@@ -522,6 +522,7 @@ export default function TeacherAttemptPage() {
         return buildStudentGrowthReport({
             selectedStudentId,
             selectedClassKey: growthClassKeyForAttempt(selectedGrowthAttempt),
+            selectedOrganizationId: attempt.organizationId,
             dataStatus: cumulativeStatus,
             attempts: growthAttempts,
             exams: cumulativeExams,
@@ -539,7 +540,14 @@ export default function TeacherAttemptPage() {
         if (cumulativeStatus === "stale" && cumulativeError && (!selectedGrowthAttempt || !growthReportModel)) {
             return { status: "error", message: cumulativeError };
         }
-        if (cumulativeStatus === "partial" && (!selectedGrowthAttempt || !growthReportModel || growthReportModel.rows.length === 0)) {
+        if (
+            cumulativeStatus === "partial"
+            && (
+                !selectedGrowthAttempt
+                || !growthReportModel
+                || (growthReportModel.rows.length === 0 && growthReportModel.omittedCount === 0)
+            )
+        ) {
             return {
                 status: "error",
                 message: cumulativeError || "일부 데이터만 불러와 선택한 응시의 성장 이력을 확인할 수 없습니다.",
@@ -551,7 +559,11 @@ export default function TeacherAttemptPage() {
         if (!growthReportModel) {
             return { status: "empty", message: "비교할 수 있는 완료된 원시험 기록이 없습니다." };
         }
-        if (growthReportModel.rows.length === 0 && cumulativeStatus === "ready") {
+        if (
+            growthReportModel.rows.length === 0
+            && growthReportModel.omittedCount === 0
+            && cumulativeStatus === "ready"
+        ) {
             return { status: "empty", message: "비교할 수 있는 완료된 원시험 기록이 없습니다." };
         }
         return {

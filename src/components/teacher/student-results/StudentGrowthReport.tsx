@@ -43,14 +43,6 @@ function formatRank(model: StudentGrowthReportModel, latest: StudentGrowthRow | 
     return `${model.currentRank}등 / ${latest.participantCount}명`;
 }
 
-function comparisonAverageGap(rows: StudentGrowthRow[]): number | null {
-    const comparableRows = rows.filter(row => row.participantCount >= 2);
-    if (comparableRows.length === 0) return null;
-    return Math.round(
-        comparableRows.reduce((sum, row) => sum + row.gap, 0) / comparableRows.length * 10,
-    ) / 10;
-}
-
 function formatTrend(model: StudentGrowthReportModel): string {
     const scoreTrend = model.trend === "up"
         ? "점수 상승 흐름"
@@ -68,7 +60,6 @@ function formatTrend(model: StudentGrowthReportModel): string {
 
 function GrowthSummaryRail({ model }: { model: StudentGrowthReportModel }) {
     const latest = model.rows.at(-1);
-    const averageGap = comparisonAverageGap(model.rows);
     return (
         <dl className={styles.growthSummaryRail} aria-label="최근 시험 요약">
             <div>
@@ -77,7 +68,7 @@ function GrowthSummaryRail({ model }: { model: StudentGrowthReportModel }) {
             </div>
             <div>
                 <dt>평균 격차</dt>
-                <dd className="numeric-emphasis">{averageGap == null ? "반 비교 불가" : formatGap(averageGap)}</dd>
+                <dd className="numeric-emphasis">{model.averageGap == null ? "반 비교 불가" : formatGap(model.averageGap)}</dd>
             </div>
             <div>
                 <dt>현재 등수</dt>
@@ -88,6 +79,15 @@ function GrowthSummaryRail({ model }: { model: StudentGrowthReportModel }) {
                 <dd>{formatTrend(model)}</dd>
             </div>
         </dl>
+    );
+}
+
+function GrowthOmissionNotice({ count }: { count: number }) {
+    if (count === 0) return null;
+    return (
+        <p className={styles.growthComparisonNote} role="status" aria-label="제외된 성장 데이터">
+            시험 또는 학생 식별 정보가 부족한 {count}개 응시는 집계에서 제외했습니다.
+        </p>
     );
 }
 
@@ -202,6 +202,7 @@ export default function StudentGrowthReport({
             <section className={`${styles.panel} ${styles.growthReport}`} aria-labelledby={`student-growth-title-${rawId}`}>
                 <h2 id={`student-growth-title-${rawId}`} className={styles.reportSectionTitle}>개인 성장</h2>
                 <GrowthDataNotice status={state.status} message={state.message} onRetry={onRetry} />
+                <GrowthOmissionNotice count={model.omittedCount} />
                 <p className={styles.growthReportState} role="status" aria-label="성장 데이터 없음">표시할 성장 데이터가 없습니다.</p>
             </section>
         );
@@ -263,6 +264,7 @@ export default function StudentGrowthReport({
             </div>
 
             <GrowthDataNotice status={state.status} message={state.message} onRetry={onRetry} />
+            <GrowthOmissionNotice count={model.omittedCount} />
 
             {hasUnavailableComparison && (
                 <p className={styles.growthComparisonNote} role="status" aria-label="반 비교 안내">

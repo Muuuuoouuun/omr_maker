@@ -1,5 +1,6 @@
 import type { Attempt, Exam } from "@/types/omr";
 import { resolveAttemptScore } from "@/lib/attemptScores";
+import { computeRankPercentile } from "@/lib/scoreDistribution";
 
 export type GrowthDataStatus = "ready" | "partial" | "stale";
 
@@ -21,13 +22,16 @@ export interface StudentGrowthReportModel {
     latestScore: number | null;
     averageGap: number | null;
     currentRank: number | null;
+    currentPercentile: number | null;
     rankDelta: number | null;
     trend: "up" | "down" | "flat" | "insufficient";
+    omittedCount: number;
 }
 
 export interface BuildStudentGrowthReportInput {
     selectedStudentId: string;
     selectedClassKey: string;
+    selectedOrganizationId?: string;
     dataStatus: GrowthDataStatus;
     attempts: readonly Attempt[];
     exams: readonly Exam[];
@@ -66,6 +70,42 @@ function attemptMatchesStudent(attempt: Attempt, selectedStudentId: string): boo
     return normalizedName(attempt.studentName) === normalizedName(selectedStudentId);
 }
 
+function attemptMatchesOrganization(attempt: Attempt, selectedOrganizationId: string | undefined): boolean {
+    const selectedOrganization = stableKey(selectedOrganizationId);
+    const attemptOrganization = stableKey(attempt.organizationId);
+    if (!selectedOrganization) return !attemptOrganization;
+    return !attemptOrganization || attemptOrganization === selectedOrganization;
+}
+
+function hasStudentIdentity(attempt: Attempt): boolean {
+    return Boolean(
+        stableKey(attempt.studentProfileId)
+        || stableKey(attempt.studentId)
+        || normalizedName(attempt.studentName),
+    );
+}
+
+function buildScopedExamMap(exams: readonly Exam[], selectedOrganizationId: string | undefined): Map<string, Exam> {
+    const selectedOrganization = stableKey(selectedOrganizationId);
+    const scopedExams = new Map<string, Exam>();
+    for (const exam of exams) {
+        const examId = stableKey(exam.id);
+        const examOrganization = stableKey(exam.organizationId);
+        const organizationMatches = selectedOrganization
+            ? !examOrganization || examOrganization === selectedOrganization
+            : !examOrganization;
+        if (!examId || !stableKey(exam.title) || !organizationMatches) continue;
+
+        const current = scopedExams.get(examId);
+        const isExactOrganizationMatch = selectedOrganization && examOrganization === selectedOrganization;
+        const currentIsLegacy = current && !stableKey(current.organizationId);
+        if (!current || (isExactOrganizationMatch && currentIsLegacy)) {
+            scopedExams.set(examId, exam);
+        }
+    }
+    return scopedExams;
+}
+
 function participantKey(attempt: Attempt): string {
     if (stableKey(attempt.studentProfileId)) return `id:${stableKey(attempt.studentProfileId)}`;
     if (stableKey(attempt.studentId)) return `id:${stableKey(attempt.studentId)}`;
@@ -82,7 +122,7 @@ function isPreferredRepresentative(candidate: Attempt, current: Attempt): boolea
 }
 
 function resolvedScorePercent(attempt: Attempt, exam?: Exam): number | null {
-    const resolved = resolveAttemptScore(attempt, exam);
+    const resolved = resolveAttemptScore(attempt, exam && exam.questions.length > 0 ? exam : undefined);
     if (!Number.isFinite(resolved.scorePercent)) return null;
     if (
         resolved.source === "storedScore"
@@ -104,17 +144,29 @@ function isFinalAttempt(attempt: Attempt): boolean {
 export function buildStudentGrowthReport({
     selectedStudentId,
     selectedClassKey,
+    selectedOrganizationId,
     dataStatus,
     attempts,
     exams,
 }: BuildStudentGrowthReportInput): StudentGrowthReportModel {
-    const examById = new Map(exams.map(exam => [exam.id, exam]));
+    const examById = buildScopedExamMap(exams, selectedOrganizationId);
     const scoreByAttempt = new Map<Attempt, number>();
+    let omittedCount = 0;
     const scopedAttempts = attempts.filter(attempt => {
-        if (attempt.retake || !isFinalAttempt(attempt) || !attemptMatchesClass(attempt, selectedClassKey)) {
+        if (
+            attempt.retake
+            || !isFinalAttempt(attempt)
+            || !attemptMatchesOrganization(attempt, selectedOrganizationId)
+            || !attemptMatchesClass(attempt, selectedClassKey)
+        ) {
             return false;
         }
-        const score = resolvedScorePercent(attempt, examById.get(attempt.examId));
+        const exam = examById.get(stableKey(attempt.examId));
+        if (!exam || !hasStudentIdentity(attempt)) {
+            omittedCount += 1;
+            return false;
+        }
+        const score = resolvedScorePercent(attempt, exam);
         if (score == null) return false;
         scoreByAttempt.set(attempt, score);
         return true;
@@ -164,16 +216,23 @@ export function buildStudentGrowthReport({
             : latestRow.studentScore - previousRow.studentScore < -1
                 ? "down"
                 : "flat";
+    const recentComparableRows = rows
+        .filter(row => row.participantCount >= 2)
+        .slice(-6);
 
     return {
         status: dataStatus,
         rows,
         latestScore: latestRow?.studentScore ?? null,
-        averageGap: rows.length > 0
-            ? roundToOneDecimal(rows.reduce((sum, row) => sum + row.gap, 0) / rows.length)
+        averageGap: recentComparableRows.length > 0
+            ? roundToOneDecimal(recentComparableRows.reduce((sum, row) => sum + row.gap, 0) / recentComparableRows.length)
             : null,
         currentRank: latestRow?.rank ?? null,
+        currentPercentile: latestRow?.rank == null
+            ? null
+            : computeRankPercentile(latestRow.rank, latestRow.participantCount),
         rankDelta,
         trend,
+        omittedCount,
     };
 }

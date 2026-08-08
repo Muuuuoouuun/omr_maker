@@ -18,6 +18,7 @@ function attempt(partial: Partial<Attempt> & Pick<Attempt, "id" | "examId">): At
         id: partial.id,
         examId: partial.examId,
         examTitle: partial.examTitle ?? partial.examId,
+        organizationId: partial.organizationId,
         studentName: partial.studentName ?? "김학생",
         studentProfileId: partial.studentProfileId,
         studentId: partial.studentId,
@@ -38,10 +39,11 @@ function attempt(partial: Partial<Attempt> & Pick<Attempt, "id" | "examId">): At
 
 function build(
     attempts: Attempt[],
-    exams: Exam[] = [],
+    exams: Exam[] = Array.from(new Set(attempts.map(item => item.examId))).map(id => exam(id)),
     overrides: Partial<{
         selectedStudentId: string;
         selectedClassKey: string;
+        selectedOrganizationId: string;
         dataStatus: GrowthDataStatus;
     }> = {},
 ) {
@@ -63,9 +65,36 @@ describe("student growth report", () => {
             latestScore: null,
             averageGap: null,
             currentRank: null,
+            currentPercentile: null,
             rankDelta: null,
             trend: "insufficient",
+            omittedCount: 0,
         });
+    });
+
+    it("isolates an explicit organization while retaining unscoped legacy attempts during migration", () => {
+        const model = build([
+            attempt({ id: "selected", examId: "exam-1", organizationId: "org-a", studentId: "student-1", classId: "class-a", score: 80 }),
+            attempt({ id: "same-org", examId: "exam-1", organizationId: "org-a", studentId: "student-2", classId: "class-a", score: 60 }),
+            attempt({ id: "legacy", examId: "exam-1", studentId: "student-3", classId: "class-a", score: 70 }),
+            attempt({ id: "other-org", examId: "exam-1", organizationId: "org-b", studentId: "student-4", classId: "class-a", score: 100 }),
+        ], [exam("exam-1")], { selectedOrganizationId: "org-a" });
+
+        expect(model.rows[0]).toMatchObject({
+            classAverage: 70,
+            participantCount: 3,
+            rank: 1,
+        });
+    });
+
+    it("does not pull explicitly scoped attempts into an unscoped legacy report", () => {
+        const model = build([
+            attempt({ id: "selected", examId: "exam-1", studentId: "student-1", classId: "class-a", score: 80 }),
+            attempt({ id: "legacy-peer", examId: "exam-1", studentId: "student-2", classId: "class-a", score: 60 }),
+            attempt({ id: "scoped-peer", examId: "exam-1", organizationId: "org-b", studentId: "student-3", classId: "class-a", score: 100 }),
+        ]);
+
+        expect(model.rows[0]).toMatchObject({ classAverage: 70, participantCount: 2, rank: 1 });
     });
 
     it("uses classId before groupId when isolating the selected class", () => {
@@ -124,7 +153,7 @@ describe("student growth report", () => {
         const selectedClassKey = growthClassKeyForAttempt(selected);
 
         expect(selectedClassKey).toBe("Region-Seoul::a반");
-        expect(build([selected, peer], [], { selectedClassKey }).rows[0]).toMatchObject({
+        expect(build([selected, peer], undefined, { selectedClassKey }).rows[0]).toMatchObject({
             classAverage: 70,
             participantCount: 2,
         });
@@ -259,6 +288,7 @@ describe("student growth report", () => {
         ]);
 
         expect(model.rows[0]).toMatchObject({ rank: 3, participantCount: 5 });
+        expect(model.currentPercentile).toBe(60);
     });
 
     it("returns a null rank for a single participant", () => {
@@ -268,16 +298,17 @@ describe("student growth report", () => {
 
         expect(model.rows[0]).toMatchObject({ rank: null, participantCount: 1 });
         expect(model.currentRank).toBeNull();
+        expect(model.currentPercentile).toBeNull();
     });
 
     it("prefers profile ids, then student ids, then normalized names for identity", () => {
         const model = build([
             attempt({ id: "selected-profile", examId: "exam-1", studentProfileId: " profile-1 ", studentId: "legacy-id", studentName: "KIM", classId: "class-a", score: 80 }),
             attempt({ id: "different-profile", examId: "exam-1", studentProfileId: "profile-2", studentId: "profile-1", studentName: "KIM", classId: "class-a", score: 60 }),
-        ], [], { selectedStudentId: "profile-1" });
+        ], undefined, { selectedStudentId: "profile-1" });
         const nameFallback = build([
             attempt({ id: "selected-name", examId: "exam-2", studentName: "  KIM  ", classId: "class-a", score: 75 }),
-        ], [], { selectedStudentId: "kim" });
+        ], undefined, { selectedStudentId: "kim" });
 
         expect(model.rows).toHaveLength(1);
         expect(model.rows[0]).toMatchObject({ studentScore: 80, participantCount: 2 });
@@ -309,12 +340,27 @@ describe("student growth report", () => {
         expect(model.rows[0]).toMatchObject({ participantCount: 2, classAverage: 70 });
     });
 
-    it("uses the attempt title when exam metadata is missing", () => {
+    it("omits otherwise eligible attempts with missing exam metadata or student identity", () => {
         const model = build([
-            attempt({ id: "selected", examId: "missing-exam", examTitle: "현장 모의고사", studentId: "student-1", classId: "class-a", score: 80 }),
-        ]);
+            attempt({ id: "selected", examId: "exam-1", studentId: "student-1", classId: "class-a", score: 80 }),
+            attempt({ id: "missing-exam", examId: "exam-2", studentId: "student-1", classId: "class-a", score: 90 }),
+            attempt({ id: "missing-identity", examId: "exam-1", studentName: "   ", classId: "class-a", score: 60 }),
+        ], [exam("exam-1", "확인된 시험")]);
 
-        expect(model.rows[0]?.examTitle).toBe("현장 모의고사");
+        expect(model.rows).toHaveLength(1);
+        expect(model.rows[0]).toMatchObject({ examTitle: "확인된 시험", participantCount: 1 });
+        expect(model.omittedCount).toBe(2);
+    });
+
+    it("prefers organization-matching exam metadata when exam ids collide", () => {
+        const orgAExam = { ...exam("exam-1", "A 조직 시험"), organizationId: "org-a" };
+        const orgBExam = { ...exam("exam-1", "B 조직 시험"), organizationId: "org-b" };
+        const model = build([
+            attempt({ id: "selected", examId: "exam-1", organizationId: "org-a", studentId: "student-1", classId: "class-a", score: 80 }),
+        ], [orgAExam, orgBExam], { selectedOrganizationId: "org-a" });
+
+        expect(model.rows[0]?.examTitle).toBe("A 조직 시험");
+        expect(model.omittedCount).toBe(0);
     });
 
     it.each(["partial", "stale"] as const)("propagates a %s data status", dataStatus => {
@@ -354,6 +400,39 @@ describe("student growth report", () => {
             rankDelta: 0,
             trend: "flat",
         });
+    });
+
+    it("averages only the latest six chronological rows with a class comparison", () => {
+        const attempts = Array.from({ length: 8 }, (_, index) => {
+            const examId = `exam-${index + 1}`;
+            const month = String(index + 1).padStart(2, "0");
+            const selectedScore = index < 2 ? 60 : 80;
+            const peerScore = index < 2 ? 80 : 60;
+            const rows = [attempt({
+                id: `selected-${index + 1}`,
+                examId,
+                studentId: "student-1",
+                classId: "class-a",
+                finishedAt: `2026-${month}-01T10:00:00.000Z`,
+                score: selectedScore,
+            })];
+            if (index !== 6) {
+                rows.push(attempt({
+                    id: `peer-${index + 1}`,
+                    examId,
+                    studentId: "student-2",
+                    classId: "class-a",
+                    finishedAt: `2026-${month}-01T10:00:00.000Z`,
+                    score: peerScore,
+                }));
+            }
+            return rows;
+        }).flat();
+
+        const model = build(attempts);
+
+        expect(model.rows).toHaveLength(8);
+        expect(model.averageGap).toBe(6.7);
     });
 
     it("computes rank improvement and score trend from the previous row", () => {

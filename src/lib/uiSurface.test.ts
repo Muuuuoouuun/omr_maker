@@ -1391,9 +1391,20 @@ describe("service UI surface", () => {
 
         expect(modelCalls).toHaveLength(1);
         expect(teacherAttemptPage).toContain("growthClassKeyForAttempt(selectedGrowthAttempt)");
+        expect(teacherAttemptPage).toContain("selectedOrganizationId: attempt.organizationId");
         expect(teacherAttemptPage).toContain("attempts: growthAttempts");
         expect(teacherAttemptPage).toContain("exams: cumulativeExams");
         expect(teacherAttemptPage).toContain("growthReportState={growthReportState}");
+    });
+
+    it("keeps an empty growth model when omitted records need disclosure", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const stateIndex = teacherAttemptPage.indexOf("const growthReportState = useMemo");
+        const labelIndex = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo");
+        const stateBlock = teacherAttemptPage.slice(stateIndex, labelIndex);
+
+        expect(stateBlock).toContain("growthReportModel.omittedCount === 0");
+        expect(stateBlock).toContain("model: growthReportModel");
     });
 
     it("enriches legacy cohort rows with matched roster classes before growth modeling", () => {
@@ -1525,7 +1536,7 @@ describe("service UI surface", () => {
         const stateEnd = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo", stateStart);
         const stateBlock = teacherAttemptPage.slice(stateStart, stateEnd);
         const staleFailureIndex = stateBlock.indexOf('cumulativeStatus === "stale" && cumulativeError && (!selectedGrowthAttempt || !growthReportModel)');
-        const partialFailureIndex = stateBlock.indexOf('cumulativeStatus === "partial" && (!selectedGrowthAttempt || !growthReportModel || growthReportModel.rows.length === 0)');
+        const partialFailureIndex = stateBlock.indexOf('cumulativeStatus === "partial"');
         const unlinkedEmptyIndex = stateBlock.indexOf("if (!selectedGrowthAttempt)");
 
         expect(stateStart).toBeGreaterThan(-1);

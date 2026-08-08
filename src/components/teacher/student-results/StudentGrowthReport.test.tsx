@@ -78,8 +78,10 @@ const manyPointModel: StudentGrowthReportModel = {
     latestScore: 82,
     averageGap: -2,
     currentRank: 2,
+    currentPercentile: 17,
     rankDelta: 1,
     trend: "up",
+    omittedCount: 0,
 };
 
 const onePointModel: StudentGrowthReportModel = {
@@ -96,10 +98,12 @@ const onePointModel: StudentGrowthReportModel = {
         isLatest: true,
     }],
     latestScore: 60,
-    averageGap: -10,
+    averageGap: null,
     currentRank: null,
+    currentPercentile: null,
     rankDelta: null,
     trend: "insufficient",
+    omittedCount: 0,
 };
 
 beforeEach(() => {
@@ -207,15 +211,45 @@ describe("StudentGrowthReport", () => {
                 { ...manyPointModel.rows[0], participantCount: 1, rank: null },
                 manyPointModel.rows[1],
             ],
-            averageGap: -2,
+            averageGap: 3.5,
         };
         render(<StudentGrowthReport state={{ status: "ready", model: mixedModel }} enabled onRetry={() => {}} />);
 
         await screen.findByTestId("growth-chart-shell");
         expect(screen.getByRole("status", { name: "반 비교 안내" })).toHaveTextContent("1명인 시험은 개인 점수만 표시");
-        expect(screen.getByLabelText("최근 시험 요약")).toHaveTextContent("+6%p");
+        expect(screen.getByLabelText("최근 시험 요약")).toHaveTextContent("+3.5%p");
         expect(screen.getByLabelText("최근 시험 요약")).not.toHaveTextContent("-2%p");
         expect(screen.getByTestId("line-classAverage")).toBeInTheDocument();
+    });
+
+    it("discloses omitted records for both populated and empty growth reports", () => {
+        const { rerender } = render(<StudentGrowthReport
+            state={{ status: "ready", model: { ...manyPointModel, omittedCount: 2 } }}
+            enabled
+            onRetry={() => {}}
+        />);
+
+        expect(screen.getByRole("status", { name: "제외된 성장 데이터" })).toHaveTextContent("식별 정보가 부족한 2개 응시");
+
+        rerender(<StudentGrowthReport
+            state={{
+                status: "ready",
+                model: {
+                    ...manyPointModel,
+                    rows: [],
+                    latestScore: null,
+                    averageGap: null,
+                    currentRank: null,
+                    currentPercentile: null,
+                    omittedCount: 1,
+                },
+            }}
+            enabled
+            onRetry={() => {}}
+        />);
+
+        expect(screen.getByRole("status", { name: "제외된 성장 데이터" })).toHaveTextContent("식별 정보가 부족한 1개 응시");
+        expect(screen.getByRole("status", { name: "성장 데이터 없음" })).toBeInTheDocument();
     });
 
     it("keeps an isolated comparable class average visible without connecting unavailable gaps", async () => {
