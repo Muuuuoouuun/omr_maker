@@ -31,7 +31,7 @@
 실제 외부 경보 시스템에 연결된 어댑터로만 실행합니다. 로컬·staging 모의 응답, credential 누락,
 `unverified` 종료는 통과나 생략으로 기록할 수 없습니다. 증거는 릴리스 승인 시점 기준 30일 이내여야 합니다.
 
-정확한 실행 명령(출력은 기존에 존재하지 않는 절대 경로이며, 부모 디렉터리는 group/other 권한이 없어야 함):
+정확한 실행 명령(출력은 기존에 존재하지 않는 정규화된 절대 경로이며, 부모는 실행 uid 소유의 정확한 `0700` 실제 디렉터리여야 함):
 
 ```sh
 npm run ops:alert:verify -- --output /absolute/private/path/operational-alert-evidence.json
@@ -50,13 +50,19 @@ npm run ops:alert:verify -- --output /absolute/private/path/operational-alert-ev
 | `OMR_ALERT_RECEIPT_TOKEN` | 공백 없는 32–512자 bearer credential |
 | `OMR_ALERT_ACK_TOKEN` | 공백 없는 32–512자 bearer credential |
 | `OMR_ALERT_RESOLVE_TOKEN` | 공백 없는 32–512자 bearer credential |
+| `OMR_ALERT_EVIDENCE_HMAC_SECRET` | transport token 네 개와 모두 다른 공백 없는 32–512자 HMAC secret |
 | `OMR_ALERT_POLL_INTERVAL_MS` | 정수 250–5000 |
 | `OMR_ALERT_DEADLINE_MS` | 정수 1000–120000, poll interval 이상 |
 | `OMR_ALERT_REQUEST_TIMEOUT_MS` | 정수 1000–10000 |
 
-네 credential은 권한 분리를 위해 모두 달라야 합니다. URL은 userinfo·fragment, localhost/private IP,
+다섯 credential은 권한 분리를 위해 모두 달라야 합니다. URL은 userinfo·fragment, localhost/private IP,
 예약된 `.test`/`.invalid`/`.example` 또는 `example.com`/`.net`/`.org` host를 포함할 수 없습니다.
 CLI 인자는 위의 `--output <absolute-new-path>` 한 쌍만 허용합니다.
+
+DNS host는 단일 trailing dot을 제거해 canonicalize한 뒤 모든 A/AAAA 응답을 검사합니다. loopback,
+private/ULA, link-local, CGNAT, documentation, benchmark, multicast, reserved 등 non-global 주소가 하나라도
+섞이면 실패합니다. 검사를 통과한 주소 하나를 TLS 연결에 고정하되 원래 canonical host를 HTTP Host와
+TLS SNI로 유지하여 DNS rebinding을 막습니다. literal IP에도 같은 global-address 정책을 적용합니다.
 
 Provider-neutral HTTP 계약:
 
@@ -64,22 +70,35 @@ Provider-neutral HTTP 계약:
 - receipt: receipt endpoint에 `GET`; `200` body는 정확히 `eventId`, `sinkReceivedAt`, `alertReceivedAt`이며 `202`/`204`/`404`만 deadline 전 transient 상태입니다.
 - acknowledge: acknowledgement endpoint에 `{ "eventId": "..." }`를 `POST`; `200` body는 정확히 `eventId`, `acknowledgedAt`입니다.
 - resolve: resolution endpoint에 `{ "eventId": "..." }`를 `POST`; `200` body는 정확히 `eventId`, `resolvedAt`입니다.
-- 모든 응답은 redirect 없이 요청 timeout 안에 32 KiB 이하여야 합니다. 모든 시각은 UTC millisecond ISO-8601이며 emit ≤ sink ≤ alert ≤ acknowledge ≤ resolve 순서여야 합니다.
+- 모든 응답은 redirect 없이 monotonic request timeout 안에 32 KiB 이하여야 합니다. receipt deadline도 monotonic clock 기준입니다.
+- 모든 provider 시각은 UTC millisecond ISO-8601이고 emit ≤ sink ≤ alert ≤ acknowledge ≤ resolve 순서이며, 각 응답을 로컬에서 관찰한 wall clock보다 최대 5분(`300000 ms`)까지만 미래일 수 있습니다.
 
 - `ops:alert:verify` 상태: `verified` / `unverified` (외부 시스템 실행만 `verified` 가능)
 - 증거 artifact 절대 경로:
 - 증거 `eventId`:
 - 증거 `buildSha`와 배포 SHA 일치: 예 / 아니오
 - 증거 `resolvedAt`(UTC):
-- 승인 시점 기준 freshness 30일 이내: 예 / 아니오
+- 증거 `verifiedAt`(로컬 UTC):
+- `verifiedAt` 기준 승인 시점 freshness 30일 이내: 예 / 아니오
 - artifact `integrity` 재계산 일치: 예 / 아니오
+- artifact `attestation` HMAC 검증 일치: 예 / 아니오
 
 성공 artifact는 새 `0600` JSON 파일이며 정확히 `status`, `schemaVersion`, `buildSha`, `eventId`,
 `emittedAt`, `sinkReceivedAt`, `alertReceivedAt`, `acknowledgedAt`, `resolvedAt`,
-`endpointOriginHashes`, `integrity`만 포함합니다. URL, token, response body, 학생 식별자,
+`verifiedAt`, `endpointOriginHashes`, `integrity`, `attestation`만 포함합니다. URL, token, HMAC secret,
+response body, 학생 식별자,
 provider 자유 형식 데이터는 artifact나 릴리스 기록에 복사하지 않습니다.
-`integrity` 검산은 `integrity` 필드를 제외하고 모든 object key를 재귀적으로 사전순 정렬한 뒤,
+`integrity` 검산은 `integrity`와 `attestation` 필드를 제외하고 모든 object key를 재귀적으로 사전순 정렬한 뒤,
 공백 없는 UTF-8 JSON으로 직렬화하여 SHA-256을 계산하고 `sha256:<lowercase-hex>`로 표기합니다.
+`attestation`은 `integrity`까지 포함한 canonical JSON 앞에 domain bytes
+`omr.synthetic-alert-evidence:v1\0`를 붙여 `OMR_ALERT_EVIDENCE_HMAC_SECRET`으로 HMAC-SHA256하고
+`hmac-sha256:<lowercase-hex>`로 표기합니다.
+
+출력 경로의 모든 ancestor는 symlink가 아니고 group/world writable이 아니어야 합니다. 최종 부모의
+realpath/dev/inode/uid/`0700`을 publish 직전에 다시 확인합니다. 완성 evidence는 같은 디렉터리의 고유
+`O_EXCL` `0600` 임시 inode에 write→fsync→stat→close한 뒤 hard-link로 overwrite 없이 원자적으로
+publish하고 임시 이름을 제거하며 부모 디렉터리를 fsync합니다. 실패 시 이 실행이 만든 inode만 정리하고
+기존 또는 교체된 경로는 삭제하지 않습니다. CLI 진단은 `unverified: <allowlisted_code>` 한 줄뿐입니다.
 
 ## 변경형 여정과 운영 증거
 
