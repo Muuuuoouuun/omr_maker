@@ -134,7 +134,7 @@ describe("CI quality gates", () => {
         expect(lines).toContain("runs-on: ubuntu-latest");
         expect(lines).toContain("needs: lint-and-test");
         expect(setupNode).toBeGreaterThanOrEqual(0);
-        expect(lines).toContain('node-version: "20"');
+        expect(lines).toContain('node-version: "22.13.0"');
         expect(lines).not.toContain('cache: "npm"');
         expect(lines).not.toContain("run: npm ci");
         expect(liveContract).toBeGreaterThan(setupNode);
