@@ -367,7 +367,11 @@ describe("production server-only database boundary", () => {
     });
 
     it("documents the canonical final-schema contract and exact table count", () => {
-        for (const document of [productionReadiness, read("docs/operations/backup-restore-runbook.md")]) {
+        for (const document of [
+            productionReadiness,
+            read("docs/operations/backup-restore-runbook.md"),
+            supabaseReadme,
+        ]) {
             expect(document).toContain("schema.sql baseline + sorted migrations = final schema");
             expect(document).toMatch(/canonical 38(?:개| tables)/i);
         }

@@ -12,6 +12,8 @@ import { delimiter, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
+import { CANONICAL_TABLES } from "./canonical-table-manifest.mjs";
+
 const root = resolve(import.meta.dirname, "..");
 const container = `omr-postgres-verify-${process.pid}`;
 const password = "omr-live-test-password";
@@ -19,6 +21,17 @@ const migrationOwner = "postgres";
 const localDatabase = "omr_live_verify";
 const requiredPostgresBinaries = ["initdb", "pg_ctl", "createdb", "psql", "postgres"];
 const dockerInfoTimeoutMs = 5_000;
+const liveCanonicalTablesSql = `
+select coalesce(json_agg(canonical.table_name order by canonical.table_name), '[]'::json)::text
+  from (
+      select relation.relname as table_name
+        from pg_class relation
+        join pg_namespace namespace on namespace.oid = relation.relnamespace
+       where namespace.nspname = 'public'
+         and relation.relkind in ('r', 'p')
+         and relation.relname like 'omr\\_%' escape '\\'
+  ) canonical
+`;
 
 function run(command, args, options = {}) {
     const result = spawnSync(command, args, {
@@ -39,7 +52,16 @@ function run(command, args, options = {}) {
     return result;
 }
 
-function runSqlMatrix(psqlFile) {
+function assertLiveCanonicalTables(psqlQuery) {
+    const liveTables = JSON.parse(psqlQuery(liveCanonicalTablesSql).trim());
+    if (JSON.stringify(liveTables) !== JSON.stringify(CANONICAL_TABLES)) {
+        throw new Error(
+            `live canonical tables do not match the generated manifest: expected ${JSON.stringify(CANONICAL_TABLES)}, found ${JSON.stringify(liveTables)}`,
+        );
+    }
+}
+
+function runSqlMatrix(psqlFile, psqlQuery) {
     psqlFile("supabase/live-test-prelude.sql");
     psqlFile("supabase/schema.sql");
     psqlFile("supabase/live-test-alpha-generated-helpers.sql");
@@ -50,6 +72,7 @@ function runSqlMatrix(psqlFile) {
     for (const migration of migrations) {
         psqlFile(`supabase/migrations/${migration}`);
     }
+    assertLiveCanonicalTables(psqlQuery);
 
     psqlFile("supabase/individual-student-assignments-assertions.sql");
     psqlFile("supabase/teacher-force-finish-compact-assertions.sql");
@@ -145,6 +168,14 @@ function runDockerVerification() {
         ]);
     }
 
+    function psqlQuery(sql) {
+        return run("docker", [
+            "exec", container,
+            "psql", "-U", migrationOwner, "-d", "postgres",
+            "-v", "ON_ERROR_STOP=1", "-At", "-c", sql,
+        ], { capture: true }).stdout;
+    }
+
     try {
         run("docker", [
             "run", "--detach", "--rm",
@@ -168,7 +199,7 @@ function runDockerVerification() {
         }
         if (!ready) throw new Error("PostgreSQL container did not become ready in time.");
 
-        runSqlMatrix(psqlFile);
+        runSqlMatrix(psqlFile, psqlQuery);
     } finally {
         run("docker", ["rm", "--force", container], { capture: true, allowFailure: true });
     }
@@ -217,6 +248,17 @@ async function runLocalVerification() {
             ], { env: localEnv });
         }
 
+        function psqlQuery(sql) {
+            return run(postgresBinary(postgresBin, "psql"), [
+                "-h", "127.0.0.1",
+                "-p", String(port),
+                "-U", migrationOwner,
+                "-d", localDatabase,
+                "-v", "ON_ERROR_STOP=1",
+                "-At", "-c", sql,
+            ], { capture: true, env: localEnv }).stdout;
+        }
+
         run(postgresBinary(postgresBin, "initdb"), [
             "-D", dataDirectory,
             "-U", migrationOwner,
@@ -242,7 +284,7 @@ async function runLocalVerification() {
             localDatabase,
         ], { env: localEnv });
 
-        runSqlMatrix(psqlFile);
+        runSqlMatrix(psqlFile, psqlQuery);
     } finally {
         run(postgresBinary(postgresBin, "pg_ctl"), [
             "-D", resolve(temporaryDirectory, "data"),

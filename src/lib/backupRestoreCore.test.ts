@@ -103,6 +103,78 @@ describe("backup and restore manifest core", () => {
         })).toThrow(/migration path/i);
     });
 
+    it("applies canonical CREATE, DROP, and RENAME identity changes in migration order", () => {
+        const discoveredTables = discoverCanonicalTables({
+            schemaSql: [
+                "create table public.omr_created_then_dropped (id bigint);",
+                'create unlogged table if not exists "public"."omr_unlogged" (id bigint);',
+                "create table public.omr_renamed_old (id bigint);",
+            ].join("\n"),
+            migrationSqlFiles: [
+                {
+                    path: "002_rename.sql",
+                    sql: [
+                        'alter table only "public"."omr_renamed_old" rename to "omr_renamed_final";',
+                        "alter table public.omr_unlogged add column note text;",
+                    ].join("\n"),
+                },
+                {
+                    path: "001_drop.sql",
+                    sql: "drop table if exists public.omr_created_then_dropped;",
+                },
+            ],
+        });
+
+        expect(discoveredTables).toEqual(["omr_renamed_final", "omr_unlogged"]);
+    });
+
+    it("removes multiple canonical DROP TABLE targets without retaining stale names", () => {
+        expect(discoverCanonicalTables({
+            schemaSql: [
+                "create table public.omr_drop_alpha (id bigint);",
+                "create table public.omr_drop_beta (id bigint);",
+                "create table public.omr_keep (id bigint);",
+            ].join("\n"),
+            migrationSqlFiles: [{
+                path: "001_drop.sql",
+                sql: "drop table public.omr_drop_alpha, public.omr_drop_beta cascade;",
+            }],
+        })).toEqual(["omr_keep"]);
+    });
+
+    it.each([
+        [
+            "temporary canonical table",
+            "create temporary table public.omr_temp (id bigint);",
+            /001_unsupported\.sql.*CREATE TEMPORARY TABLE/i,
+        ],
+        [
+            "malformed canonical create",
+            "create table public.omr_broken;",
+            /001_unsupported\.sql.*CREATE TABLE/i,
+        ],
+        [
+            "canonical SET SCHEMA",
+            "alter table public.omr_move set schema archive;",
+            /001_unsupported\.sql.*ALTER TABLE SET SCHEMA/i,
+        ],
+        [
+            "malformed canonical drop",
+            "drop table public omr_broken;",
+            /001_unsupported\.sql.*DROP TABLE/i,
+        ],
+        [
+            "malformed canonical rename",
+            "alter table public.omr_old rename omr_new;",
+            /001_unsupported\.sql.*ALTER TABLE RENAME/i,
+        ],
+    ])("fails closed on unsupported %s identity DDL", (_label, sql, error) => {
+        expect(() => discoverCanonicalTables({
+            schemaSql: "",
+            migrationSqlFiles: [{ path: "001_unsupported.sql", sql }],
+        })).toThrow(error);
+    });
+
     it("counts rows inside canonical pg_dump COPY blocks", () => {
         const sql = [
             "COPY public.omr_organizations (id, name) FROM stdin;",

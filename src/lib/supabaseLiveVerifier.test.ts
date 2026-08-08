@@ -19,6 +19,13 @@ describe("Supabase live verifier local PostgreSQL fallback", () => {
         expect(verifier.match(/psqlFile\("supabase\/live-test-boundary-assertions\.sql"\)/g)).toHaveLength(2);
     });
 
+    it("compares the generated canonical manifest to live public base and partitioned tables", () => {
+        expect(verifier).toContain('import { CANONICAL_TABLES } from "./canonical-table-manifest.mjs"');
+        expect(verifier).toContain("assertLiveCanonicalTables");
+        expect(verifier).toContain("relation.relkind in ('r', 'p')");
+        expect(verifier).toContain("live canonical tables do not match the generated manifest");
+    });
+
     it("uses an isolated loopback-only PostgreSQL 17 cluster and always cleans it up", () => {
         expect(verifier).toContain("OMR_SUPABASE_LIVE_BACKEND");
         expect(verifier).toContain("OMR_POSTGRES_BIN");

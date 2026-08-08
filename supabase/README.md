@@ -198,7 +198,8 @@ idempotent, but its preflight is intentionally fail-closed. Use this order:
 1. Put writes into maintenance mode and take a restorable database snapshot.
 2. Connect as `postgres`, the single migration owner, and deploy the matching
    `schema.sql` and all `migrations` in filename order. Do not mix owners: default
-   privileges are owner-specific.
+   privileges are owner-specific. The canonical manifest follows
+   `schema.sql baseline + sorted migrations = final schema`.
 3. In that `postgres` session, run
    `select public.omr_assert_production_boundary_preflight_v1();`. Stop unless
    every bounded organization-integrity count is zero.
@@ -214,7 +215,7 @@ idempotent, but its preflight is intentionally fail-closed. Use this order:
 7. Deploy the matching server build and verify teacher/student server-action
    journeys before reopening writes.
 
-The profile covers all 29 `public.omr_*` app tables. Supabase requires entities
+The profile covers all canonical 38 tables under `public.omr_*`. Supabase requires entities
 under `storage` to remain owned by `supabase_storage_admin`; see
 [Supabase platform permissions](https://supabase.com/docs/guides/platform/permissions).
 Still in the `postgres` transaction, the profile verifies that `postgres` can
