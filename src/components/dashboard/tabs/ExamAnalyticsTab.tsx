@@ -85,6 +85,7 @@ import WaveBar from "@/components/dashboard/WaveBar";
 import StatusPill from "@/components/dashboard/StatusPill";
 import type { AnalyticsMetricItem } from "@/components/AnalyticsMetricGrid";
 import { buildExamHeadlineInsight } from "@/lib/examAnalyticsReport";
+import type { ExamAnalyticsSampleStatus } from "@/lib/examAnalyticsReport";
 import ExamAnalyticsReportOverview, {
     type ExamOverviewAction,
     type ExamOverviewWeakQuestion,
@@ -97,6 +98,11 @@ interface ExamAnalyticsTabProps {
     rosterGroups?: RosterGroup[];
     initialExamId?: string;
     currentPlan?: PlanKey;
+    sampleStatus?: ExamAnalyticsSampleStatus;
+}
+
+export function filterGradableQuestionEvidence<T extends { totalCount: number }>(items: T[]): T[] {
+    return items.filter(item => item.totalCount > 0);
 }
 
 const difficultyLabelMap: Record<string, string> = {
@@ -275,6 +281,7 @@ export default function ExamAnalyticsTab({
     rosterGroups = [],
     initialExamId,
     currentPlan = "free",
+    sampleStatus = "ready",
 }: ExamAnalyticsTabProps) {
     const [selectedExamId, setSelectedExamId] = useState<string>(initialExamId || (exams.length > 0 ? exams[0].id : ""));
     const [isSelectOpen, setIsSelectOpen] = useState(false);
@@ -563,6 +570,11 @@ export default function ExamAnalyticsTab({
         }).sort((a: { correctRate: number }, b: { correctRate: number }) => a.correctRate - b.correctRate); // Sort by hardest first
     }, [selectedExam, examAttempts]);
 
+    const gradableQuestionAnalytics = useMemo(
+        () => filterGradableQuestionEvidence(questionAnalytics),
+        [questionAnalytics],
+    );
+
     const examLabels = useMemo(() => {
         if (!selectedExam) return [];
         return Array.from(new Set(selectedExam.questions.map(q => q.label || '일반')));
@@ -624,7 +636,7 @@ export default function ExamAnalyticsTab({
             mistakeTypes: Set<string>;
         }> = {};
 
-        questionAnalytics.forEach(q => {
+        gradableQuestionAnalytics.forEach(q => {
             const concept = q.concept || q.label || '일반';
             if (!conceptMap[concept]) {
                 conceptMap[concept] = {
@@ -656,13 +668,13 @@ export default function ExamAnalyticsTab({
                 mistakeTypes: Array.from(data.mistakeTypes),
             }))
             .sort((a, b) => a.correctRate - b.correctRate);
-    }, [selectedExam, examAttempts, questionAnalytics]);
+    }, [selectedExam, examAttempts, gradableQuestionAnalytics]);
 
     // B4: this panel is about the HIGHEST wrong rate, so sort by wrongRate desc rather
     // than reusing questionAnalytics' lowest-correctRate ordering (which unanswered skews).
     const topWrongQuestions = useMemo(
-        () => [...questionAnalytics].sort((a, b) => b.wrongRate - a.wrongRate).slice(0, 3),
-        [questionAnalytics],
+        () => [...gradableQuestionAnalytics].sort((a, b) => b.wrongRate - a.wrongRate).slice(0, 3),
+        [gradableQuestionAnalytics],
     );
 
     const teachingInsights = useMemo(() => {
@@ -676,14 +688,14 @@ export default function ExamAnalyticsTab({
         const hasWeakDiscrimination = (q: typeof questionAnalytics[number]) =>
             q.pointBiserial !== null && q.pointBiserial < WEAK_POINT_BISERIAL_THRESHOLD
             && q.correctRate >= 35 && q.correctRate <= 85;
-        const riskyQuestionSummary = summarizeRiskyQuestions(questionAnalytics.filter(q =>
+        const riskyQuestionSummary = summarizeRiskyQuestions(gradableQuestionAnalytics.filter(q =>
             q.correctRate < 50 ||
             hasWeakDiscrimination(q) ||
             q.unansweredRate >= 20 ||
             (q.topWrongOption?.rate || 0) >= 30
         ));
-        const tooEasyCount = questionAnalytics.filter(q => q.correctRate >= 90).length;
-        const weakDiscriminationCount = questionAnalytics.filter(hasWeakDiscrimination).length;
+        const tooEasyCount = gradableQuestionAnalytics.filter(q => q.correctRate >= 90).length;
+        const weakDiscriminationCount = gradableQuestionAnalytics.filter(hasWeakDiscrimination).length;
         const lowStudents = studentScores.filter(student => student.scorePercentage < 60);
         const borderlineStudents = studentScores.filter(student => student.scorePercentage >= 60 && student.scorePercentage < 80);
         const advancedStudents = studentScores.filter(student => student.scorePercentage >= 90);
@@ -701,7 +713,7 @@ export default function ExamAnalyticsTab({
                 ? `${weakConcept.concept} 보강 후 ${weakConcept.questionNumbers.slice(0, 4).join(", ")}번 유사문항 재응시`
                 : "응시 데이터가 쌓이면 보강 우선순위를 계산합니다.",
         };
-    }, [conceptAnalytics, examStats, questionAnalytics, studentScores]);
+    }, [conceptAnalytics, examStats, gradableQuestionAnalytics, studentScores]);
 
     const studentAchievementBands = useMemo(() => {
         const definitions = [
@@ -726,7 +738,7 @@ export default function ExamAnalyticsTab({
     const overviewRetakeQuestionIds = (
         teachingInsights?.riskyQuestions.length
             ? teachingInsights.riskyQuestions
-            : questionAnalytics
+            : gradableQuestionAnalytics
     )
         .map(question => question.id)
         .slice(0, 5);
@@ -739,9 +751,10 @@ export default function ExamAnalyticsTab({
         submissionCount: examStats?.count ?? 0,
         weakConcept: teachingInsights?.weakConcept?.concept,
         weakConceptRate: teachingInsights?.weakConcept?.correctRate,
+        hasGradableEvidence: gradableQuestionAnalytics.length > 0,
         lowStudentCount: teachingInsights?.lowStudents.length ?? 0,
         riskyQuestionCount: teachingInsights?.riskyQuestionCount ?? 0,
-    }), [examStats?.count, teachingInsights]);
+    }), [examStats?.count, gradableQuestionAnalytics.length, teachingInsights]);
     const overviewMetrics = useMemo<AnalyticsMetricItem[]>(() => examStats ? [
         { id: "mean", label: "평균", value: examStats.avgScore, unit: "점", detail: `표준편차 ${examStats.standardDeviation}`, animate: true },
         { id: "median", label: "중앙값", value: examStats.medianScore, unit: "점", animate: true },
@@ -751,7 +764,7 @@ export default function ExamAnalyticsTab({
         { id: "elapsed", label: "평균 시간", value: formatSeconds(examStats.avgElapsedTimeSec) },
     ] : [], [examStats]);
     const overviewWeakQuestions = useMemo<ExamOverviewWeakQuestion[]>(() => (
-        questionAnalytics.slice(0, 5).map(question => ({
+        gradableQuestionAnalytics.slice(0, 5).map(question => ({
             key: question.id,
             questionNumber: question.index,
             title: question.concept,
@@ -760,17 +773,23 @@ export default function ExamAnalyticsTab({
                 ? `정답 ${question.correctCount}/${question.totalCount}명 · 최다 오답 ${question.topWrongOption.option}번 ${question.topWrongOption.rate}%`
                 : `정답 ${question.correctCount}/${question.totalCount}명 · 오답 없음`,
         }))
-    ), [questionAnalytics]);
+    ), [gradableQuestionAnalytics]);
     const overviewActions = useMemo<ExamOverviewAction[]>(() => {
         if (!teachingInsights) return [];
 
-        const actions: ExamOverviewAction[] = [
-            {
-                key: "weak-concept",
-                title: `취약 개념 보강 · ${teachingInsights.weakConcept?.concept || "데이터 확인"}`,
-                detail: teachingInsights.actionCopy,
-                onAction: () => setActiveWorkspaceView("questions"),
-            },
+        const actions: ExamOverviewAction[] = teachingInsights.weakConcept ? [{
+            key: "weak-concept",
+            title: `취약 개념 보강 · ${teachingInsights.weakConcept.concept}`,
+            detail: teachingInsights.actionCopy,
+            onAction: () => setActiveWorkspaceView("questions"),
+        }] : [{
+            key: "evidence-readiness",
+            title: "채점 근거 확인",
+            detail: "미채점 문항을 확인한 뒤 취약 개념과 행동 추천을 계산합니다.",
+            onAction: () => setActiveWorkspaceView("questions"),
+        }];
+
+        if (gradableQuestionAnalytics.length > 0) actions.push(
             {
                 key: "question-quality",
                 title: buildQuestionQualityActionTitle(teachingInsights.riskyQuestionCount, teachingInsights.tooEasyCount),
@@ -783,7 +802,7 @@ export default function ExamAnalyticsTab({
                 detail: `60~79점 경계 구간 ${teachingInsights.borderlineStudents.length}명 · 심화 ${teachingInsights.advancedStudents.length}명`,
                 onAction: () => setActiveWorkspaceView("students"),
             },
-        ];
+        );
 
         if (overviewRetakeHref) {
             actions.push({
@@ -794,7 +813,7 @@ export default function ExamAnalyticsTab({
                 enabled: retakeAssignmentsEnabled,
                 lockedTitle: "Pro 이상에서 취약 문항 보강 세트를 만들 수 있습니다.",
             });
-        } else {
+        } else if (gradableQuestionAnalytics.length > 0) {
             actions.push({
                 key: "questions",
                 title: "취약 문항 보기",
@@ -804,7 +823,7 @@ export default function ExamAnalyticsTab({
         }
 
         return actions;
-    }, [overviewRetakeHref, retakeAssignmentsEnabled, teachingInsights]);
+    }, [gradableQuestionAnalytics.length, overviewRetakeHref, retakeAssignmentsEnabled, teachingInsights]);
 
     const examTypeWeaknessGroups = useMemo(() => {
         // Feeds Pro-gated UI only — skip the recommendation pass when locked.
@@ -1812,7 +1831,7 @@ export default function ExamAnalyticsTab({
                                     tone: band.tone,
                                 }))}
                                 actions={overviewActions}
-                                sampleStatus="ready"
+                                sampleStatus={sampleStatus}
                             />
                         </div>
                     )}

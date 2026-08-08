@@ -73,7 +73,7 @@ const achievementToneClasses: Record<ExamOverviewAchievementTone, string> = {
 };
 
 function sampleStatusNote(status: ExamAnalyticsReportOverviewProps["sampleStatus"]): string | null {
-    if (status === "partial") return "일부 제출만 반영된 중간 결과입니다.";
+    if (status === "partial") return "일부 제출 기준의 중간 결과입니다.";
     if (status === "stale") return "최신 제출이 아직 반영되지 않았을 수 있습니다.";
     return null;
 }

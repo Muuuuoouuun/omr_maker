@@ -1,7 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { buildExamHeadlineInsight } from "./examAnalyticsReport";
+import {
+    buildExamHeadlineInsight,
+    resolveExamAnalyticsSampleStatus,
+} from "./examAnalyticsReport";
+
+describe("exam analytics sample completeness", () => {
+    it("keeps a usable paginated response explicitly partial", () => {
+        expect(resolveExamAnalyticsSampleStatus({
+            remoteLoaded: true,
+            remotePartial: true,
+        })).toBe("partial");
+    });
+
+    it("marks local-only or otherwise unsynced usable rows stale", () => {
+        expect(resolveExamAnalyticsSampleStatus({
+            remoteLoaded: false,
+            remoteSynced: false,
+        })).toBe("stale");
+    });
+
+    it("marks a complete remote response ready", () => {
+        expect(resolveExamAnalyticsSampleStatus({
+            remoteLoaded: true,
+            remoteSynced: true,
+        })).toBe("ready");
+    });
+});
 
 describe("exam analytics report headline", () => {
+    it("does not fabricate an action when every question lacks gradable evidence", () => {
+        expect(buildExamHeadlineInsight({
+            submissionCount: 8,
+            hasGradableEvidence: false,
+            weakConcept: "시제",
+            weakConceptRate: 0,
+            lowStudentCount: 8,
+            riskyQuestionCount: 3,
+        })).toEqual({
+            tone: "observation",
+            title: "채점 가능한 문항 근거가 더 필요합니다",
+            detail: "미채점 문항은 취약 개념과 행동 추천에서 제외했습니다.",
+        });
+    });
+
     it("asks for more evidence when fewer than five submissions exist", () => {
         expect(buildExamHeadlineInsight({
             submissionCount: 4,

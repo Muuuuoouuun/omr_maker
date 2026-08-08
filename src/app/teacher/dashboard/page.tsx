@@ -48,6 +48,10 @@ import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
 import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient";
 import type { TeacherAttemptAggregate } from "@/lib/teacherAttemptReportingGateway";
 import { loadTeacherIndividualAssignmentTargetCounts } from "@/app/actions/teacherAssignment";
+import {
+    resolveExamAnalyticsSampleStatus,
+    type ExamAnalyticsSampleStatus,
+} from "@/lib/examAnalyticsReport";
 
 type TabType = 'overview' | 'exam' | 'student';
 type DashboardDataMode = "real" | "demo";
@@ -137,7 +141,11 @@ function TeacherDashboard() {
     const [detailedAttemptStatus, setDetailedAttemptStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
     const [detailedAttemptGeneration, setDetailedAttemptGeneration] = useState(0);
     const detailedAttemptGenerationRef = useRef(0);
-    const detailedAttemptCacheRef = useRef<{ generation: number; items: Attempt[] } | null>(null);
+    const detailedAttemptCacheRef = useRef<{
+        generation: number;
+        items: Attempt[];
+        sampleStatus: ExamAnalyticsSampleStatus;
+    } | null>(null);
     const detailedAttemptLoadRef = useRef<DetailedAttemptLoad | null>(null);
     const attemptSummarySignalRef = useRef<string | null>(null);
     const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
@@ -161,6 +169,7 @@ function TeacherDashboard() {
     const [hasDashboardDataResolved, setHasDashboardDataResolved] = useState(false);
     const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
     const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);
+    const [detailedAttemptSampleStatus, setDetailedAttemptSampleStatus] = useState<ExamAnalyticsSampleStatus>("ready");
     const analyticsAttempts = useMemo(
         () => dataMode === "demo" ? attempts : detailedAttempts || [],
         [attempts, dataMode, detailedAttempts],
@@ -184,6 +193,7 @@ function TeacherDashboard() {
         detailedAttemptCacheRef.current = null;
         setDetailedAttempts(null);
         setDetailedAttemptStatus("idle");
+        setDetailedAttemptSampleStatus("ready");
         setDetailedAttemptGeneration(nextGeneration);
     }, []);
 
@@ -195,7 +205,10 @@ function TeacherDashboard() {
         while (true) {
             const requestedGeneration = detailedAttemptGenerationRef.current;
             const cached = detailedAttemptCacheRef.current;
-            if (cached?.generation === requestedGeneration) return cached.items;
+            if (cached?.generation === requestedGeneration) {
+                setDetailedAttemptSampleStatus(cached.sampleStatus);
+                return cached.items;
+            }
 
             let activeLoad = detailedAttemptLoadRef.current;
             if (!activeLoad || activeLoad.generation !== requestedGeneration) {
@@ -211,8 +224,14 @@ function TeacherDashboard() {
                 const result = await activeLoad.promise;
                 if (requestedGeneration !== detailedAttemptGenerationRef.current) continue;
                 if (result.remoteError) throw new Error(result.remoteError);
-                detailedAttemptCacheRef.current = { generation: requestedGeneration, items: result.items };
+                const sampleStatus = resolveExamAnalyticsSampleStatus(result);
+                detailedAttemptCacheRef.current = {
+                    generation: requestedGeneration,
+                    items: result.items,
+                    sampleStatus,
+                };
                 setDetailedAttempts(result.items);
+                setDetailedAttemptSampleStatus(sampleStatus);
                 setDetailedAttemptStatus("ready");
                 return result.items;
             } catch (error) {
@@ -554,6 +573,7 @@ function TeacherDashboard() {
                         detailedAttemptCacheRef.current = {
                             generation: detailedAttemptGenerationRef.current,
                             items: next,
+                            sampleStatus: detailedAttemptSampleStatus,
                         };
                     }
                     return next;
@@ -1229,6 +1249,7 @@ function TeacherDashboard() {
                             rosterGroups={rosterGroups}
                             initialExamId={selectedExamIdForAnalytics}
                             currentPlan={isMockupAccount ? "academy" : currentPlan}
+                            sampleStatus={detailedAttemptSampleStatus}
                         />
                     )}
                     {activeTab === 'student' && (dataMode === "demo" || detailedAttemptStatus === "ready") && (

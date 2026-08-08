@@ -121,13 +121,13 @@ describe("ExamAnalyticsReportOverview", () => {
             <ExamAnalyticsReportOverview {...buildProps({ sampleStatus: "partial" })} />,
         );
 
-        expect(screen.getByText("일부 제출만 반영된 중간 결과입니다.")).toBeInTheDocument();
+        expect(screen.getByText("일부 제출 기준의 중간 결과입니다.")).toBeInTheDocument();
 
         rerender(<ExamAnalyticsReportOverview {...buildProps({ sampleStatus: "stale" })} />);
         expect(screen.getByText("최신 제출이 아직 반영되지 않았을 수 있습니다.")).toBeInTheDocument();
 
         rerender(<ExamAnalyticsReportOverview {...buildProps({ sampleStatus: "ready" })} />);
-        expect(screen.queryByText("일부 제출만 반영된 중간 결과입니다.")).not.toBeInTheDocument();
+        expect(screen.queryByText("일부 제출 기준의 중간 결과입니다.")).not.toBeInTheDocument();
         expect(screen.queryByText("최신 제출이 아직 반영되지 않았을 수 있습니다.")).not.toBeInTheDocument();
     });
 
@@ -190,14 +190,45 @@ describe("exam overview wiring", () => {
         expect(source).toContain("questionResultRepairPlan.repairableCount > 0");
     });
 
-    it("uses a ready sample status when the tab has no completeness or freshness metadata", () => {
-        const source = readFileSync(
+    it("threads loader completeness from the dashboard into the report sample note", () => {
+        const dashboardSource = readFileSync(
+            path.join(process.cwd(), "src/app/teacher/dashboard/page.tsx"),
+            "utf8",
+        );
+        const tabSource = readFileSync(
             path.join(process.cwd(), "src/components/dashboard/tabs/ExamAnalyticsTab.tsx"),
             "utf8",
         );
 
-        expect(source).toContain('sampleStatus="ready"');
-        expect(source).not.toContain('sampleStatus={examStats.count < 5 ? "partial" : "ready"}');
+        expect(dashboardSource).toContain("resolveExamAnalyticsSampleStatus(result)");
+        expect(dashboardSource).toContain("sampleStatus={detailedAttemptSampleStatus}");
+        expect(tabSource).toContain("sampleStatus = \"ready\"");
+        expect(tabSource).toContain("sampleStatus={sampleStatus}");
+        expect(tabSource).not.toContain('sampleStatus="ready"');
+    });
+
+    it("excludes zero-denominator questions from actionable evidence", async () => {
+        const examAnalyticsModule = await import("./ExamAnalyticsTab");
+        const filterGradableQuestionEvidence = (
+            examAnalyticsModule as unknown as {
+                filterGradableQuestionEvidence?: <T extends { totalCount: number }>(items: T[]) => T[];
+            }
+        ).filterGradableQuestionEvidence;
+        const items = [
+            { id: "ungraded", totalCount: 0 },
+            { id: "graded", totalCount: 4 },
+        ];
+
+        expect(filterGradableQuestionEvidence).toBeTypeOf("function");
+        expect(filterGradableQuestionEvidence?.(items)).toEqual([items[1]]);
+
+        const source = readFileSync(
+            path.join(process.cwd(), "src/components/dashboard/tabs/ExamAnalyticsTab.tsx"),
+            "utf8",
+        );
+        expect(source).toContain("const gradableQuestionAnalytics = useMemo");
+        expect(source).toContain("hasGradableEvidence: gradableQuestionAnalytics.length > 0");
+        expect(source).not.toContain("questionAnalytics.slice(0, 5).map");
     });
 
     it("keeps the true risky-question total while capping the overview evidence list", async () => {

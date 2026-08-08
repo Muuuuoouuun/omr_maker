@@ -1,5 +1,6 @@
 export interface ExamHeadlineInsightInput {
     submissionCount: number;
+    hasGradableEvidence?: boolean;
     weakConcept?: string;
     weakConceptRate?: number;
     lowStudentCount: number;
@@ -10,6 +11,18 @@ export interface ExamHeadlineInsight {
     tone: "action" | "observation" | "positive";
     title: string;
     detail: string;
+}
+
+export type ExamAnalyticsSampleStatus = "ready" | "partial" | "stale";
+
+export function resolveExamAnalyticsSampleStatus(input: {
+    remoteLoaded: boolean;
+    remoteSynced?: boolean;
+    remotePartial?: boolean;
+}): ExamAnalyticsSampleStatus {
+    if (input.remotePartial === true) return "partial";
+    if (!input.remoteLoaded || input.remoteSynced === false) return "stale";
+    return "ready";
 }
 
 function sanitizeCount(value: number): number {
@@ -27,6 +40,14 @@ export function buildExamHeadlineInsight(input: ExamHeadlineInsightInput): ExamH
     const riskyQuestionCount = sanitizeCount(input.riskyQuestionCount);
     const weakConcept = input.weakConcept?.trim() || "";
     const weakConceptRate = sanitizeRate(input.weakConceptRate);
+
+    if (input.hasGradableEvidence === false) {
+        return {
+            tone: "observation",
+            title: "채점 가능한 문항 근거가 더 필요합니다",
+            detail: "미채점 문항은 취약 개념과 행동 추천에서 제외했습니다.",
+        };
+    }
 
     if (submissionCount < 5) {
         return {

@@ -281,6 +281,29 @@ describe("teacher attempt read fallback", () => {
         });
     });
 
+    it("preserves partial page metadata on the detailed analytics loader", async () => {
+        actionMocks.list.mockResolvedValue({
+            status: "loaded",
+            attempts: [baseAttempt],
+            page: {
+                partial: true,
+                hasMore: true,
+                itemCount: 1,
+                nextCursor: { finishedAt: baseAttempt.finishedAt, id: baseAttempt.id },
+            },
+        });
+
+        await expect(loadTeacherAttempts()).resolves.toMatchObject({
+            items: [{ id: baseAttempt.id }],
+            remoteLoaded: true,
+            remoteSynced: false,
+            remotePartial: true,
+            remoteHasMore: true,
+            remoteItemCount: 1,
+            remoteNextCursor: { finishedAt: baseAttempt.finishedAt, id: baseAttempt.id },
+        });
+    });
+
     it("fails closed instead of returning prior-account cache when the authenticated server read fails", async () => {
         actionMocks.list.mockResolvedValue({ status: "service_unavailable", error: "offline" });
         persistenceMocks.readLocalAttempts.mockReturnValue([{ ...baseAttempt, id: "prior-account" }]);
