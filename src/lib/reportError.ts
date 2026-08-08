@@ -210,7 +210,7 @@ function generatedOperationalId(excluded?: string): string {
     return `${candidate.slice(0, -1)}${replacement}`;
 }
 
-function safeCorrelationId(value: unknown, eventId: string): string {
+export function safeOperationalCorrelationId(value: unknown, eventId: string): string {
     if (typeof value === "string") {
         const match = value.match(SAFE_CORRELATION_ID)?.[0];
         if (match === value && value !== eventId && !SENSITIVE_CORRELATION_ID.test(value)) return value;
@@ -224,7 +224,7 @@ function safeSeverity(value: unknown, fallback: OperationalSeverity): Operationa
         : fallback;
 }
 
-function safeContext(value: unknown): string {
+export function safeOperationalContext(value: unknown): string {
     return typeof value === "string" && SAFE_CONTEXTS.has(value) ? value : "unknown";
 }
 
@@ -262,9 +262,9 @@ export function buildOperationalErrorEvent(
         const eventId = generatedOperationalId();
         return {
             event: "omr.runtime_error" as const,
-            context: safeContext(context),
+            context: safeOperationalContext(context),
             eventId,
-            correlationId: safeCorrelationId(ownDataValue(options, "correlationId"), eventId),
+            correlationId: safeOperationalCorrelationId(ownDataValue(options, "correlationId"), eventId),
             buildSha: safeRuntimeBuildSha(),
             severity: safeSeverity(ownDataValue(options, "severity"), "error"),
             timestamp: safeTimestamp(ownDataValue(options, "now")),

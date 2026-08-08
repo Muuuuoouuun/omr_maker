@@ -1,5 +1,12 @@
 import "next/dist/compiled/server-only";
-import { SAFE_EVENT_ID, type OperationalEvent } from "./reportError";
+import {
+    redactOperationalError,
+    SAFE_EVENT_ID,
+    safeOperationalContext,
+    safeOperationalCorrelationId,
+    type OperationalEvent,
+    type OperationalSeverity,
+} from "./reportError";
 
 type Env = Record<string, string | undefined>;
 type FetchLike = typeof fetch;
@@ -34,31 +41,76 @@ function isSafeEventId(value: unknown): value is string {
     return typeof value === "string" && value.match(SAFE_EVENT_ID)?.[0] === value;
 }
 
+function ownDataValue(value: unknown, key: string): unknown {
+    if ((typeof value !== "object" || value === null) && typeof value !== "function") return undefined;
+    try {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        return descriptor && "value" in descriptor ? descriptor.value : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+function snapshotBuildSha(value: unknown): string {
+    return typeof value === "string" && (value === "unknown" || /^[a-f0-9]{7,40}$/.test(value))
+        ? value
+        : "unknown";
+}
+
+function snapshotTimestamp(value: unknown): string {
+    if (typeof value !== "string") return "1970-01-01T00:00:00.000Z";
+    try {
+        return new Date(value).toISOString() === value ? value : "1970-01-01T00:00:00.000Z";
+    } catch {
+        return "1970-01-01T00:00:00.000Z";
+    }
+}
+
+function snapshotSeverity(value: unknown): OperationalSeverity {
+    return value === "info" || value === "warning" || value === "error" || value === "critical"
+        ? value
+        : "error";
+}
+
+function snapshotHeartbeatMetrics(value: unknown): Record<string, number> {
+    const metrics: Record<string, number> = {};
+    for (const key of ["claimed", "deleted", "failed", "batches"]) {
+        const metric = ownDataValue(value, key);
+        if (typeof metric === "number" && Number.isSafeInteger(metric) && metric >= 0) {
+            metrics[key] = metric;
+        }
+    }
+    return metrics;
+}
+
 function snapshotOperationalEvent(event: OperationalEvent, eventId: string): OperationalEvent | undefined {
-    const eventName = event.event;
+    const eventName = ownDataValue(event, "event");
     if (eventName === "omr.runtime_error") {
         return {
             event: eventName,
-            context: event.context,
+            context: safeOperationalContext(ownDataValue(event, "context")),
             eventId,
-            correlationId: event.correlationId,
-            buildSha: event.buildSha,
-            severity: event.severity,
-            timestamp: event.timestamp,
-            error: event.error,
+            correlationId: safeOperationalCorrelationId(ownDataValue(event, "correlationId"), eventId),
+            buildSha: snapshotBuildSha(ownDataValue(event, "buildSha")),
+            severity: snapshotSeverity(ownDataValue(event, "severity")),
+            timestamp: snapshotTimestamp(ownDataValue(event, "timestamp")),
+            error: redactOperationalError(ownDataValue(event, "error")),
         };
     }
     if (eventName === "omr.job_heartbeat") {
+        const status = ownDataValue(event, "status");
+        if (status !== "ok" && status !== "degraded") return undefined;
+        const job = ownDataValue(event, "job");
         return {
             event: eventName,
-            job: event.job,
-            status: event.status,
-            severity: event.severity,
+            job: job === "asset-gc" || job === "readiness" ? job : "unknown",
+            status,
+            severity: status === "ok" ? "info" : "warning",
             eventId,
-            correlationId: event.correlationId,
-            buildSha: event.buildSha,
-            timestamp: event.timestamp,
-            metrics: event.metrics,
+            correlationId: safeOperationalCorrelationId(ownDataValue(event, "correlationId"), eventId),
+            buildSha: snapshotBuildSha(ownDataValue(event, "buildSha")),
+            timestamp: snapshotTimestamp(ownDataValue(event, "timestamp")),
+            metrics: snapshotHeartbeatMetrics(ownDataValue(event, "metrics")),
         };
     }
     return undefined;

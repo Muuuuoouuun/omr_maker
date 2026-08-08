@@ -311,23 +311,117 @@ describe("operational event sink", () => {
         expect(fetchImpl).not.toHaveBeenCalled();
     });
 
+    it("deep-snapshots runtime errors without invoking nested code or leaking hostile values", async () => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const errorToJSON = vi.fn(() => ({ token: "toJSON-token-secret" }));
+        const countGetter = vi.fn(() => "getter-private-body");
+        const proxyGet = vi.fn(() => {
+            throw new Error("proxy-db-error-secret");
+        });
+        const proxiedStatus = new Proxy({ code: "service_unavailable" }, { get: proxyGet });
+        const hostileError = {
+            code: "service_unavailable",
+            status: proxiedStatus,
+            toJSON: errorToJSON,
+            name: "김학생",
+            email: "student@example.com",
+            token: "private-token",
+            rawBody: "private request body",
+            pdf: "%PDF private content",
+            databaseError: "private database detail",
+        };
+        Object.defineProperty(hostileError, "count", {
+            enumerable: true,
+            get: countGetter,
+        });
+        const contextToJSON = vi.fn(() => "context-secret");
+        const contextGetter = vi.fn(() => ({ toJSON: contextToJSON }));
+        const hostileEvent = {
+            ...buildOperationalErrorEvent("route-error", new Error("private")),
+            error: hostileError,
+        };
+        Object.defineProperty(hostileEvent, "context", {
+            enumerable: true,
+            get: contextGetter,
+        });
+
+        await expect(deliverOperationalEvent(hostileEvent as never, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "delivered" });
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(errorToJSON).not.toHaveBeenCalled();
+        expect(countGetter).not.toHaveBeenCalled();
+        expect(proxyGet).not.toHaveBeenCalled();
+        expect(contextGetter).not.toHaveBeenCalled();
+        expect(contextToJSON).not.toHaveBeenCalled();
+        const body = String(fetchImpl.mock.calls[0]?.[1]?.body);
+        expect(JSON.parse(body)).toMatchObject({
+            context: "unknown",
+            error: { code: "service_unavailable" },
+        });
+        expect(body).not.toMatch(
+            /toJSON-token-secret|getter-private-body|proxy-db-error-secret|김학생|student@example\.com|private-token|private request body|%PDF|private database detail|context-secret/,
+        );
+    });
+
+    it("deep-snapshots heartbeat metrics from exact numeric data descriptors", async () => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const metricsToJSON = vi.fn(() => ({ token: "metrics-token-secret" }));
+        const claimedGetter = vi.fn(() => 99);
+        const proxyGet = vi.fn(() => {
+            throw new Error("metrics-proxy-secret");
+        });
+        const hostileMetrics = {
+            deleted: 2,
+            failed: Number.POSITIVE_INFINITY,
+            batches: "3",
+            unknown: 4,
+            rawBody: "metrics-private-body",
+            toJSON: metricsToJSON,
+        };
+        Object.defineProperty(hostileMetrics, "claimed", {
+            enumerable: true,
+            get: claimedGetter,
+        });
+        const metricsProxy = new Proxy(hostileMetrics, { get: proxyGet });
+        const hostileEvent = {
+            ...buildOperationalHeartbeatEvent("asset-gc", "degraded"),
+            metrics: metricsProxy,
+        };
+
+        await expect(deliverOperationalEvent(hostileEvent as never, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "delivered" });
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(metricsToJSON).not.toHaveBeenCalled();
+        expect(claimedGetter).not.toHaveBeenCalled();
+        expect(proxyGet).not.toHaveBeenCalled();
+        const body = String(fetchImpl.mock.calls[0]?.[1]?.body);
+        expect(JSON.parse(body)).toMatchObject({ metrics: { deleted: 2 } });
+        expect(JSON.parse(body).metrics).toEqual({ deleted: 2 });
+        expect(body).not.toMatch(/metrics-token-secret|metrics-proxy-secret|metrics-private-body|Infinity|"3"/);
+    });
+
     it("enforces the 32 KiB delivery bound using UTF-8 bytes", async () => {
         const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
             void args;
             return new Response(null, { status: 202 });
         });
         const encoder = new TextEncoder();
-        const baseEvent = { ...buildOperationalErrorEvent("route-error", new Error("private")), error: "" };
-        const baseBytes = encoder.encode(JSON.stringify(baseEvent)).byteLength;
-        const underCount = Math.floor((MAX_OPERATIONAL_EVENT_BYTES - baseBytes) / 3);
-        const underEvent = { ...baseEvent, error: "가".repeat(underCount) };
-        const overEvent = { ...baseEvent, error: "가".repeat(underCount + 1) };
-        const underBytes = encoder.encode(JSON.stringify(underEvent)).byteLength;
-        const overBytes = encoder.encode(JSON.stringify(overEvent)).byteLength;
+        const baseEvent = buildOperationalErrorEvent("route-error", new Error("private"));
+        const emptyErrorBytes = encoder.encode(JSON.stringify({ ...baseEvent, error: "" })).byteLength;
+        const underDigits = MAX_OPERATIONAL_EVENT_BYTES - emptyErrorBytes;
+        const underEvent = { ...baseEvent, error: BigInt("1".repeat(underDigits)) };
+        const overEvent = { ...baseEvent, error: BigInt("1".repeat(underDigits + 1)) };
+        const underBytes = encoder.encode(JSON.stringify({ ...baseEvent, error: "1".repeat(underDigits) })).byteLength;
+        const overBytes = encoder.encode(JSON.stringify({ ...baseEvent, error: "1".repeat(underDigits + 1) })).byteLength;
 
-        expect(underBytes).toBeLessThanOrEqual(MAX_OPERATIONAL_EVENT_BYTES);
-        expect(MAX_OPERATIONAL_EVENT_BYTES - underBytes).toBeLessThan(3);
-        expect(overBytes).toBeGreaterThan(MAX_OPERATIONAL_EVENT_BYTES);
+        expect(underBytes).toBe(MAX_OPERATIONAL_EVENT_BYTES);
+        expect(overBytes).toBe(MAX_OPERATIONAL_EVENT_BYTES + 1);
         await expect(deliverOperationalEvent(underEvent, configuredEnv, fetchImpl, 250))
             .resolves.toEqual({ status: "delivered" });
         await expect(deliverOperationalEvent(overEvent, configuredEnv, fetchImpl, 250))
