@@ -82,6 +82,7 @@ const manyPointModel: StudentGrowthReportModel = {
     rankDelta: 1,
     trend: "up",
     omittedCount: 0,
+    selectedAttemptIncluded: true,
 };
 
 const onePointModel: StudentGrowthReportModel = {
@@ -104,6 +105,7 @@ const onePointModel: StudentGrowthReportModel = {
     rankDelta: null,
     trend: "insufficient",
     omittedCount: 0,
+    selectedAttemptIncluded: true,
 };
 
 beforeEach(() => {

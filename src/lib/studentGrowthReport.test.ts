@@ -42,6 +42,7 @@ function build(
     exams: Exam[] = Array.from(new Set(attempts.map(item => item.examId))).map(id => exam(id)),
     overrides: Partial<{
         selectedStudentId: string;
+        selectedAttemptId: string;
         selectedClassKey: string;
         selectedOrganizationId: string;
         dataStatus: GrowthDataStatus;
@@ -69,7 +70,29 @@ describe("student growth report", () => {
             rankDelta: null,
             trend: "insufficient",
             omittedCount: 0,
+            selectedAttemptIncluded: false,
         });
+    });
+
+    it("uses the authoritative organization scope for a legacy selected attempt", () => {
+        const orgAExam = { ...exam("exam-1", "A 조직 시험"), organizationId: "org-a" };
+        const orgBExam = { ...exam("exam-1", "B 조직 시험"), organizationId: "org-b" };
+        const model = build([
+            attempt({ id: "selected", examId: "exam-1", studentId: "student-1", classId: "class-a", score: 80 }),
+            attempt({ id: "org-a-peer", examId: "exam-1", organizationId: "org-a", studentId: "student-2", classId: "class-a", score: 60 }),
+            attempt({ id: "org-b-peer", examId: "exam-1", organizationId: "org-b", studentId: "student-3", classId: "class-a", score: 100 }),
+        ], [orgAExam, orgBExam], {
+            selectedAttemptId: "selected",
+            selectedOrganizationId: "org-a",
+        });
+
+        expect(model.rows[0]).toMatchObject({
+            examTitle: "A 조직 시험",
+            classAverage: 70,
+            participantCount: 2,
+            rank: 1,
+        });
+        expect(model.selectedAttemptIncluded).toBe(true);
     });
 
     it("isolates an explicit organization while retaining unscoped legacy attempts during migration", () => {
@@ -350,6 +373,33 @@ describe("student growth report", () => {
         expect(model.rows).toHaveLength(1);
         expect(model.rows[0]).toMatchObject({ examTitle: "확인된 시험", participantCount: 1 });
         expect(model.omittedCount).toBe(2);
+    });
+
+    it("distinguishes a missing selected attempt from unrelated omitted cohort rows", () => {
+        const model = build([
+            attempt({ id: "selected-history", examId: "exam-1", studentId: "student-1", classId: "class-a", score: 80 }),
+            attempt({ id: "missing-identity", examId: "exam-1", studentName: "   ", classId: "class-a", score: 60 }),
+        ], [exam("exam-1")], {
+            dataStatus: "partial",
+            selectedAttemptId: "selected-current",
+        });
+
+        expect(model.rows).toHaveLength(1);
+        expect(model.omittedCount).toBe(1);
+        expect(model.selectedAttemptIncluded).toBe(false);
+    });
+
+    it("retains selected-attempt evidence when that included row is omitted from metrics", () => {
+        const model = build([
+            attempt({ id: "selected-current", examId: "missing-exam", studentId: "student-1", classId: "class-a", score: 80 }),
+        ], [], {
+            dataStatus: "partial",
+            selectedAttemptId: "selected-current",
+        });
+
+        expect(model.rows).toHaveLength(0);
+        expect(model.omittedCount).toBe(1);
+        expect(model.selectedAttemptIncluded).toBe(true);
     });
 
     it("prefers organization-matching exam metadata when exam ids collide", () => {

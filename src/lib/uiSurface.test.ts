@@ -1391,7 +1391,7 @@ describe("service UI surface", () => {
 
         expect(modelCalls).toHaveLength(1);
         expect(teacherAttemptPage).toContain("growthClassKeyForAttempt(selectedGrowthAttempt)");
-        expect(teacherAttemptPage).toContain("selectedOrganizationId: attempt.organizationId");
+        expect(teacherAttemptPage).toContain("selectedOrganizationId: activeOrganizationId || attempt.organizationId");
         expect(teacherAttemptPage).toContain("attempts: growthAttempts");
         expect(teacherAttemptPage).toContain("exams: cumulativeExams");
         expect(teacherAttemptPage).toContain("growthReportState={growthReportState}");
@@ -1405,6 +1405,30 @@ describe("service UI surface", () => {
 
         expect(stateBlock).toContain("growthReportModel.omittedCount === 0");
         expect(stateBlock).toContain("model: growthReportModel");
+    });
+
+    it("does not treat unrelated omissions as evidence that a partial collection includes the selected attempt", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const stateIndex = teacherAttemptPage.indexOf("const growthReportState = useMemo");
+        const labelIndex = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo");
+        const stateBlock = teacherAttemptPage.slice(stateIndex, labelIndex);
+        const partialIndex = stateBlock.indexOf('cumulativeStatus === "partial"');
+        const unlinkedIndex = stateBlock.indexOf("if (!selectedGrowthAttempt)", partialIndex);
+        const partialBlock = stateBlock.slice(partialIndex, unlinkedIndex);
+
+        expect(partialBlock).toContain("!growthReportModel.selectedAttemptIncluded");
+        expect(partialBlock).not.toContain("growthReportModel.rows.length === 0 && growthReportModel.omittedCount === 0");
+    });
+
+    it("prefers the active workspace organization over a legacy attempt fallback", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const modelIndex = teacherAttemptPage.indexOf("buildStudentGrowthReport({");
+        const modelBlock = teacherAttemptPage.slice(modelIndex, modelIndex + 700);
+
+        expect(teacherAttemptPage).toContain("setActiveOrganizationId(workspaceOrganizationId || null)");
+        expect(modelBlock).toContain("selectedOrganizationId: activeOrganizationId || attempt.organizationId");
+        expect(modelBlock).not.toContain("cumulativeExams.find");
+        expect(modelBlock).not.toContain("growthAttempts.find");
     });
 
     it("enriches legacy cohort rows with matched roster classes before growth modeling", () => {

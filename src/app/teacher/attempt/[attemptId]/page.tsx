@@ -149,6 +149,7 @@ export default function TeacherAttemptPage() {
     }, [id]);
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
+    const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(null);
     const [peerAttempts, setPeerAttempts] = useState<Attempt[]>([]);
     const [exam, setExam] = useState<Exam | null>(null);
     const [drawings, setDrawings] = useState<PdfDrawings | undefined>(undefined);
@@ -192,6 +193,7 @@ export default function TeacherAttemptPage() {
             setDetailLoadStatus("loading");
             setAccessDenied(false);
             setAttempt(null);
+            setActiveOrganizationId(null);
             setExam(null);
             setDrawings(undefined);
             setPdfFile(null);
@@ -225,6 +227,9 @@ export default function TeacherAttemptPage() {
                 setDetailLoadStatus("ready");
                 return;
             }
+
+            const workspaceOrganizationId = readActiveWorkspaceContext().organizationId?.trim();
+            setActiveOrganizationId(workspaceOrganizationId || null);
 
             let attemptResolved = false;
             try {
@@ -262,9 +267,8 @@ export default function TeacherAttemptPage() {
                 // Keep a client-side defense in depth on top of the canonical,
                 // organization-scoped teacher gateway. Legacy rows without an
                 // organizationId remain readable during migration.
-                const activeOrganizationId = readActiveWorkspaceContext().organizationId?.trim();
                 const attemptOrganizationId = found.organizationId?.trim();
-                if (attemptOrganizationId && activeOrganizationId && attemptOrganizationId !== activeOrganizationId) {
+                if (attemptOrganizationId && workspaceOrganizationId && attemptOrganizationId !== workspaceOrganizationId) {
                     setAccessDenied(true);
                     setDetailLoadStatus("ready");
                     return;
@@ -521,13 +525,14 @@ export default function TeacherAttemptPage() {
             || attempt.studentName;
         return buildStudentGrowthReport({
             selectedStudentId,
+            selectedAttemptId: attempt.id,
             selectedClassKey: growthClassKeyForAttempt(selectedGrowthAttempt),
-            selectedOrganizationId: attempt.organizationId,
+            selectedOrganizationId: activeOrganizationId || attempt.organizationId,
             dataStatus: cumulativeStatus,
             attempts: growthAttempts,
             exams: cumulativeExams,
         });
-    }, [attempt, cumulativeAttemptId, cumulativeExams, cumulativeStatus, growthAttempts, rosterStudent?.id, selectedGrowthAttempt]);
+    }, [activeOrganizationId, attempt, cumulativeAttemptId, cumulativeExams, cumulativeStatus, growthAttempts, rosterStudent?.id, selectedGrowthAttempt]);
 
     const growthReportState = useMemo<StudentGrowthReportState>(() => {
         if (!attempt || cumulativeAttemptId !== attempt.id) return { status: "idle" };
@@ -545,7 +550,7 @@ export default function TeacherAttemptPage() {
             && (
                 !selectedGrowthAttempt
                 || !growthReportModel
-                || (growthReportModel.rows.length === 0 && growthReportModel.omittedCount === 0)
+                || !growthReportModel.selectedAttemptIncluded
             )
         ) {
             return {

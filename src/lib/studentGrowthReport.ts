@@ -26,10 +26,12 @@ export interface StudentGrowthReportModel {
     rankDelta: number | null;
     trend: "up" | "down" | "flat" | "insufficient";
     omittedCount: number;
+    selectedAttemptIncluded: boolean;
 }
 
 export interface BuildStudentGrowthReportInput {
     selectedStudentId: string;
+    selectedAttemptId?: string;
     selectedClassKey: string;
     selectedOrganizationId?: string;
     dataStatus: GrowthDataStatus;
@@ -143,12 +145,20 @@ function isFinalAttempt(attempt: Attempt): boolean {
 
 export function buildStudentGrowthReport({
     selectedStudentId,
+    selectedAttemptId,
     selectedClassKey,
     selectedOrganizationId,
     dataStatus,
     attempts,
     exams,
 }: BuildStudentGrowthReportInput): StudentGrowthReportModel {
+    const selectedAttemptKey = stableKey(selectedAttemptId);
+    const selectedAttemptIncluded = selectedAttemptKey
+        ? attempts.some(attempt => (
+            stableKey(attempt.id) === selectedAttemptKey
+            && attemptMatchesOrganization(attempt, selectedOrganizationId)
+        ))
+        : false;
     const examById = buildScopedExamMap(exams, selectedOrganizationId);
     const scoreByAttempt = new Map<Attempt, number>();
     let omittedCount = 0;
@@ -234,5 +244,8 @@ export function buildStudentGrowthReport({
         rankDelta,
         trend,
         omittedCount,
+        selectedAttemptIncluded: selectedAttemptId == null
+            ? selectedAttempts.length > 0
+            : selectedAttemptIncluded,
     };
 }
