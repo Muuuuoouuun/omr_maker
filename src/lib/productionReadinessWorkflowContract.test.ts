@@ -46,6 +46,7 @@ describe("production readiness workflow release identity", () => {
 
         const historical = spawnSync("sh", ["-c", equalityCheck], {
             env: {
+                ...process.env,
                 OMR_PRODUCTION_EXPECTED_BUILD: "a".repeat(40),
                 WORKFLOW_SHA: "b".repeat(40),
             },
