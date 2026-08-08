@@ -23,6 +23,7 @@ const READINESS_TOKEN = "readiness-token-which-is-at-least-32-bytes";
 const ANON_KEY = "anon-key-which-is-at-least-32-random-bytes";
 const AUTH_JWT = `eyJhbGciOiJIUzI1NiJ9.${"a".repeat(32)}.${"b".repeat(32)}`;
 const SERVICE_KEY = "service-role-key-which-is-at-least-32-bytes";
+const ASSET_GC_CRON_SECRET = "asset-gc-cron-secret-with-strong-entropy-42";
 
 function signPreviewIdentity(secret: string): string {
     return createHmac("sha256", secret)
@@ -50,6 +51,7 @@ function env() {
         OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: PREVIEW_ARTIFACT_DIGEST,
         OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE: PREVIEW_ATTESTATION_SIGNATURE,
         OMR_RELEASE_ATTESTATION_SECRET: RELEASE_ATTESTATION_SECRET,
+        OMR_ASSET_GC_CRON_SECRET: ASSET_GC_CRON_SECRET,
     };
 }
 
@@ -64,7 +66,13 @@ function response(url: string, body: unknown, status = 200, headers: Record<stri
     }) as Response & { url: string; redirected: boolean };
 }
 
-function fetchFor(options: { build?: string; readyStatus?: string; denyStatus?: number } = {}) {
+function fetchFor(options: {
+    build?: string;
+    readyStatus?: string;
+    denyStatus?: number;
+    assetGcStatus?: number;
+    assetGcObservability?: string;
+} = {}) {
     return vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
         const url = String(input);
         if (url === "https://app.example.com/") {
@@ -93,6 +101,20 @@ function fetchFor(options: { build?: string; readyStatus?: string; denyStatus?: 
                 build: options.build ?? BUILD,
                 timestamp: new Date().toISOString(),
             });
+            Object.defineProperties(result, { url: { value: url }, redirected: { value: false } });
+            return result;
+        }
+        if (url.endsWith("/api/internal/asset-gc")) {
+            expect(new Headers(init?.headers).get("authorization"))
+                .toBe(`Bearer ${ASSET_GC_CRON_SECRET}`);
+            const result = response(url, {
+                status: options.assetGcStatus && options.assetGcStatus !== 200 ? "unavailable" : "ok",
+                observability: options.assetGcObservability ?? "ready",
+                claimed: 0,
+                deleted: 0,
+                failed: 0,
+                batches: 1,
+            }, options.assetGcStatus ?? 200);
             Object.defineProperties(result, { url: { value: url }, redirected: { value: false } });
             return result;
         }
@@ -180,6 +202,42 @@ describe("hosted production deployment verification", () => {
         expect(JSON.stringify(config)).not.toContain(SERVICE_KEY);
         expect(JSON.stringify(config)).not.toContain(RELEASE_ATTESTATION_SECRET);
         expect(JSON.stringify(config)).not.toContain(PREVIEW_ATTESTATION_SIGNATURE);
+        expect(JSON.stringify(config)).not.toContain(ASSET_GC_CRON_SECRET);
+    });
+
+    it.each([
+        ["missing", undefined],
+        ["short", "s".repeat(31)],
+        ["long", "s".repeat(257)],
+        ["whitespace", `${"s".repeat(32)} space`],
+    ])("rejects a %s protected asset-GC cron secret", (_label, value) => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-gc-secret-"));
+        expect(() => resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: { ...env(), OMR_ASSET_GC_CRON_SECRET: value },
+            cwd: process.cwd(),
+        })).toThrow(/asset.*gc.*secret.*missing|asset.*gc.*secret.*invalid/i);
+    });
+
+    it.each([
+        ["OMR_READINESS_TOKEN", READINESS_TOKEN],
+        ["OMR_PRODUCTION_SUPABASE_ANON_KEY", ANON_KEY],
+        ["OMR_PRODUCTION_AUTHENTICATED_JWT", AUTH_JWT],
+        ["OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY", SERVICE_KEY],
+        ["OMR_RELEASE_ATTESTATION_SECRET", RELEASE_ATTESTATION_SECRET],
+    ])("rejects an asset-GC cron secret reused as %s", (key, value) => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-gc-reuse-"));
+        expect(() => resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: { ...env(), OMR_ASSET_GC_CRON_SECRET: value, [key]: value },
+            cwd: process.cwd(),
+        })).toThrow(/credentials.*distinct/i);
     });
 
     it("fails closed unless the expected build is the checked-out verifier HEAD", () => {
@@ -310,7 +368,8 @@ describe("hosted production deployment verification", () => {
             env: env(),
             cwd: process.cwd(),
         });
-        const result = await runProductionDeploymentVerification(config, fetchFor());
+        const hostedFetch = fetchFor();
+        const result = await runProductionDeploymentVerification(config, hostedFetch);
 
         expect(result).toMatchObject({
             status: "verified",
@@ -326,6 +385,7 @@ describe("hosted production deployment verification", () => {
         expect(JSON.stringify(result)).not.toContain(SERVICE_KEY);
         expect(JSON.stringify(result)).not.toContain(RELEASE_ATTESTATION_SECRET);
         expect(JSON.stringify(result)).not.toContain(PREVIEW_ATTESTATION_SIGNATURE);
+        expect(JSON.stringify(result)).not.toContain(ASSET_GC_CRON_SECRET);
         expect(result.releaseIdentity).toEqual({
             verifierSha: BUILD,
             deployedSha: BUILD,
@@ -333,6 +393,58 @@ describe("hosted production deployment verification", () => {
             previewArtifactDigest: PREVIEW_ARTIFACT_DIGEST,
             previewIdentityAttested: true,
         });
+        const requestUrls = hostedFetch.mock.calls.map(([input]) => String(input));
+        expect(requestUrls.indexOf("https://app.example.com/api/healthz"))
+            .toBeLessThan(requestUrls.indexOf("https://app.example.com/api/internal/asset-gc"));
+        expect(requestUrls.indexOf("https://app.example.com/api/internal/asset-gc"))
+            .toBeLessThan(requestUrls.indexOf("https://app.example.com/api/readyz"));
+        expect(result).toMatchObject({
+            assetGcBootstrap: { status: "healthy", observability: "ready" },
+        });
+    });
+
+    it("allows sink-only GC telemetry degradation but still requires ready observability afterward", async () => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-gc-observability-"));
+        const config = resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: env(),
+            cwd: process.cwd(),
+        });
+        await expect(runProductionDeploymentVerification(config, fetchFor({
+            assetGcObservability: "degraded",
+        }))).resolves.toMatchObject({
+            assetGcBootstrap: { status: "healthy", observability: "degraded" },
+        });
+        const degradedReadinessConfig = resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "failed.json")}`,
+            ],
+            env: env(),
+            cwd: process.cwd(),
+        });
+        await expect(runProductionDeploymentVerification(
+            degradedReadinessConfig,
+            fetchFor({ assetGcObservability: "degraded", readyStatus: "degraded" }),
+        ))
+            .rejects.toThrow(/readiness/i);
+    });
+
+    it("aborts deployment verification when the one-shot asset GC is not durably healthy", async () => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-gc-failure-"));
+        const config = resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: env(),
+            cwd: process.cwd(),
+        });
+        await expect(runProductionDeploymentVerification(config, fetchFor({ assetGcStatus: 503 })))
+            .rejects.toThrow();
     });
 
     it.each([

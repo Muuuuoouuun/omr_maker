@@ -168,10 +168,17 @@ CRUD 성공을 모두 확인합니다.
 - 두 응답 모두 `Cache-Control: no-store`입니다. 준비 상태 응답과 오류 로그에는 원본 DB 오류,
   학생 이름·이메일, 쿠키, 토큰, 답안/PDF payload를 넣지 않습니다. `OMR_READINESS_TIMEOUT_MS`는
   별도 probe 제한 시간이며 100~10,000ms 범위로 제한됩니다(기본 5,000ms).
-- 배포 직후 다음과 같이 확인하고 결과에 커밋 SHA와 시각을 남깁니다.
+- 배포 직후에는 애플리케이션 writes를 계속 paused 상태로 둘 수 있지만, 이 게이트에 한해
+  GC claims를 명시적으로 resumed 상태로 전환합니다. 검증된 SHA/attestation과 공개 health를
+  먼저 확인하고, protected `OMR_ASSET_GC_CRON_SECRET`으로 자산 GC를 한 번 실행한 뒤에만
+  `/api/readyz`를 확인합니다. 정리 실패, durable dead backlog, 상태 저장 실패는 즉시 배포를
+  중단합니다. GC가 durable healthy이고 중앙 sink 전달만 실패한 `200 observability=degraded`는
+  이 단계에서 허용하지만, 이어지는 `/api/readyz`는 반드시 `observability=ready`여야 합니다.
+  결과에는 커밋 SHA와 시각을 남깁니다. cron secret은 로그나 evidence artifact에 기록하지 않습니다.
 
 ```sh
 curl -i https://<deployment>/api/healthz
+curl -i -H "Authorization: Bearer $OMR_ASSET_GC_CRON_SECRET" https://<deployment>/api/internal/asset-gc
 curl -i -H "Authorization: Bearer $OMR_READINESS_TOKEN" https://<deployment>/api/readyz
 ```
 

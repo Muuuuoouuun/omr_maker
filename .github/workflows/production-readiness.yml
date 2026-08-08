@@ -75,6 +75,7 @@ jobs:
           OMR_PRODUCTION_AUTHENTICATED_JWT: ${{ secrets.OMR_PRODUCTION_AUTHENTICATED_JWT }}
           OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY }}
           OMR_READINESS_TOKEN: ${{ secrets.OMR_READINESS_TOKEN }}
+          OMR_ASSET_GC_CRON_SECRET: ${{ secrets.OMR_ASSET_GC_CRON_SECRET }}
           OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
           OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID: ${{ inputs.preview_deployment_id }}
           OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}

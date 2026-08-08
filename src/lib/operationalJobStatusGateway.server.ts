@@ -135,18 +135,15 @@ export async function recordOperationalJobStatus(
     input: {
         jobKey: "asset_gc";
         status: "healthy" | "failed";
-        attemptedAt: string;
         buildSha: string;
         failureCategory: string | null;
     },
 ): Promise<OperationalJobStatus> {
-    const attemptedAt = normalizedTimestamp(input.attemptedAt);
     const buildSha = normalizedBuildSha(input.buildSha);
     const failureCategory = normalizedFailureCategory(input.failureCategory);
     if (
         !validJobKey(input.jobKey)
         || (input.status !== "healthy" && input.status !== "failed")
-        || !attemptedAt
         || !buildSha
         || (input.status === "healthy" && input.failureCategory !== null)
         || (input.status === "failed" && failureCategory === null)
@@ -156,7 +153,6 @@ export async function recordOperationalJobStatus(
         const result = await client.rpc("omr_record_operational_job_status_v1", {
             p_job_key: input.jobKey,
             p_status: input.status,
-            p_attempted_at: attemptedAt,
             p_build_sha: buildSha,
             p_failure_category: failureCategory,
         });

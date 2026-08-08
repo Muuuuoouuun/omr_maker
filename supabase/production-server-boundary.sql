@@ -175,7 +175,7 @@ grant execute on function public.omr_ack_remote_asset_cleanup_v1(text,text,integ
     to service_role;
 grant execute on function public.omr_fail_remote_asset_cleanup_v1(text,text,integer,text)
     to service_role;
-grant execute on function public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)
+grant execute on function public.omr_record_operational_job_status_v1(text,text,text,text)
     to service_role;
 grant execute on function public.omr_read_operational_job_status_v1(text)
     to service_role;
@@ -638,18 +638,63 @@ begin
 
     v_operational_job_status_ready :=
         pg_catalog.to_regclass('public.omr_operational_job_status') is not null
+        and pg_catalog.to_regclass('public.omr_remote_asset_cleanup_dead_idx') is not null
+        and position(
+            'status = ''dead''' in lower(pg_catalog.pg_get_indexdef(
+                'public.omr_remote_asset_cleanup_dead_idx'::pg_catalog.regclass
+            ))
+        ) > 0
         and pg_catalog.to_regprocedure(
-            'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'
+            'public.omr_record_operational_job_status_v1(text,text,text,text)'
         ) is not null
         and pg_catalog.to_regprocedure(
             'public.omr_read_operational_job_status_v1(text)'
         ) is not null
         and pg_catalog.pg_get_function_result(
-            'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure
+            'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure
         ) = 'jsonb'
+        and pg_catalog.pg_get_function_result(
+            'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
+        ) = 'jsonb'
+        and not exists (
+            select 1
+              from pg_catalog.pg_proc routine
+             where routine.oid in (
+                 'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
+                 'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
+             )
+               and (
+                   routine.prokind <> 'f'
+                   or not routine.prosecdef
+                   or pg_catalog.pg_get_userbyid(routine.proowner) <> 'postgres'
+                   or not coalesce(routine.proconfig, '{}'::text[]) @> array[
+                       'search_path=""', 'statement_timeout=5s'
+                   ]::text[]
+                   or (
+                       routine.proname = 'omr_record_operational_job_status_v1'
+                       and not coalesce(routine.proconfig, '{}'::text[])
+                           @> array['lock_timeout=2s']::text[]
+                   )
+               )
+        )
+        and not exists (
+            select 1
+              from pg_catalog.pg_proc routine
+              join pg_catalog.pg_namespace namespace
+                on namespace.oid = routine.pronamespace
+             where namespace.nspname = 'public'
+               and routine.proname in (
+                   'omr_record_operational_job_status_v1',
+                   'omr_read_operational_job_status_v1'
+               )
+               and routine.oid not in (
+                   'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
+                   'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
+               )
+        )
         and pg_catalog.has_function_privilege(
             'service_role',
-            'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',
+            'public.omr_record_operational_job_status_v1(text,text,text,text)',
             'EXECUTE'
         )
         and pg_catalog.has_function_privilege(
@@ -659,12 +704,12 @@ begin
         )
         and position(
             'cleanup.status = ''dead''' in pg_catalog.pg_get_functiondef(
-                'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure
+                'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure
             )
         ) > 0
         and position(
             'lock table public.omr_remote_asset_cleanup_queue in share mode' in pg_catalog.pg_get_functiondef(
-                'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure
+                'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure
             )
         ) > 0
         and position(
@@ -682,7 +727,7 @@ begin
                    )
                 or pg_catalog.has_function_privilege(
                        browser_role.role_name,
-                       'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',
+                       'public.omr_record_operational_job_status_v1(text,text,text,text)',
                        'EXECUTE'
                    )
                 or pg_catalog.has_function_privilege(
@@ -707,11 +752,27 @@ begin
                   coalesce(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
               ) privilege
              where routine.oid in (
-                 'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure,
+                 'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
                  'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
              )
                and privilege.grantee = 0
                and privilege.privilege_type = 'EXECUTE'
+        )
+        and not exists (
+            select 1
+              from pg_catalog.pg_proc routine
+              cross join lateral pg_catalog.aclexplode(
+                  coalesce(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
+              ) privilege
+             where routine.oid in (
+                 'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
+                 'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
+             )
+               and privilege.privilege_type = 'EXECUTE'
+               and privilege.grantee not in (
+                   routine.proowner,
+                   'service_role'::pg_catalog.regrole
+               )
         );
 
     v_cleanup_epoch_ready :=

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const workflow = readFileSync(resolve(".github/workflows/production-readiness.yml"), "utf8");
+const operationsGuide = readFileSync(resolve("docs/production-readiness.md"), "utf8");
 const defaultBranchOnly = "if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)";
 
 function hasDefaultBranchOnlyGate(candidate: string): boolean {
@@ -11,6 +12,14 @@ function hasDefaultBranchOnlyGate(candidate: string): boolean {
 }
 
 describe("production readiness workflow release identity", () => {
+    it("documents the post-deploy one-shot GC before readiness while writes remain paused", () => {
+        const bootstrap = operationsGuide.indexOf("/api/internal/asset-gc");
+        const readiness = operationsGuide.indexOf("/api/readyz", bootstrap);
+        expect(bootstrap).toBeGreaterThan(-1);
+        expect(readiness).toBeGreaterThan(bootstrap);
+        expect(operationsGuide).toMatch(/writes?[^\n]{0,80}paused/i);
+        expect(operationsGuide).toMatch(/GC claims?[^\n]{0,100}(?:resume|resumed)/i);
+    });
     it.each(["preview_deployment_id", "preview_artifact_digest", "preview_attestation_signature"])(
         "requires the %s dispatch input",
         (input) => {
@@ -96,7 +105,11 @@ describe("production readiness workflow release identity", () => {
         expect(workflow).toContain(
             "          OMR_RELEASE_ATTESTATION_SECRET: ${{ secrets.OMR_RELEASE_ATTESTATION_SECRET }}",
         );
+        expect(workflow).toContain(
+            "          OMR_ASSET_GC_CRON_SECRET: ${{ secrets.OMR_ASSET_GC_CRON_SECRET }}",
+        );
         expect(workflow).not.toMatch(/run:.*preview_(?:deployment_id|artifact_digest|attestation_signature)/);
         expect(workflow).not.toMatch(/(?:echo|print|set -x).*OMR_PRODUCTION_/);
+        expect(workflow).not.toMatch(/(?:echo|print|set -x).*OMR_ASSET_GC_CRON_SECRET/);
     });
 });

@@ -56,10 +56,16 @@ alter table public.omr_operational_job_status force row level security;
 revoke all on table public.omr_operational_job_status
     from public, anon, authenticated, service_role;
 
+-- Asset-GC is globally bounded to the initial <=100-user deployment. This
+-- partial index keeps the exact durable dead-backlog count index-only without
+-- weakening the table lock that makes the status snapshot correct.
+create index if not exists omr_remote_asset_cleanup_dead_idx
+    on public.omr_remote_asset_cleanup_queue (id)
+    where status = 'dead';
+
 create function public.omr_record_operational_job_status_v1(
     p_job_key text,
     p_status text,
-    p_attempted_at timestamptz,
     p_build_sha text,
     p_failure_category text
 )
@@ -75,13 +81,11 @@ declare
     v_effective_status text;
     v_effective_failure_category text;
     v_job_status public.omr_operational_job_status%rowtype;
+    v_previous_attempt_at timestamptz;
+    v_recorded_at timestamptz;
 begin
     if p_job_key is distinct from 'asset_gc'
        or p_status not in ('healthy', 'failed')
-       or p_attempted_at is null
-       or not pg_catalog.isfinite(p_attempted_at)
-       or p_attempted_at < timestamptz '2020-01-01 00:00:00+00'
-       or p_attempted_at > pg_catalog.clock_timestamp() + interval '5 minutes'
        or p_build_sha is null
        or p_build_sha !~ '^[a-f0-9]{40}$'
        or (
@@ -98,9 +102,20 @@ begin
         raise exception 'invalid operational job status';
     end if;
 
-    -- Serialize this snapshot with cleanup outbox mutations. The caller reports
-    -- only the current run outcome; durable dead-letter truth remains DB-owned.
+    -- Serialize same-job invocations before assigning DB time. Client clocks
+    -- never participate in ordering, and a clock regression still advances by
+    -- one microsecond. Keep the queue lock for a transactionally exact backlog.
+    perform pg_catalog.pg_advisory_xact_lock(20260808, 5);
     lock table public.omr_remote_asset_cleanup_queue in share mode;
+    select job_status.last_attempt_at
+      into v_previous_attempt_at
+      from public.omr_operational_job_status job_status
+     where job_status.job_key = p_job_key;
+    v_recorded_at := pg_catalog.clock_timestamp();
+    if v_previous_attempt_at is not null
+       and v_recorded_at <= v_previous_attempt_at then
+        v_recorded_at := v_previous_attempt_at + interval '1 microsecond';
+    end if;
     select pg_catalog.count(*)::bigint
       into v_dead_count
       from public.omr_remote_asset_cleanup_queue cleanup
@@ -128,23 +143,22 @@ begin
     ) values (
         p_job_key,
         v_effective_status,
-        p_attempted_at,
-        case when v_effective_status = 'healthy' then p_attempted_at else null end,
+        v_recorded_at,
+        case when v_effective_status = 'healthy' then v_recorded_at else null end,
         v_dead_count::integer,
         p_build_sha,
         v_effective_failure_category
     )
     on conflict (job_key) do update
         set status = excluded.status,
-            last_attempt_at = excluded.last_attempt_at,
+            last_attempt_at = v_recorded_at,
             last_success_at = case
-                when excluded.status = 'healthy' then excluded.last_attempt_at
+                when excluded.status = 'healthy' then v_recorded_at
                 else current_status.last_success_at
             end,
             dead_count = excluded.dead_count,
             build_sha = excluded.build_sha,
-            failure_category = excluded.failure_category
-        where excluded.last_attempt_at > current_status.last_attempt_at;
+            failure_category = excluded.failure_category;
 
     select job_status.*
       into strict v_job_status
@@ -209,19 +223,19 @@ end;
 $$;
 
 revoke all on function public.omr_record_operational_job_status_v1(
-    text, text, timestamptz, text, text
+    text, text, text, text
 ) from public, anon, authenticated;
 revoke all on function public.omr_read_operational_job_status_v1(text)
     from public, anon, authenticated;
 grant execute on function public.omr_record_operational_job_status_v1(
-    text, text, timestamptz, text, text
+    text, text, text, text
 ) to service_role;
 grant execute on function public.omr_read_operational_job_status_v1(text)
     to service_role;
 
 comment on table public.omr_operational_job_status is
     'Bounded server-only operational job heartbeat state without raw errors or tenant identifiers.';
-comment on function public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)
+comment on function public.omr_record_operational_job_status_v1(text,text,text,text)
     is 'monotonic-operational-job-heartbeat:202608080005';
 comment on function public.omr_read_operational_job_status_v1(text)
     is 'bounded-operational-job-heartbeat-read:202608080005';

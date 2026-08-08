@@ -58,7 +58,6 @@ export async function GET(request: Request): Promise<Response> {
             await recordOperationalJobStatus(client, {
                 jobKey: "asset_gc",
                 status: "failed",
-                attemptedAt: new Date().toISOString(),
                 buildSha: operationalRuntimeBuildSha(),
                 failureCategory: "cleanup_exception",
             });
@@ -77,7 +76,6 @@ export async function GET(request: Request): Promise<Response> {
         persistedStatus = await recordOperationalJobStatus(client, {
             jobKey: "asset_gc",
             status: result.failed > 0 ? "failed" : "healthy",
-            attemptedAt: new Date().toISOString(),
             buildSha: operationalRuntimeBuildSha(),
             failureCategory: result.failed > 0 ? "cleanup_failed" : null,
         });
@@ -89,7 +87,8 @@ export async function GET(request: Request): Promise<Response> {
         });
     }
 
-    const durableFailure = persistedStatus.status !== "healthy"
+    const durableFailure = result.failed > 0
+        || persistedStatus.status !== "healthy"
         || persistedStatus.deadCount !== 0;
     const heartbeat = await reportOperationalHeartbeat(
         "asset-gc",

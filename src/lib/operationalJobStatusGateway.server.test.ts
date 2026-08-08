@@ -69,14 +69,12 @@ describe("operational job status gateway", () => {
         await expect(recordOperationalJobStatus(client, {
             jobKey: "asset_gc",
             status: "healthy",
-            attemptedAt: "2026-08-08T00:00:00.000Z",
             buildSha: BUILD_SHA,
             failureCategory: null,
         })).resolves.toEqual(persisted);
         expect(client.rpc).toHaveBeenCalledWith("omr_record_operational_job_status_v1", {
             p_job_key: "asset_gc",
             p_status: "healthy",
-            p_attempted_at: "2026-08-08T00:00:00.000Z",
             p_build_sha: BUILD_SHA,
             p_failure_category: null,
         });
@@ -86,7 +84,6 @@ describe("operational job status gateway", () => {
         await expect(recordOperationalJobStatus(clientWithResult(true), {
             jobKey: "asset_gc",
             status: "healthy",
-            attemptedAt: "2026-08-08T00:00:00.000Z",
             buildSha: BUILD_SHA,
             failureCategory: null,
         })).rejects.toThrow("Operational job status record failed");
@@ -100,7 +97,6 @@ describe("operational job status gateway", () => {
             const client = clientWithResult(true);
             await expect(recordOperationalJobStatus(client, {
                 jobKey: "asset_gc",
-                attemptedAt: NOW.toISOString(),
                 ...input,
             })).rejects.toThrow("Invalid operational job status");
             expect(client.rpc).not.toHaveBeenCalled();

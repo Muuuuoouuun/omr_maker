@@ -77,6 +77,15 @@ function releaseAttestationSecret(value) {
     return secret;
 }
 
+function assetGcCronSecret(value) {
+    const secret = typeof value === "string" ? value : "";
+    const length = Buffer.byteLength(secret, "utf8");
+    if (length < 32 || length > 256 || /\s/.test(secret)) {
+        throw new Error("Asset GC cron secret is missing or invalid");
+    }
+    return secret;
+}
+
 export function buildPreviewIdentityAttestationPayload({ expectedBuild, previewDeploymentId, previewArtifactDigest }) {
     return `omr-preview-identity:v1\n${expectedBuild}\n${previewDeploymentId}\n${previewArtifactDigest}`;
 }
@@ -175,7 +184,15 @@ export function resolveProductionDeploymentConfig(input) {
     const anonKey = strongSecret(env.OMR_PRODUCTION_SUPABASE_ANON_KEY, "Production anon key");
     const authenticatedJwt = strongSecret(env.OMR_PRODUCTION_AUTHENTICATED_JWT, "Production authenticated JWT");
     const serviceRoleKey = strongSecret(env.OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY, "Production service role key");
-    if (new Set([readinessToken, anonKey, authenticatedJwt, serviceRoleKey, releaseAttestation]).size !== 5) {
+    const gcCronSecret = assetGcCronSecret(env.OMR_ASSET_GC_CRON_SECRET);
+    if (new Set([
+        readinessToken,
+        anonKey,
+        authenticatedJwt,
+        serviceRoleKey,
+        releaseAttestation,
+        gcCronSecret,
+    ]).size !== 6) {
         throw new Error("Production verification credentials must be distinct");
     }
     const config = {
@@ -196,6 +213,7 @@ export function resolveProductionDeploymentConfig(input) {
         anonKey: { value: anonKey, enumerable: false },
         authenticatedJwt: { value: authenticatedJwt, enumerable: false },
         serviceRoleKey: { value: serviceRoleKey, enumerable: false },
+        gcCronSecret: { value: gcCronSecret, enumerable: false },
     });
     return Object.freeze(config);
 }
@@ -265,6 +283,27 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
         || Math.abs(now.getTime() - healthTimestamp) > MAX_CLOCK_SKEW_MS
     ) throw new Error("Production health attestation mismatch");
 
+    const assetGcUrl = new URL("/api/internal/asset-gc", `${config.baseUrl}/`);
+    const assetGc = await requestJson(assetGcUrl, {
+        method: "GET",
+        headers: {
+            accept: "application/json",
+            authorization: `Bearer ${config.gcCronSecret}`,
+            "user-agent": "omr-production-verifier/1",
+        },
+    }, fetchImpl, [200]);
+    const boundedCount = (value, maximum) => Number.isSafeInteger(value)
+        && value >= 0
+        && value <= maximum;
+    if (
+        assetGc.body?.status !== "ok"
+        || !["ready", "degraded"].includes(assetGc.body?.observability)
+        || !boundedCount(assetGc.body?.claimed, 100)
+        || !boundedCount(assetGc.body?.deleted, 100)
+        || assetGc.body?.failed !== 0
+        || !boundedCount(assetGc.body?.batches, 4)
+    ) throw new Error("Production asset GC bootstrap failed");
+
     const readinessUrl = new URL("/api/readyz", `${config.baseUrl}/`);
     const readiness = await requestJson(readinessUrl, {
         method: "GET",
@@ -327,6 +366,10 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
         }),
         readinessVersion: config.expectedReadinessVersion,
         databaseProjectRefHash: config.databaseProjectRefHash,
+        assetGcBootstrap: Object.freeze({
+            status: "healthy",
+            observability: assetGc.body.observability,
+        }),
         access,
         staticAssetCompression,
     });

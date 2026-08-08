@@ -78,7 +78,6 @@ describe("remote asset cleanup route behavior", () => {
         expect(mocks.recordJobStatus).toHaveBeenCalledWith(expect.anything(), {
             jobKey: "asset_gc",
             status: "healthy",
-            attemptedAt: expect.any(String),
             buildSha: "0123456789abcdef0123456789abcdef01234567",
             failureCategory: null,
         });
@@ -128,6 +127,18 @@ describe("remote asset cleanup route behavior", () => {
                 failureCategory: "cleanup_failed",
             }),
         );
+    });
+
+    it("does not let a newer healthy row mask this invocation's cleanup failure", async () => {
+        const cleanup = { claimed: 2, deleted: 1, failed: 1, batches: 1 };
+        mocks.drain.mockResolvedValue(cleanup);
+        mocks.recordJobStatus.mockResolvedValue(persistedStatus());
+
+        const response = await GET(new Request("https://app.example.test/api/internal/asset-gc"));
+
+        expect(response.status).toBe(503);
+        await expect(response.json()).resolves.toEqual({ status: "unavailable" });
+        expect(mocks.heartbeat).toHaveBeenCalledWith("asset-gc", "degraded", cleanup);
     });
 
     it("returns 503 when a clean batch reveals a pre-existing durable dead backlog", async () => {

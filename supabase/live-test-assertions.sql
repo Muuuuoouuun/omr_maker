@@ -5374,6 +5374,7 @@ $$;
 do $$
 declare
     v_columns text[];
+    v_first_success timestamptz;
     v_recorded jsonb;
     v_snapshot jsonb;
     v_rejected integer := 0;
@@ -5411,6 +5412,46 @@ begin
     ) then
         raise exception 'operational job status exposed to public';
     end if;
+    if pg_catalog.to_regclass('public.omr_remote_asset_cleanup_dead_idx') is null
+       or position(
+           'status = ''dead''' in lower(pg_catalog.pg_get_indexdef(
+               'public.omr_remote_asset_cleanup_dead_idx'::pg_catalog.regclass
+           ))
+       ) = 0 then
+        raise exception 'operational job dead backlog partial index missing';
+    end if;
+    if (
+        select count(*)
+          from pg_catalog.pg_proc routine
+          join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+         where namespace.nspname = 'public'
+           and routine.proname in (
+               'omr_record_operational_job_status_v1',
+               'omr_read_operational_job_status_v1'
+           )
+    ) <> 2 or exists (
+        select 1
+          from pg_catalog.pg_proc routine
+         where routine.oid in (
+             'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
+             'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
+         )
+           and (
+               pg_catalog.pg_get_function_result(routine.oid) <> 'jsonb'
+               or not routine.prosecdef
+               or pg_catalog.pg_get_userbyid(routine.proowner) <> 'postgres'
+               or not coalesce(routine.proconfig, '{}'::text[]) @> array[
+                   'search_path=""', 'statement_timeout=5s'
+               ]::text[]
+               or (
+                   routine.proname = 'omr_record_operational_job_status_v1'
+                   and not coalesce(routine.proconfig, '{}'::text[])
+                       @> array['lock_timeout=2s']::text[]
+               )
+           )
+    ) then
+        raise exception 'operational job RPC catalog hardening failed';
+    end if;
     if pg_catalog.has_table_privilege(
         'anon', 'public.omr_operational_job_status', 'SELECT,INSERT,UPDATE,DELETE'
     ) then
@@ -5426,7 +5467,7 @@ begin
         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',
+        'public.omr_record_operational_job_status_v1(text,text,text,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_read_operational_job_status_v1(text)', 'EXECUTE'
@@ -5435,7 +5476,7 @@ begin
     end if;
     if pg_catalog.has_function_privilege(
         'anon',
-        'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',
+        'public.omr_record_operational_job_status_v1(text,text,text,text)',
         'EXECUTE'
     ) or pg_catalog.has_function_privilege(
         'authenticated', 'public.omr_read_operational_job_status_v1(text)', 'EXECUTE'
@@ -5446,7 +5487,7 @@ begin
               coalesce(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
           ) privilege
          where routine.oid in (
-             'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure,
+             'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
              'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
          )
            and privilege.grantee = 0
@@ -5460,15 +5501,16 @@ begin
         raise exception 'operational job status missing-row read was not null';
     end if;
     v_recorded := public.omr_record_operational_job_status_v1(
-        'asset_gc', 'healthy', timestamptz '2026-08-08 02:00:00+00',
+        'asset_gc', 'healthy',
         '0123456789abcdef0123456789abcdef01234567', null
     );
     if v_recorded->>'status' <> 'healthy'
        or v_recorded->>'deadCount' <> '0' then
         raise exception 'operational job success did not return authoritative status';
     end if;
+    v_first_success := (v_recorded->>'lastSuccessAt')::timestamptz;
     v_recorded := public.omr_record_operational_job_status_v1(
-        'asset_gc', 'failed', timestamptz '2026-08-08 03:00:00+00',
+        'asset_gc', 'failed',
         '0123456789abcdef0123456789abcdef01234567', 'cleanup_failed'
     );
     if v_recorded->>'status' <> 'failed'
@@ -5478,29 +5520,24 @@ begin
     v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
     if v_snapshot->>'status' <> 'failed'
        or (v_snapshot->>'lastSuccessAt')::timestamptz
-            is distinct from timestamptz '2026-08-08 02:00:00+00'
-       or (v_snapshot->>'lastAttemptAt')::timestamptz
-            is distinct from timestamptz '2026-08-08 03:00:00+00'
+            is distinct from v_first_success
+       or (v_snapshot->>'lastAttemptAt')::timestamptz <= v_first_success
        or v_snapshot->>'deadCount' <> '0' then
         raise exception 'operational job failure advanced last success';
     end if;
     v_recorded := public.omr_record_operational_job_status_v1(
-        'asset_gc', 'healthy', timestamptz '2026-08-08 01:00:00+00',
+        'asset_gc', 'healthy',
         'ffffffffffffffffffffffffffffffffffffffff', null
     );
-    if v_recorded is distinct from v_snapshot then
-        raise exception 'operational job stale write returned non-authoritative state';
+    if v_recorded->>'status' <> 'healthy'
+       or v_recorded->>'buildSha' <> repeat('f', 40)
+       or (v_recorded->>'lastAttemptAt')::timestamptz
+            <= (v_snapshot->>'lastAttemptAt')::timestamptz then
+        raise exception 'operational job DB ordering did not advance a later invocation';
     end if;
-    v_recorded := public.omr_record_operational_job_status_v1(
-        'asset_gc', 'healthy', timestamptz '2026-08-08 03:00:00+00',
-        'ffffffffffffffffffffffffffffffffffffffff', null
-    );
-    if v_recorded is distinct from v_snapshot then
-        raise exception 'operational job same-time write returned non-authoritative state';
-    end if;
-    if public.omr_read_operational_job_status_v1('asset_gc') is distinct from v_snapshot
-       or (select count(*) from public.omr_operational_job_status where job_key = 'asset_gc') <> 1 then
-        raise exception 'operational job stale write overwrote newer state';
+    v_first_success := (v_recorded->>'lastSuccessAt')::timestamptz;
+    if (select count(*) from public.omr_operational_job_status where job_key = 'asset_gc') <> 1 then
+        raise exception 'operational job upsert created more than one row';
     end if;
 
     insert into public.omr_remote_asset_cleanup_queue (
@@ -5513,7 +5550,7 @@ begin
         'asset_replaced', 'dead', 10
     );
     v_recorded := public.omr_record_operational_job_status_v1(
-        'asset_gc', 'healthy', timestamptz '2026-08-08 04:00:00+00',
+        'asset_gc', 'healthy',
         '0123456789abcdef0123456789abcdef01234567', null
     );
     if v_recorded->>'status' <> 'failed'
@@ -5526,13 +5563,13 @@ begin
        or v_snapshot->>'deadCount' <> '1'
        or v_snapshot->>'failureCategory' <> 'dead_backlog'
        or (v_snapshot->>'lastSuccessAt')::timestamptz
-            is distinct from timestamptz '2026-08-08 02:00:00+00' then
+            is distinct from v_first_success then
         raise exception 'operational job clean run ignored durable dead backlog';
     end if;
     delete from public.omr_remote_asset_cleanup_queue
      where source_id = 'operational-dead-fixture';
     v_recorded := public.omr_record_operational_job_status_v1(
-        'asset_gc', 'healthy', timestamptz '2026-08-08 05:00:00+00',
+        'asset_gc', 'healthy',
         '0123456789abcdef0123456789abcdef01234567', null
     );
     if v_recorded->>'status' <> 'healthy'
@@ -5549,7 +5586,7 @@ begin
 
     begin
         perform public.omr_record_operational_job_status_v1(
-            'asset_gc', 'healthy', timestamptz '2026-08-08 06:00:00+00',
+            'asset_gc', 'healthy',
             'short', null
         );
     exception when others then
@@ -5557,7 +5594,7 @@ begin
     end;
     begin
         perform public.omr_record_operational_job_status_v1(
-            'asset_gc', 'failed', timestamptz '2026-08-08 06:00:00+00',
+            'asset_gc', 'failed',
             '0123456789abcdef0123456789abcdef01234567', 'Student@example.com'
         );
     exception when others then
@@ -5569,6 +5606,66 @@ begin
     delete from public.omr_operational_job_status where job_key = 'asset_gc';
 end
 $$;
+
+delete from public.omr_operational_job_status where job_key = 'asset_gc';
+do $$
+declare
+    v_failed jsonb;
+    v_healthy jsonb;
+    v_final jsonb;
+begin
+    perform extensions.dblink_connect(
+        'operational-job-failed',
+        'host=127.0.0.1 port=' || current_setting('port')
+            || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_connect(
+        'operational-job-healthy',
+        'host=127.0.0.1 port=' || current_setting('port')
+            || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_send_query(
+        'operational-job-failed',
+        $sql$select public.omr_record_operational_job_status_v1(
+            'asset_gc', 'failed',
+            '0123456789abcdef0123456789abcdef01234567', 'cleanup_failed'
+        )::text$sql$
+    );
+    perform extensions.dblink_send_query(
+        'operational-job-healthy',
+        $sql$select public.omr_record_operational_job_status_v1(
+            'asset_gc', 'healthy',
+            'ffffffffffffffffffffffffffffffffffffffff', null
+        )::text$sql$
+    );
+    select result.recorded::jsonb into v_failed
+      from extensions.dblink_get_result('operational-job-failed')
+        as result(recorded text);
+    select result.recorded::jsonb into v_healthy
+      from extensions.dblink_get_result('operational-job-healthy')
+        as result(recorded text);
+    v_final := public.omr_read_operational_job_status_v1('asset_gc');
+    if (v_failed->>'lastAttemptAt')::timestamptz
+            = (v_healthy->>'lastAttemptAt')::timestamptz
+       or (v_final->>'lastAttemptAt')::timestamptz is distinct from greatest(
+            (v_failed->>'lastAttemptAt')::timestamptz,
+            (v_healthy->>'lastAttemptAt')::timestamptz
+       )
+       or (v_final->>'buildSha') is distinct from (case
+            when (v_failed->>'lastAttemptAt')::timestamptz
+                   > (v_healthy->>'lastAttemptAt')::timestamptz
+                then v_failed->>'buildSha'
+            else v_healthy->>'buildSha'
+       end) then
+        raise exception 'operational job concurrent DB ordering was not monotonic';
+    end if;
+    perform extensions.dblink_disconnect('operational-job-failed');
+    perform extensions.dblink_disconnect('operational-job-healthy');
+end
+$$;
+delete from public.omr_operational_job_status where job_key = 'asset_gc';
 
 drop function public.omr_default_acl_probe_v1();
 
