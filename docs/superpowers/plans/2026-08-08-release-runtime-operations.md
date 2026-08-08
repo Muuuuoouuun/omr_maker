@@ -78,24 +78,44 @@ git commit -m "fix(ci): align initial operations runtime"
 - Modify: `src/lib/productionDeploymentVerification.test.ts`
 - Create: `src/lib/productionReadinessWorkflowContract.test.ts`
 
-- [ ] **Step 1: Add failing workflow and verifier tests**
+- [ ] **Step 1: Add failing trusted-workflow and attestation tests**
 
-Assert that the workflow checks out the user-supplied build and verifies HEAD before installing:
+Assert that the protected-default-branch workflow rejects a historical or user-selected SHA before
+checkout, then preserves the exact checked-out HEAD and default-branch ancestry gates before any
+repository-controlled command:
 
 ```ts
+expect(workflow).toContain("WORKFLOW_SHA: ${{ github.sha }}");
+expect(workflow).toContain('test "$OMR_PRODUCTION_EXPECTED_BUILD" = "$WORKFLOW_SHA"');
 expect(workflow).toContain("ref: ${{ inputs.expected_build }}");
-expect(workflow).toContain('test "$(git rev-parse HEAD)" = "${{ inputs.expected_build }}"');
+expect(workflow).toContain('test "$(git rev-parse --verify HEAD)" = "$OMR_PRODUCTION_EXPECTED_BUILD"');
+expect(workflow).toContain(
+  'git merge-base --is-ancestor "$OMR_PRODUCTION_EXPECTED_BUILD" "origin/$OMR_PRODUCTION_DEFAULT_BRANCH"',
+);
 ```
 
-Extend the deployment evidence fixture with immutable identity fields:
+Require `preview_deployment_id`, `preview_artifact_digest`, and
+`preview_attestation_signature` workflow inputs, plus the protected
+`OMR_RELEASE_ATTESTATION_SECRET`. Assert that signer and verifier share the canonical payload and
+that evidence records only the attested identity:
 
 ```ts
+expect(buildPreviewIdentityAttestationPayload({
+  expectedBuild,
+  previewDeploymentId: "dpl_preview_01",
+  previewArtifactDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+})).toBe(
+  `omr-preview-identity:v1\n${expectedBuild}\ndpl_preview_01\nsha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`,
+);
 expect(evidence.releaseIdentity).toEqual({
   verifierSha: expectedBuild,
   deployedSha: expectedBuild,
   previewDeploymentId: "dpl_preview_01",
-  previewArtifactDigest: "sha256:0123456789abcdef",
+  previewArtifactDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  previewIdentityAttested: true,
 });
+expect(JSON.stringify(evidence)).not.toContain(previewAttestationSignature);
+expect(JSON.stringify(evidence)).not.toContain(releaseAttestationSecret);
 ```
 
 - [ ] **Step 2: Run RED**
@@ -104,21 +124,41 @@ expect(evidence.releaseIdentity).toEqual({
 npx vitest run src/lib/productionReadinessWorkflowContract.test.ts src/lib/productionDeploymentVerification.test.ts
 ```
 
-Expected: missing checkout ref, HEAD assertion, and release identity fields.
+Expected: missing pre-checkout trusted-workflow equality, ancestry ordering, domain-separated HMAC,
+exact digest validation, and attested release identity fields.
 
-- [ ] **Step 3: Add exact-SHA inputs and evidence**
+- [ ] **Step 3: Add trusted exact-SHA and preview attestation gates**
 
-Add required workflow inputs `preview_deployment_id` and `preview_artifact_digest`, checkout
-`inputs.expected_build`, and fail before `npm ci` when HEAD differs. Extend
-`resolveProductionDeploymentConfig` with:
+Keep the job restricted to the protected default branch. Before checkout, bind
+`inputs.expected_build` to the trusted workflow event by requiring exact equality with
+`${{ github.sha }}` through a quoted `WORKFLOW_SHA` environment variable. Only then checkout
+`inputs.expected_build` with full ancestry available. Before `actions/setup-node`, `npm ci`, or the
+verifier step, require the actual HEAD to equal `expected_build` and require that commit to be an
+ancestor of `origin/$OMR_PRODUCTION_DEFAULT_BRANCH`.
+
+Add required workflow inputs `preview_deployment_id`, `preview_artifact_digest`, and
+`preview_attestation_signature`, and pass the protected `OMR_RELEASE_ATTESTATION_SECRET` only to
+the verifier step. Extend `resolveProductionDeploymentConfig` with:
 
 ```ts
 previewDeploymentId: string;
 previewArtifactDigest: `sha256:${string}`;
+previewIdentityAttested: true;
 ```
 
 Validate deployment IDs with `^[A-Za-z0-9._:-]{3,200}$` and digests with
-`^sha256:[a-f0-9]{16,128}$`. Write both values and verifier SHA into the 0600 evidence JSON.
+`^sha256:[a-f0-9]{64}$`. Require the signature to be exactly 64 lowercase hexadecimal characters
+and the attestation secret to be 32–512 non-whitespace bytes and distinct from every other
+production credential. Verify HMAC-SHA256 with `timingSafeEqual` over the exported canonical
+payload:
+
+```text
+omr-preview-identity:v1\n<expectedBuild>\n<previewDeploymentId>\n<previewArtifactDigest>
+```
+
+Write the verifier SHA, deployed SHA, preview deployment ID, exact artifact digest, and
+`previewIdentityAttested: true` into the exclusive 0600 evidence JSON. Never write the attestation
+signature or secret to config serialization, evidence, logs, or errors.
 
 - [ ] **Step 4: Run GREEN**
 
@@ -126,7 +166,8 @@ Validate deployment IDs with `^[A-Za-z0-9._:-]{3,200}$` and digests with
 npx vitest run src/lib/productionReadinessWorkflowContract.test.ts src/lib/productionDeploymentVerification.test.ts
 ```
 
-Expected: all focused tests pass, including wrong-SHA and malformed-digest failures.
+Expected: all focused tests pass, including historical-SHA downgrade, wrong-HEAD, non-ancestor,
+legacy non-domain-separated signature, invalid attestation, and 63/65/uppercase digest failures.
 
 - [ ] **Step 5: Commit**
 
