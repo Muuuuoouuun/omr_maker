@@ -1,7 +1,7 @@
 # Initial Operations for 100 Users Release Design
 
 **Date:** 2026-08-08  
-**Status:** Approved design, awaiting written-spec review  
+**Status:** Written specification approved by the user
 **Release target:** Browser-based initial operation for at most 100 active users  
 **Quality target:** Mean score at least 9.3/10, every dimension at least 8.7/10, and no hard gate open
 
