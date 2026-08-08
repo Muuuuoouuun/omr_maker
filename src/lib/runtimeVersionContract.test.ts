@@ -14,57 +14,57 @@ const productionReadinessWorkflow = readFileSync(
     join(root, ".github/workflows/production-readiness.yml"),
     "utf8",
 );
+const canonicalNodeVersion = 'node-version: "22.13.0"';
 
-function versionTuple(version: string): [number, number, number] {
-    const match = version.match(/^(?:>=)?(\d+)\.(\d+)\.(\d+)$/);
-
-    expect(match, `invalid Node version: ${version}`).not.toBeNull();
-
-    return [Number(match![1]), Number(match![2]), Number(match![3])];
-}
-
-function versionNumber(version: string): number {
-    const [major, minor, patch] = versionTuple(version);
-    return major * 1_000_000 + minor * 1_000 + patch;
-}
-
-function extractNodeVersions(workflow: string): string[] {
-    return Array.from(
-        workflow.matchAll(/^\s*node-version:\s*"([^"\r\n]+)"\s*$/gm),
-        (match) => match[1],
-    );
+function extractNodeVersionDeclarations(workflow: string): string[] {
+    return workflow
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith("node-version:"));
 }
 
 describe("Node runtime contract", () => {
-    it("extracts only double-quoted Node versions", () => {
-        const invalidQuoting = [
+    it("captures every raw node-version declaration before validation", () => {
+        const declarations = [
+            canonicalNodeVersion,
             "node-version: 22.13.0",
             "node-version: '22.13.0'",
             "node-version: \"22.13.0'",
             "node-version: '22.13.0\"",
-        ].join("\n");
+            'node-version: "20"',
+        ];
+        const indentedDeclarations = declarations
+            .map((line) => `          ${line}  `)
+            .join("\n");
 
-        expect(extractNodeVersions(invalidQuoting)).toEqual([]);
-        expect(extractNodeVersions('node-version: "22.13.0"')).toEqual([
-            "22.13.0",
-        ]);
-    });
-
-    it("requires a package engine of at least Node 22.13.0", () => {
-        const engine = packageJson.engines?.node;
-
-        expect(engine).toBeDefined();
-        expect(versionNumber(engine!)).toBeGreaterThanOrEqual(
-            versionNumber("22.13.0"),
+        expect(extractNodeVersionDeclarations(indentedDeclarations)).toEqual(
+            declarations,
         );
     });
 
-    it("pins every executable workflow to Node 22.13.0", () => {
-        expect(extractNodeVersions(ciWorkflow)).toEqual(
-            Array(6).fill("22.13.0"),
+    it("requires the exact package Node engine", () => {
+        expect(packageJson.engines?.node).toBe(">=22.13.0");
+    });
+
+    it("pins every raw workflow declaration to quoted Node 22.13.0", () => {
+        expect(extractNodeVersionDeclarations(ciWorkflow)).toEqual(
+            Array(6).fill(canonicalNodeVersion),
         );
-        expect(extractNodeVersions(productionReadinessWorkflow)).toEqual([
-            "22.13.0",
+        expect(
+            extractNodeVersionDeclarations(productionReadinessWorkflow),
+        ).toEqual([canonicalNodeVersion]);
+    });
+
+    it("uses locked installs in every workflow job that installs dependencies", () => {
+        const lockedInstalls = (workflow: string) =>
+            workflow
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => line === "run: npm ci");
+
+        expect(lockedInstalls(ciWorkflow)).toEqual(Array(5).fill("run: npm ci"));
+        expect(lockedInstalls(productionReadinessWorkflow)).toEqual([
+            "run: npm ci",
         ]);
     });
 });
