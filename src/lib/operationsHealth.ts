@@ -16,6 +16,13 @@ import {
     probeTeacherAccountDelivery,
     type TeacherAccountDeliveryReadiness,
 } from "./teacherAccountDelivery";
+import { isRemoteAssetCleanupScheduled } from "./remoteAssetCleanup.server";
+import {
+    evaluateAssetGcReadiness,
+    operationalRuntimeBuildSha,
+    readOperationalJobStatusWithServiceRole,
+    type OperationalJobStatus,
+} from "./operationalJobStatusGateway.server";
 
 type Env = Record<string, string | undefined>;
 
@@ -136,6 +143,7 @@ export async function probeOperationalReadiness(
         databaseProbe?: SupabaseDeploymentProbe | null,
     ) => DeploymentReadinessSummary = buildDeploymentReadiness,
     deliveryProbe: (env: Env) => Promise<TeacherAccountDeliveryReadiness> = probeTeacherAccountDelivery,
+    jobStatusProbe: (env: Env) => Promise<OperationalJobStatus | null> = readOperationalJobStatusWithServiceRole,
 ): Promise<OperationalReadinessPayload> {
     const sinkPromise = sinkProbe(env).catch(() => "probe_failed" as const);
     const attestation = stagingDeploymentAttestation(env);
@@ -199,6 +207,40 @@ export async function probeOperationalReadiness(
                 ...(result.version ? { version: result.version } : {}),
                 failedChecks: ["configuration:teacher_account_delivery_probe"],
             };
+        }
+        const assetGcScheduled = isRemoteAssetCleanupScheduled(env);
+        const assetGcRequired = clean(env.NODE_ENV).toLowerCase() === "production" || assetGcScheduled;
+        if (assetGcRequired && !assetGcScheduled) {
+            return {
+                status: "not_ready",
+                database: "ready",
+                observability,
+                configuration: "not_ready",
+                ...attestation,
+                ...(result.version ? { version: result.version } : {}),
+                failedChecks: ["configuration:remote_asset_cleanup_schedule"],
+            };
+        }
+        if (assetGcRequired) {
+            const jobStatus = await jobStatusProbe(env).catch(() => null);
+            const assetGcReadiness = jobStatus
+                ? evaluateAssetGcReadiness({
+                    ...jobStatus,
+                    now: new Date(),
+                    expectedBuildSha: operationalRuntimeBuildSha(env),
+                })
+                : "missing";
+            if (assetGcReadiness !== "ready") {
+                return {
+                    status: "not_ready",
+                    database: "ready",
+                    observability,
+                    configuration: "not_ready",
+                    ...attestation,
+                    ...(result.version ? { version: result.version } : {}),
+                    failedChecks: ["configuration:remote_asset_cleanup_heartbeat"],
+                };
+            }
         }
         if (observability !== "ready") return {
             status: "degraded",

@@ -221,7 +221,7 @@ describe("production backup runner contract", () => {
         })).toThrow(/database.*project/i);
     });
 
-    it("builds PostgreSQL 17 commands with an exact 38-table data allowlist", () => {
+    it("builds PostgreSQL 17 commands with an exact 39-table data allowlist", () => {
         const commands = buildPostgresDumpCommands(resolveCreate("/secure/backup-1"));
         expect(commands.map((plan) => plan.command)).toEqual([
             `${POSTGRES_BIN}/pg_dumpall`,

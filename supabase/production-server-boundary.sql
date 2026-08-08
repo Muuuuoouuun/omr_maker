@@ -120,6 +120,7 @@ revoke all on table public.omr_initial_ops_metrics from public, anon, authentica
 revoke all on table public.omr_teacher_accounts from public, anon, authenticated, service_role;
 revoke all on table public.omr_teacher_account_tokens from public, anon, authenticated, service_role;
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
+revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
 
 -- Cleanup completion is fenced by the claim attempt (lease epoch). Keep the
 -- compatibility stubs in the catalog for upgrade diagnostics, but do not let
@@ -173,6 +174,10 @@ grant execute on function public.omr_authorize_remote_asset_cleanup_delete_v1(te
 grant execute on function public.omr_ack_remote_asset_cleanup_v1(text,text,integer)
     to service_role;
 grant execute on function public.omr_fail_remote_asset_cleanup_v1(text,text,integer,text)
+    to service_role;
+grant execute on function public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)
+    to service_role;
+grant execute on function public.omr_read_operational_job_status_v1(text)
     to service_role;
 grant execute on function public.omr_consume_rate_limit_v1(text,text,integer,integer,integer)
     to service_role;
@@ -453,6 +458,8 @@ alter table if exists public.omr_teacher_accounts enable row level security;
 alter table if exists public.omr_teacher_accounts force row level security;
 alter table if exists public.omr_teacher_account_tokens enable row level security;
 alter table if exists public.omr_teacher_account_tokens force row level security;
+alter table if exists public.omr_operational_job_status enable row level security;
+alter table if exists public.omr_operational_job_status force row level security;
 alter table if exists public.omr_initial_ops_metrics enable row level security;
 alter table if exists public.omr_initial_ops_metrics force row level security;
 alter table if exists public.omr_teacher_notification_states enable row level security;
@@ -493,6 +500,7 @@ declare
     v_canonical_tables_force_rls boolean;
     v_service_role_privileges_ready boolean;
     v_cleanup_epoch_ready boolean;
+    v_operational_job_status_ready boolean;
     v_attempt_sessions_ready boolean;
     v_durable_rate_limits_ready boolean;
     v_teacher_notification_summary_ready boolean;
@@ -537,7 +545,7 @@ begin
         ('omr_remote_asset_cleanup_queue'), ('omr_attempt_sessions'),
         ('omr_rate_limit_buckets'), ('omr_exam_mutations'), ('omr_feedback_mutations'),
         ('omr_initial_ops_metrics'), ('omr_teacher_accounts'), ('omr_teacher_account_tokens'),
-        ('omr_teacher_notification_states')
+        ('omr_teacher_notification_states'), ('omr_operational_job_status')
     ), actual(table_name, row_security, force_row_security) as (
         select relation.relname::text, relation.relrowsecurity, relation.relforcerowsecurity
           from pg_catalog.pg_class relation
@@ -571,7 +579,7 @@ begin
                    'omr_rate_limit_buckets', 'omr_exam_mutations', 'omr_feedback_mutations',
                    'omr_exam_entry_invites',
                    'omr_initial_ops_metrics', 'omr_teacher_accounts', 'omr_teacher_account_tokens',
-                   'omr_teacher_notification_states'
+                   'omr_teacher_notification_states', 'omr_operational_job_status'
                )
                and (
                    not pg_catalog.has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -612,6 +620,10 @@ begin
             'service_role', 'public.omr_teacher_notification_states',
             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
         )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_operational_job_status',
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
         and not exists (
             select 1
               from pg_catalog.pg_class relation
@@ -622,6 +634,66 @@ begin
                    or not pg_catalog.has_sequence_privilege('service_role', relation.oid, 'SELECT')
                    or not pg_catalog.has_sequence_privilege('service_role', relation.oid, 'UPDATE')
                )
+        );
+
+    v_operational_job_status_ready :=
+        pg_catalog.to_regclass('public.omr_operational_job_status') is not null
+        and pg_catalog.to_regprocedure(
+            'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)'
+        ) is not null
+        and pg_catalog.to_regprocedure(
+            'public.omr_read_operational_job_status_v1(text)'
+        ) is not null
+        and pg_catalog.has_function_privilege(
+            'service_role',
+            'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+            'EXECUTE'
+        )
+        and pg_catalog.has_function_privilege(
+            'service_role',
+            'public.omr_read_operational_job_status_v1(text)',
+            'EXECUTE'
+        )
+        and not exists (
+            select 1
+              from pg_catalog.unnest(array['anon', 'authenticated']) browser_role(role_name)
+             where pg_catalog.has_table_privilege(
+                       browser_role.role_name,
+                       'public.omr_operational_job_status',
+                       'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+                   )
+                or pg_catalog.has_function_privilege(
+                       browser_role.role_name,
+                       'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+                       'EXECUTE'
+                   )
+                or pg_catalog.has_function_privilege(
+                       browser_role.role_name,
+                       'public.omr_read_operational_job_status_v1(text)',
+                       'EXECUTE'
+                   )
+        )
+        and not exists (
+            select 1
+              from pg_catalog.pg_class relation
+              cross join lateral pg_catalog.aclexplode(
+                  coalesce(relation.relacl, pg_catalog.acldefault('r', relation.relowner))
+              ) privilege
+             where relation.oid = 'public.omr_operational_job_status'::pg_catalog.regclass
+               and privilege.grantee = 0
+        )
+        and not exists (
+            select 1
+              from pg_catalog.pg_proc routine
+              cross join lateral pg_catalog.aclexplode(
+                  coalesce(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
+              ) privilege
+             where routine.oid in (
+                 'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)'::pg_catalog.regprocedure,
+                 'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
+             )
+               and privilege.grantee = 0
+               and privilege.privilege_type = 'EXECUTE'
         );
 
     v_cleanup_epoch_ready :=
@@ -1621,6 +1693,7 @@ begin
       into v_legacy_gateway_catalog_ready;
 
     v_server_gateway_capabilities_ready := v_legacy_gateway_catalog_ready
+        and v_operational_job_status_ready
         and v_roster_snapshot_cas_ready
         and v_cleanup_epoch_ready
         and v_attempt_sessions_ready

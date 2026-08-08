@@ -213,4 +213,74 @@ describe("operational health", () => {
         });
         expect(receivedSignal?.aborted).toBe(true);
     });
+
+    it("requires a live healthy asset cleanup heartbeat when the scheduler is configured", async () => {
+        const buildSha = "0123456789abcdef0123456789abcdef01234567";
+        const env = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_ASSET_GC_SCHEDULED: "1",
+            CRON_SECRET: "cron-secret-that-is-at-least-thirty-two-characters",
+            VERCEL_GIT_COMMIT_SHA: buildSha,
+        };
+        const databaseProbe = async () => ({ ready: true as const, version: "v", failedChecks: [] });
+        const heartbeatAt = new Date().toISOString();
+
+        await expect(probeOperationalReadiness(
+            env,
+            databaseProbe,
+            50,
+            async () => "ready",
+            readyConfigurationProbe,
+            async () => "ready",
+            async () => null,
+        )).resolves.toEqual({
+            status: "not_ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "not_ready",
+            version: "v",
+            failedChecks: ["configuration:remote_asset_cleanup_heartbeat"],
+        });
+
+        await expect(probeOperationalReadiness(
+            env,
+            databaseProbe,
+            50,
+            async () => "ready",
+            readyConfigurationProbe,
+            async () => "ready",
+            async () => ({
+                status: "healthy",
+                lastAttemptAt: heartbeatAt,
+                lastSuccessAt: heartbeatAt,
+                deadCount: 0,
+                buildSha,
+                failureCategory: null,
+            }),
+        )).resolves.toMatchObject({ status: "ready" });
+    });
+
+    it("fails production readiness when the required asset cleanup scheduler is absent", async () => {
+        await expect(probeOperationalReadiness(
+            {
+                NODE_ENV: "production",
+                SUPABASE_URL: "https://example.supabase.co",
+                SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            },
+            async () => ({ ready: true, version: "v", failedChecks: [] }),
+            50,
+            async () => "ready",
+            readyConfigurationProbe,
+            async () => "ready",
+            async () => null,
+        )).resolves.toEqual({
+            status: "not_ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "not_ready",
+            version: "v",
+            failedChecks: ["configuration:remote_asset_cleanup_schedule"],
+        });
+    });
 });

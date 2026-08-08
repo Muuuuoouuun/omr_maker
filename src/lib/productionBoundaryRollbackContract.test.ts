@@ -103,6 +103,7 @@ describe("production boundary rollback contract", () => {
             "omr_teacher_account_tokens",
             "omr_exam_entry_invites",
             "omr_teacher_notification_states",
+            "omr_operational_job_status",
         ]);
         const forcedByBoundary = new Set(
             [...boundary.matchAll(/alter table if exists public\.(omr_\w+) force row level security/g)]
@@ -125,6 +126,7 @@ describe("production boundary rollback contract", () => {
         expect(rollback).toContain("revoke all on table public.omr_teacher_accounts from public, anon, authenticated, service_role");
         expect(rollback).toContain("revoke all on table public.omr_teacher_account_tokens from public, anon, authenticated, service_role");
         expect(rollback).toContain("revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role");
+        expect(rollback).toContain("revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role");
     });
 
     it("keeps post-alpha gateways exact and fail-closed after rollback", () => {

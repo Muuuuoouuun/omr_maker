@@ -9,6 +9,11 @@ import {
     type RemoteAssetCleanupGatewayClient,
 } from "@/lib/remoteAssetCleanup.server";
 import { reportOperationalHeartbeat, reportServerError } from "@/lib/reportServerError";
+import {
+    operationalRuntimeBuildSha,
+    recordOperationalJobStatus,
+    type OperationalJobStatusGatewayClient,
+} from "@/lib/operationalJobStatusGateway.server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -29,13 +34,16 @@ export async function GET(request: Request): Promise<Response> {
             headers: NO_STORE_HEADERS,
         });
     }
+    const cleanupConfig = {
+        ...config,
+        backendTimeoutMs: Math.min(config.backendTimeoutMs, 10_000),
+    };
+    const client = createSupabaseAdminClient(cleanupConfig) as unknown as
+        RemoteAssetCleanupGatewayClient & OperationalJobStatusGatewayClient;
+    let result: Awaited<ReturnType<typeof drainRemoteAssetCleanupWithGateway>>;
     try {
-        const cleanupConfig = {
-            ...config,
-            backendTimeoutMs: Math.min(config.backendTimeoutMs, 10_000),
-        };
-        const result = await drainRemoteAssetCleanupWithGateway(
-            createSupabaseAdminClient(cleanupConfig) as unknown as RemoteAssetCleanupGatewayClient,
+        result = await drainRemoteAssetCleanupWithGateway(
+            client,
             {
                 workerId: `gc-${randomUUID()}`,
                 batchSize: 25,
@@ -45,24 +53,34 @@ export async function GET(request: Request): Promise<Response> {
                 minimumBatchBudgetMs: 30_000,
             },
         );
-        const heartbeat = await reportOperationalHeartbeat(
-            "asset-gc",
-            result.failed > 0 ? "degraded" : "ok",
-            result,
-        );
-        if (result.failed > 0) {
-            return Response.json({ status: "unavailable" }, {
-                status: 503,
-                headers: NO_STORE_HEADERS,
+    } catch (error) {
+        try {
+            await recordOperationalJobStatus(client, {
+                jobKey: "asset_gc",
+                status: "failed",
+                attemptedAt: new Date().toISOString(),
+                deadCount: 0,
+                buildSha: operationalRuntimeBuildSha(),
+                failureCategory: "cleanup_exception",
             });
+        } catch {
+            // Readiness remains failed closed when the durable heartbeat cannot be written.
         }
-        return Response.json({
-            status: "ok",
-            observability: heartbeat.status === "delivered" ? "ready" : "degraded",
-            ...result,
-        }, {
-            status: 200,
+        await reportServerError("asset-gc", error);
+        return Response.json({ status: "unavailable" }, {
+            status: 503,
             headers: NO_STORE_HEADERS,
+        });
+    }
+
+    try {
+        await recordOperationalJobStatus(client, {
+            jobKey: "asset_gc",
+            status: result.failed > 0 ? "failed" : "healthy",
+            attemptedAt: new Date().toISOString(),
+            deadCount: result.failed,
+            buildSha: operationalRuntimeBuildSha(),
+            failureCategory: result.failed > 0 ? "cleanup_failed" : null,
         });
     } catch (error) {
         await reportServerError("asset-gc", error);
@@ -71,4 +89,24 @@ export async function GET(request: Request): Promise<Response> {
             headers: NO_STORE_HEADERS,
         });
     }
+
+    const heartbeat = await reportOperationalHeartbeat(
+        "asset-gc",
+        result.failed > 0 ? "degraded" : "ok",
+        result,
+    ).catch(() => ({ status: "rejected" as const }));
+    if (result.failed > 0) {
+        return Response.json({ status: "unavailable" }, {
+            status: 503,
+            headers: NO_STORE_HEADERS,
+        });
+    }
+    return Response.json({
+        status: "ok",
+        observability: heartbeat.status === "delivered" ? "ready" : "degraded",
+        ...result,
+    }, {
+        status: 200,
+        headers: NO_STORE_HEADERS,
+    });
 }

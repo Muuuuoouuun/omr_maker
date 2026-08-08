@@ -80,8 +80,13 @@ describe("production server-only database boundary", () => {
     const livePrelude = read("supabase/live-test-prelude.sql");
     const verifier = read("scripts/verify-supabase-live.mjs");
     const liveAssertions = read("supabase/live-test-assertions.sql");
+    const boundaryAssertions = read("supabase/live-test-boundary-assertions.sql");
+    const rollback = read("supabase/production-server-boundary-rollback.sql");
     const supabaseReadme = read("supabase/README.md");
     const productionReadiness = read("docs/production-readiness.md");
+    const operationalJobStatusMigration = readOptional(
+        "supabase/migrations/202608080005_operational_job_status.sql",
+    );
     const ci = read(".github/workflows/ci.yml");
     const readinessV4 = readOptional(
         "supabase/migrations/202607280003_service_readiness_probe_v4.sql",
@@ -353,7 +358,7 @@ describe("production server-only database boundary", () => {
         expect(profile).toMatch(/grant all on all functions in schema public to service_role;/i);
 
         const discoveredTables = [...CANONICAL_TABLES];
-        expect(discoveredTables).toHaveLength(38);
+        expect(discoveredTables).toHaveLength(39);
         expect(discoveredTables).toEqual([...discoveredTables].sort());
         expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
         for (const table of CANONICAL_TABLES) {
@@ -364,6 +369,58 @@ describe("production server-only database boundary", () => {
                 new RegExp(`alter table(?: if exists)? public\\.${table} force row level security;`, "i"),
             );
         }
+        expect(profile).toContain("public.omr_operational_job_status");
+        expect(profile).toContain("public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)");
+        expect(profile).toContain("public.omr_read_operational_job_status_v1(text)");
+    });
+
+    it("keeps operational job heartbeat state RPC-only, bounded, and monotonic", () => {
+        expect(operationalJobStatusMigration).not.toBe("");
+        expect(operationalJobStatusMigration).toContain(
+            "create table public.omr_operational_job_status",
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /alter table public\.omr_operational_job_status enable row level security/i,
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /alter table public\.omr_operational_job_status force row level security/i,
+        );
+        expect(operationalJobStatusMigration).toContain("security definer");
+        expect(operationalJobStatusMigration).toContain("set search_path = ''");
+        expect(operationalJobStatusMigration).toMatch(/on conflict \(job_key\) do update/i);
+        expect(operationalJobStatusMigration).toMatch(
+            /where excluded\.last_attempt_at > current_status\.last_attempt_at/i,
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /when excluded\.status = 'healthy' then excluded\.last_attempt_at\s+else current_status\.last_success_at/i,
+        );
+        for (const role of ["public", "anon", "authenticated"]) {
+            expect(operationalJobStatusMigration).toMatch(
+                new RegExp(`from public, anon, authenticated`, "i"),
+            );
+            expect(liveAssertions).toContain(
+                `operational job status exposed to ${role}`,
+            );
+        }
+        expect(liveAssertions).toContain(
+            "operational job status service role boundary failed",
+        );
+        expect(liveAssertions).toContain(
+            "operational job stale write overwrote newer state",
+        );
+        expect(liveAssertions).toContain(
+            "operational job failure advanced last success",
+        );
+        expect(liveAssertions).toContain(
+            "operational job status accepted malformed input",
+        );
+        expect(boundaryAssertions).toContain("public.omr_operational_job_status");
+        expect(boundaryAssertions).toContain("public.omr_record_operational_job_status_v1");
+        expect(rollback).toContain(
+            "revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role",
+        );
+        expect(rollback).toContain("'omr_record_operational_job_status_v1'");
+        expect(rollback).toContain("'omr_read_operational_job_status_v1'");
     });
 
     it("documents the canonical final-schema contract and exact table count", () => {
@@ -373,7 +430,7 @@ describe("production server-only database boundary", () => {
             supabaseReadme,
         ]) {
             expect(document).toContain("schema.sql baseline + sorted migrations = final schema");
-            expect(document).toMatch(/canonical 38(?:개| tables)/i);
+            expect(document).toMatch(/canonical 39(?:개| tables)/i);
         }
     });
 

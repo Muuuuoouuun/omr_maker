@@ -48,6 +48,8 @@ begin
         'service_role', 'public.omr_feedback_mutations', 'SELECT,INSERT,UPDATE,DELETE'
     ) or pg_catalog.has_table_privilege(
         'service_role', 'public.omr_teacher_notification_states', 'SELECT,INSERT,UPDATE,DELETE'
+    ) or pg_catalog.has_table_privilege(
+        'service_role', 'public.omr_operational_job_status', 'SELECT,INSERT,UPDATE,DELETE'
     ) then
         raise exception 'production boundary exposed RPC-only state tables';
     end if;
@@ -62,6 +64,14 @@ begin
     ) or not pg_catalog.has_function_privilege(
         'service_role',
         'public.omr_fail_remote_asset_cleanup_v1(text,text,integer,text)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_read_operational_job_status_v1(text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',

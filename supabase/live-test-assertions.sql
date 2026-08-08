@@ -140,8 +140,9 @@ begin
                'omr_initial_ops_metrics',
                'omr_exam_entry_invites',
                'omr_teacher_accounts',
-               'omr_teacher_account_tokens',
-               'omr_teacher_notification_states'
+                'omr_teacher_account_tokens',
+                'omr_teacher_notification_states',
+                'omr_operational_job_status'
            )
            and (
                not has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -152,7 +153,7 @@ begin
     ) then
         raise exception 'service_role lost an OMR table privilege';
     end if;
-    if has_table_privilege(
+     if has_table_privilege(
         'service_role', 'public.omr_rate_limit_buckets',
         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
     ) or has_table_privilege(
@@ -174,10 +175,13 @@ begin
         'service_role', 'public.omr_teacher_account_tokens',
         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
     ) or has_table_privilege(
-        'service_role', 'public.omr_teacher_notification_states',
-        'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
-    ) then
-        raise exception 'service_role bypassed a private operations or teacher-auth table';
+         'service_role', 'public.omr_teacher_notification_states',
+         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+     ) or has_table_privilege(
+         'service_role', 'public.omr_operational_job_status',
+         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+     ) then
+         raise exception 'service_role bypassed a private operations or teacher-auth table';
     end if;
 
     if exists (
@@ -5364,6 +5368,151 @@ begin
     ) then
         raise exception 'latest assignment/reporting service gateway grant missing';
     end if;
+end
+$$;
+
+do $$
+declare
+    v_columns text[];
+    v_snapshot jsonb;
+    v_rejected integer := 0;
+begin
+    select pg_catalog.array_agg(column_name::text order by ordinal_position)
+      into v_columns
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'omr_operational_job_status';
+    if v_columns is distinct from array[
+        'job_key', 'status', 'last_attempt_at', 'last_success_at',
+        'dead_count', 'build_sha', 'failure_category'
+    ]::text[] then
+        raise exception 'operational job status persisted an unbounded or raw field';
+    end if;
+    if not exists (
+        select 1
+          from pg_catalog.pg_class relation
+         where relation.oid = 'public.omr_operational_job_status'::pg_catalog.regclass
+           and relation.relrowsecurity
+           and relation.relforcerowsecurity
+    ) then
+        raise exception 'operational job status did not FORCE RLS';
+    end if;
+
+    if exists (
+        select 1
+          from pg_catalog.pg_class relation
+          cross join lateral pg_catalog.aclexplode(
+              coalesce(relation.relacl, pg_catalog.acldefault('r', relation.relowner))
+          ) privilege
+         where relation.oid = 'public.omr_operational_job_status'::pg_catalog.regclass
+           and privilege.grantee = 0
+           and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE', 'DELETE')
+    ) then
+        raise exception 'operational job status exposed to public';
+    end if;
+    if pg_catalog.has_table_privilege(
+        'anon', 'public.omr_operational_job_status', 'SELECT,INSERT,UPDATE,DELETE'
+    ) then
+        raise exception 'operational job status exposed to anon';
+    end if;
+    if pg_catalog.has_table_privilege(
+        'authenticated', 'public.omr_operational_job_status', 'SELECT,INSERT,UPDATE,DELETE'
+    ) then
+        raise exception 'operational job status exposed to authenticated';
+    end if;
+    if pg_catalog.has_table_privilege(
+        'service_role', 'public.omr_operational_job_status',
+        'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_read_operational_job_status_v1(text)', 'EXECUTE'
+    ) then
+        raise exception 'operational job status service role boundary failed';
+    end if;
+    if pg_catalog.has_function_privilege(
+        'anon',
+        'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+        'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'authenticated', 'public.omr_read_operational_job_status_v1(text)', 'EXECUTE'
+    ) or exists (
+        select 1
+          from pg_catalog.pg_proc routine
+          cross join lateral pg_catalog.aclexplode(
+              coalesce(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
+          ) privilege
+         where routine.oid in (
+             'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)'::pg_catalog.regprocedure,
+             'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
+         )
+           and privilege.grantee = 0
+           and privilege.privilege_type = 'EXECUTE'
+    ) then
+        raise exception 'operational job status exposed to public';
+    end if;
+
+    delete from public.omr_operational_job_status where job_key = 'asset_gc';
+    if public.omr_read_operational_job_status_v1('asset_gc') is not null then
+        raise exception 'operational job status missing-row read was not null';
+    end if;
+    if not public.omr_record_operational_job_status_v1(
+        'asset_gc', 'healthy', timestamptz '2026-08-08 02:00:00+00', 0,
+        '0123456789abcdef0123456789abcdef01234567', null
+    ) then
+        raise exception 'operational job success was not persisted';
+    end if;
+    if not public.omr_record_operational_job_status_v1(
+        'asset_gc', 'failed', timestamptz '2026-08-08 03:00:00+00', 1,
+        '0123456789abcdef0123456789abcdef01234567', 'cleanup_failed'
+    ) then
+        raise exception 'operational job failure was not persisted';
+    end if;
+    v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
+    if v_snapshot->>'status' <> 'failed'
+       or (v_snapshot->>'lastSuccessAt')::timestamptz
+            is distinct from timestamptz '2026-08-08 02:00:00+00'
+       or (v_snapshot->>'lastAttemptAt')::timestamptz
+            is distinct from timestamptz '2026-08-08 03:00:00+00'
+       or v_snapshot->>'deadCount' <> '1' then
+        raise exception 'operational job failure advanced last success';
+    end if;
+    if public.omr_record_operational_job_status_v1(
+        'asset_gc', 'healthy', timestamptz '2026-08-08 01:00:00+00', 0,
+        'ffffffffffffffffffffffffffffffffffffffff', null
+    ) or public.omr_record_operational_job_status_v1(
+        'asset_gc', 'healthy', timestamptz '2026-08-08 03:00:00+00', 0,
+        'ffffffffffffffffffffffffffffffffffffffff', null
+    ) then
+        raise exception 'operational job stale write reported as applied';
+    end if;
+    if public.omr_read_operational_job_status_v1('asset_gc') is distinct from v_snapshot
+       or (select count(*) from public.omr_operational_job_status where job_key = 'asset_gc') <> 1 then
+        raise exception 'operational job stale write overwrote newer state';
+    end if;
+
+    begin
+        perform public.omr_record_operational_job_status_v1(
+            'asset_gc', 'healthy', timestamptz '2026-08-08 04:00:00+00', 0,
+            'short', null
+        );
+    exception when others then
+        v_rejected := v_rejected + 1;
+    end;
+    begin
+        perform public.omr_record_operational_job_status_v1(
+            'asset_gc', 'failed', timestamptz '2026-08-08 04:00:00+00', 0,
+            '0123456789abcdef0123456789abcdef01234567', 'Student@example.com'
+        );
+    exception when others then
+        v_rejected := v_rejected + 1;
+    end;
+    if v_rejected <> 2 then
+        raise exception 'operational job status accepted malformed input';
+    end if;
+    delete from public.omr_operational_job_status where job_key = 'asset_gc';
 end
 $$;
 

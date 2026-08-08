@@ -83,7 +83,7 @@ The service-role-only readiness probe version `202608060029` is the runtime
 release gate. It combines direct catalog grants with effective
 `has_*_privilege` checks (including column privileges and PostgreSQL 17
 `MAINTAIN`), requires zero public canonical policies, validates the exact
-38-table allowlist plus every table's ENABLE + FORCE RLS state, reruns the
+39-table allowlist plus every table's ENABLE + FORCE RLS state, reruns the
 four-count organization preflight, checks the exact purpose-scoped teacher RPC
 signatures, requires the exact 17 server-gateway signatures with no extra
 overload, forbids every legacy broad-RPC overload, and verifies the hosted
@@ -215,7 +215,7 @@ idempotent, but its preflight is intentionally fail-closed. Use this order:
 7. Deploy the matching server build and verify teacher/student server-action
    journeys before reopening writes.
 
-The profile covers all canonical 38 tables under `public.omr_*`. Supabase requires entities
+The profile covers all canonical 39 tables under `public.omr_*`. Supabase requires entities
 under `storage` to remain owned by `supabase_storage_admin`; see
 [Supabase platform permissions](https://supabase.com/docs/guides/platform/permissions).
 Still in the `postgres` transaction, the profile verifies that `postgres` can

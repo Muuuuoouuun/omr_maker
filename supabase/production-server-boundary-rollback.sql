@@ -147,6 +147,7 @@ revoke all on table public.omr_initial_ops_metrics from public, anon, authentica
 revoke all on table public.omr_teacher_accounts from public, anon, authenticated, service_role;
 revoke all on table public.omr_teacher_account_tokens from public, anon, authenticated, service_role;
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
+revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
 
 do $$
 declare
@@ -165,6 +166,8 @@ declare
         'omr_authorize_remote_asset_cleanup_delete_v1',
         'omr_ack_remote_asset_cleanup_v1',
         'omr_fail_remote_asset_cleanup_v1',
+        'omr_record_operational_job_status_v1',
+        'omr_read_operational_job_status_v1',
         'omr_authorize_teacher_asset_finalize_v1',
         'omr_enqueue_remote_asset_cleanup_v1',
         'omr_enqueue_exam_asset_cleanup_v1',
@@ -484,6 +487,9 @@ revoke all on table public.omr_teacher_account_tokens from public, anon, authent
 alter table if exists public.omr_teacher_notification_states enable row level security;
 alter table if exists public.omr_teacher_notification_states force row level security;
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
+alter table if exists public.omr_operational_job_status enable row level security;
+alter table if exists public.omr_operational_job_status force row level security;
+revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
 do $$
 declare
     guarded_function text;
@@ -505,6 +511,8 @@ begin
         'omr_validate_teacher_session_v1',
         'omr_load_teacher_notification_state_v1',
         'omr_mutate_teacher_notification_state_v1',
+        'omr_record_operational_job_status_v1',
+        'omr_read_operational_job_status_v1',
         'omr_assign_students_v1',
         'omr_clear_student_assignment_v1',
         'omr_load_teacher_student_assignment_v1',

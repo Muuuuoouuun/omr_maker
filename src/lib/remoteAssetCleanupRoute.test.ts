@@ -19,6 +19,7 @@ describe("remote asset cleanup cron route", () => {
         expect(route).toContain("deadlineAtMs");
         expect(route).toContain("minimumBatchBudgetMs");
         expect(route).toContain("reportOperationalHeartbeat");
+        expect(route).toContain("recordOperationalJobStatus");
         expect(route).toContain("reportServerError");
         expect(route).toContain("observability:");
         expect(route).toContain("result.failed > 0");
