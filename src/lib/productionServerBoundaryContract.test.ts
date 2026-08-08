@@ -87,6 +87,9 @@ describe("production server-only database boundary", () => {
     const operationalJobStatusMigration = readOptional(
         "supabase/migrations/202608080005_operational_job_status.sql",
     );
+    const operatorProvisioningMigration = readOptional(
+        "supabase/migrations/202608080006_initial_operator_provisioning.sql",
+    );
     const ci = read(".github/workflows/ci.yml");
     const readinessV4 = readOptional(
         "supabase/migrations/202607280003_service_readiness_probe_v4.sql",
@@ -318,12 +321,12 @@ describe("production server-only database boundary", () => {
         expect(liveAssertions).toContain(
             "v4 readiness accepted a server gateway procedure impostor",
         );
-        expect(supabaseReadme).toContain("202608080005");
+        expect(supabaseReadme).toContain("202608080006");
         expect(supabaseReadme).toContain("rosterSnapshotCasReady");
         expect(supabaseReadme).toContain("attemptMutationCasReady");
         expect(supabaseReadme).toContain("examDeleteSessionSafe");
         expect(supabaseReadme).toContain("teacherAccountLifecycleReady");
-        expect(productionReadiness).toContain("202608080005");
+        expect(productionReadiness).toContain("202608080006");
         expect(productionReadiness).toContain("rosterSnapshotCasReady");
         expect(productionReadiness).toContain("attemptMutationCasReady");
         expect(productionReadiness).toContain("examDeleteSessionSafe");
@@ -358,7 +361,7 @@ describe("production server-only database boundary", () => {
         expect(profile).toMatch(/grant all on all functions in schema public to service_role;/i);
 
         const discoveredTables = [...CANONICAL_TABLES];
-        expect(discoveredTables).toHaveLength(39);
+        expect(discoveredTables).toHaveLength(40);
         expect(discoveredTables).toEqual([...discoveredTables].sort());
         expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
         for (const table of CANONICAL_TABLES) {
@@ -370,10 +373,15 @@ describe("production server-only database boundary", () => {
             );
         }
         expect(profile).toContain("public.omr_operational_job_status");
+        expect(profile).toContain("public.omr_pilot_plan_grants");
         expect(profile).toContain("public.omr_begin_operational_job_run_v1(text,text)");
         expect(profile).toContain("public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)");
         expect(profile).toContain("public.omr_read_operational_job_status_v1(text)");
         expect(profile).toContain("pg_catalog.pg_get_function_result(routine.oid) <> 'jsonb'");
+        expect(operatorProvisioningMigration).toContain(
+            "atomic-operator-pilot-teacher-provisioning:202608080006",
+        );
+        expect(profile).toContain("operatorPilotProvisioningReady");
     });
 
     it("keeps operational job heartbeat state RPC-only, bounded, and monotonic", () => {
@@ -551,7 +559,7 @@ describe("production server-only database boundary", () => {
         expect(profile).toContain(
             "revoke all on function public.omr_normalize_exam_save_request_v10(jsonb)",
         );
-        expect(profile).toContain("'version', '202608080005'");
+        expect(profile).toContain("'version', '202608080006'");
         expect(profile).toContain("'operationalJobStatusReady'");
         expect(profile).toContain("'durableRateLimitsReady'");
         expect(profile).toContain("'teacherExamCasReady'");

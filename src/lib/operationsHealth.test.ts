@@ -91,7 +91,7 @@ describe("operational health", () => {
 
         await expect(probeOperationalReadiness(
             env,
-            async () => ({ ready: true, version: "202608080005", failedChecks: [] }),
+            async () => ({ ready: true, version: "202608080006", failedChecks: [] }),
             50,
             async () => "ready",
             configurationProbe,
@@ -100,7 +100,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "202608080005",
+            version: "202608080006",
             failedChecks: ["configuration:teacher_account_delivery"],
         });
         expect(configurationProbe).toHaveBeenCalledOnce();
@@ -114,7 +114,7 @@ describe("operational health", () => {
 
         await expect(probeOperationalReadiness(
             env,
-            async () => ({ ready: true, version: "202608080005", failedChecks: [] }),
+            async () => ({ ready: true, version: "202608080006", failedChecks: [] }),
             50,
             async () => "ready",
             readyConfigurationProbe,
@@ -124,7 +124,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "202608080005",
+            version: "202608080006",
             failedChecks: ["configuration:teacher_account_delivery_probe"],
         });
     });
@@ -141,7 +141,7 @@ describe("operational health", () => {
             VERCEL_GIT_COMMIT_SHA: "a".repeat(40),
         }, async () => ({
             ready: true,
-            version: "202608080005",
+            version: "202608080006",
             failedChecks: [],
         }), 50, async () => "ready", readyConfigurationProbe, async () => "ready");
 
@@ -150,7 +150,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "ready",
-            version: "202608080005",
+            version: "202608080006",
             environment: "staging",
             build: "a".repeat(40),
             databaseProjectRefHash: createHash("sha256").update(projectRef).digest("hex"),

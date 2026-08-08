@@ -104,6 +104,7 @@ describe("production boundary rollback contract", () => {
             "omr_exam_entry_invites",
             "omr_teacher_notification_states",
             "omr_operational_job_status",
+            "omr_pilot_plan_grants",
         ]);
         const forcedByBoundary = new Set(
             [...boundary.matchAll(/alter table if exists public\.(omr_\w+) force row level security/g)]
@@ -120,6 +121,7 @@ describe("production boundary rollback contract", () => {
         expect(rollback).toContain("alter table if exists public.omr_exam_mutations force row level security");
         expect(rollback).toContain("revoke all on table public.omr_rate_limit_buckets from public, anon, authenticated, service_role");
         expect(rollback).toContain("revoke all on table public.omr_exam_mutations from public, anon, authenticated, service_role");
+        expect(rollback).toContain("revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role");
         expect(rollback).toContain("alter table if exists public.omr_feedback_mutations force row level security");
         expect(rollback).toContain("revoke all on table public.omr_feedback_mutations from public, anon, authenticated, service_role");
         expect(rollback).toContain("revoke all on table public.omr_initial_ops_metrics from public, anon, authenticated, service_role");

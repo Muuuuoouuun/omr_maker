@@ -148,6 +148,7 @@ revoke all on table public.omr_teacher_accounts from public, anon, authenticated
 revoke all on table public.omr_teacher_account_tokens from public, anon, authenticated, service_role;
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
 revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
+revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
 
 do $$
@@ -170,6 +171,8 @@ declare
         'omr_begin_operational_job_run_v1',
         'omr_complete_operational_job_run_v1',
         'omr_read_operational_job_status_v1',
+        'omr_provision_pilot_teacher_v1',
+        'omr_read_effective_workspace_plan_v1',
         'omr_authorize_teacher_asset_finalize_v1',
         'omr_enqueue_remote_asset_cleanup_v1',
         'omr_enqueue_exam_asset_cleanup_v1',

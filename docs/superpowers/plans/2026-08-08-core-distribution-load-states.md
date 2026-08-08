@@ -72,7 +72,7 @@ git commit -m "feat(invites): define safe invite capabilities"
 ### Task 2: Add metadata-only teacher invite RPCs
 
 **Files:**
-- Create: `supabase/migrations/202608080004_exam_entry_invite_lifecycle.sql`
+- Create: `supabase/migrations/202608080009_exam_entry_invite_lifecycle.sql`
 - Create: `src/lib/examEntryInviteLifecycleMigrationContract.test.ts`
 - Modify: `src/lib/examEntryInviteGateway.ts`
 - Modify: `src/lib/examEntryInviteGateway.test.ts`
@@ -114,7 +114,7 @@ npm run test:supabase:live
 - [ ] **Step 5: Commit**
 
 ```sh
-git add supabase/migrations/202608080004_exam_entry_invite_lifecycle.sql src/lib/examEntryInviteLifecycleMigrationContract.test.ts src/lib/examEntryInviteGateway.ts src/lib/examEntryInviteGateway.test.ts supabase/live-test-assertions.sql
+git add supabase/migrations/202608080009_exam_entry_invite_lifecycle.sql src/lib/examEntryInviteLifecycleMigrationContract.test.ts src/lib/examEntryInviteGateway.ts src/lib/examEntryInviteGateway.test.ts supabase/live-test-assertions.sql
 git commit -m "feat(invites): expose metadata without invite secret"
 ```
 

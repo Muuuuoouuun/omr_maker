@@ -121,6 +121,7 @@ revoke all on table public.omr_teacher_accounts from public, anon, authenticated
 revoke all on table public.omr_teacher_account_tokens from public, anon, authenticated, service_role;
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
 revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
+revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
 
 -- Cleanup completion is fenced by the claim attempt (lease epoch). Keep the
@@ -463,6 +464,8 @@ alter table if exists public.omr_teacher_account_tokens enable row level securit
 alter table if exists public.omr_teacher_account_tokens force row level security;
 alter table if exists public.omr_operational_job_status enable row level security;
 alter table if exists public.omr_operational_job_status force row level security;
+alter table if exists public.omr_pilot_plan_grants enable row level security;
+alter table if exists public.omr_pilot_plan_grants force row level security;
 alter table if exists public.omr_initial_ops_metrics enable row level security;
 alter table if exists public.omr_initial_ops_metrics force row level security;
 alter table if exists public.omr_teacher_notification_states enable row level security;
@@ -504,6 +507,7 @@ declare
     v_service_role_privileges_ready boolean;
     v_cleanup_epoch_ready boolean;
     v_operational_job_status_ready boolean;
+    v_operator_pilot_provisioning_ready boolean;
     v_attempt_sessions_ready boolean;
     v_durable_rate_limits_ready boolean;
     v_teacher_notification_summary_ready boolean;
@@ -548,7 +552,8 @@ begin
         ('omr_remote_asset_cleanup_queue'), ('omr_attempt_sessions'),
         ('omr_rate_limit_buckets'), ('omr_exam_mutations'), ('omr_feedback_mutations'),
         ('omr_initial_ops_metrics'), ('omr_teacher_accounts'), ('omr_teacher_account_tokens'),
-        ('omr_teacher_notification_states'), ('omr_operational_job_status')
+        ('omr_teacher_notification_states'), ('omr_operational_job_status'),
+        ('omr_pilot_plan_grants')
     ), actual(table_name, row_security, force_row_security) as (
         select relation.relname::text, relation.relrowsecurity, relation.relforcerowsecurity
           from pg_catalog.pg_class relation
@@ -582,7 +587,8 @@ begin
                    'omr_rate_limit_buckets', 'omr_exam_mutations', 'omr_feedback_mutations',
                    'omr_exam_entry_invites',
                    'omr_initial_ops_metrics', 'omr_teacher_accounts', 'omr_teacher_account_tokens',
-                   'omr_teacher_notification_states', 'omr_operational_job_status'
+                   'omr_teacher_notification_states', 'omr_operational_job_status',
+                   'omr_pilot_plan_grants'
                )
                and (
                    not pg_catalog.has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -625,6 +631,10 @@ begin
         )
         and not pg_catalog.has_table_privilege(
             'service_role', 'public.omr_operational_job_status',
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_pilot_plan_grants',
             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
         )
         and not exists (
@@ -1206,6 +1216,232 @@ begin
                 'public.omr_checkpoint_attempt_session_v1(text,text,text,bigint,bigint,text,jsonb,jsonb,jsonb,integer,boolean)'::pg_catalog.regprocedure
             ))
         ) > 0;
+
+    v_operator_pilot_provisioning_ready :=
+        pg_catalog.to_regclass('public.omr_pilot_plan_grants') is not null
+        and pg_catalog.to_regprocedure(
+            'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'
+        ) is not null
+        and pg_catalog.to_regprocedure(
+            'public.omr_read_effective_workspace_plan_v1(text)'
+        ) is not null
+        and (
+            select pg_catalog.count(*) = 2
+               and pg_catalog.bool_and(
+                   routine.prosecdef
+                   and pg_catalog.pg_get_userbyid(routine.proowner) = 'postgres'
+                   and routine.prokind = 'f'
+                   and pg_catalog.pg_get_function_result(routine.oid) = 'jsonb'
+                   and routine.proconfig @> array['search_path=""']::text[]
+                   and case
+                       when routine.proname = 'omr_provision_pilot_teacher_v1' then
+                           routine.proconfig @> array[
+                               'statement_timeout=10s', 'lock_timeout=3s'
+                           ]::text[]
+                       else routine.proconfig @> array['statement_timeout=5s']::text[]
+                   end
+                   and pg_catalog.has_function_privilege('service_role', routine.oid, 'EXECUTE')
+                   and not pg_catalog.has_function_privilege('anon', routine.oid, 'EXECUTE')
+                   and not pg_catalog.has_function_privilege('authenticated', routine.oid, 'EXECUTE')
+               )
+              from pg_catalog.pg_proc routine
+              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+             where namespace.nspname = 'public'
+               and routine.proname in (
+                   'omr_provision_pilot_teacher_v1',
+                   'omr_read_effective_workspace_plan_v1'
+               )
+        )
+        and pg_catalog.obj_description(
+            'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure,
+            'pg_proc'
+        ) = 'atomic-operator-pilot-teacher-provisioning:202608080006'
+        and pg_catalog.obj_description(
+            'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure,
+            'pg_proc'
+        ) like 'expiry-safe-effective-workspace-plan-read:202608080006;%'
+        and position(
+            'v_existing_grant.request_hash is distinct from v_request_hash' in
+            pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'pg_catalog.pg_advisory_xact_lock(20260808, pg_catalog.hashtext(v_email))' in
+            pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'v_membership_count <> 1' in pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'v_profile_count <> 1' in pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'v_account.status is distinct from ''active''' in pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'session_generation = account.session_generation + 1' in
+            pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'update public.omr_teacher_account_tokens' in pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'set state = ''superseded''' in pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'insert into public.omr_pilot_plan_grants' in pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'set plan = ''free''' in pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'insert into public.omr_audit_logs' in pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'v_existing_grant.request_hash is distinct from v_request_hash' in
+            pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) < position(
+            'update public.omr_teacher_accounts' in pg_catalog.pg_get_functiondef(
+                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+            )
+        )
+        and position(
+            'grant_row.state = ''active''' in pg_catalog.pg_get_functiondef(
+                'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'grant_row.superseded_at is null' in pg_catalog.pg_get_functiondef(
+                'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'grant_row.expires_at > pg_catalog.clock_timestamp()' in pg_catalog.pg_get_functiondef(
+                'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            '''plan'', ''free''' in pg_catalog.pg_get_functiondef(
+                'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and exists (
+            select 1 from pg_catalog.pg_index index_record
+             where index_record.indexrelid = pg_catalog.to_regclass(
+                       'public.omr_pilot_plan_grants_one_current_org_idx'
+                   )
+               and index_record.indrelid = 'public.omr_pilot_plan_grants'::pg_catalog.regclass
+               and index_record.indisvalid and index_record.indisready and index_record.indisunique
+               and index_record.indnkeyatts = 1
+               and pg_catalog.pg_get_indexdef(index_record.indexrelid, 1, true) = 'organization_id'
+               and position('state = ''active''::text' in pg_catalog.lower(pg_catalog.pg_get_expr(
+                   index_record.indpred, index_record.indrelid, true
+               ))) > 0
+               and position('superseded_at is null' in pg_catalog.lower(pg_catalog.pg_get_expr(
+                   index_record.indpred, index_record.indrelid, true
+               ))) > 0
+        )
+        and exists (
+            select 1 from pg_catalog.pg_index index_record
+             where index_record.indexrelid = pg_catalog.to_regclass(
+                       'public.omr_pilot_plan_grants_idempotency_hash_unique'
+                   )
+               and index_record.indrelid = 'public.omr_pilot_plan_grants'::pg_catalog.regclass
+               and index_record.indisvalid and index_record.indisready and index_record.indisunique
+               and index_record.indnkeyatts = 1 and index_record.indpred is null
+               and pg_catalog.pg_get_indexdef(index_record.indexrelid, 1, true)
+                   = 'idempotency_key_hash'
+        )
+        and (
+            select pg_catalog.count(*) = 7
+               and pg_catalog.bool_and(
+                   case constraint_record.conname
+                       when 'omr_pilot_plan_grants_idempotency_hash_check' then
+                           position('idempotency_key_hash ~ ''^[a-f0-9]{64}$''::text' in
+                               pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_record.oid, true))) > 0
+                       when 'omr_pilot_plan_grants_request_hash_check' then
+                           position('request_hash ~ ''^[a-f0-9]{64}$''::text' in
+                               pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_record.oid, true))) > 0
+                       when 'omr_pilot_plan_grants_plan_check' then
+                           position('plan = any' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                           and position('''pro''::text' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                           and position('''academy''::text' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                       when 'omr_pilot_plan_grants_state_check' then
+                           position('state = any' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                           and position('''active''::text' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                           and position('''superseded''::text' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                       when 'omr_pilot_plan_grants_expiry_check' then
+                           position('isfinite(expires_at)' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                           and position('expires_at > created_at' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                       when 'omr_pilot_plan_grants_superseded_check' then
+                           position('superseded_at is null' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                           and position('superseded_at >= created_at' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                       when 'omr_pilot_plan_grants_updated_check' then
+                           position('updated_at >= created_at' in pg_catalog.lower(
+                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
+                           )) > 0
+                       else false
+                   end
+               )
+              from pg_catalog.pg_constraint constraint_record
+             where constraint_record.conrelid = 'public.omr_pilot_plan_grants'::pg_catalog.regclass
+               and constraint_record.conname in (
+                   'omr_pilot_plan_grants_idempotency_hash_check',
+                   'omr_pilot_plan_grants_request_hash_check',
+                   'omr_pilot_plan_grants_plan_check',
+                   'omr_pilot_plan_grants_state_check',
+                   'omr_pilot_plan_grants_expiry_check',
+                   'omr_pilot_plan_grants_superseded_check',
+                   'omr_pilot_plan_grants_updated_check'
+               )
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_pilot_plan_grants',
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        );
 
     v_teacher_live_sessions_ready :=
         pg_catalog.to_regclass('public.omr_attempt_sessions_teacher_live_idx') is not null
@@ -1841,6 +2077,7 @@ begin
     v_ready := v_canonical_tables_force_rls
         and v_service_role_privileges_ready
         and v_operational_job_status_ready
+        and v_operator_pilot_provisioning_ready
         and v_server_gateway_capabilities_ready
         and not exists (
             select 1
@@ -1856,11 +2093,12 @@ begin
             - 'serviceRolePrivilegesReady' - 'serverGatewayCapabilitiesReady'
             - 'teacherUploadCleanupQueueReady' - 'studentAttemptSessionsReady')
         || pg_catalog.jsonb_build_object(
-            'version', '202608080005',
+            'version', '202608080006',
             'canonicalTablesForceRls', v_canonical_tables_force_rls,
             'serviceRolePrivilegesReady', v_service_role_privileges_ready,
             'serverGatewayCapabilitiesReady', v_server_gateway_capabilities_ready,
             'operationalJobStatusReady', v_operational_job_status_ready,
+            'operatorPilotProvisioningReady', v_operator_pilot_provisioning_ready,
             'teacherUploadCleanupQueueReady', v_cleanup_epoch_ready,
             'studentAttemptSessionsReady', v_attempt_sessions_ready,
             'durableRateLimitsReady', v_durable_rate_limits_ready,

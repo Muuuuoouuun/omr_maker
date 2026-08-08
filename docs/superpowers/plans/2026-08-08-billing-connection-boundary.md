@@ -130,7 +130,7 @@ git commit -m "test(billing): add deterministic fake adapter"
 ### Task 3: Add the four durable billing tables and atomic apply RPC
 
 **Files:**
-- Create: `supabase/migrations/202608080006_billing_connection_boundary.sql`
+- Create: `supabase/migrations/202608080010_billing_connection_boundary.sql`
 - Create: `src/lib/billingConnectionBoundaryMigrationContract.test.ts`
 - Modify: `supabase/production-server-boundary.sql`
 - Modify: `supabase/production-server-boundary-rollback.sql`
@@ -198,7 +198,7 @@ anon/authenticated denial, service-role success, and absence of raw identifiers 
 - [ ] **Step 6: Update canonical manifests and readiness version**
 
 After operator grant and operational job-status tables, the four billing tables make the expected final
-canonical count 44. Set readiness version to `202608080006`, add `billingBoundaryReady`, and update every
+canonical count 44. Set readiness version to `202608080010`, add `billingBoundaryReady`, and update every
 exact-version consumer found by:
 
 ```sh
@@ -215,7 +215,7 @@ npm run test:supabase:live
 - [ ] **Step 8: Commit**
 
 ```sh
-git add supabase/migrations/202608080006_billing_connection_boundary.sql src/lib/billingConnectionBoundaryMigrationContract.test.ts supabase/production-server-boundary.sql supabase/production-server-boundary-rollback.sql supabase/live-test-assertions.sql supabase/live-test-rollback-assertions.sql scripts/backup-restore-core.mjs src/lib/backupRestoreCore.test.ts src/lib/productionServerBoundaryContract.test.ts src/lib/supabaseReadinessProbe.ts scripts/verify-initial-operations.mjs scripts/initial-operations-core.mjs scripts/backup-production.mjs .github/workflows/production-readiness.yml docs/production-readiness.md
+git add supabase/migrations/202608080010_billing_connection_boundary.sql src/lib/billingConnectionBoundaryMigrationContract.test.ts supabase/production-server-boundary.sql supabase/production-server-boundary-rollback.sql supabase/live-test-assertions.sql supabase/live-test-rollback-assertions.sql scripts/backup-restore-core.mjs src/lib/backupRestoreCore.test.ts src/lib/productionServerBoundaryContract.test.ts src/lib/supabaseReadinessProbe.ts scripts/verify-initial-operations.mjs scripts/initial-operations-core.mjs scripts/backup-production.mjs .github/workflows/production-readiness.yml docs/production-readiness.md
 git commit -m "feat(billing): add atomic durable provider boundary"
 ```
 

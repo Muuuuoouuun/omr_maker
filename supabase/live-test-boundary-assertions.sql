@@ -4,6 +4,69 @@ do $$
 declare
     readiness jsonb;
 begin
+    if position(
+        'grant_row.state = ''active''' in pg_catalog.pg_get_functiondef(
+            'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+        )
+    ) = 0 then raise exception 'operator provisioning readiness missed active-state function proof';
+    end if;
+    if position(
+        'grant_row.superseded_at is null' in pg_catalog.pg_get_functiondef(
+            'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+        )
+    ) = 0 then raise exception 'operator provisioning readiness missed superseded function proof';
+    end if;
+    if position(
+        'grant_row.expires_at > pg_catalog.clock_timestamp()' in pg_catalog.pg_get_functiondef(
+            'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+        )
+    ) = 0 then raise exception 'operator provisioning readiness missed expiry function proof';
+    end if;
+    if position(
+        '''plan'', ''free''' in pg_catalog.pg_get_functiondef(
+            'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+        )
+    ) = 0 then raise exception 'operator provisioning readiness missed free-fallback function proof';
+    end if;
+    if not exists (
+        select 1 from pg_catalog.pg_index index_record
+         where index_record.indexrelid = pg_catalog.to_regclass(
+                   'public.omr_pilot_plan_grants_one_current_org_idx'
+               )
+           and index_record.indrelid = 'public.omr_pilot_plan_grants'::pg_catalog.regclass
+           and index_record.indisvalid and index_record.indisready and index_record.indisunique
+           and index_record.indnkeyatts = 1
+           and pg_catalog.pg_get_indexdef(index_record.indexrelid, 1, true) = 'organization_id'
+           and position('state = ''active''::text' in pg_catalog.lower(pg_catalog.pg_get_expr(
+               index_record.indpred, index_record.indrelid, true
+           ))) > 0
+           and position('superseded_at is null' in pg_catalog.lower(pg_catalog.pg_get_expr(
+               index_record.indpred, index_record.indrelid, true
+           ))) > 0
+    ) then raise exception 'operator provisioning readiness missed current-org unique index proof: key=%, predicate=%',
+        pg_catalog.pg_get_indexdef(
+            pg_catalog.to_regclass('public.omr_pilot_plan_grants_one_current_org_idx'), 1, true
+        ),
+        (
+            select pg_catalog.pg_get_expr(index_record.indpred, index_record.indrelid, true)
+              from pg_catalog.pg_index index_record
+             where index_record.indexrelid = pg_catalog.to_regclass(
+                       'public.omr_pilot_plan_grants_one_current_org_idx'
+                   )
+        );
+    end if;
+    if not exists (
+        select 1 from pg_catalog.pg_index index_record
+         where index_record.indexrelid = pg_catalog.to_regclass(
+                   'public.omr_pilot_plan_grants_idempotency_hash_unique'
+               )
+           and index_record.indrelid = 'public.omr_pilot_plan_grants'::pg_catalog.regclass
+           and index_record.indisvalid and index_record.indisready and index_record.indisunique
+           and index_record.indnkeyatts = 1 and index_record.indpred is null
+           and pg_catalog.pg_get_indexdef(index_record.indexrelid, 1, true)
+               = 'idempotency_key_hash'
+    ) then raise exception 'operator provisioning readiness missed idempotency unique index proof';
+    end if;
     if pg_catalog.has_schema_privilege('anon', 'public', 'USAGE')
        or pg_catalog.has_schema_privilege('authenticated', 'public', 'USAGE') then
         raise exception 'production boundary left browser schema access';
@@ -13,7 +76,7 @@ begin
         raise exception 'production boundary left browser canonical access';
     end if;
     readiness := public.omr_service_readiness_v1();
-    if readiness ->> 'version' <> '202608080005'
+    if readiness ->> 'version' <> '202608080006'
        or readiness ->> 'ready' <> 'true'
        or readiness ->> 'teacherUploadCleanupQueueReady' <> 'true'
        or readiness ->> 'studentAttemptSessionsReady' <> 'true'
@@ -38,7 +101,8 @@ begin
        or readiness ->> 'initialOperationsLoadControlReady' <> 'true'
        or readiness ->> 'individualStudentAssignmentsReady' <> 'true'
        or readiness ->> 'teacherAttemptReportingReady' <> 'true'
-       or readiness ->> 'operationalJobStatusReady' <> 'true' then
+       or readiness ->> 'operationalJobStatusReady' <> 'true'
+       or readiness ->> 'operatorPilotProvisioningReady' <> 'true' then
         raise exception 'production boundary readiness failed: %', readiness;
     end if;
     if pg_catalog.has_table_privilege(
@@ -51,6 +115,8 @@ begin
         'service_role', 'public.omr_teacher_notification_states', 'SELECT,INSERT,UPDATE,DELETE'
     ) or pg_catalog.has_table_privilege(
         'service_role', 'public.omr_operational_job_status', 'SELECT,INSERT,UPDATE,DELETE'
+    ) or pg_catalog.has_table_privilege(
+        'service_role', 'public.omr_pilot_plan_grants', 'SELECT,INSERT,UPDATE,DELETE'
     ) then
         raise exception 'production boundary exposed RPC-only state tables';
     end if;
@@ -77,6 +143,14 @@ begin
     ) or not pg_catalog.has_function_privilege(
         'service_role',
         'public.omr_read_operational_job_status_v1(text)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_read_effective_workspace_plan_v1(text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',

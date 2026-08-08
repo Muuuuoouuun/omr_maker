@@ -7,7 +7,7 @@ import {
 
 const readyV22Payload = {
     ready: true,
-    version: "202608080005",
+    version: "202608080006",
     browserSchemaPrivilegesDenied: true,
     anonTablePrivilegesDenied: true,
     authenticatedCanonicalPrivilegesDenied: true,
@@ -53,13 +53,14 @@ const readyV22Payload = {
     individualStudentAssignmentsReady: true,
     teacherAttemptReportingReady: true,
     operationalJobStatusReady: true,
+    operatorPilotProvisioningReady: true,
 };
 
 describe("Supabase deployment readiness probe", () => {
     it("accepts only the complete v22 effective-boundary and gateway evidence", () => {
         expect(parseSupabaseDeploymentProbe(readyV22Payload)).toEqual({
             ready: true,
-            version: "202608080005",
+            version: "202608080006",
             browserSchemaPrivilegesDenied: true,
             anonTablePrivilegesDenied: true,
             authenticatedCanonicalPrivilegesDenied: true,
@@ -105,6 +106,7 @@ describe("Supabase deployment readiness probe", () => {
             individualStudentAssignmentsReady: true,
             teacherAttemptReportingReady: true,
             operationalJobStatusReady: true,
+            operatorPilotProvisioningReady: true,
             failedChecks: [],
         });
     });
@@ -155,6 +157,7 @@ describe("Supabase deployment readiness probe", () => {
             "individualStudentAssignmentsReady",
             "teacherAttemptReportingReady",
             "operationalJobStatusReady",
+            "operatorPilotProvisioningReady",
         ] as const) {
             expect(parseSupabaseDeploymentProbe({
                 ...readyV22Payload,
@@ -201,9 +204,20 @@ describe("Supabase deployment readiness probe", () => {
         delete oldShape.operationalJobStatusReady;
         expect(parseSupabaseDeploymentProbe(oldShape)).toMatchObject({
             ready: false,
-            version: "202608080005",
+            version: "202608080006",
             operationalJobStatusReady: false,
             failedChecks: ["operationalJobStatusReady"],
+        });
+    });
+
+    it("rejects a current payload missing atomic pilot provisioning evidence", () => {
+        const oldShape = { ...readyV22Payload } as Record<string, unknown>;
+        delete oldShape.operatorPilotProvisioningReady;
+        expect(parseSupabaseDeploymentProbe(oldShape)).toMatchObject({
+            ready: false,
+            version: "202608080006",
+            operatorPilotProvisioningReady: false,
+            failedChecks: ["operatorPilotProvisioningReady"],
         });
     });
 

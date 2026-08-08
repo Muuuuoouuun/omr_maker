@@ -102,7 +102,7 @@ function backupClient(body = "pdf-body", options: {
                 expect(name).toBe("omr_service_readiness_v1");
                 return {
                     data: {
-                        version: options.version ?? "202608080005",
+                        version: options.version ?? "202608080006",
                         ready: options.ready ?? true,
                     },
                     error: null,
@@ -221,7 +221,7 @@ describe("production backup runner contract", () => {
         })).toThrow(/database.*project/i);
     });
 
-    it("builds PostgreSQL 17 commands with an exact 39-table data allowlist", () => {
+    it("builds PostgreSQL 17 commands with an exact 40-table data allowlist", () => {
         const commands = buildPostgresDumpCommands(resolveCreate("/secure/backup-1"));
         expect(commands.map((plan) => plan.command)).toEqual([
             `${POSTGRES_BIN}/pg_dumpall`,

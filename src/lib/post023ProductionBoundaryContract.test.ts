@@ -14,7 +14,7 @@ describe("post-023 production boundary integration", () => {
 
     it("pins runtime readiness to migration 027", () => {
         for (const document of [boundary, boundaryAssertions]) {
-            expect(document).toContain("202608080005");
+            expect(document).toContain("202608080006");
         }
     });
 

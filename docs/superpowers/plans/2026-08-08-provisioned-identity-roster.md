@@ -70,7 +70,7 @@ git commit -m "feat(identity): add provisioned-only teacher mode"
 ### Task 2: Add atomic operator teacher and pilot provisioning
 
 **Files:**
-- Create: `supabase/migrations/202608080001_initial_operator_provisioning.sql`
+- Create: `supabase/migrations/202608080006_initial_operator_provisioning.sql`
 - Create: `src/lib/operatorProvisioningMigrationContract.test.ts`
 - Modify: `src/lib/productionServerBoundaryContract.test.ts`
 - Modify: `src/lib/backupRestoreCore.test.ts`
@@ -116,8 +116,15 @@ return organization_id, account_id, grant_id, plan, expires_at, and replayed;
 perform all writes in the caller transaction or no writes at all.
 ```
 
-The RPC must not accept a raw password, log the verifier, or return the verifier. Replaying the same
+The RPC must not accept a raw password, log the verifier, or return the verifier. It accepts only the
+existing `pbkdf2-sha256:120000:<32hex>:<64hex>` encoded-verifier format. Replaying the same
 idempotency key with different normalized input returns `idempotency_conflict`.
+
+Keep `omr_organizations.plan` fail-closed as `free` for pilot-provisioned workspaces. The trusted
+`omr_read_effective_workspace_plan_v1` boundary is the only source of active pilot entitlement and
+returns `free` after expiry or supersession. Task 3 must bind account login to the provisioned
+organization/owner membership and move every paid-plan decision to this boundary before the pilot
+journey is considered connected; Task 2 alone does not claim login or paid-feature integration.
 
 Update the canonical manifest expectation from 39 to 40 because the pilot grant ledger is canonical;
 the backup and boundary tests must discover and protect the new table.
@@ -137,7 +144,7 @@ npm run test:supabase:live
 - [ ] **Step 6: Commit**
 
 ```sh
-git add supabase/migrations/202608080001_initial_operator_provisioning.sql src/lib/operatorProvisioningMigrationContract.test.ts src/lib/productionServerBoundaryContract.test.ts src/lib/backupRestoreCore.test.ts supabase/live-test-assertions.sql supabase/production-server-boundary.sql supabase/production-server-boundary-rollback.sql
+git add supabase/migrations/202608080006_initial_operator_provisioning.sql src/lib/operatorProvisioningMigrationContract.test.ts src/lib/productionServerBoundaryContract.test.ts src/lib/backupRestoreCore.test.ts supabase/live-test-assertions.sql supabase/production-server-boundary.sql supabase/production-server-boundary-rollback.sql
 git commit -m "feat(identity): add atomic pilot provisioning"
 ```
 
@@ -167,9 +174,9 @@ const result = await provisionPilotTeacher({
 expect(result).toMatchObject({ status: "provisioned", replayed: false });
 expect(client.rpc).toHaveBeenCalledWith("omr_provision_pilot_teacher_v1", expect.objectContaining({
   p_email: "teacher@example.com",
-  p_password_hash: expect.stringMatching(/^pbkdf2_sha256\$/),
+  p_password_hash: expect.stringMatching(/^pbkdf2-sha256:120000:[a-f0-9]{32}:[a-f0-9]{64}$/),
 }));
-expect(JSON.stringify(result)).not.toContain("pbkdf2_sha256");
+expect(JSON.stringify(result)).not.toContain("pbkdf2-sha256");
 ```
 
 - [ ] **Step 2: Run RED**
@@ -266,7 +273,7 @@ git commit -m "feat(identity): align readiness with provisioned mode"
 ### Task 5: Add student session generation and request-time validation
 
 **Files:**
-- Create: `supabase/migrations/202608080002_student_session_generation.sql`
+- Create: `supabase/migrations/202608080007_student_session_generation.sql`
 - Create: `src/lib/studentSessionRevocation.test.ts`
 - Modify: `src/lib/studentServerSession.ts`
 - Modify: `src/app/actions/studentAuth.ts`
@@ -324,14 +331,14 @@ npm run test:supabase:live
 - [ ] **Step 6: Commit**
 
 ```sh
-git add supabase/migrations/202608080002_student_session_generation.sql src/lib/studentSessionRevocation.test.ts src/lib/studentServerSession.ts src/app/actions/studentAuth.ts src/app/actions/studentSession.ts supabase/live-test-assertions.sql
+git add supabase/migrations/202608080007_student_session_generation.sql src/lib/studentSessionRevocation.test.ts src/lib/studentServerSession.ts src/app/actions/studentAuth.ts src/app/actions/studentSession.ts supabase/live-test-assertions.sql
 git commit -m "feat(students): revoke sessions on credential rotation"
 ```
 
 ### Task 6: Add all-or-none start-code batch issuance
 
 **Files:**
-- Create: `supabase/migrations/202608080003_student_start_code_batch.sql`
+- Create: `supabase/migrations/202608080008_student_start_code_batch.sql`
 - Create: `src/lib/studentCredentialBatchMigrationContract.test.ts`
 - Create: `src/lib/studentCredentialBatchGateway.server.ts`
 - Create: `src/lib/studentCredentialBatchGateway.test.ts`
@@ -389,7 +396,7 @@ npm run test:supabase:live
 - [ ] **Step 6: Commit**
 
 ```sh
-git add supabase/migrations/202608080003_student_start_code_batch.sql src/lib/studentCredentialBatchMigrationContract.test.ts src/lib/studentCredentialBatchGateway.server.ts src/lib/studentCredentialBatchGateway.test.ts src/app/actions/studentAuth.ts supabase/live-test-assertions.sql
+git add supabase/migrations/202608080008_student_start_code_batch.sql src/lib/studentCredentialBatchMigrationContract.test.ts src/lib/studentCredentialBatchGateway.server.ts src/lib/studentCredentialBatchGateway.test.ts src/app/actions/studentAuth.ts supabase/live-test-assertions.sql
 git commit -m "feat(roster): issue student codes atomically"
 ```
 

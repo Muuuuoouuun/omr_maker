@@ -64,8 +64,8 @@ describe("core/free feedback boundary migration", () => {
         expect(boundary).toContain("v_feedback_core_free_ready");
         expect(boundary).toContain("feedback-core-free:202608060027");
         expect(boundary).toContain("'feedbackCoreFreeReady'");
-        expect(boundary).toContain("'version', '202608080005'");
-        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608080005"');
+        expect(boundary).toContain("'version', '202608080006'");
+        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608080006"');
         expect(readiness).toContain('"feedbackCoreFreeReady"');
         expect(liveBoundary).toContain("readiness ->> 'feedbackCoreFreeReady' <> 'true'");
         expect(live).toContain("free core feedback save did not persist bounded text and comments");

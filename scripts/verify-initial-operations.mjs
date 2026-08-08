@@ -289,7 +289,7 @@ export async function runInitialOperationsPreflight(config, overrides = {}) {
         || readiness.body.database !== "ready"
         || readiness.body.observability !== "ready"
         || readiness.body.configuration !== "ready"
-        || readiness.body.version !== "202608080005"
+        || readiness.body.version !== "202608080006"
         || readiness.body.environment !== "staging"
         || readiness.body.build !== config.expectedBuild
         || readiness.body.databaseProjectRefHash !== config.stagingProjectRefHash

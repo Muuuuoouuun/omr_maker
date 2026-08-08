@@ -188,7 +188,7 @@ describe("restored staging environment verification", () => {
             status: "verified",
             environment: "staging",
             targetProjectRefHash: hashProjectRef(TARGET_REF),
-            databaseTableCount: 39,
+            databaseTableCount: 40,
             storageObjectCount: 1,
             rpoMinutes: 60,
             rtoMinutes: 45,

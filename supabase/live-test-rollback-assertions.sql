@@ -86,6 +86,11 @@ begin
        or pg_catalog.has_table_privilege('service_role', 'public.omr_teacher_notification_states', 'SELECT,INSERT,UPDATE,DELETE') then
         raise exception 'rollback exposed RPC-only rate or mutation state';
     end if;
+    if pg_catalog.has_table_privilege('anon', 'public.omr_pilot_plan_grants', 'SELECT,INSERT,UPDATE,DELETE')
+       or pg_catalog.has_table_privilege('authenticated', 'public.omr_pilot_plan_grants', 'SELECT,INSERT,UPDATE,DELETE')
+       or pg_catalog.has_table_privilege('service_role', 'public.omr_pilot_plan_grants', 'SELECT,INSERT,UPDATE,DELETE') then
+        raise exception 'rollback exposed RPC-only pilot grant ledger';
+    end if;
     if not pg_catalog.has_function_privilege(
         'service_role',
         'public.omr_authorize_remote_asset_cleanup_delete_v1(text,text,integer)',
@@ -128,6 +133,10 @@ begin
         'service_role', 'public.omr_force_finish_attempt_sessions_compact_v1(text,text[],timestamptz,text,text,text,jsonb)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_validate_teacher_session_v1(text,bigint)', 'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)', 'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_read_effective_workspace_plan_v1(text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_rotate_exam_entry_invite_v1(text,text,text,text,timestamptz)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(

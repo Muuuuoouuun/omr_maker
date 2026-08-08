@@ -142,7 +142,8 @@ begin
                'omr_teacher_accounts',
                 'omr_teacher_account_tokens',
                 'omr_teacher_notification_states',
-                'omr_operational_job_status'
+                'omr_operational_job_status',
+                'omr_pilot_plan_grants'
            )
            and (
                not has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -179,6 +180,9 @@ begin
          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
      ) or has_table_privilege(
          'service_role', 'public.omr_operational_job_status',
+         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+     ) or has_table_privilege(
+         'service_role', 'public.omr_pilot_plan_grants',
          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
      ) then
          raise exception 'service_role bypassed a private operations or teacher-auth table';
@@ -3803,7 +3807,7 @@ declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202608080005'
+    if readiness->>'version' <> '202608080006'
         or readiness->>'ready' <> 'true'
         or exists (
             select 1
@@ -5976,6 +5980,834 @@ begin
             <> pg_catalog.jsonb_array_length(v_export -> 'rows')::bigint
        or v_export::text ~* 'student_name|student_profile_id|answers|question_results' then
         raise exception 'atomic PII-free attempt export contract failed: %', v_export;
+    end if;
+end
+$$;
+
+reset role;
+
+do $drift$
+declare
+    v_definition text;
+    v_probe jsonb;
+begin
+    v_definition := pg_catalog.pg_get_functiondef(
+        'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+    );
+    execute $replace$
+        create or replace function public.omr_provision_pilot_teacher_v1(
+            p_organization_name text, p_email text, p_display_name text,
+            p_password_hash text, p_plan text, p_expires_at timestamptz,
+            p_actor text, p_reason text, p_idempotency_key text
+        ) returns jsonb language sql security definer
+        set search_path = '' set statement_timeout = '10s' set lock_timeout = '3s'
+        as 'select jsonb_build_object(''organizationId'', ''fake'', ''accountId'', ''fake'', ''grantId'', ''fake'', ''plan'', ''academy'', ''expiresAt'', null, ''replayed'', false)'
+    $replace$;
+    v_probe := public.omr_service_readiness_v1();
+    if coalesce((v_probe->>'operatorPilotProvisioningReady')::boolean, true) then
+        execute v_definition;
+        raise exception 'operator provisioning mutation body drift passed readiness';
+    end if;
+    execute v_definition;
+end
+$drift$;
+
+do $drift$
+declare
+    v_definition text;
+    v_probe jsonb;
+begin
+    v_definition := pg_catalog.pg_get_functiondef(
+        'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+    );
+    execute $replace$
+        create or replace function public.omr_read_effective_workspace_plan_v1(p_organization_id text)
+        returns jsonb language sql security definer
+        set search_path = '' set statement_timeout = '5s'
+        as 'select jsonb_build_object(''organizationId'', $1, ''plan'', ''academy'', ''grantId'', null, ''expiresAt'', null)'
+    $replace$;
+    v_probe := public.omr_service_readiness_v1();
+    if coalesce((v_probe->>'operatorPilotProvisioningReady')::boolean, true) then
+        execute v_definition;
+        raise exception 'operator provisioning effective-plan body drift passed readiness';
+    end if;
+    execute v_definition;
+end
+$drift$;
+
+do $$
+declare
+    v_probe jsonb;
+begin
+    alter index public.omr_pilot_plan_grants_one_current_org_idx
+        rename to omr_pilot_plan_grants_one_current_org_idx_real;
+    create unique index omr_pilot_plan_grants_one_current_org_idx
+        on public.omr_pilot_plan_grants (account_id)
+        where state = 'active' and superseded_at is null;
+    v_probe := public.omr_service_readiness_v1();
+    if coalesce((v_probe->>'operatorPilotProvisioningReady')::boolean, true) then
+        drop index public.omr_pilot_plan_grants_one_current_org_idx;
+        alter index public.omr_pilot_plan_grants_one_current_org_idx_real
+            rename to omr_pilot_plan_grants_one_current_org_idx;
+        raise exception 'operator provisioning current-grant index drift passed readiness';
+    end if;
+    drop index public.omr_pilot_plan_grants_one_current_org_idx;
+    alter index public.omr_pilot_plan_grants_one_current_org_idx_real
+        rename to omr_pilot_plan_grants_one_current_org_idx;
+end
+$$;
+
+do $$
+declare
+    v_probe jsonb;
+begin
+    alter table public.omr_pilot_plan_grants
+        rename constraint omr_pilot_plan_grants_state_check
+        to omr_pilot_plan_grants_state_check_real;
+    alter table public.omr_pilot_plan_grants
+        add constraint omr_pilot_plan_grants_state_check check (true);
+    v_probe := public.omr_service_readiness_v1();
+    if coalesce((v_probe->>'operatorPilotProvisioningReady')::boolean, true) then
+        alter table public.omr_pilot_plan_grants
+            drop constraint omr_pilot_plan_grants_state_check;
+        alter table public.omr_pilot_plan_grants
+            rename constraint omr_pilot_plan_grants_state_check_real
+            to omr_pilot_plan_grants_state_check;
+        raise exception 'operator provisioning ledger constraint drift passed readiness';
+    end if;
+    alter table public.omr_pilot_plan_grants
+        drop constraint omr_pilot_plan_grants_state_check;
+    alter table public.omr_pilot_plan_grants
+        rename constraint omr_pilot_plan_grants_state_check_real
+        to omr_pilot_plan_grants_state_check;
+end
+$$;
+
+-- Operator provisioning is RPC-only for all browser roles and its digest
+-- ledger remains inaccessible even to service_role.
+do $$
+declare
+    v_signature text := 'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)';
+    v_role text;
+begin
+    if pg_catalog.has_function_privilege('anon', v_signature, 'EXECUTE') then
+        raise exception 'operator provisioning RPC exposed to anon';
+    end if;
+    if pg_catalog.has_function_privilege('authenticated', v_signature, 'EXECUTE') then
+        raise exception 'operator provisioning RPC exposed to authenticated';
+    end if;
+    if not pg_catalog.has_function_privilege('service_role', v_signature, 'EXECUTE')
+       or not pg_catalog.has_function_privilege(
+           'service_role', 'public.omr_read_effective_workspace_plan_v1(text)', 'EXECUTE'
+       ) then
+        raise exception 'operator provisioning service role boundary failed';
+    end if;
+    foreach v_role in array array['public', 'anon', 'authenticated', 'service_role'] loop
+        if pg_catalog.has_table_privilege(
+            v_role, 'public.omr_pilot_plan_grants',
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        ) then
+            raise exception 'pilot grant ledger exposed to %', v_role;
+        end if;
+    end loop;
+end
+$$;
+
+set role service_role;
+do $$
+declare
+    v_result jsonb;
+begin
+    v_result := public.omr_provision_pilot_teacher_v1(
+        'Service Boundary School', 'service-boundary@example.test', 'Service Teacher',
+        'pbkdf2-sha256:120000:11111111111111111111111111111111:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'pro', pg_catalog.clock_timestamp() + interval '1 day',
+        'operator:live', 'service_boundary',
+        'prov_service_boundary_0123456789abcdef0123456789abcdef'
+    );
+    if v_result->>'replayed' <> 'false' then
+        raise exception 'operator provisioning service role boundary failed';
+    end if;
+end
+$$;
+reset role;
+
+do $$
+declare
+    v_initial jsonb;
+    v_replay jsonb;
+    v_replacement jsonb;
+    v_effective jsonb;
+    v_before jsonb;
+    v_after jsonb;
+    v_expiry timestamptz := pg_catalog.clock_timestamp() + interval '1 hour';
+    v_account_id text;
+    v_organization_id text;
+    v_grant_id text;
+    v_case integer;
+    v_conflicted boolean;
+    v_hash_a text := 'pbkdf2-sha256:120000:22222222222222222222222222222222:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    v_hash_b text := 'pbkdf2-sha256:120000:33333333333333333333333333333333:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+begin
+    v_initial := public.omr_provision_pilot_teacher_v1(
+        'Atomic Pilot School', '  ATOMIC-PILOT@EXAMPLE.TEST ', ' Atomic Teacher ',
+        v_hash_a, 'PRO', v_expiry, ' operator:live ', ' initial_pilot ',
+        'prov_atomic_replay_0123456789abcdef0123456789abcdef'
+    );
+    v_account_id := v_initial->>'accountId';
+    v_organization_id := v_initial->>'organizationId';
+    v_grant_id := v_initial->>'grantId';
+    if v_initial->>'replayed' <> 'false'
+       or v_initial->>'plan' <> 'pro'
+       or not exists (
+           select 1 from public.omr_teacher_accounts account
+            where account.id = v_account_id and account.status = 'active'
+              and account.email = 'atomic-pilot@example.test'
+              and account.session_generation = 1
+       )
+       or not exists (
+           select 1 from public.omr_organization_members member
+            where member.organization_id = v_organization_id
+              and member.user_id = v_account_id and member.role = 'owner'
+              and member.status = 'active'
+       )
+       or not exists (
+           select 1 from public.omr_teacher_profiles profile
+            where profile.organization_id = v_organization_id
+              and profile.user_id = v_account_id
+              and profile.display_name = 'Atomic Teacher'
+              and profile.status = 'active'
+       ) then
+        raise exception 'operator provisioning initial apply failed';
+    end if;
+    if exists (
+        select 1 from public.omr_organizations organization
+         where organization.id = v_organization_id and organization.plan <> 'free'
+    ) then
+        raise exception 'pilot provisioning materialized a paid legacy plan';
+    end if;
+
+    select pg_catalog.jsonb_build_object(
+        'account', (select pg_catalog.to_jsonb(account) from public.omr_teacher_accounts account where account.id = v_account_id),
+        'organization', (select pg_catalog.to_jsonb(organization) from public.omr_organizations organization where organization.id = v_organization_id),
+        'member', (select pg_catalog.to_jsonb(member) from public.omr_organization_members member where member.organization_id = v_organization_id and member.user_id = v_account_id),
+        'profile', (select pg_catalog.to_jsonb(profile) from public.omr_teacher_profiles profile where profile.organization_id = v_organization_id and profile.user_id = v_account_id),
+        'grants', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(grant_row) order by grant_row.id) from public.omr_pilot_plan_grants grant_row where grant_row.account_id = v_account_id),
+        'audits', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(audit) order by audit.id) from public.omr_audit_logs audit where audit.entity_id = v_grant_id),
+        'tokens', (select pg_catalog.count(*) from public.omr_teacher_account_tokens token where token.account_id = v_account_id)
+    ) into v_before;
+
+    v_replay := public.omr_provision_pilot_teacher_v1(
+        'Atomic Pilot School', 'atomic-pilot@example.test', 'Atomic Teacher',
+        v_hash_a, 'pro', v_expiry, 'operator:live', 'initial_pilot',
+        'prov_atomic_replay_0123456789abcdef0123456789abcdef'
+    );
+    select pg_catalog.jsonb_build_object(
+        'account', (select pg_catalog.to_jsonb(account) from public.omr_teacher_accounts account where account.id = v_account_id),
+        'organization', (select pg_catalog.to_jsonb(organization) from public.omr_organizations organization where organization.id = v_organization_id),
+        'member', (select pg_catalog.to_jsonb(member) from public.omr_organization_members member where member.organization_id = v_organization_id and member.user_id = v_account_id),
+        'profile', (select pg_catalog.to_jsonb(profile) from public.omr_teacher_profiles profile where profile.organization_id = v_organization_id and profile.user_id = v_account_id),
+        'grants', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(grant_row) order by grant_row.id) from public.omr_pilot_plan_grants grant_row where grant_row.account_id = v_account_id),
+        'audits', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(audit) order by audit.id) from public.omr_audit_logs audit where audit.entity_id = v_grant_id),
+        'tokens', (select pg_catalog.count(*) from public.omr_teacher_account_tokens token where token.account_id = v_account_id)
+    ) into v_after;
+    if v_replay->>'replayed' <> 'true'
+       or (v_initial - 'replayed') is distinct from (v_replay - 'replayed')
+       or v_before is distinct from v_after then
+        raise exception 'operator provisioning exact replay mutated state';
+    end if;
+
+    -- The same key conflicts before all writes for every normalized request field.
+    for v_case in 1..8 loop
+        v_conflicted := false;
+        begin
+            perform public.omr_provision_pilot_teacher_v1(
+                case when v_case = 1 then 'Other School' else 'Atomic Pilot School' end,
+                case when v_case = 2 then 'other@example.test' else 'atomic-pilot@example.test' end,
+                case when v_case = 3 then 'Other Teacher' else 'Atomic Teacher' end,
+                case when v_case = 4 then v_hash_b else v_hash_a end,
+                case when v_case = 5 then 'academy' else 'pro' end,
+                case when v_case = 6 then v_expiry + interval '1 minute' else v_expiry end,
+                case when v_case = 7 then 'operator:other' else 'operator:live' end,
+                case when v_case = 8 then 'other_reason' else 'initial_pilot' end,
+                'prov_atomic_replay_0123456789abcdef0123456789abcdef'
+            );
+        exception when others then
+            if sqlerrm <> 'idempotency_conflict' then raise; end if;
+            v_conflicted := true;
+        end;
+        if not v_conflicted then raise exception 'operator provisioning idempotency conflict was accepted'; end if;
+        if v_case = 4 and exists (
+            select 1 from public.omr_teacher_accounts account
+             where account.id = v_account_id and account.password_hash <> v_hash_a
+        ) then
+            raise exception 'operator provisioning verifier conflict mutated state';
+        end if;
+    end loop;
+    select pg_catalog.jsonb_build_object(
+        'account', (select pg_catalog.to_jsonb(account) from public.omr_teacher_accounts account where account.id = v_account_id),
+        'organization', (select pg_catalog.to_jsonb(organization) from public.omr_organizations organization where organization.id = v_organization_id),
+        'member', (select pg_catalog.to_jsonb(member) from public.omr_organization_members member where member.organization_id = v_organization_id and member.user_id = v_account_id),
+        'profile', (select pg_catalog.to_jsonb(profile) from public.omr_teacher_profiles profile where profile.organization_id = v_organization_id and profile.user_id = v_account_id),
+        'grants', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(grant_row) order by grant_row.id) from public.omr_pilot_plan_grants grant_row where grant_row.account_id = v_account_id),
+        'audits', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(audit) order by audit.id) from public.omr_audit_logs audit where audit.entity_id = v_grant_id),
+        'tokens', (select pg_catalog.count(*) from public.omr_teacher_account_tokens token where token.account_id = v_account_id)
+    ) into v_after;
+    if v_before is distinct from v_after then
+        raise exception 'operator provisioning idempotency conflict mutated state';
+    end if;
+
+    insert into public.omr_teacher_account_tokens (
+        id, account_id, purpose, token_hash, expires_at, created_at
+    ) values (
+        'teacher_token_0123456789abcdefghijklmn', v_account_id, 'password_reset',
+        'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        pg_catalog.clock_timestamp() + interval '1 hour', pg_catalog.clock_timestamp()
+    );
+    v_replacement := public.omr_provision_pilot_teacher_v1(
+        'Atomic Pilot School', 'atomic-pilot@example.test', 'Atomic Teacher',
+        v_hash_b, 'academy', v_expiry + interval '1 hour',
+        'operator:live', 'credential_replacement',
+        'prov_atomic_replace_0123456789abcdef0123456789abcdef'
+    );
+    if v_replacement->>'replayed' <> 'false'
+       or not exists (
+           select 1 from public.omr_teacher_accounts account
+            where account.id = v_account_id and account.password_hash = v_hash_b
+              and account.session_generation = 2
+       )
+       or exists (
+           select 1 from public.omr_teacher_account_tokens token
+            where token.account_id = v_account_id and token.consumed_at is null
+       )
+       or not exists (
+           select 1 from public.omr_pilot_plan_grants grant_row
+            where grant_row.id = v_grant_id and grant_row.superseded_at is not null
+       ) then
+        raise exception 'operator provisioning replacement did not rotate exactly one session generation';
+    end if;
+    if exists (
+        select 1 from public.omr_organizations organization
+         where organization.id = v_organization_id and organization.plan <> 'free'
+    ) then
+        raise exception 'pilot provisioning materialized a paid legacy plan';
+    end if;
+    v_effective := public.omr_read_effective_workspace_plan_v1(v_organization_id);
+    if v_effective->>'plan' <> 'academy'
+       or v_effective->>'grantId' <> v_replacement->>'grantId' then
+        raise exception 'active pilot grant did not resolve effective plan';
+    end if;
+    if v_initial::text ~* 'pbkdf2|atomic-pilot|prov_atomic'
+       or exists (
+           select 1 from public.omr_audit_logs audit
+            where audit.organization_id = v_organization_id
+              and (audit.metadata::text ~* 'pbkdf2|atomic-pilot|prov_atomic|requestHash|idempotency')
+       ) then
+        raise exception 'operator provisioning leaked PII or secret material';
+    end if;
+end
+$$;
+
+-- An audit sink failure must roll back organization, account, membership,
+-- grant receipt, and every other mutation from the provisioning statement.
+create function pg_temp.reject_pilot_provision_audit_v1()
+returns trigger language plpgsql as $$
+begin
+    if new.action = 'operator.pilot_teacher_provisioned'
+       and new.actor_user_id = 'operator:forced-audit-failure' then
+        raise exception 'forced_audit_failure';
+    end if;
+    return new;
+end
+$$;
+create trigger omr_live_reject_pilot_provision_audit
+before insert on public.omr_audit_logs
+for each row execute function pg_temp.reject_pilot_provision_audit_v1();
+do $$
+declare
+    v_before jsonb;
+    v_after jsonb;
+    v_failed boolean := false;
+begin
+    select pg_catalog.jsonb_build_object(
+        'organizations', (select pg_catalog.count(*) from public.omr_organizations),
+        'accounts', (select pg_catalog.count(*) from public.omr_teacher_accounts),
+        'members', (select pg_catalog.count(*) from public.omr_organization_members),
+        'profiles', (select pg_catalog.count(*) from public.omr_teacher_profiles),
+        'grants', (select pg_catalog.count(*) from public.omr_pilot_plan_grants),
+        'audits', (select pg_catalog.count(*) from public.omr_audit_logs)
+    ) into v_before;
+    begin
+        perform public.omr_provision_pilot_teacher_v1(
+            'Rollback Pilot School', 'rollback-pilot@example.test', 'Rollback Teacher',
+            'pbkdf2-sha256:120000:44444444444444444444444444444444:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+            'pro', pg_catalog.clock_timestamp() + interval '1 day',
+            'operator:forced-audit-failure', 'atomicity_probe',
+            'prov_audit_failure_0123456789abcdef0123456789abcdef'
+        );
+    exception when others then
+        if sqlerrm <> 'forced_audit_failure' then raise; end if;
+        v_failed := true;
+    end;
+    select pg_catalog.jsonb_build_object(
+        'organizations', (select pg_catalog.count(*) from public.omr_organizations),
+        'accounts', (select pg_catalog.count(*) from public.omr_teacher_accounts),
+        'members', (select pg_catalog.count(*) from public.omr_organization_members),
+        'profiles', (select pg_catalog.count(*) from public.omr_teacher_profiles),
+        'grants', (select pg_catalog.count(*) from public.omr_pilot_plan_grants),
+        'audits', (select pg_catalog.count(*) from public.omr_audit_logs)
+    ) into v_after;
+    if not v_failed or v_before is distinct from v_after
+       or exists (select 1 from public.omr_teacher_accounts where email = 'rollback-pilot@example.test') then
+        raise exception 'operator provisioning audit failure was not atomic';
+    end if;
+end
+$$;
+do $$
+declare
+    v_account_id text;
+    v_organization_id text;
+    v_before jsonb;
+    v_after jsonb;
+    v_failed boolean := false;
+begin
+    select account.id, member.organization_id
+      into strict v_account_id, v_organization_id
+      from public.omr_teacher_accounts account
+      join public.omr_organization_members member on member.user_id = account.id
+     where account.email = 'atomic-pilot@example.test';
+    insert into public.omr_teacher_account_tokens (
+        id, account_id, purpose, token_hash, expires_at, created_at
+    ) values (
+        'teacher_token_replacementrollback01234', v_account_id, 'password_reset',
+        'abababababababababababababababababababababababababababababababab',
+        pg_catalog.clock_timestamp() + interval '1 hour', pg_catalog.clock_timestamp()
+    );
+    select pg_catalog.jsonb_build_object(
+        'account', (select pg_catalog.to_jsonb(account) from public.omr_teacher_accounts account where account.id = v_account_id),
+        'organization', (select pg_catalog.to_jsonb(organization) from public.omr_organizations organization where organization.id = v_organization_id),
+        'member', (select pg_catalog.to_jsonb(member) from public.omr_organization_members member where member.organization_id = v_organization_id and member.user_id = v_account_id),
+        'profile', (select pg_catalog.to_jsonb(profile) from public.omr_teacher_profiles profile where profile.organization_id = v_organization_id and profile.user_id = v_account_id),
+        'grants', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(grant_row) order by grant_row.id) from public.omr_pilot_plan_grants grant_row where grant_row.account_id = v_account_id),
+        'audits', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(audit) order by audit.id) from public.omr_audit_logs audit where audit.organization_id = v_organization_id),
+        'tokens', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(token) order by token.id) from public.omr_teacher_account_tokens token where token.account_id = v_account_id)
+    ) into v_before;
+    begin
+        perform public.omr_provision_pilot_teacher_v1(
+            'Atomic Pilot School', 'atomic-pilot@example.test', 'Atomic Teacher',
+            'pbkdf2-sha256:120000:77777777777777777777777777777777:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            'pro', pg_catalog.clock_timestamp() + interval '2 hours',
+            'operator:forced-audit-failure', 'replacement_atomicity_probe',
+            'prov_replace_failure_0123456789abcdef0123456789abcdef'
+        );
+    exception when others then
+        if sqlerrm <> 'forced_audit_failure' then raise; end if;
+        v_failed := true;
+    end;
+    select pg_catalog.jsonb_build_object(
+        'account', (select pg_catalog.to_jsonb(account) from public.omr_teacher_accounts account where account.id = v_account_id),
+        'organization', (select pg_catalog.to_jsonb(organization) from public.omr_organizations organization where organization.id = v_organization_id),
+        'member', (select pg_catalog.to_jsonb(member) from public.omr_organization_members member where member.organization_id = v_organization_id and member.user_id = v_account_id),
+        'profile', (select pg_catalog.to_jsonb(profile) from public.omr_teacher_profiles profile where profile.organization_id = v_organization_id and profile.user_id = v_account_id),
+        'grants', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(grant_row) order by grant_row.id) from public.omr_pilot_plan_grants grant_row where grant_row.account_id = v_account_id),
+        'audits', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(audit) order by audit.id) from public.omr_audit_logs audit where audit.organization_id = v_organization_id),
+        'tokens', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(token) order by token.id) from public.omr_teacher_account_tokens token where token.account_id = v_account_id)
+    ) into v_after;
+    if not v_failed or v_before is distinct from v_after then
+        raise exception 'operator provisioning replacement audit failure was not atomic';
+    end if;
+end
+$$;
+drop trigger omr_live_reject_pilot_provision_audit on public.omr_audit_logs;
+
+-- Independent connections race the same key. Exactly one creates the state;
+-- the other returns the deterministic replay after the advisory lock.
+do $$
+declare
+    v_a jsonb;
+    v_b jsonb;
+    v_query text;
+    v_expiry timestamptz := pg_catalog.clock_timestamp() + interval '1 day';
+begin
+    perform extensions.dblink_connect(
+        'pilot-provision-a',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_connect(
+        'pilot-provision-b',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    v_query := 'select public.omr_provision_pilot_teacher_v1('
+        || quote_literal('Concurrent Pilot School') || ','
+        || quote_literal('concurrent-pilot@example.test') || ','
+        || quote_literal('Concurrent Teacher') || ','
+        || quote_literal('pbkdf2-sha256:120000:55555555555555555555555555555555:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff') || ','
+        || quote_literal('pro') || ',' || quote_literal(v_expiry) || '::timestamptz,'
+        || quote_literal('operator:live') || ',' || quote_literal('concurrency_probe') || ','
+        || quote_literal('prov_concurrent_same_0123456789abcdef0123456789abcdef') || ')::text';
+    perform extensions.dblink_send_query('pilot-provision-a', v_query);
+    perform extensions.dblink_send_query('pilot-provision-b', v_query);
+    select result.recorded::jsonb into v_a
+      from extensions.dblink_get_result('pilot-provision-a') as result(recorded text);
+    select result.recorded::jsonb into v_b
+      from extensions.dblink_get_result('pilot-provision-b') as result(recorded text);
+    perform extensions.dblink_disconnect('pilot-provision-a');
+    perform extensions.dblink_disconnect('pilot-provision-b');
+    if (v_a->>'replayed' = v_b->>'replayed')
+       or (v_a - 'replayed') is distinct from (v_b - 'replayed')
+       or (select pg_catalog.count(*) from public.omr_teacher_accounts where email = 'concurrent-pilot@example.test') <> 1
+       or (select pg_catalog.count(*) from public.omr_pilot_plan_grants where account_id = v_a->>'accountId') <> 1 then
+        raise exception 'operator provisioning concurrent replay duplicated state';
+    end if;
+end
+$$;
+
+-- Distinct keys targeting the same missing email serialize on the email lock.
+-- Exact tenant/profile input becomes two whole reprovisions, never two tenants.
+do $$
+declare
+    v_a jsonb;
+    v_b jsonb;
+    v_base text;
+    v_expiry timestamptz := pg_catalog.clock_timestamp() + interval '1 day';
+begin
+    perform extensions.dblink_connect(
+        'pilot-distinct-a',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_connect(
+        'pilot-distinct-b',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    v_base := quote_literal('Distinct Key School') || ','
+        || quote_literal('distinct-key@example.test') || ','
+        || quote_literal('Distinct Teacher') || ',';
+    perform extensions.dblink_send_query(
+        'pilot-distinct-a',
+        'select public.omr_provision_pilot_teacher_v1(' || v_base
+        || quote_literal('pbkdf2-sha256:120000:88888888888888888888888888888888:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc') || ','
+        || quote_literal('pro') || ',' || quote_literal(v_expiry) || '::timestamptz,'
+        || quote_literal('operator:live') || ',' || quote_literal('distinct_key_a') || ','
+        || quote_literal('prov_distinct_key_a_0123456789abcdef0123456789abcdef') || ')::text'
+    );
+    perform extensions.dblink_send_query(
+        'pilot-distinct-b',
+        'select public.omr_provision_pilot_teacher_v1(' || v_base
+        || quote_literal('pbkdf2-sha256:120000:99999999999999999999999999999999:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd') || ','
+        || quote_literal('academy') || ',' || quote_literal(v_expiry) || '::timestamptz,'
+        || quote_literal('operator:live') || ',' || quote_literal('distinct_key_b') || ','
+        || quote_literal('prov_distinct_key_b_0123456789abcdef0123456789abcdef') || ')::text'
+    );
+    select result.recorded::jsonb into v_a
+      from extensions.dblink_get_result('pilot-distinct-a') as result(recorded text);
+    select result.recorded::jsonb into v_b
+      from extensions.dblink_get_result('pilot-distinct-b') as result(recorded text);
+    perform extensions.dblink_disconnect('pilot-distinct-a');
+    perform extensions.dblink_disconnect('pilot-distinct-b');
+    if v_a->>'replayed' <> 'false' or v_b->>'replayed' <> 'false'
+       or v_a->>'organizationId' <> v_b->>'organizationId'
+       or v_a->>'accountId' <> v_b->>'accountId'
+       or v_a->>'grantId' = v_b->>'grantId'
+       or (select pg_catalog.count(*) from public.omr_teacher_accounts where email = 'distinct-key@example.test') <> 1
+       or (select pg_catalog.count(*) from public.omr_organization_members where user_id = v_a->>'accountId') <> 1
+       or (select pg_catalog.count(*) from public.omr_teacher_profiles where user_id = v_a->>'accountId') <> 1
+       or (select pg_catalog.count(*) from public.omr_pilot_plan_grants where account_id = v_a->>'accountId') <> 2
+       or (select pg_catalog.count(*) from public.omr_pilot_plan_grants where account_id = v_a->>'accountId' and state = 'active') <> 1
+       or exists (
+           select 1 from public.omr_pilot_plan_grants grant_row
+            where grant_row.account_id = v_a->>'accountId'
+              and (
+                  grant_row.updated_at < grant_row.created_at
+                  or (grant_row.state = 'superseded'
+                      and grant_row.superseded_at < grant_row.created_at)
+              )
+       )
+       or not exists (select 1 from public.omr_teacher_accounts where id = v_a->>'accountId' and session_generation = 2) then
+        raise exception 'operator provisioning distinct-key email race mixed state';
+    end if;
+end
+$$;
+
+-- Conflicting tenant/profile requests for one missing email admit one whole
+-- request and reject the other without an orphan organization or profile.
+do $$
+declare
+    v_a jsonb;
+    v_b jsonb;
+    v_error_a text;
+    v_error_b text;
+    v_expiry timestamptz := pg_catalog.clock_timestamp() + interval '1 day';
+begin
+    perform extensions.dblink_connect(
+        'pilot-conflict-a',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_connect(
+        'pilot-conflict-b',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_send_query(
+        'pilot-conflict-a',
+        'select public.omr_provision_pilot_teacher_v1('
+        || quote_literal('Conflict School A') || ',' || quote_literal('conflict-race@example.test') || ','
+        || quote_literal('Conflict Teacher A') || ','
+        || quote_literal('pbkdf2-sha256:120000:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') || ','
+        || quote_literal('pro') || ',' || quote_literal(v_expiry) || '::timestamptz,'
+        || quote_literal('operator:live') || ',' || quote_literal('conflict_race_a') || ','
+        || quote_literal('prov_conflict_race_a_0123456789abcdef0123456789abcdef') || ')::text'
+    );
+    perform extensions.dblink_send_query(
+        'pilot-conflict-b',
+        'select public.omr_provision_pilot_teacher_v1('
+        || quote_literal('Conflict School B') || ',' || quote_literal('conflict-race@example.test') || ','
+        || quote_literal('Conflict Teacher B') || ','
+        || quote_literal('pbkdf2-sha256:120000:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff') || ','
+        || quote_literal('academy') || ',' || quote_literal(v_expiry) || '::timestamptz,'
+        || quote_literal('operator:live') || ',' || quote_literal('conflict_race_b') || ','
+        || quote_literal('prov_conflict_race_b_0123456789abcdef0123456789abcdef') || ')::text'
+    );
+    select result.recorded::jsonb into v_a
+      from extensions.dblink_get_result('pilot-conflict-a', false) as result(recorded text);
+    v_error_a := extensions.dblink_error_message('pilot-conflict-a');
+    select result.recorded::jsonb into v_b
+      from extensions.dblink_get_result('pilot-conflict-b', false) as result(recorded text);
+    v_error_b := extensions.dblink_error_message('pilot-conflict-b');
+    perform extensions.dblink_disconnect('pilot-conflict-a');
+    perform extensions.dblink_disconnect('pilot-conflict-b');
+    if ((v_a is not null)::integer + (v_b is not null)::integer) <> 1
+       or not (coalesce(v_error_a, '') like '%provisioning_conflict%'
+               or coalesce(v_error_b, '') like '%provisioning_conflict%')
+       or (select pg_catalog.count(*) from public.omr_teacher_accounts where email = 'conflict-race@example.test') <> 1
+       or (select pg_catalog.count(*) from public.omr_organizations where name in ('Conflict School A', 'Conflict School B')) <> 1
+       or (select pg_catalog.count(*) from public.omr_organization_members where user_id = coalesce(v_a->>'accountId', v_b->>'accountId')) <> 1
+       or (select pg_catalog.count(*) from public.omr_teacher_profiles where user_id = coalesce(v_a->>'accountId', v_b->>'accountId')) <> 1
+       or (select pg_catalog.count(*) from public.omr_pilot_plan_grants where account_id = coalesce(v_a->>'accountId', v_b->>'accountId')) <> 1 then
+        raise exception 'operator provisioning conflicting email race orphaned state';
+    end if;
+end
+$$;
+
+create function pg_temp.pilot_provisioning_scope_snapshot_v1(
+    p_account_id text,
+    p_organization_id text
+)
+returns jsonb language sql set search_path = '' as $$
+    select pg_catalog.jsonb_build_object(
+        'account', (select pg_catalog.to_jsonb(account) from public.omr_teacher_accounts account where account.id = p_account_id),
+        'organization', (select pg_catalog.to_jsonb(organization) from public.omr_organizations organization where organization.id = p_organization_id),
+        'members', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(member) order by member.organization_id) from public.omr_organization_members member where member.user_id = p_account_id),
+        'profiles', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(profile) order by profile.organization_id) from public.omr_teacher_profiles profile where profile.user_id = p_account_id),
+        'grants', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(grant_row) order by grant_row.id) from public.omr_pilot_plan_grants grant_row where grant_row.account_id = p_account_id),
+        'audits', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(audit) order by audit.id) from public.omr_audit_logs audit where audit.organization_id in (
+            select member.organization_id from public.omr_organization_members member where member.user_id = p_account_id
+        )),
+        'tokens', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(token) order by token.id) from public.omr_teacher_account_tokens token where token.account_id = p_account_id)
+    )
+$$;
+do $$
+declare
+    v_result jsonb;
+    v_account_id text;
+    v_organization_id text;
+    v_before jsonb;
+    v_after jsonb;
+    v_rejected boolean;
+    v_attempt integer := 0;
+    v_hash text := 'pbkdf2-sha256:120000:cccccccccccccccccccccccccccccccc:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+begin
+    v_result := public.omr_provision_pilot_teacher_v1(
+        'Unsafe State School', 'unsafe-state@example.test', 'Unsafe State Teacher',
+        v_hash, 'pro', pg_catalog.clock_timestamp() + interval '1 day',
+        'operator:live', 'unsafe_state_fixture',
+        'prov_unsafe_fixture_0123456789abcdef0123456789abcdef'
+    );
+    v_account_id := v_result->>'accountId';
+    v_organization_id := v_result->>'organizationId';
+
+    -- Pending and disabled accounts are never reactivated.
+    foreach v_attempt in array array[1, 2] loop
+        update public.omr_teacher_accounts
+           set status = case when v_attempt = 1 then 'pending' else 'disabled' end
+         where id = v_account_id;
+        v_before := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+        v_rejected := false;
+        begin
+            perform public.omr_provision_pilot_teacher_v1(
+                'Unsafe State School', 'unsafe-state@example.test', 'Unsafe State Teacher',
+                v_hash, 'academy', pg_catalog.clock_timestamp() + interval '2 days',
+                'operator:live', 'unsafe_status_probe',
+                'prov_unsafe_status_' || v_attempt || '_0123456789abcdef0123456789abcdef'
+            );
+        exception when others then
+            if sqlerrm <> 'provisioning_conflict' then raise; end if;
+            v_rejected := true;
+        end;
+        v_after := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+        if not v_rejected or v_before is distinct from v_after then
+            raise exception 'operator provisioning unsafe existing account was accepted';
+        end if;
+    end loop;
+    update public.omr_teacher_accounts set status = 'active' where id = v_account_id;
+
+    -- A second membership alone makes tenant ownership ambiguous.
+    insert into public.omr_organizations (id, name, plan, metadata)
+    values ('unsafe-extra-org', 'Unsafe Extra Org', 'free', '{}'::jsonb);
+    insert into public.omr_organization_members (
+        organization_id, user_id, email, display_name, role, status
+    ) values (
+        'unsafe-extra-org', v_account_id, 'unsafe-state@example.test',
+        'Unsafe State Teacher', 'teacher', 'active'
+    );
+    v_before := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    v_rejected := false;
+    begin
+        perform public.omr_provision_pilot_teacher_v1(
+            'Unsafe State School', 'unsafe-state@example.test', 'Unsafe State Teacher',
+            v_hash, 'academy', pg_catalog.clock_timestamp() + interval '2 days',
+            'operator:live', 'unsafe_membership_probe',
+            'prov_unsafe_membership_0123456789abcdef0123456789abcdef'
+        );
+    exception when others then
+        if sqlerrm <> 'provisioning_conflict' then raise; end if;
+        v_rejected := true;
+    end;
+    v_after := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    if not v_rejected or v_before is distinct from v_after then
+        raise exception 'operator provisioning second membership was accepted';
+    end if;
+    delete from public.omr_organization_members where organization_id = 'unsafe-extra-org';
+
+    -- A second profile alone independently proves the profile-count guard.
+    insert into public.omr_teacher_profiles (
+        organization_id, user_id, display_name, status, metadata
+    ) values ('unsafe-extra-org', v_account_id, 'Unsafe State Teacher', 'active', '{}'::jsonb);
+    v_before := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    v_rejected := false;
+    begin
+        perform public.omr_provision_pilot_teacher_v1(
+            'Unsafe State School', 'unsafe-state@example.test', 'Unsafe State Teacher',
+            v_hash, 'academy', pg_catalog.clock_timestamp() + interval '2 days',
+            'operator:live', 'unsafe_profile_count_probe',
+            'prov_unsafe_profile_count_0123456789abcdef0123456789abcdef'
+        );
+    exception when others then
+        if sqlerrm <> 'provisioning_conflict' then raise; end if;
+        v_rejected := true;
+    end;
+    v_after := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    if not v_rejected or v_before is distinct from v_after then
+        raise exception 'operator provisioning second profile was accepted';
+    end if;
+    delete from public.omr_teacher_profiles where organization_id = 'unsafe-extra-org';
+    delete from public.omr_organizations where id = 'unsafe-extra-org';
+
+    -- Mismatched member/profile fields and non-free legacy provenance fail closed.
+    update public.omr_organization_members set display_name = 'Mismatch'
+     where organization_id = v_organization_id and user_id = v_account_id;
+    v_before := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    v_rejected := false;
+    begin
+        perform public.omr_provision_pilot_teacher_v1(
+            'Unsafe State School', 'unsafe-state@example.test', 'Unsafe State Teacher',
+            v_hash, 'academy', pg_catalog.clock_timestamp() + interval '2 days',
+            'operator:live', 'unsafe_member_probe',
+            'prov_unsafe_member_0123456789abcdef0123456789abcdef'
+        );
+    exception when others then
+        if sqlerrm <> 'provisioning_conflict' then raise; end if;
+        v_rejected := true;
+    end;
+    v_after := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    if not v_rejected or v_before is distinct from v_after then
+        raise exception 'operator provisioning unsafe existing account was accepted';
+    end if;
+    update public.omr_organization_members set display_name = 'Unsafe State Teacher'
+     where organization_id = v_organization_id and user_id = v_account_id;
+    update public.omr_teacher_profiles set display_name = 'Mismatch'
+     where organization_id = v_organization_id and user_id = v_account_id;
+    v_before := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    v_rejected := false;
+    begin
+        perform public.omr_provision_pilot_teacher_v1(
+            'Unsafe State School', 'unsafe-state@example.test', 'Unsafe State Teacher',
+            v_hash, 'academy', pg_catalog.clock_timestamp() + interval '2 days',
+            'operator:live', 'unsafe_profile_probe',
+            'prov_unsafe_profile_0123456789abcdef0123456789abcdef'
+        );
+    exception when others then
+        if sqlerrm <> 'provisioning_conflict' then raise; end if;
+        v_rejected := true;
+    end;
+    v_after := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    if not v_rejected or v_before is distinct from v_after then
+        raise exception 'operator provisioning unsafe existing account was accepted';
+    end if;
+    update public.omr_teacher_profiles set display_name = 'Unsafe State Teacher'
+     where organization_id = v_organization_id and user_id = v_account_id;
+    update public.omr_organizations set plan = 'pro' where id = v_organization_id;
+    v_before := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    v_rejected := false;
+    begin
+        perform public.omr_provision_pilot_teacher_v1(
+            'Unsafe State School', 'unsafe-state@example.test', 'Unsafe State Teacher',
+            v_hash, 'academy', pg_catalog.clock_timestamp() + interval '2 days',
+            'operator:live', 'unsafe_plan_probe',
+            'prov_unsafe_plan_0123456789abcdef0123456789abcdef'
+        );
+    exception when others then
+        if sqlerrm <> 'provisioning_conflict' then raise; end if;
+        v_rejected := true;
+    end;
+    v_after := pg_temp.pilot_provisioning_scope_snapshot_v1(v_account_id, v_organization_id);
+    if not v_rejected or v_before is distinct from v_after then
+        raise exception 'operator provisioning unsafe existing account was accepted';
+    end if;
+end
+$$;
+drop function pg_temp.pilot_provisioning_scope_snapshot_v1(text,text);
+
+-- Expiry is enforced by the only supported entitlement boundary while the
+-- legacy denormalized plan remains fail-closed free.
+do $$
+declare
+    v_result jsonb;
+    v_replay jsonb;
+    v_effective jsonb;
+    v_expiry timestamptz := pg_catalog.clock_timestamp() + interval '250 milliseconds';
+begin
+    v_result := public.omr_provision_pilot_teacher_v1(
+        'Expiry Pilot School', 'expiry-pilot@example.test', 'Expiry Teacher',
+        'pbkdf2-sha256:120000:66666666666666666666666666666666:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'pro', v_expiry,
+        'operator:live', 'expiry_probe',
+        'prov_expiry_probe_0123456789abcdef0123456789abcdef'
+    );
+    perform pg_catalog.pg_sleep(0.3);
+    v_effective := public.omr_read_effective_workspace_plan_v1(v_result->>'organizationId');
+    if v_effective->>'plan' <> 'free' or v_effective->>'grantId' is not null then
+        raise exception 'expired pilot grant did not resolve to effective free';
+    end if;
+    v_replay := public.omr_provision_pilot_teacher_v1(
+        'Expiry Pilot School', 'expiry-pilot@example.test', 'Expiry Teacher',
+        'pbkdf2-sha256:120000:66666666666666666666666666666666:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'pro', v_expiry, 'operator:live', 'expiry_probe',
+        'prov_expiry_probe_0123456789abcdef0123456789abcdef'
+    );
+    if v_replay->>'replayed' <> 'true'
+       or (v_replay - 'replayed') is distinct from (v_result - 'replayed') then
+        raise exception 'expired pilot receipt did not replay deterministically';
+    end if;
+    if exists (
+        select 1 from public.omr_organizations organization
+         where organization.id = v_result->>'organizationId' and organization.plan <> 'free'
+    ) then
+        raise exception 'pilot provisioning materialized a paid legacy plan';
     end if;
 end
 $$;
