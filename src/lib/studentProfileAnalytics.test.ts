@@ -3,6 +3,7 @@ import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
 import type { TeacherAttemptSummary } from "@/lib/teacherAttemptSummary";
 import { buildStudentProfileInsight } from "./studentProfileAnalytics";
+import { buildStudentReportHeadline } from "./studentReportHeadline";
 
 const exam: Exam = {
     id: "exam-1",
@@ -55,6 +56,142 @@ function attempt(partial: Partial<Attempt>): Attempt {
 }
 
 describe("student profile analytics", () => {
+    it("excludes completely ungraded attempts from score aggregates while preserving activity history", () => {
+        const ungradedExam: Exam = {
+            id: "exam-ungraded",
+            title: "미채점 시험",
+            createdAt: "2026-06-16T00:00:00.000Z",
+            questions: [{ id: 1, number: 1 }],
+        };
+        const insight = buildStudentProfileInsight(student, [
+            attempt({
+                id: "gradable",
+                studentId: student.id,
+                answers: { 1: 2, 2: 4, 3: 0 },
+            }),
+            attempt({
+                id: "ungraded",
+                examId: ungradedExam.id,
+                examTitle: ungradedExam.title,
+                studentId: student.id,
+                finishedAt: "2026-06-16T10:30:00.000Z",
+                score: 0,
+                totalScore: 0,
+                answers: {},
+                questionTimings: [{ questionId: 1, questionNumber: 1, totalTimeSec: 45, visitCount: 1, revisitCount: 0, answerChangeCount: 0 }],
+                tabFociLostCount: 2,
+            }),
+            attempt({
+                id: "ungraded-retake",
+                examId: ungradedExam.id,
+                examTitle: ungradedExam.title,
+                studentId: student.id,
+                finishedAt: "2026-06-17T10:30:00.000Z",
+                score: 0,
+                totalScore: 0,
+                answers: {},
+                questionTimings: [{ questionId: 1, questionNumber: 1, totalTimeSec: 15, visitCount: 1, revisitCount: 0, answerChangeCount: 0 }],
+                tabFociLostCount: 1,
+                retake: { sourceAttemptId: "ungraded", questionIds: [1], mode: "wrong", createdAt: "2026-06-16T12:00:00.000Z" },
+            }),
+        ], new Map([[exam.id, exam], [ungradedExam.id, ungradedExam]]));
+
+        expect(insight.attempts.map(item => item.id)).toEqual(["ungraded-retake", "ungraded", "gradable"]);
+        expect(insight.attempts[0]).toMatchObject({ scorePercent: null, focusLossCount: 1, isRetake: true });
+        expect(insight.averageScore).toBe(67);
+        expect(insight.latestScore).toBe(67);
+        expect(insight.bestScore).toBe(67);
+        expect(insight.baseAttemptCount).toBe(2);
+        expect(insight.retakeAttemptCount).toBe(1);
+        expect(insight.focusLossCount).toBe(3);
+        expect(insight.totalTrackedTimeSec).toBe(60);
+    });
+
+    it("publishes unavailable score metrics without falling back to the roster average", () => {
+        const ungradedStudent = { ...student, avgScore: 91 };
+        const ungradedExam: Exam = {
+            id: "ungraded-only-exam",
+            title: "미채점 서술형",
+            createdAt: "2026-06-15T00:00:00.000Z",
+            questions: [{ id: 1, number: 1 }],
+        };
+        const insight = buildStudentProfileInsight(ungradedStudent, [
+            attempt({
+                id: "ungraded-only",
+                examId: ungradedExam.id,
+                examTitle: ungradedExam.title,
+                studentId: ungradedStudent.id,
+                score: 0,
+                totalScore: 0,
+                answers: {},
+                questionTimings: [{ questionId: 1, questionNumber: 1, totalTimeSec: 30, visitCount: 1, revisitCount: 0, answerChangeCount: 0 }],
+            }),
+        ], new Map([[ungradedExam.id, ungradedExam]]));
+
+        expect(insight).toMatchObject({
+            averageScore: null,
+            bestScore: null,
+            latestScore: null,
+            trendDelta: null,
+            baseAttemptCount: 1,
+            totalTrackedTimeSec: 30,
+        });
+        expect(insight.attempts).toEqual([
+            expect.objectContaining({ id: "ungraded-only", scorePercent: null }),
+        ]);
+    });
+
+    it("keeps bounded headline evidence from all candidates when recurring weaknesses rank below the display top six", () => {
+        const exams = Array.from({ length: 4 }, (_, examIndex): Exam => ({
+            id: `exam-${examIndex + 1}`,
+            title: `${examIndex + 1}차 진단`,
+            createdAt: `2026-0${examIndex + 1}-01T00:00:00.000Z`,
+            questions: [
+                { id: 1, number: 1, answer: 1, score: 1, tags: { concept: "반복 개념" } },
+                { id: 2, number: 2, answer: 1, score: 1, tags: { concept: "반복 개념" } },
+                ...Array.from({ length: 14 }, (_, uniqueIndex) => ({
+                    id: uniqueIndex + 3,
+                    number: uniqueIndex + 3,
+                    answer: 1,
+                    score: 1,
+                    tags: { concept: `고우선-${examIndex + 1}-${uniqueIndex + 1}` },
+                })),
+            ],
+        }));
+        const attempts = exams.map((currentExam, examIndex) => attempt({
+            id: `attempt-${examIndex + 1}`,
+            examId: currentExam.id,
+            examTitle: currentExam.title,
+            studentId: student.id,
+            finishedAt: `2026-0${examIndex + 1}-02T10:30:00.000Z`,
+            score: 1,
+            totalScore: 16,
+            answers: Object.fromEntries(currentExam.questions.map(question => [
+                question.id,
+                question.id === 2 ? 1 : 2,
+            ])),
+        }));
+
+        const insight = buildStudentProfileInsight(
+            student,
+            attempts,
+            new Map(exams.map(currentExam => [currentExam.id, currentExam])),
+            { weaknessKinds: ["concept"], weaknessLimit: 6 },
+        );
+
+        expect(insight.weaknessGroups).toHaveLength(6);
+        expect(insight.weaknessGroups.map(group => group.title)).not.toContain("반복 개념");
+        const recurringEvidence = insight.headlineWeaknessGroups.find(group => group.title === "반복 개념");
+        expect(recurringEvidence).toMatchObject({
+            title: "반복 개념",
+            examIds: ["exam-1", "exam-2", "exam-3", "exam-4"],
+        });
+        expect(buildStudentReportHeadline(insight.headlineWeaknessGroups, "현재 시험 해석")).toMatchObject({
+            weaknessLabel: "반복 개념 · 4회 반복",
+        });
+        expect(insight.headlineWeaknessGroups.length).toBeLessThanOrEqual(12);
+    });
+
     it("counts archived handwriting from lightweight teacher attempt summaries", () => {
         const summaryAttempt: TeacherAttemptSummary = {
             ...attempt({

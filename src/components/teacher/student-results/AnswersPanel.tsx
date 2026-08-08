@@ -6,7 +6,7 @@ import StatusPill from "@/components/dashboard/StatusPill";
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import type { AttemptScoreSummary } from "@/lib/premiumAnalytics";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { safeScorePercent } from "@/lib/scoreUtils";
+import { hasGradableAttemptScore, safeScorePercent } from "@/lib/scoreUtils";
 import styles from "./StudentResultHub.module.css";
 
 export interface AnswerResultCounts {
@@ -101,10 +101,12 @@ export default function AnswersPanel({
     const currentPercent = score?.scorePercent ?? safeScorePercent(attempt.score, attempt.totalScore);
     const currentEarnedScore = score?.earnedScore ?? attempt.score;
     const currentTotalScore = score?.totalScore ?? attempt.totalScore;
+    const hasGradableScore = hasGradableAttemptScore({ totalScore: currentTotalScore, scorePercent: currentPercent });
     const storedPercent = safeScorePercent(attempt.score, attempt.totalScore);
+    const storedScoreIsGradable = hasGradableAttemptScore({ totalScore: attempt.totalScore, scorePercent: storedPercent });
     const scoreRegraded = !!score
-        && attempt.totalScore > 0
-        && score.scorePercent !== storedPercent;
+        && hasGradableScore
+        && (!storedScoreIsGradable || score.scorePercent !== storedPercent);
     const visibleQuestionResults = wrongOnly
         ? questionResults.filter(result => result.status === "wrong" || result.status === "unanswered")
         : questionResults;
@@ -134,14 +136,16 @@ export default function AnswersPanel({
             <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="answer-summary-title">
                 <div id="answer-summary-title" style={{ fontSize: "0.75rem", fontWeight: 800, color: "var(--muted)", letterSpacing: "0.08em", marginBottom: "0.6rem" }}>현재 채점 요약</div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: "0.6rem", flexWrap: "wrap" }}>
-                    <strong style={{ fontSize: "2.3rem", color: "var(--primary)", lineHeight: 1 }}>{currentPercent}%</strong>
-                    <span style={{ color: "var(--muted)", fontWeight: 800 }}>{currentEarnedScore} / {currentTotalScore}점</span>
+                    <strong style={{ fontSize: "2.3rem", color: "var(--primary)", lineHeight: 1 }}>{hasGradableScore ? `${currentPercent}%` : "미채점"}</strong>
+                    {hasGradableScore && <span style={{ color: "var(--muted)", fontWeight: 800 }}>{currentEarnedScore} / {currentTotalScore}점</span>}
                 </div>
                 {scoreRegraded && (
                     <StatusPill
                         tone="warning"
                         label="현재 정답 기준 재채점됨"
-                        detail={`제출 당시 ${attempt.score}점 (${storedPercent}%)`}
+                        detail={storedScoreIsGradable
+                            ? `제출 당시 ${attempt.score}점 (${storedPercent}%)`
+                            : "제출 당시 미채점"}
                         style={{ marginTop: "0.65rem" }}
                     />
                 )}

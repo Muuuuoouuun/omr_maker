@@ -126,6 +126,10 @@ export function MiniRegionMetric({ label, value }: { label: string; value: strin
     );
 }
 
+export function RegionalAverageMetric({ averageScore }: { averageScore: number | null }) {
+    return <MiniRegionMetric label="평균" value={averageScore === null ? "미채점" : `${averageScore}점`} />;
+}
+
 // DEV-B: clickable/keyboard-focusable table header that toggles asc/desc
 // sort for a column, with a small arrow indicator. Rendered inside a plain
 // <th> so it inherits the header row's text styling via `font: inherit`.
@@ -509,10 +513,12 @@ export function StudentProfileModal({
     // Score trend is exam-performance signal (an improving/declining trend),
     // not a system state — success for up, grade (not error) for down. See
     // docs/design-system.md's --error vs --grade-red rule.
-    const trendTone = profile.trendDelta >= 0 ? "success" : "grade";
-    const trendLabel = profile.trendDelta === 0
-        ? "변화 없음"
-        : `${profile.trendDelta > 0 ? "+" : ""}${profile.trendDelta}점`;
+    const trendTone = profile.trendDelta === null ? "muted" : profile.trendDelta >= 0 ? "success" : "grade";
+    const trendLabel = profile.trendDelta === null
+        ? "비교 불가"
+        : profile.trendDelta === 0
+            ? "변화 없음"
+            : `${profile.trendDelta > 0 ? "+" : ""}${profile.trendDelta}점`;
 
     return (
         <ModalShell title={`${student.name} 학생 성장 리포트`} onClose={onClose} maxWidth={900}>
@@ -555,8 +561,8 @@ export function StudentProfileModal({
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
-                    <ProfileMetric label="원시험 평균" value={`${profile.averageScore}점`} color="#4f46e5" icon={<BarChart3 size={15} />} />
-                    <ProfileMetric label="최근 원시험" value={`${profile.latestScore}점`} color={scoreColor(profile.latestScore)} icon={<TrendingUp size={15} />} />
+                    <ProfileMetric label="원시험 평균" value={profile.averageScore === null ? "확인 불가" : `${profile.averageScore}점`} color="#4f46e5" icon={<BarChart3 size={15} />} />
+                    <ProfileMetric label="최근 원시험" value={profile.latestScore === null ? "확인 불가" : `${profile.latestScore}점`} color={profile.latestScore === null ? "var(--muted)" : scoreColor(profile.latestScore)} icon={<TrendingUp size={15} />} />
                     <ProfileMetric label="재시험" value={`${profile.retakeAttemptCount}회`} color="#0f766e" icon={<RefreshCw size={15} />} />
                     <ProfileMetric label="오답/미응답" value={`${profile.wrongQuestionCount}/${profile.unansweredQuestionCount}`} color="#ef4444" icon={<AlertTriangle size={15} />} />
                     <ProfileMetric label="필기 보관" value={`${profile.handwritingArchiveCount}건`} color="#7c3aed" icon={<PenLine size={15} />} />
@@ -591,7 +597,7 @@ export function StudentProfileModal({
                                                 )}
                                             </div>
                                         </div>
-                                        <div style={{ color: scoreColor(attempt.scorePercent), fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{attempt.scorePercent}점</div>
+                                        <div style={{ color: attempt.scorePercent === null ? "var(--muted)" : scoreColor(attempt.scorePercent), fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{attempt.scorePercent === null ? "미채점" : `${attempt.scorePercent}점`}</div>
                                     </div>
                                     <div style={{ display: 'grid', gap: '0.35rem', marginTop: '0.65rem', color: 'var(--muted)', fontSize: '0.78rem' }}>
                                         <div>오답 {questionNumberLabel(attempt.wrongQuestionNumbers)}</div>

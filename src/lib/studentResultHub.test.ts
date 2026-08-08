@@ -1,14 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Attempt } from "@/types/omr";
+import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
 import {
     buildStudentAttemptSeries,
+    buildStudentRetakeScoreDelta,
     buildStudentResultHref,
+    buildCumulativeExamMap,
     filterCumulativeAttemptsForStudent,
     matchRosterStudentForAttempt,
+    markUnresolvedGrowthAttempt,
+    mergeSelectedAttemptIntoPeers,
     parseStudentResultView,
     sameStudentAttempt,
 } from "./studentResultHub";
+import { buildStudentProfileInsight } from "./studentProfileAnalytics";
+import { buildStudentReportHeadline } from "./studentReportHeadline";
+import { buildStudentGrowthReport } from "./studentGrowthReport";
 
 function student(partial: Partial<RosterStudent>): RosterStudent {
     return {
@@ -141,6 +148,100 @@ describe("student result hub", () => {
         )).toEqual([selected]);
     });
 
+    it("uses an authoritative organization to scope a legacy selected student's cumulative evidence", () => {
+        const selected = attempt({
+            id: "selected",
+            studentProfileId: "student-a",
+            groupName: "A반",
+        });
+        const orgA = attempt({
+            id: "org-a-history",
+            organizationId: "org-a",
+            studentProfileId: "student-a",
+            groupName: "A반",
+        });
+        const orgB = attempt({
+            id: "org-b-history",
+            organizationId: "org-b",
+            studentProfileId: "student-a",
+            groupName: "A반",
+        });
+        const rosterStudent = student({ id: "student-a" });
+
+        expect(filterCumulativeAttemptsForStudent(
+            selected,
+            [orgB, selected, orgA],
+            [rosterStudent],
+            rosterStudent,
+            "org-a",
+        )).toEqual([selected, orgA]);
+    });
+
+    it("builds deterministic personal evidence from the active organization when ids collide", () => {
+        const selectedStudent = student({ id: "student-a" });
+        const selected = attempt({
+            id: "selected",
+            examId: "shared-exam",
+            examTitle: "legacy title",
+            studentProfileId: "student-a",
+            groupName: "A반",
+            startedAt: "2026-06-01T10:00:00.000Z",
+            finishedAt: "2026-06-01T10:10:00.000Z",
+            answers: { 1: 2 },
+        });
+        const orgAHistory = attempt({
+            id: "org-a-history",
+            examId: "shared-exam",
+            examTitle: "A 조직 시험",
+            organizationId: "org-a",
+            studentProfileId: "student-a",
+            groupName: "A반",
+            startedAt: "2026-05-01T10:00:00.000Z",
+            finishedAt: "2026-05-01T10:20:00.000Z",
+            answers: { 1: 2 },
+        });
+        const orgBHistory = attempt({
+            ...orgAHistory,
+            id: "org-a-history",
+            organizationId: "org-b",
+            startedAt: "2026-05-01T09:00:00.000Z",
+            finishedAt: "2026-05-01T10:00:00.000Z",
+        });
+        const orgAExam: Exam = {
+            id: "shared-exam",
+            title: "A 조직 시험",
+            organizationId: "org-a",
+            createdAt: "2026-05-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 1, score: 1, tags: { concept: "A 개념" } }],
+        };
+        const orgBExam: Exam = {
+            ...orgAExam,
+            title: "B 조직 시험",
+            organizationId: "org-b",
+            questions: [{ id: 1, number: 1, answer: 2, score: 1, tags: { concept: "B 개념" } }],
+        };
+        const personalAttempts = filterCumulativeAttemptsForStudent(
+            selected,
+            [orgBHistory, selected, orgAHistory],
+            [selectedStudent],
+            selectedStudent,
+            "org-a",
+        );
+        const insight = buildStudentProfileInsight(
+            selectedStudent,
+            personalAttempts,
+            buildCumulativeExamMap([orgBExam, orgAExam], "org-a"),
+        );
+        const headline = buildStudentReportHeadline(insight.headlineWeaknessGroups, "fallback");
+
+        expect(insight.attempts.map(item => item.id)).toEqual(["selected", "org-a-history"]);
+        expect(insight.attempts.map(item => item.examTitle)).not.toContain("B 조직 시험");
+        expect(insight.averageElapsedTimeSec).toBe(900);
+        expect(insight.headlineWeaknessGroups.map(group => group.title)).toContain("A 개념");
+        expect(insight.headlineWeaknessGroups.map(group => group.title)).not.toContain("B 개념");
+        expect(headline.headline).toContain("A 개념");
+    });
+
     it("excludes an ambiguous id-less legacy attempt for duplicate roster students", () => {
         const selected = attempt({ id: "selected", studentProfileId: "student-a", groupName: "A반" });
         const exactA = attempt({ id: "exact-a", studentId: "student-a", groupName: "A반" });
@@ -154,6 +255,47 @@ describe("student result hub", () => {
             roster,
             roster[0],
         )).toEqual([exactA, selected]);
+    });
+
+    it("prefers the canonical exam revision before recency regardless of input order", () => {
+        const canonical: Exam = {
+            id: "exam-collision",
+            title: "충돌 시험",
+            organizationId: "org-a",
+            revision: 8,
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 2, score: 1 }],
+        };
+        const newerButStale: Exam = {
+            ...canonical,
+            revision: 7,
+            updatedAt: "2026-08-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 1, score: 1 }],
+        };
+
+        expect(buildCumulativeExamMap([newerButStale, canonical], "org-a").get(canonical.id)).toBe(canonical);
+        expect(buildCumulativeExamMap([canonical, newerButStale], "org-a").get(canonical.id)).toBe(canonical);
+    });
+
+    it("uses a stable semantic tie-break for same-scope exam collisions", () => {
+        const first: Exam = {
+            id: "exam-semantic-tie",
+            title: "동일 시험",
+            organizationId: "org-a",
+            revision: 3,
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 1, score: 1 }],
+        };
+        const second: Exam = {
+            ...first,
+            questions: [{ id: 1, number: 1, answer: 2, score: 1 }],
+        };
+
+        const forward = buildCumulativeExamMap([first, second], "org-a").get(first.id);
+        const reverse = buildCumulativeExamMap([second, first], "org-a").get(first.id);
+        expect(forward).toEqual(reverse);
     });
 
     it("keeps a compatible id-less legacy attempt when the roster match is unique", () => {
@@ -192,6 +334,35 @@ describe("student result hub", () => {
             [unrelated],
             unrelated,
         )).toEqual([selected]);
+    });
+
+    it("preserves an unresolved in-scope row as omitted evidence without merging its ambiguous name", () => {
+        const selected = attempt({
+            id: "selected",
+            examId: "exam-1",
+            studentProfileId: "student-a",
+            classId: "class-a",
+            score: 80,
+        });
+        const unresolved = markUnresolvedGrowthAttempt(attempt({
+            id: "ambiguous",
+            examId: "exam-1",
+            studentName: "김학생",
+            classId: "class-a",
+            score: 60,
+        }));
+        const model = buildStudentGrowthReport({
+            selectedStudentId: "student-a",
+            selectedAttemptId: selected.id,
+            selectedClassKey: "class-a",
+            dataStatus: "ready",
+            attempts: [selected, unresolved],
+            exams: [{ id: "exam-1", title: "시험", createdAt: "2026-01-01T00:00:00.000Z", questions: [] }],
+        });
+
+        expect(unresolved).toMatchObject({ studentName: "", studentProfileId: undefined, studentId: undefined });
+        expect(model.rows[0]).toMatchObject({ participantCount: 1, studentScore: 80 });
+        expect(model.omittedCount).toBe(1);
     });
 
     it("defaults missing or invalid views to answers while retaining handwriting", () => {
@@ -364,10 +535,159 @@ describe("student result hub", () => {
         ]);
     });
 
+    it("does not publish percentages or retake deltas for completely ungraded attempts", () => {
+        const original = attempt({ id: "original-ungraded", studentId: "student-1", score: 0, totalScore: 0 });
+        const retake = attempt({
+            id: "retake-ungraded",
+            studentId: "student-1",
+            score: 0,
+            totalScore: 0,
+            retake: { sourceAttemptId: original.id, questionIds: [], mode: "wrong", createdAt: "2026-06-02T10:00:00.000Z" },
+        });
+
+        expect(buildStudentAttemptSeries(retake, [original, retake])).toEqual([
+            expect.objectContaining({ attempt: original, scorePercent: null, scoreDelta: null }),
+            expect.objectContaining({ attempt: retake, scorePercent: null, scoreDelta: null }),
+        ]);
+    });
+
+    it("uses the current exam answer key as the canonical score for legacy stored zero-over-zero attempts", () => {
+        const canonicalExam: Exam = {
+            id: "exam-1",
+            title: "중간고사",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 2, score: 10 }],
+        };
+        const legacy = attempt({
+            id: "legacy-score",
+            studentId: "student-1",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 2 },
+        });
+
+        expect(buildStudentAttemptSeries(
+            legacy,
+            [legacy],
+            new Map([[canonicalExam.id, canonicalExam]]),
+        )).toEqual([
+            expect.objectContaining({
+                attempt: legacy,
+                scorePercent: 100,
+                scoreDelta: null,
+                scoreSummary: expect.objectContaining({ earnedScore: 10, totalScore: 10, scorePercent: 100 }),
+            }),
+        ]);
+    });
+
+    it("derives retake deltas from the same canonical exam summaries", () => {
+        const canonicalExam: Exam = {
+            id: "exam-1",
+            title: "중간고사",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            questions: [
+                { id: 1, number: 1, answer: 2, score: 5 },
+                { id: 2, number: 2, answer: 3, score: 5 },
+            ],
+        };
+        const original = attempt({ id: "legacy-original", studentId: "student-1", score: 0, totalScore: 0, answers: { 1: 2, 2: 1 } });
+        const retake = attempt({
+            id: "legacy-retake",
+            studentId: "student-1",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 2, 2: 3 },
+            retake: { sourceAttemptId: original.id, questionIds: [2], mode: "wrong", createdAt: "2026-06-02T00:00:00.000Z" },
+        });
+
+        expect(buildStudentAttemptSeries(
+            retake,
+            [original, retake],
+            new Map([[canonicalExam.id, canonicalExam]]),
+        )).toEqual([
+            expect.objectContaining({ attempt: original, scorePercent: 50, scoreDelta: null }),
+            expect.objectContaining({ attempt: retake, scorePercent: 100, scoreDelta: 50 }),
+        ]);
+    });
+
+    it("preserves a submitted graded retake delta while exposing current canonical scores", () => {
+        const canonicalExam: Exam = {
+            id: "exam-1",
+            title: "중간고사",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            questions: [
+                { id: 1, number: 1, answer: 2, score: 50 },
+                { id: 2, number: 2, answer: 4, score: 50 },
+            ],
+        };
+        const original = attempt({ id: "graded-original", studentId: "student-1", score: 60, totalScore: 100, answers: { 1: 2, 2: 1 } });
+        const retake = attempt({
+            id: "graded-retake",
+            studentId: "student-1",
+            score: 80,
+            totalScore: 100,
+            answers: { 1: 2, 2: 4 },
+            retake: { sourceAttemptId: original.id, questionIds: [2], mode: "wrong", createdAt: "2026-06-02T00:00:00.000Z" },
+        });
+
+        expect(buildStudentAttemptSeries(
+            retake,
+            [original, retake],
+            new Map([[canonicalExam.id, canonicalExam]]),
+        )).toEqual([
+            expect.objectContaining({ attempt: original, scorePercent: 50, scoreDelta: null }),
+            expect.objectContaining({ attempt: retake, scorePercent: 100, scoreDelta: 20 }),
+        ]);
+    });
+
+    it("merges an omitted selected detail exactly once before canonical series scoring", () => {
+        const canonicalExam: Exam = {
+            id: "exam-1",
+            title: "중간고사",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 2, score: 10 }],
+        };
+        const selectedOlder = attempt({
+            id: "selected-older",
+            studentId: "student-1",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 2 },
+            finishedAt: "2026-05-01T10:00:00.000Z",
+        });
+        const cappedPeer = attempt({ id: "newer-peer", studentId: "student-1", finishedAt: "2026-06-01T10:00:00.000Z" });
+        const merged = mergeSelectedAttemptIntoPeers(selectedOlder, [cappedPeer]);
+        const series = buildStudentAttemptSeries(selectedOlder, merged, new Map([[canonicalExam.id, canonicalExam]]));
+
+        expect(merged.filter(item => item.id === selectedOlder.id)).toHaveLength(1);
+        expect(series).toEqual([
+            expect.objectContaining({ attempt: selectedOlder, scorePercent: 100 }),
+            expect.objectContaining({ attempt: cappedPeer }),
+        ]);
+    });
+
+    it("distinguishes a missing retake source from unavailable score evidence", () => {
+        expect(buildStudentRetakeScoreDelta(
+            { totalScore: 100, scorePercent: 80 },
+            null,
+        )).toEqual({ status: "source-missing" });
+        expect(buildStudentRetakeScoreDelta(
+            { totalScore: 0, scorePercent: 0 },
+            { totalScore: 100, scorePercent: 80 },
+        )).toEqual({ status: "score-unavailable" });
+        expect(buildStudentRetakeScoreDelta(
+            { totalScore: 100, scorePercent: 80 },
+            { totalScore: 100, scorePercent: 60 },
+        )).toEqual({ status: "comparable", sourceScorePercent: 60, currentScorePercent: 80, delta: 20 });
+    });
+
     it("rounds fractional source deltas to one decimal place", async () => {
         vi.resetModules();
         vi.doMock("@/lib/scoreUtils", () => ({
             safeScorePercent: (score: number) => score,
+            hasGradableAttemptScore: ({ totalScore, scorePercent }: { totalScore: number; scorePercent: number }) => (
+                totalScore > 0 && Number.isFinite(scorePercent)
+            ),
         }));
 
         const original = attempt({ id: "original", studentId: "student-1", score: 60.01, totalScore: 10 });

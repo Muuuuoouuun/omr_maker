@@ -227,6 +227,54 @@
   font-weight: 750;
 }
 
+.horizontalTableRegion {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.horizontalTableRegion:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.scrollHint {
+  margin: 0 0 0.45rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.sortButton {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.16s ease, background-color 0.16s ease;
+}
+
+.sortButton:hover {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+.sortButton:focus-visible {
+  color: var(--primary);
+  outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  outline-offset: -3px;
+}
+
 .emptyOption {
   padding: 0.9rem;
   color: var(--muted);
@@ -820,6 +868,303 @@
   min-width: 0;
 }
 
+.reportOverviewPanel,
+.reportOverview {
+  min-width: 0;
+}
+
+.reportOverview {
+  display: grid;
+  gap: 1rem;
+}
+
+.reportMetricsSection,
+.reportHeadlineSection,
+.reportEvidenceSection,
+.reportWeakSection,
+.reportActionsSection {
+  box-shadow: none;
+}
+
+.reportMetricGrid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0;
+}
+
+.reportMetricGrid > div {
+  padding: 0.65rem 1rem;
+  border: 0;
+  border-inline-start: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.reportMetricGrid > div:first-child {
+  border-inline-start: 0;
+}
+
+.reportHeadlineSection {
+  border-inline-start-width: 3px;
+}
+
+.reportHeadlineAction {
+  border-inline-start-color: var(--grade-red);
+}
+
+.reportHeadlineObservation {
+  border-inline-start-color: var(--warning);
+}
+
+.reportHeadlinePositive {
+  border-inline-start-color: var(--success);
+}
+
+.reportHeadlineTitle {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--type-heading-md);
+  font-weight: 850;
+  line-height: 1.4;
+}
+
+.reportHeadlineDetail,
+.reportSampleNote {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: var(--type-body-sm);
+  line-height: 1.55;
+  word-break: keep-all;
+}
+
+.reportSampleNote {
+  color: var(--text-warning);
+  font-size: var(--type-caption);
+  font-weight: 800;
+}
+
+.reportEvidenceGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.8fr);
+  gap: 1rem;
+  align-items: start;
+  min-width: 0;
+}
+
+.distributionBars {
+  width: 100%;
+  min-height: 220px;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(28px, 1fr));
+  align-items: end;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 1rem 1rem 0.75rem;
+  list-style: none;
+}
+
+.distributionBars li {
+  min-width: 0;
+  height: 190px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0.35rem;
+  align-items: end;
+  text-align: center;
+}
+
+.distributionCount,
+.distributionLabel {
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.distributionCount {
+  color: var(--foreground);
+  font-weight: 800;
+}
+
+.distributionBar {
+  width: 100%;
+  height: var(--distribution-share);
+  min-height: 2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--primary);
+}
+
+.achievementList {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.achievementCopy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.75rem;
+  align-items: baseline;
+  color: var(--muted);
+  font-size: var(--type-label);
+}
+
+.achievementCopy strong {
+  color: var(--foreground);
+  font-size: var(--type-heading-sm);
+}
+
+.achievementTrack {
+  display: block;
+  height: 0.45rem;
+  margin-top: 0.4rem;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--background);
+}
+
+.achievementFill {
+  display: block;
+  width: var(--achievement-share);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--achievement-color);
+}
+
+.achievementNeutral {
+  --achievement-color: var(--muted);
+}
+
+.achievementSuccess {
+  --achievement-color: var(--success);
+}
+
+.achievementWarning {
+  --achievement-color: var(--warning);
+}
+
+.achievementGrade {
+  --achievement-color: var(--grade-red);
+}
+
+.reportTableWrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.reportDataTable {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font-size: var(--type-body-sm);
+  text-align: left;
+}
+
+.reportDataTable caption {
+  padding-bottom: 0.6rem;
+  color: var(--muted);
+  font-size: var(--type-caption);
+  text-align: left;
+}
+
+.reportDataTable th,
+.reportDataTable td {
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.reportDataTable thead th {
+  color: var(--muted);
+  background: var(--background);
+  font-size: var(--type-caption);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.reportDataTable tbody th {
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.reportDataTable tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.rateGrade {
+  color: var(--grade-red);
+  font-weight: 850;
+}
+
+.reportRate {
+  color: var(--foreground);
+  font-weight: 800;
+}
+
+.reportActionList {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.reportActionList li {
+  border-bottom: 1px solid var(--border);
+}
+
+.reportAction {
+  width: 100%;
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0.25rem;
+  color: var(--foreground);
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.reportAction:hover,
+.reportAction:focus-visible {
+  color: var(--primary);
+  background: var(--background);
+  outline: none;
+}
+
+.reportAction:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.reportAction > span {
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.reportAction strong {
+  font-size: var(--type-label);
+  font-weight: 850;
+}
+
+.reportAction small {
+  color: var(--muted);
+  font-size: var(--type-caption);
+  line-height: 1.45;
+  word-break: keep-all;
+}
+
+.reportAction svg {
+  flex: 0 0 auto;
+}
+
 .emptyState {
   display: grid;
   place-items: center;
@@ -879,6 +1224,22 @@
 
   .kpi:nth-child(3n+1) {
     border-left: 0;
+  }
+
+  .reportMetricGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .reportMetricGrid > div:nth-child(3n+1) {
+    border-inline-start: 0;
+  }
+
+  .reportMetricGrid > div:nth-child(n+4) {
+    border-top: 1px solid var(--border);
+  }
+
+  .reportEvidenceGrid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -957,6 +1318,37 @@
   .tableWrap {
     margin-inline: -0.95rem;
   }
+
+  .reportMetricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .reportMetricGrid > div:nth-child(3n+1) {
+    border-inline-start: 1px solid var(--border);
+  }
+
+  .reportMetricGrid > div:nth-child(odd) {
+    border-inline-start: 0;
+  }
+
+  .reportMetricGrid > div:nth-child(n+3) {
+    border-top: 1px solid var(--border);
+  }
+
+  .distributionBars {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+    gap: 0.25rem;
+    padding-inline: 0.5rem;
+  }
+
+  .distributionLabel {
+    font-size: var(--type-micro);
+    writing-mode: vertical-rl;
+  }
+
+  .reportDataTable {
+    min-width: 560px;
+  }
 }
 
 @media (max-width: 520px) {
@@ -1024,5 +1416,19 @@
   .scoreValue,
   .kpi strong {
     animation: none;
+  }
+
+  .reportAction {
+    transition: none;
+  }
+}
+
+:global(html[data-motion="off"]) .reportAction {
+  transition: none;
+}
+
+@media print {
+  .scrollHint {
+    display: none;
   }
 }

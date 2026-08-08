@@ -1,11 +1,38 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { growthClassKeyForAttempt } from "@/lib/studentGrowthReport";
+import { rosterGroupMatchesStudent, type RosterGroup, type RosterStudent } from "@/lib/rosterStorage";
+import { matchRosterStudentForAttempt } from "@/lib/studentResultHub";
+import type { Attempt } from "@/types/omr";
 
 const rootDir = process.cwd();
 
 function readProjectFile(filePath: string): string {
     return readFileSync(path.join(rootDir, filePath), "utf8");
+}
+
+function loadGrowthAttemptContextHelper(): (
+    source: Attempt,
+    student: RosterStudent | null,
+    groups: readonly RosterGroup[],
+) => Attempt | null {
+    const pageSource = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+    const helperStart = pageSource.indexOf("function enrichGrowthAttemptContext(");
+    const helperEndMarker = "\n}\n\nasync function loadTeacherPdfFile";
+    const helperEnd = pageSource.indexOf(helperEndMarker, helperStart);
+    if (helperStart < 0 || helperEnd < 0) throw new Error("growth attempt context helper not found");
+    const helperSource = pageSource.slice(helperStart, helperEnd + 2);
+    const compiled = ts.transpileModule(helperSource, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    return runInNewContext(`${compiled}\nenrichGrowthAttemptContext`, { rosterGroupMatchesStudent }) as (
+        source: Attempt,
+        student: RosterStudent | null,
+        groups: readonly RosterGroup[],
+    ) => Attempt | null;
 }
 
 function stripCssComments(cssSource: string): string {
@@ -1218,6 +1245,8 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain('import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";');
         expect(teacherAttemptPage).toMatch(/activeView === ["']answers["'][\s\S]*?<AnswersPanel/);
         expect(teacherAttemptPage).toMatch(/activeView === ["']analytics["'][\s\S]*?<AnalyticsPanel/);
+        expect(teacherAttemptPage).toMatch(/activeView === ["']handwriting["'][\s\S]*?<HandwritingPanel/);
+        expect(teacherAttemptPage).toMatch(/activeView === ["']report["'][\s\S]*?<ReportPanel/);
     });
 
     it("renders the report view through a dedicated report panel", () => {
@@ -1227,15 +1256,16 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toMatch(/activeView === ["']report["'][\s\S]*?<ReportPanel/);
     });
 
-    it("keeps the student report sections in the fixed summary-to-growth order", () => {
+    it("keeps the dense student report in the editorial context-to-history order", () => {
         const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
         const orderedMarkers = [
             "report-summary-title",
             "report-score-title",
+            "report-headline-title",
+            "<StudentGrowthReport",
             "report-weakness-title",
-            "report-retake-title",
             "report-feedback-title",
-            "<CumulativeGrowthPanel",
+            "report-history-title",
         ];
 
         let previousIndex = -1;
@@ -1249,7 +1279,8 @@ describe("service UI surface", () => {
     it("loads cumulative result sources lazily with stable roster matching and route guards", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 
-        expect(teacherAttemptPage).toContain('activeView !== "report" && activeView !== "analytics"');
+        expect(teacherAttemptPage).toContain('if (activeView !== "report") return;');
+        expect(teacherAttemptPage).not.toContain('activeView !== "report" && activeView !== "analytics"');
         expect(teacherAttemptPage).toContain("cumulativeLoadingAttemptRef.current === targetAttemptId");
         expect(teacherAttemptPage).toContain("cumulativeSettledAttemptIdRef.current === targetAttemptId");
         expect(teacherAttemptPage).toContain("Promise.all([");
@@ -1257,23 +1288,38 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("loadTeacherExams()");
         expect(teacherAttemptPage).toContain("loadTeacherRosterSnapshot(window.localStorage)");
         expect(teacherAttemptPage).toContain("matchRosterStudentForAttempt(attempt, rosterResult.students)");
+        expect(teacherAttemptPage).toContain("setCumulativeAttempts(attemptResult.items)");
+        expect(teacherAttemptPage).toContain("groups: rosterResult.groups");
         expect(teacherAttemptPage).toContain("activeAttemptIdRef.current !== targetAttemptId");
         expect(teacherAttemptPage).not.toContain("student.name === attempt.studentName");
     });
 
-    it("keeps current-exam analytics first and appends plan-scoped cumulative growth", () => {
+    it("uses the complete demo dashboard cohort for growth comparisons", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const demoDetailIndex = teacherAttemptPage.indexOf("resolveDemoAttemptDetail(readTeacherSession(), targetAttemptId");
+        const demoCohortIndex = teacherAttemptPage.indexOf("buildDemoDashboardData", demoDetailIndex);
+        const remoteLoadIndex = teacherAttemptPage.indexOf("const [attemptResult, examResult, rosterResult]", demoCohortIndex);
+        const demoBranch = teacherAttemptPage.slice(demoCohortIndex, remoteLoadIndex);
+
+        expect(demoDetailIndex).toBeGreaterThan(-1);
+        expect(demoCohortIndex).toBeGreaterThan(demoDetailIndex);
+        expect(remoteLoadIndex).toBeGreaterThan(demoCohortIndex);
+        expect(demoBranch).toContain("setCumulativeAttempts(demoCohort.attempts)");
+        expect(demoBranch).toContain("setCumulativeExams(demoCohort.exams)");
+        expect(demoBranch).toContain("students: demoCohort.rosterStudents");
+        expect(demoBranch).toContain("groups: demoCohort.rosterGroups");
+        expect(demoBranch).not.toContain("...demoDetail.cumulativeAttempts");
+        expect(demoBranch).not.toContain("...demoDetail.peerAttempts");
+    });
+
+    it("keeps analytics focused on current-exam diagnostics without duplicated growth", () => {
         const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
         const currentExamIndex = analyticsPanel.indexOf("오답·미응답·유형 분석");
-        const cumulativeIndex = analyticsPanel.lastIndexOf("<CumulativeGrowthPanel");
-        const cumulativePanel = readProjectFile("src/components/teacher/student-results/CumulativeGrowthPanel.tsx");
 
         expect(currentExamIndex).toBeGreaterThan(-1);
-        expect(cumulativeIndex).toBeGreaterThan(currentExamIndex);
-        expect(analyticsPanel).toContain("studentGrowthReportsEnabled");
-        expect(cumulativePanel).toContain("LockedFeaturePanel");
-        expect(cumulativePanel).toContain("누적 이력을 학생 명단과 안정적으로 연결할 수 없습니다.");
-        expect(analyticsPanel).toContain("cumulativeStatus");
-        expect(analyticsPanel).toContain("cumulativeError");
+        expect(analyticsPanel).not.toContain("CumulativeGrowthPanel");
+        expect(analyticsPanel).not.toContain("cumulativeStatus");
+        expect(analyticsPanel).not.toContain("studentGrowthReportsEnabled");
     });
 
     it("scopes printing to the dedicated report and removes the legacy detail branch", () => {
@@ -1295,36 +1341,275 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).not.toContain("function AllQuestionRow");
     });
 
-    it("shares retryable cumulative growth states and skips locked-plan loads", () => {
+    it("maps cumulative source health into growth report states and skips locked-plan loads", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
         const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
         const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
-        const cumulativePanelPath = path.join(rootDir, "src/components/teacher/student-results/CumulativeGrowthPanel.tsx");
-        expect(existsSync(cumulativePanelPath)).toBe(true);
-        if (!existsSync(cumulativePanelPath)) return;
-        const cumulativePanel = readProjectFile("src/components/teacher/student-results/CumulativeGrowthPanel.tsx");
 
         expect(teacherAttemptPage).toContain("if (!studentGrowthReportsEnabled) return;");
         expect(teacherAttemptPage).toContain("attemptResult.remoteError");
         expect(teacherAttemptPage).toContain("examResult.remoteError");
         expect(teacherAttemptPage).toContain("rosterResult.remoteError");
-        expect(teacherAttemptPage).toContain('setCumulativeStatus("stale")');
+        expect(teacherAttemptPage).toContain("resolveTeacherCollectionGroupCompleteness");
+        expect(teacherAttemptPage).toContain("setCumulativeStatus(attemptCompleteness)");
         expect(teacherAttemptPage).toContain("const retryCumulativeLoad = useCallback");
-        expect(reportPanel).toContain("<CumulativeGrowthPanel");
-        expect(analyticsPanel).toContain("<CumulativeGrowthPanel");
-        expect(cumulativePanel).toContain("onRetry");
-        expect(cumulativePanel).toContain("다시 시도");
-        expect(cumulativePanel).toContain('status === "stale"');
+        expect(reportPanel).toContain("<StudentGrowthReport");
+        expect(reportPanel).toContain("onRetry={onRetryCumulative}");
+        expect(analyticsPanel).not.toContain("CumulativeGrowthPanel");
     });
 
-    it("uses the strict roster matcher and selected-attempt filtering for cumulative insight", () => {
+    it("uses the shared completeness policy for cumulative growth data", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const loaderStart = teacherAttemptPage.indexOf("const [attemptResult, examResult, rosterResult]");
+        const loaderEnd = teacherAttemptPage.indexOf("} catch", loaderStart);
+        const loaderBlock = teacherAttemptPage.slice(loaderStart, loaderEnd);
+
+        expect(loaderBlock).toContain("resolveTeacherCollectionGroupCompleteness([");
+        expect(loaderBlock).toContain("...attemptResult");
+        expect(loaderBlock).toContain("...examResult");
+        expect(loaderBlock).toContain("...rosterResult");
+        expect(loaderBlock).toContain("items: [...rosterResult.students, ...rosterResult.groups]");
+        expect(loaderBlock).toContain("setCumulativeStatus(attemptCompleteness)");
+        expect(loaderBlock).toContain("일부 자료는 서버 동기화 전 로컬 저장본 기준입니다.");
+        expect(loaderBlock).not.toContain("서버 동기화 전 로컬 제출 기준입니다.");
+        expect(loaderBlock).not.toContain("if (attemptResult.remotePartial)");
+    });
+
+    it("keeps mixed exam or roster failures retryable ahead of partial pagination", () => {
+        const collectionClient = readProjectFile("src/lib/teacherAttemptClient.ts");
+        const resolverStart = collectionClient.indexOf("export function resolveTeacherAttemptCollectionCompleteness");
+        const resolverEnd = collectionClient.indexOf("export async function loadTeacherActiveAttemptSessions", resolverStart);
+        const resolverBlock = collectionClient.slice(resolverStart, resolverEnd);
+
+        expect(resolverBlock.indexOf("input.remoteError")).toBeLessThan(resolverBlock.indexOf("input.remotePartial"));
+        expect(resolverBlock).toContain('hasUsableItems ? "stale" : "error"');
+        expect(resolverBlock).toContain('hasUsableItems ? "partial" : "error"');
+    });
+
+    it("retains cohort attempts for growth while filtering only the personal insight", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 
         expect(teacherAttemptPage).toContain("matchRosterStudentForAttempt(attempt, rosterResult.students)");
+        expect(teacherAttemptPage).toContain("setCumulativeAttempts(attemptResult.items)");
         expect(teacherAttemptPage).toContain("filterCumulativeAttemptsForStudent(");
-        expect(teacherAttemptPage).toContain("rosterResult.students,");
-        expect(teacherAttemptPage).toContain("matchedStudent,");
+        expect(teacherAttemptPage).toContain("cumulativeRoster.students,");
+        expect(teacherAttemptPage).toContain("rosterStudent,");
+        expect(teacherAttemptPage).toContain("buildStudentProfileInsight(");
         expect(teacherAttemptPage).not.toContain("rosterResult.students.find(student => attemptMatchesStudentProfile");
+    });
+
+    it("scopes personal cumulative attempts and exam metadata to the active organization", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const insightIndex = teacherAttemptPage.indexOf("const cumulativeInsight = useMemo");
+        const growthIndex = teacherAttemptPage.indexOf("const growthAttempts = useMemo", insightIndex);
+        const insightBlock = teacherAttemptPage.slice(insightIndex, growthIndex);
+
+        expect(insightBlock).toContain("activeOrganizationId || attempt.organizationId");
+        expect(insightBlock).toContain("buildCumulativeExamMap(");
+        expect(insightBlock).not.toContain("new Map(cumulativeExams.map");
+    });
+
+    it("preserves unresolved growth candidates for explicit omission accounting", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const growthReport = readProjectFile("src/components/teacher/student-results/StudentGrowthReport.tsx");
+        const growthAttemptsIndex = teacherAttemptPage.indexOf("const growthAttempts = useMemo");
+        const selectedGrowthIndex = teacherAttemptPage.indexOf("const selectedGrowthAttempt = useMemo", growthAttemptsIndex);
+        const growthBlock = teacherAttemptPage.slice(growthAttemptsIndex, selectedGrowthIndex);
+
+        expect(growthBlock).toContain("markUnresolvedGrowthAttempt(candidate)");
+        expect(growthBlock).not.toContain("candidate is Attempt => candidate !== null");
+        expect(growthReport).toContain("<GrowthOmissionNotice count={model.omittedCount}");
+    });
+
+    it("builds one class-scoped growth model from the complete cohort", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const modelCalls = teacherAttemptPage.match(/buildStudentGrowthReport\(/g) ?? [];
+
+        expect(modelCalls).toHaveLength(1);
+        expect(teacherAttemptPage).toContain("growthClassKeyForAttempt(selectedGrowthAttempt)");
+        expect(teacherAttemptPage).toContain("selectedOrganizationId: activeOrganizationId || attempt.organizationId");
+        expect(teacherAttemptPage).toContain("attempts: growthAttempts");
+        expect(teacherAttemptPage).toContain("exams: cumulativeExams");
+        expect(teacherAttemptPage).toContain("growthReportState={growthReportState}");
+    });
+
+    it("keeps an empty growth model when omitted records need disclosure", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const stateIndex = teacherAttemptPage.indexOf("const growthReportState = useMemo");
+        const labelIndex = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo");
+        const stateBlock = teacherAttemptPage.slice(stateIndex, labelIndex);
+
+        expect(stateBlock).toContain("growthReportModel.omittedCount === 0");
+        expect(stateBlock).toContain("model: growthReportModel");
+    });
+
+    it("does not treat unrelated omissions as evidence that a partial collection includes the selected attempt", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const stateIndex = teacherAttemptPage.indexOf("const growthReportState = useMemo");
+        const labelIndex = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo");
+        const stateBlock = teacherAttemptPage.slice(stateIndex, labelIndex);
+        const partialIndex = stateBlock.indexOf('cumulativeStatus === "partial"');
+        const unlinkedIndex = stateBlock.indexOf("if (!selectedGrowthAttempt)", partialIndex);
+        const partialBlock = stateBlock.slice(partialIndex, unlinkedIndex);
+
+        expect(partialBlock).toContain("!growthReportModel.selectedAttemptIncluded");
+        expect(partialBlock).not.toContain("growthReportModel.rows.length === 0 && growthReportModel.omittedCount === 0");
+    });
+
+    it("prefers the active workspace organization over a legacy attempt fallback", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const modelIndex = teacherAttemptPage.indexOf("buildStudentGrowthReport({");
+        const modelBlock = teacherAttemptPage.slice(modelIndex, modelIndex + 700);
+
+        expect(teacherAttemptPage).toContain("setActiveOrganizationId(workspaceOrganizationId || null)");
+        expect(modelBlock).toContain("selectedOrganizationId: activeOrganizationId || attempt.organizationId");
+        expect(modelBlock).not.toContain("cumulativeExams.find");
+        expect(modelBlock).not.toContain("growthAttempts.find");
+    });
+
+    it("enriches legacy cohort rows with matched roster classes before growth modeling", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const growthAttemptsIndex = teacherAttemptPage.indexOf("const growthAttempts = useMemo");
+        const growthModelIndex = teacherAttemptPage.indexOf("const growthReportModel = useMemo");
+        const modelIndex = teacherAttemptPage.indexOf("buildStudentGrowthReport({");
+        const identityBlock = teacherAttemptPage.slice(growthModelIndex, modelIndex + 900);
+
+        expect(growthAttemptsIndex).toBeGreaterThan(-1);
+        expect(growthModelIndex).toBeGreaterThan(growthAttemptsIndex);
+        expect(modelIndex).toBeGreaterThan(growthAttemptsIndex);
+        expect(teacherAttemptPage).toContain("rosterGroupMatchesStudent");
+        expect(teacherAttemptPage).toContain("studentProfileId: student.id.trim()");
+        expect(identityBlock.indexOf("rosterStudent?.id")).toBeGreaterThan(-1);
+        expect(identityBlock.indexOf("rosterStudent?.id")).toBeLessThan(identityBlock.indexOf("attempt.studentName"));
+        expect(identityBlock).toContain("selectedClassKey: growthClassKeyForAttempt(selectedGrowthAttempt)");
+        expect(identityBlock).toContain("attempts: growthAttempts");
+        expect(identityBlock).not.toContain("attempts: cumulativeAttempts");
+    });
+
+    it("isolates identical legacy group names by roster region without overwriting snapshots", () => {
+        const enrichGrowthAttemptContext = loadGrowthAttemptContextHelper();
+        const rosterStudent = (id: string, region: string): RosterStudent => ({
+            id,
+            name: id,
+            email: `${id}@example.com`,
+            group: "심화반",
+            region,
+            avatar: "#fff",
+            avgScore: 0,
+            examsTaken: 0,
+            lastActive: "",
+            trend: "flat",
+            status: "active",
+        });
+        const rosterGroup = (id: string, region: string): RosterGroup => ({
+            id,
+            name: "심화반",
+            region,
+            count: 1,
+            avgScore: 0,
+            color: "#fff",
+        });
+        const seoulStudent = rosterStudent("student-seoul", "서울");
+        const busanStudent = rosterStudent("student-busan", "부산");
+        const groups = [rosterGroup("group-seoul", "서울"), rosterGroup("group-busan", "부산")];
+        const legacySource = (id: string, studentName: string): Attempt => ({
+            id,
+            studentName,
+            groupName: "심화반",
+        } as Attempt);
+
+        const seoul = enrichGrowthAttemptContext(legacySource("a-seoul", "서울 학생"), seoulStudent, groups);
+        const busan = enrichGrowthAttemptContext(legacySource("a-busan", "부산 학생"), busanStudent, groups);
+        if (!seoul || !busan) throw new Error("matched legacy attempts must be enriched");
+
+        expect(seoul.groupName).toBe("심화반");
+        expect(busan.groupName).toBe("심화반");
+        expect(seoul.groupId).toBe("group-seoul");
+        expect(busan.groupId).toBe("group-busan");
+        expect(seoul.regionName).toBe("서울");
+        expect(busan.regionName).toBe("부산");
+        expect(growthClassKeyForAttempt(seoul)).not.toBe(growthClassKeyForAttempt(busan));
+
+        const snapshotted = legacySource("snapshot", "기존 학생");
+        Object.assign(snapshotted, {
+            classId: "class-original",
+            groupId: "group-original",
+            regionId: "region-original",
+            regionName: "기존 지역",
+        });
+        const preserved = enrichGrowthAttemptContext(snapshotted, seoulStudent, groups);
+        if (!preserved) throw new Error("authoritative snapshots must be preserved");
+        expect(preserved).toMatchObject({
+            classId: "class-original",
+            groupId: "group-original",
+            groupName: "심화반",
+            regionId: "region-original",
+            regionName: "기존 지역",
+        });
+    });
+
+    it("drops ambiguous unscoped legacy rows instead of merging two regional students", () => {
+        const enrichGrowthAttemptContext = loadGrowthAttemptContextHelper();
+        const rosterStudent = (id: string, region: string): RosterStudent => ({
+            id,
+            name: "동명이인",
+            email: `${id}@example.com`,
+            group: "심화반",
+            region,
+            avatar: "#fff",
+            avgScore: 0,
+            examsTaken: 0,
+            lastActive: "",
+            trend: "flat",
+            status: "active",
+        });
+        const students = [rosterStudent("student-seoul", "서울"), rosterStudent("student-busan", "부산")];
+        const groups: RosterGroup[] = [
+            { id: "group-seoul", name: "심화반", region: "서울", count: 1, avgScore: 0, color: "#fff" },
+            { id: "group-busan", name: "심화반", region: "부산", count: 1, avgScore: 0, color: "#fff" },
+        ];
+        const ambiguousRows = ["ambiguous-a", "ambiguous-b"].map(id => ({
+            id,
+            studentName: "동명이인",
+            groupName: "심화반",
+        } as Attempt));
+
+        const resolvedRows = ambiguousRows
+            .map(row => enrichGrowthAttemptContext(
+                row,
+                matchRosterStudentForAttempt(row, students),
+                groups,
+            ))
+            .filter((row): row is Attempt => row !== null);
+
+        expect(ambiguousRows.map(row => matchRosterStudentForAttempt(row, students))).toEqual([null, null]);
+        expect(resolvedRows).toEqual([]);
+
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        expect(teacherAttemptPage).toContain("markUnresolvedGrowthAttempt(candidate)");
+        expect(teacherAttemptPage).not.toContain(".filter((candidate): candidate is Attempt => candidate !== null)");
+        expect(teacherAttemptPage).toContain("학생·반 연결 정보가 부족해 성장 데이터를 비교할 수 없습니다.");
+    });
+
+    it("keeps stale source failures retryable ahead of clean unlinked empty state", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const stateStart = teacherAttemptPage.indexOf("const growthReportState = useMemo<StudentGrowthReportState>");
+        const stateEnd = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo", stateStart);
+        const stateBlock = teacherAttemptPage.slice(stateStart, stateEnd);
+        const staleFailureIndex = stateBlock.indexOf('cumulativeStatus === "stale" && cumulativeError && (!selectedGrowthAttempt || !growthReportModel)');
+        const partialFailureIndex = stateBlock.indexOf('cumulativeStatus === "partial"');
+        const unlinkedEmptyIndex = stateBlock.indexOf("if (!selectedGrowthAttempt)");
+
+        expect(stateStart).toBeGreaterThan(-1);
+        expect(stateEnd).toBeGreaterThan(stateStart);
+        expect(staleFailureIndex).toBeGreaterThan(-1);
+        expect(partialFailureIndex).toBeGreaterThan(staleFailureIndex);
+        expect(unlinkedEmptyIndex).toBeGreaterThan(partialFailureIndex);
+        expect(stateBlock.slice(staleFailureIndex, unlinkedEmptyIndex)).toContain('status: "error", message: cumulativeError');
+        expect(stateBlock.slice(partialFailureIndex, unlinkedEmptyIndex)).toContain('message: cumulativeError || "일부 데이터만 불러와 선택한 응시의 성장 이력을 확인할 수 없습니다."');
+
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
+        expect(reportPanel).toMatch(/growthReportState\.status === "error"[\s\S]*role="alert"[\s\S]*onClick=\{onRetryCumulative\}/);
     });
 
     it("keeps cumulative data and the rendered attempt keyed to the current route", () => {
@@ -1334,6 +1619,24 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("cumulativeAttemptId === attempt.id");
         expect(teacherAttemptPage).toContain("setCumulativeAttemptId(targetAttemptId)");
         expect(teacherAttemptPage).toContain("setCumulativeAttemptId(null)");
+    });
+
+    it("guards A-to-B-to-A cumulative requests with a monotonic generation", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const generationStartIndex = teacherAttemptPage.indexOf("const requestGeneration = ++cumulativeLoadGenerationRef.current");
+        const requestGuardIndex = teacherAttemptPage.indexOf("const isCurrentCumulativeRequest = () =>");
+        const demoCommitIndex = teacherAttemptPage.indexOf("setCumulativeAttempts(", requestGuardIndex);
+        const remoteCommitIndex = teacherAttemptPage.indexOf("setCumulativeAttempts(attemptResult.items)");
+        const finalizerIndex = teacherAttemptPage.indexOf("if (isCurrentCumulativeRequest() && cumulativeLoadingAttemptRef.current === targetAttemptId)");
+
+        expect(teacherAttemptPage).toContain("const cumulativeLoadGenerationRef = useRef(0)");
+        expect(generationStartIndex).toBeGreaterThan(-1);
+        expect(requestGuardIndex).toBeGreaterThan(generationStartIndex);
+        expect(demoCommitIndex).toBeGreaterThan(requestGuardIndex);
+        expect(remoteCommitIndex).toBeGreaterThan(demoCommitIndex);
+        expect(finalizerIndex).toBeGreaterThan(remoteCommitIndex);
+        expect(teacherAttemptPage.match(/if \(!isCurrentCumulativeRequest\(\)\) return;/g) ?? []).toHaveLength(3);
+        expect(teacherAttemptPage).toMatch(/cumulativeLoadGenerationRef\.current \+= 1;[\s\S]*setCumulativeAttempts\(\[\]\)/);
     });
 
     it("defines the actual global print cascade and a forced light report palette", () => {
@@ -1353,11 +1656,36 @@ describe("service UI surface", () => {
         expect(studentResultCss).not.toMatch(/\.reportPrintRoot\s*\{[^}]*position:\s*absolute;/);
     });
 
+    it("does not present locked, loading, failed, or incomplete history as empty", () => {
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
+        const historyIndex = reportPanel.indexOf('id="report-history-title"');
+        const historyBlock = reportPanel.slice(historyIndex, historyIndex + 5_000);
+
+        expect(historyIndex).toBeGreaterThan(-1);
+        expect(historyBlock).toContain("!studentGrowthReportsEnabled");
+        expect(historyBlock).toContain('growthReportState.status === "idle" || growthReportState.status === "loading"');
+        expect(historyBlock).toContain('growthReportState.status === "error"');
+        expect(historyBlock).toContain('growthReportState.status === "stale"');
+        expect(historyBlock).toContain('growthReportState.status === "partial"');
+        expect(historyBlock).toContain('growthReportState.status === "empty"');
+        expect(historyBlock.match(/onClick=\{onRetryCumulative\}/g) ?? []).toHaveLength(2);
+        expect(historyBlock).toContain("상세 이력을 학생 명단과 연결할 수 없습니다.");
+        expect(historyBlock).toContain("reportCumulativeInsight?.attempts.length");
+    });
+
     it("distinguishes unavailable report calculations from a calculated empty result", () => {
         const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
 
         expect(reportPanel).toContain("시험 정보를 불러오지 못해 오답과 약점을 계산할 수 없습니다.");
         expect(reportPanel).toContain("analytics ? (");
+        const unavailableHeadlineIndex = reportPanel.indexOf("const headline = !hasGradableScore");
+        const retakeHeadlineIndex = reportPanel.indexOf("retakeScoreDelta", unavailableHeadlineIndex);
+        expect(unavailableHeadlineIndex).toBeGreaterThan(-1);
+        expect(retakeHeadlineIndex).toBeGreaterThan(unavailableHeadlineIndex);
+        expect(reportPanel).toContain("채점 가능한 문항이 없어 점수와 비교 지표를 표시하지 않습니다.");
+        expect(reportPanel).toContain('hasGradableScore ? `${scorePercent}%` : "미채점"');
+        expect(reportPanel).toContain("제출 당시 저장된 점수");
+        expect(reportPanel).toContain("문항 분석은 시험 정보를 불러온 뒤 확인할 수 있습니다.");
     });
 
     it("keeps student result panel inputs and small status text readable in both themes", () => {
@@ -1491,8 +1819,9 @@ describe("service UI surface", () => {
             expect(mutation).toContain("activeAttemptIdRef.current !== targetAttemptId");
             expect(mutation).toMatch(/finally\s*\{[^}]*activeAttemptIdRef\.current === targetAttemptId/);
         }
+        expect(teacherAttemptPage).toContain("mergeSelectedAttemptIntoPeers(attempt, peerAttempts)");
         expect(teacherAttemptPage).toContain("const series = buildStudentAttemptSeries(");
-        expect(teacherAttemptPage).toContain("return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt]);");
+        expect(teacherAttemptPage).toContain("return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt], examById);");
     });
 
     it("keeps the dashboard overview bento grid usable on mobile", () => {

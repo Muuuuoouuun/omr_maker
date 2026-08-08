@@ -34,20 +34,30 @@ import { createDashboardRevalidationGate, isTeacherDashboardStorageKey } from "@
 import { buildDemoDashboardData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
 import { readLocalAttempts, readLocalExams, saveLocalAttempt } from "@/lib/omrPersistence";
-import { loadTeacherAttemptSummaries, loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import {
+    loadTeacherAttemptSummaries,
+    loadTeacherAttempts,
+    resolveTeacherAttemptCollectionCompleteness,
+} from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
 import { readLocalRosterSnapshot } from "@/lib/rosterPersistence";
 import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
-import { preferLocalDashboardItems } from "@/lib/teacherDashboardLoad";
+import {
+    beginDashboardDetailBackgroundRetry,
+    preferLocalDashboardItems,
+    resolveDashboardDetailRetryFailure,
+    type DashboardDetailSnapshot,
+} from "@/lib/teacherDashboardLoad";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { readTeacherSession } from "@/lib/teacherSession";
 import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
 import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient";
 import type { TeacherAttemptAggregate } from "@/lib/teacherAttemptReportingGateway";
 import { loadTeacherIndividualAssignmentTargetCounts } from "@/app/actions/teacherAssignment";
+import type { ExamAnalyticsSampleStatus } from "@/lib/examAnalyticsReport";
 
 type TabType = 'overview' | 'exam' | 'student';
 type DashboardDataMode = "real" | "demo";
@@ -137,7 +147,7 @@ function TeacherDashboard() {
     const [detailedAttemptStatus, setDetailedAttemptStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
     const [detailedAttemptGeneration, setDetailedAttemptGeneration] = useState(0);
     const detailedAttemptGenerationRef = useRef(0);
-    const detailedAttemptCacheRef = useRef<{ generation: number; items: Attempt[] } | null>(null);
+    const detailedAttemptCacheRef = useRef<DashboardDetailSnapshot<Attempt> | null>(null);
     const detailedAttemptLoadRef = useRef<DetailedAttemptLoad | null>(null);
     const attemptSummarySignalRef = useRef<string | null>(null);
     const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
@@ -161,6 +171,8 @@ function TeacherDashboard() {
     const [hasDashboardDataResolved, setHasDashboardDataResolved] = useState(false);
     const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
     const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);
+    const [detailedAttemptSampleStatus, setDetailedAttemptSampleStatus] = useState<ExamAnalyticsSampleStatus>("ready");
+    const [detailedAttemptWarning, setDetailedAttemptWarning] = useState("");
     const analyticsAttempts = useMemo(
         () => dataMode === "demo" ? attempts : detailedAttempts || [],
         [attempts, dataMode, detailedAttempts],
@@ -184,7 +196,22 @@ function TeacherDashboard() {
         detailedAttemptCacheRef.current = null;
         setDetailedAttempts(null);
         setDetailedAttemptStatus("idle");
+        setDetailedAttemptSampleStatus("ready");
+        setDetailedAttemptWarning("");
         setDetailedAttemptGeneration(nextGeneration);
+    }, []);
+
+    const retryDetailedAttempts = useCallback(() => {
+        const retry = beginDashboardDetailBackgroundRetry({
+            generation: detailedAttemptGenerationRef.current,
+            snapshot: detailedAttemptCacheRef.current,
+        });
+        detailedAttemptGenerationRef.current = retry.generation;
+        setDetailedAttempts(retry.items);
+        setDetailedAttemptStatus(retry.loadStatus);
+        setDetailedAttemptSampleStatus(retry.sampleStatus);
+        setDetailedAttemptWarning("");
+        setDetailedAttemptGeneration(retry.generation);
     }, []);
 
     const loadDetailedAttempts = useCallback(async (): Promise<Attempt[]> => {
@@ -195,11 +222,16 @@ function TeacherDashboard() {
         while (true) {
             const requestedGeneration = detailedAttemptGenerationRef.current;
             const cached = detailedAttemptCacheRef.current;
-            if (cached?.generation === requestedGeneration) return cached.items;
+            if (cached?.generation === requestedGeneration) {
+                setDetailedAttemptSampleStatus(cached.sampleStatus);
+                return cached.items;
+            }
 
             let activeLoad = detailedAttemptLoadRef.current;
             if (!activeLoad || activeLoad.generation !== requestedGeneration) {
-                setDetailedAttemptStatus("loading");
+                if (!detailedAttemptCacheRef.current) {
+                    setDetailedAttemptStatus("loading");
+                }
                 activeLoad = {
                     generation: requestedGeneration,
                     promise: loadTeacherAttempts(),
@@ -210,14 +242,47 @@ function TeacherDashboard() {
             try {
                 const result = await activeLoad.promise;
                 if (requestedGeneration !== detailedAttemptGenerationRef.current) continue;
-                if (result.remoteError) throw new Error(result.remoteError);
-                detailedAttemptCacheRef.current = { generation: requestedGeneration, items: result.items };
+                const completeness = resolveTeacherAttemptCollectionCompleteness(result);
+                if (completeness === "error") {
+                    throw new Error(result.remoteError || "상세 제출 데이터를 확인하지 못했습니다.");
+                }
+                const sampleStatus: ExamAnalyticsSampleStatus = completeness === "partial"
+                    ? "partial"
+                    : completeness === "stale"
+                        ? "stale"
+                        : "ready";
+                detailedAttemptCacheRef.current = {
+                    generation: requestedGeneration,
+                    items: result.items,
+                    sampleStatus,
+                };
                 setDetailedAttempts(result.items);
+                setDetailedAttemptSampleStatus(sampleStatus);
+                setDetailedAttemptWarning(sampleStatus === "stale" ? result.remoteError || "최신 서버 데이터를 확인하지 못했습니다." : "");
                 setDetailedAttemptStatus("ready");
                 return result.items;
             } catch (error) {
-                if (requestedGeneration !== detailedAttemptGenerationRef.current) continue;
-                setDetailedAttemptStatus("error");
+                const message = error instanceof Error ? error.message : "상세 제출 데이터를 확인하지 못했습니다.";
+                const failure = resolveDashboardDetailRetryFailure({
+                    requestedGeneration,
+                    currentGeneration: detailedAttemptGenerationRef.current,
+                    snapshot: detailedAttemptCacheRef.current,
+                    message,
+                });
+                if (failure.kind === "obsolete") continue;
+                setDetailedAttemptWarning(failure.warning);
+                if (failure.kind === "cached") {
+                    detailedAttemptCacheRef.current = {
+                        generation: requestedGeneration,
+                        items: failure.items,
+                        sampleStatus: failure.sampleStatus,
+                    };
+                    setDetailedAttempts(failure.items);
+                    setDetailedAttemptSampleStatus(failure.sampleStatus);
+                    setDetailedAttemptStatus(failure.loadStatus);
+                    return failure.items;
+                }
+                setDetailedAttemptStatus(failure.loadStatus);
                 throw error;
             } finally {
                 if (detailedAttemptLoadRef.current === activeLoad) {
@@ -554,6 +619,7 @@ function TeacherDashboard() {
                         detailedAttemptCacheRef.current = {
                             generation: detailedAttemptGenerationRef.current,
                             items: next,
+                            sampleStatus: detailedAttemptSampleStatus,
                         };
                     }
                     return next;
@@ -1053,7 +1119,7 @@ function TeacherDashboard() {
                     </div>
                 )}
 
-                {!isDashboardResolving && !isRealDashboardEmpty && !isMockupAccount && activeTab !== "overview" && <div
+                {!isDashboardResolving && !isRealDashboardEmpty && !isMockupAccount && activeTab !== "overview" && activeTab !== "exam" && <div
                     className="dashboard-analysis-actions"
                     aria-label="분석 다음 조치"
                     style={{
@@ -1210,6 +1276,36 @@ function TeacherDashboard() {
                             onLoadDetailedAttempts={loadDetailedAttempts}
                         />
                     )}
+                    {activeTab !== 'overview'
+                        && dataMode === "real"
+                        && detailedAttemptStatus === "ready"
+                        && detailedAttemptSampleStatus !== "ready" && (
+                        <section
+                            className="bento-card"
+                            role="status"
+                            style={{
+                                marginBottom: '1rem',
+                                padding: '0.9rem 1rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '1rem',
+                                flexWrap: 'wrap',
+                            }}
+                        >
+                            <div>
+                                <strong style={{ fontSize: '0.92rem' }}>
+                                    {detailedAttemptSampleStatus === "partial" ? "일부 제출 기준 분석" : "저장된 제출 기준 분석"}
+                                </strong>
+                                <p style={{ margin: '0.2rem 0 0', color: 'var(--muted)', fontSize: '0.8rem' }}>
+                                    {detailedAttemptWarning || "최신 서버 데이터와 차이가 있을 수 있습니다."}
+                                </p>
+                            </div>
+                            <button type="button" className="btn btn-secondary" onClick={retryDetailedAttempts}>
+                                최신 데이터 다시 불러오기
+                            </button>
+                        </section>
+                    )}
                     {activeTab !== 'overview' && dataMode === "real" && detailedAttemptStatus !== "ready" && (
                         detailedAttemptStatus === "error" ? (
                             <section className="bento-card" role="alert" style={{ padding: '2rem', textAlign: 'center' }}>
@@ -1229,6 +1325,7 @@ function TeacherDashboard() {
                             rosterGroups={rosterGroups}
                             initialExamId={selectedExamIdForAnalytics}
                             currentPlan={isMockupAccount ? "academy" : currentPlan}
+                            sampleStatus={detailedAttemptSampleStatus}
                         />
                     )}
                     {activeTab === 'student' && (dataMode === "demo" || detailedAttemptStatus === "ready") && (

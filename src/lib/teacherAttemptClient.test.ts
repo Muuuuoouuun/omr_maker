@@ -32,6 +32,8 @@ import {
     forceFinishTeacherAttempts,
     loadTeacherAttemptSummaries,
     loadTeacherAttempts,
+    resolveTeacherCollectionGroupCompleteness,
+    resolveTeacherAttemptCollectionCompleteness,
     setTeacherAttemptSubquestionReview,
 } from "./teacherAttemptClient";
 import * as teacherAttemptClient from "./teacherAttemptClient";
@@ -92,6 +94,52 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.unstubAllGlobals();
+});
+
+describe("teacher attempt collection completeness", () => {
+    it.each([
+        [{ items: [baseAttempt], remoteLoaded: false }, "stale"],
+        [{ items: [baseAttempt], remoteLoaded: false, remoteError: "offline" }, "stale"],
+        [{ items: [], remoteLoaded: false, remoteError: "offline" }, "error"],
+        [{ items: [], remoteLoaded: false }, "error"],
+        [{ items: [baseAttempt], remoteLoaded: true, remoteSynced: false, remotePartial: true }, "partial"],
+        [{ items: [baseAttempt], remoteLoaded: true, remoteSynced: true }, "ready"],
+    ] as const)("maps %o to %s", (result, expected) => {
+        expect(resolveTeacherAttemptCollectionCompleteness(result)).toBe(expected);
+    });
+
+    it("lets a transport error outrank partial pagination when cached rows remain usable", () => {
+        expect(resolveTeacherAttemptCollectionCompleteness({
+            items: [baseAttempt],
+            remoteLoaded: true,
+            remoteSynced: false,
+            remotePartial: true,
+            remoteError: "exam metadata unavailable",
+        })).toBe("stale");
+    });
+
+    it.each([
+        ["exam", [{ id: "exam-1" }], [{ id: "student-1" }]],
+        ["roster", [{ id: "exam-1" }], [{ id: "student-1" }]],
+    ] as const)("downgrades ready attempts when usable %s evidence is local-only", (localSource, exams, roster) => {
+        expect(resolveTeacherCollectionGroupCompleteness([
+            { items: [baseAttempt], remoteLoaded: true, remoteSynced: true },
+            { items: exams, remoteLoaded: localSource !== "exam", remoteSynced: localSource !== "exam" },
+            { items: roster, remoteLoaded: localSource !== "roster", remoteSynced: localSource !== "roster" },
+        ])).toBe("stale");
+    });
+
+    it("uses deterministic error, stale, partial, ready priority across required sources", () => {
+        const ready = { items: [baseAttempt], remoteLoaded: true, remoteSynced: true };
+        const partial = { items: [baseAttempt], remoteLoaded: true, remoteSynced: false, remotePartial: true };
+        const stale = { items: [baseAttempt], remoteLoaded: false };
+        const error = { items: [], remoteLoaded: false, remoteError: "offline" };
+
+        expect(resolveTeacherCollectionGroupCompleteness([ready, ready])).toBe("ready");
+        expect(resolveTeacherCollectionGroupCompleteness([ready, partial])).toBe("partial");
+        expect(resolveTeacherCollectionGroupCompleteness([partial, stale])).toBe("stale");
+        expect(resolveTeacherCollectionGroupCompleteness([stale, error])).toBe("error");
+    });
 });
 
 describe("teacher attempt mutation serialization", () => {
@@ -278,6 +326,29 @@ describe("teacher attempt read fallback", () => {
             remoteHasMore: true,
             remoteItemCount: 1,
             remoteNextCursor: { finishedAt: summary.finishedAt, id: summary.id },
+        });
+    });
+
+    it("preserves partial page metadata on the detailed analytics loader", async () => {
+        actionMocks.list.mockResolvedValue({
+            status: "loaded",
+            attempts: [baseAttempt],
+            page: {
+                partial: true,
+                hasMore: true,
+                itemCount: 1,
+                nextCursor: { finishedAt: baseAttempt.finishedAt, id: baseAttempt.id },
+            },
+        });
+
+        await expect(loadTeacherAttempts()).resolves.toMatchObject({
+            items: [{ id: baseAttempt.id }],
+            remoteLoaded: true,
+            remoteSynced: false,
+            remotePartial: true,
+            remoteHasMore: true,
+            remoteItemCount: 1,
+            remoteNextCursor: { finishedAt: baseAttempt.finishedAt, id: baseAttempt.id },
         });
     });
 

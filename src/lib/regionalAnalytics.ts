@@ -5,6 +5,7 @@ import { baseAttemptsOnly, resolveAttemptScore, retakeAttemptsOnly } from "@/lib
 import {
     buildLearningRecommendations,
     getAttemptQuestionResults,
+    hasGradableAttemptScore,
     studentScopeKeyForAttempt,
     type LearningRecommendation,
     type LearningRecommendationSeverity,
@@ -22,7 +23,7 @@ export interface RegionalLearningScope {
     attemptCount: number;
     retakeAttemptCount: number;
     examCount: number;
-    averageScore: number;
+    averageScore: number | null;
     groupNames: string[];
 }
 
@@ -35,7 +36,7 @@ export interface RegionalExamActionInsight {
     examTitle: string;
     attemptCount: number;
     studentCount: number;
-    averageScore: number;
+    averageScore: number | null;
     wrongQuestionCount: number;
     unansweredQuestionCount: number;
     topRecommendation?: LearningRecommendation;
@@ -56,7 +57,7 @@ export interface RegionalActionPlan extends RegionalLearningScope {
     activeStudentCount: number;
     wrongQuestionCount: number;
     unansweredQuestionCount: number;
-    severity: LearningRecommendationSeverity;
+    severity: LearningRecommendationSeverity | null;
     priorityScore: number;
     recommendedAction: string;
     exams: RegionalExamActionInsight[];
@@ -189,8 +190,8 @@ function ensureRegion(
     return created;
 }
 
-function average(values: number[]): number {
-    if (values.length === 0) return 0;
+function average(values: number[]): number | null {
+    if (values.length === 0) return null;
     return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
 }
 
@@ -206,6 +207,14 @@ function isUnansweredResult(result: { status: string; isUnanswered?: boolean }):
     return result.status === "unanswered" || !!result.isUnanswered;
 }
 
+function hasRegionalPerformanceScore(attempt: Attempt, exam?: Exam): boolean {
+    const hasStoredDenominator = Number.isFinite(attempt.totalScore) && attempt.totalScore > 0;
+    const hasSubmittedAnswer = Object.values(attempt.answers || {}).some(answer => answer !== undefined && answer !== null);
+    const hasGradedResult = attempt.questionResults?.some(result => result.status !== "ungraded") ?? false;
+    if (!hasStoredDenominator && !hasSubmittedAnswer && !hasGradedResult) return false;
+    return hasGradableAttemptScore(resolveAttemptScore(attempt, exam));
+}
+
 function sortRecommendations(items: LearningRecommendation[]): LearningRecommendation[] {
     return [...items].sort((a, b) => {
         if (b.priorityScore !== a.priorityScore) return b.priorityScore - a.priorityScore;
@@ -216,29 +225,33 @@ function sortRecommendations(items: LearningRecommendation[]): LearningRecommend
 }
 
 function severityForRegion(params: {
-    averageScore: number;
+    averageScore: number | null;
     wrongQuestionCount: number;
     studentsNeedingAttention: number;
     topRecommendation?: LearningRecommendation;
-}): LearningRecommendationSeverity {
-    if (params.averageScore > 0 && params.averageScore < 65) return "urgent";
+}): LearningRecommendationSeverity | null {
+    if (params.averageScore === null
+        && params.wrongQuestionCount === 0
+        && params.studentsNeedingAttention === 0
+        && !params.topRecommendation) return null;
+    if (params.averageScore !== null && params.averageScore < 65) return "urgent";
     if (params.topRecommendation?.severity === "urgent") return "urgent";
     if (params.wrongQuestionCount >= 8 || params.studentsNeedingAttention >= 3) return "urgent";
-    if (params.averageScore > 0 && params.averageScore < 78) return "review";
+    if (params.averageScore !== null && params.averageScore < 78) return "review";
     if (params.topRecommendation?.severity === "review") return "review";
     if (params.wrongQuestionCount > 0 || params.studentsNeedingAttention > 0) return "review";
     return "watch";
 }
 
 function priorityForRegion(params: {
-    averageScore: number;
+    averageScore: number | null;
     attemptCount: number;
     wrongQuestionCount: number;
     unansweredQuestionCount: number;
     studentsNeedingAttention: number;
     topRecommendation?: LearningRecommendation;
 }): number {
-    const scoreRisk = params.averageScore > 0 ? Math.max(0, 100 - params.averageScore) : 0;
+    const scoreRisk = params.averageScore === null ? 0 : Math.max(0, 100 - params.averageScore);
     return Math.round(
         scoreRisk * 2
         + params.wrongQuestionCount * 5
@@ -249,7 +262,13 @@ function priorityForRegion(params: {
     );
 }
 
-function actionForRegion(regionName: string, recommendation: LearningRecommendation | undefined, riskCount: number): string {
+function actionForRegion(
+    regionName: string,
+    recommendation: LearningRecommendation | undefined,
+    riskCount: number,
+    hasEvidence: boolean,
+): string {
+    if (!hasEvidence) return `${regionName} 근거 없음`;
     if (recommendation) {
         return `${regionName} ${recommendation.basis} "${recommendation.title}" ${recommendation.retakeQuestionIds.length}문항 재추천`;
     }
@@ -311,7 +330,9 @@ export function buildRegionalLearningScopes(params: {
             region.groupKeys.add(attempt.groupId || attempt.groupName || "");
             region.groupNames.add(attempt.groupName || attempt.groupId || "");
         }
-        region.scores.push(resolveAttemptScore(attempt, examById.get(attempt.examId)).scorePercent);
+        const exam = examById.get(attempt.examId);
+        const resolvedScore = resolveAttemptScore(attempt, exam);
+        if (hasRegionalPerformanceScore(attempt, exam)) region.scores.push(resolvedScore.scorePercent);
     }
 
     return Array.from(regions.entries())
@@ -379,11 +400,14 @@ export function buildRegionalActionPlans(params: {
             const exam = examById.get(examId);
             if (!exam) continue;
 
-            const results = examAttempts.flatMap(attempt => getAttemptQuestionResults(exam, attempt));
+            const gradableExamAttempts = examAttempts.filter(attempt => (
+                hasRegionalPerformanceScore(attempt, exam)
+            ));
+            const results = gradableExamAttempts.flatMap(attempt => getAttemptQuestionResults(exam, attempt));
             const examWrongCount = results.filter(isWrongResult).length;
             const examUnansweredCount = results.filter(isUnansweredResult).length;
-            const examScores = examAttempts.map(attempt => resolveAttemptScore(attempt, exam).scorePercent);
-            const examRecommendations = buildLearningRecommendations(exam, examAttempts, {
+            const examScores = gradableExamAttempts.map(attempt => resolveAttemptScore(attempt, exam).scorePercent);
+            const examRecommendations = buildLearningRecommendations(exam, gradableExamAttempts, {
                 scope: "exam",
                 kinds: options.weaknessKinds,
                 includeRetakes: options.includeRetakes,
@@ -414,22 +438,26 @@ export function buildRegionalActionPlans(params: {
         }
 
         const studentsNeedingAttention = Array.from(attemptsByStudent.entries())
-            .map(([key, studentAttempts]) => {
+            .flatMap(([key, studentAttempts]) => {
                 const ordered = [...studentAttempts].sort((a, b) => activityTime(b) - activityTime(a));
-                const scores = ordered.map(attempt => resolveAttemptScore(attempt, examById.get(attempt.examId)).scorePercent);
-                const latestScore = scores[0] ?? 0;
+                const scoredAttempts = ordered
+                    .map(attempt => ({ attempt, score: resolveAttemptScore(attempt, examById.get(attempt.examId)) }))
+                    .filter(row => hasRegionalPerformanceScore(row.attempt, examById.get(row.attempt.examId)));
+                if (scoredAttempts.length === 0) return [];
+                const scores = scoredAttempts.map(row => row.score.scorePercent);
+                const latestScore = scores[0];
                 const previousScore = scores[1] ?? latestScore;
-                const averageScore = average(scores);
-                return {
+                const averageScore = average(scores) ?? latestScore;
+                return [{
                     key,
-                    name: ordered[0]?.studentName || key,
-                    groupName: ordered[0]?.groupName,
-                    attemptCount: ordered.length,
+                    name: scoredAttempts[0]?.attempt.studentName || key,
+                    groupName: scoredAttempts[0]?.attempt.groupName,
+                    attemptCount: scoredAttempts.length,
                     averageScore,
                     latestScore,
                     trendDelta: latestScore - previousScore,
                     reason: riskReason(latestScore, averageScore, latestScore - previousScore),
-                };
+                }];
             })
             .filter(student => student.latestScore < 70 || student.averageScore < 70 || student.trendDelta <= -8)
             .sort((a, b) => {
@@ -441,6 +469,11 @@ export function buildRegionalActionPlans(params: {
 
         const topRecommendations = sortRecommendations(recommendations).slice(0, recommendationLimit);
         const topRecommendation = topRecommendations[0];
+        const hasEvidence = scope.averageScore !== null
+            || wrongQuestionCount > 0
+            || unansweredQuestionCount > 0
+            || studentsNeedingAttention.length > 0
+            || !!topRecommendation;
         const severity = severityForRegion({
             averageScore: scope.averageScore,
             wrongQuestionCount,
@@ -463,7 +496,7 @@ export function buildRegionalActionPlans(params: {
             unansweredQuestionCount,
             severity,
             priorityScore,
-            recommendedAction: actionForRegion(scope.regionName, topRecommendation, studentsNeedingAttention.length),
+            recommendedAction: actionForRegion(scope.regionName, topRecommendation, studentsNeedingAttention.length, hasEvidence),
             exams: exams
                 .sort((a, b) => {
                     const aLatest = Math.max(...(attemptsByExam.get(a.examId) || []).map(activityTime));

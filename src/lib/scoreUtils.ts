@@ -10,6 +10,15 @@ export function safeScorePercent(score: number | undefined, totalScore: number |
     return clampPercent(Math.round(((score || 0) / totalScore) * 100));
 }
 
+/** Whether a score has a real computed or legacy-stored denominator. */
+export function hasGradableAttemptScore(
+    summary: { totalScore: number; scorePercent: number },
+): boolean {
+    return Number.isFinite(summary.totalScore)
+        && summary.totalScore > 0
+        && Number.isFinite(summary.scorePercent);
+}
+
 export function averageAttemptPercent(attempts: Attempt[]): number {
     if (attempts.length === 0) return 0;
     const total = attempts.reduce((sum, attempt) => (

@@ -44,6 +44,11 @@ export async function loginAsShowcaseTeacher(page: Page) {
     await page.goto("/?role=teacher");
     await page.getByRole("button", { name: "데모 계정으로 둘러보기" }).click();
     await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1(?:#.*)?$/, { timeout: 15_000 });
+    // The URL changes before the showcase dashboard's dynamic overview chunk
+    // has finished rendering. Replacing that navigation immediately can abort
+    // the chunk request in WebKit and surface a false application runtime error.
+    await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible({ timeout: 15_000 });
+    await page.waitForLoadState("networkidle");
 }
 
 export async function openTeacherPage(page: Page, path: string) {

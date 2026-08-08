@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
-import { openTeacherPage } from "./helpers";
+import { loginAsShowcaseTeacher, openTeacherPage } from "./helpers";
 
 test.describe.configure({ timeout: 90_000 });
 
@@ -432,6 +432,156 @@ test.describe("UI-UX PROMAX layout audit", () => {
         await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "reduced");
         await expect(countUps.first()).toHaveAttribute("data-count-up-raf", "idle");
     });
+
+});
+
+test.describe("Cross-browser personal growth report acceptance", () => {
+    test("keeps the personal growth chart contained, readable, and still when motion is off", async ({ page }) => {
+        let consolePhase = "setup";
+        const consoleIssues: Array<{ phase: string; type: string; text: string; url: string }> = [];
+        const pageErrors: Array<{ phase: string; message: string }> = [];
+        page.on("console", message => {
+            if (message.type() !== "warning" && message.type() !== "error") return;
+            consoleIssues.push({ phase: consolePhase, type: message.type(), text: message.text(), url: message.location().url });
+        });
+        page.on("pageerror", error => {
+            pageErrors.push({ phase: consolePhase, message: error.stack || error.message });
+        });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.addInitScript(() => {
+            const forceMotion = window.sessionStorage.getItem("qa_growth_motion") === "on";
+            window.localStorage.setItem("omr_settings", JSON.stringify({ theme: { motion: false } }));
+            if (forceMotion) {
+                window.localStorage.setItem("omr_settings", JSON.stringify({ theme: { motion: true } }));
+            }
+        });
+        consolePhase = "showcase-dashboard";
+        await loginAsShowcaseTeacher(page);
+        await page.goto("/teacher/dashboard?showcase=1&tab=student");
+        await page.getByRole("link", { name: /결과 분석 열기/ }).first().click();
+        consolePhase = "report";
+        await page.getByRole("tab", { name: "리포트", exact: true }).click();
+
+        const growth = page.getByRole("region", { name: "개인 성장", exact: true });
+        await expect(growth).toBeVisible();
+        const chartShell = growth.getByRole("region", { name: "개인 성장 그래프 가로 스크롤 영역" });
+        await expect(chartShell).toBeVisible();
+        const requiredViewports = [
+            { width: 1440, height: 900 },
+            { width: 1024, height: 768 },
+            { width: 760, height: 844 },
+            { width: 390, height: 844 },
+            { width: 320, height: 720 },
+        ];
+        const viewportAudits: Array<{
+            width: number;
+            actualViewportWidth: number;
+            chartClientWidth: number;
+            chartScrollWidth: number;
+            documentClientWidth: number;
+            documentScrollWidth: number;
+            overflowX: string;
+            horizontalScrollRegions: string[];
+            animated: string[];
+        }> = [];
+
+        for (const viewport of requiredViewports) {
+            await page.setViewportSize(viewport);
+            await expect(chartShell).toBeVisible();
+            const audit = await chartShell.evaluate(element => {
+                const root = document.documentElement;
+                const body = document.body;
+                const animated = Array.from(element.querySelectorAll("*"))
+                    .filter(node => getComputedStyle(node).animationName !== "none")
+                    .map(node => getComputedStyle(node).animationName);
+                const horizontalScrollRegions = Array.from(document.querySelectorAll<HTMLElement>("*"))
+                    .filter(node => {
+                        const overflowX = getComputedStyle(node).overflowX;
+                        return node.scrollWidth > node.clientWidth && (overflowX === "auto" || overflowX === "scroll");
+                    })
+                    .map(node => node.getAttribute("aria-label") || node.tagName.toLowerCase());
+                return {
+                    actualViewportWidth: window.innerWidth,
+                    chartClientWidth: element.clientWidth,
+                    chartScrollWidth: element.scrollWidth,
+                    documentClientWidth: root.clientWidth,
+                    documentScrollWidth: Math.max(root.scrollWidth, body.scrollWidth),
+                    overflowX: getComputedStyle(element).overflowX,
+                    horizontalScrollRegions,
+                    animated,
+                };
+            });
+            viewportAudits.push({ width: viewport.width, ...audit });
+        }
+
+        expect(viewportAudits.map(audit => audit.width)).toEqual(requiredViewports.map(viewport => viewport.width));
+        for (const audit of viewportAudits) {
+            expect(audit.actualViewportWidth, `actual viewport at ${audit.width}px`).toBe(audit.width);
+            expect(audit.documentScrollWidth, `document overflow at ${audit.width}px`).toBe(audit.documentClientWidth);
+        }
+        for (const width of [760, 320]) {
+            const audit = viewportAudits.find(result => result.width === width)!;
+            expect(audit.chartScrollWidth, `chart should scroll at ${width}px`).toBeGreaterThan(audit.chartClientWidth);
+            expect(audit.overflowX).toBe("auto");
+            expect(audit.horizontalScrollRegions).toEqual(["개인 성장 그래프 가로 스크롤 영역"]);
+        }
+        expect(viewportAudits.find(audit => audit.width === 390)!.animated).toEqual([]);
+        await expect(growth.getByText(/등 \/ \d+명/).first()).toBeVisible();
+        await growth.getByRole("tab", { name: "추세만" }).click();
+        await expect(growth.getByRole("tab", { name: "추세만" })).toHaveAttribute("aria-selected", "true");
+        await expect(chartShell).toBeVisible();
+
+        const headerContainment = await page.locator("header .header-content").evaluate(element => {
+            const headerRect = element.closest("header")!.getBoundingClientRect();
+            const childRects = Array.from(element.children).map(child => child.getBoundingClientRect());
+            return {
+                headerTop: headerRect.top,
+                headerBottom: headerRect.bottom,
+                children: childRects.map(rect => ({ top: rect.top, bottom: rect.bottom })),
+            };
+        });
+        for (const child of headerContainment.children) {
+            expect(child.top).toBeGreaterThanOrEqual(headerContainment.headerTop);
+            expect(child.bottom).toBeLessThanOrEqual(headerContainment.headerBottom);
+        }
+
+        await page.evaluate(() => window.sessionStorage.setItem("qa_growth_motion", "on"));
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        consolePhase = "reduced-reload";
+        await page.reload();
+        const reducedGrowth = page.getByRole("region", { name: "개인 성장", exact: true });
+        await expect(reducedGrowth).toBeVisible();
+        const reducedAnimations = await reducedGrowth.locator("[data-testid='growth-chart-shell'] *").evaluateAll(elements => (
+            elements
+                .filter(element => getComputedStyle(element).animationName !== "none")
+                .map(element => getComputedStyle(element).animationName)
+        ));
+        expect(reducedAnimations).toEqual([]);
+
+        await page.setViewportSize({ width: 1024, height: 768 });
+        consolePhase = "print";
+        await page.emulateMedia({ media: "print", reducedMotion: "reduce" });
+        const printTable = reducedGrowth.getByRole("table", { name: "개인 성장 데이터" });
+        await expect(printTable).toBeVisible();
+        const printChartPresentation = await reducedGrowth.locator("[data-testid='growth-chart-shell']").evaluate(element => {
+            const style = getComputedStyle(element.parentElement!);
+            return { clipPath: style.clipPath, opacity: style.opacity, width: style.width };
+        });
+        expect(printChartPresentation).toEqual({ clipPath: "inset(50%)", opacity: "0", width: "1px" });
+        expect(
+            consoleIssues.filter(issue => /width\(0\).*height\(0\).*chart/i.test(issue.text)),
+            JSON.stringify(consoleIssues, null, 2),
+        ).toEqual([]);
+        expect(
+            consoleIssues.filter(issue => issue.type === "error"),
+            JSON.stringify(consoleIssues, null, 2),
+        ).toEqual([]);
+        expect(pageErrors, JSON.stringify(pageErrors, null, 2)).toEqual([]);
+    });
+});
+
+test.describe("UI-UX PROMAX layout audit continued", () => {
+    test.skip(({ browserName }) => browserName !== "chromium", "Layout audit runs on Chromium only.");
 
     test("keeps one visible landing landmark and one role-specific level-one heading", async ({ browser }) => {
         const landingStates = [

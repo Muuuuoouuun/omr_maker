@@ -90,6 +90,7 @@ import {
     KPI,
     MiniStat,
     MiniRegionMetric,
+    RegionalAverageMetric,
     SortableHeaderButton,
     GroupProfileModal,
     StudentProfileModal,
@@ -1477,7 +1478,7 @@ function ManageUsersInner() {
                                                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.35rem' }}>
                                                             <MiniRegionMetric label="학생" value={`${scope.studentCount}명`} />
                                                             <MiniRegionMetric label="반" value={`${scope.groupCount}개`} />
-                                                            <MiniRegionMetric label="평균" value={`${scope.averageScore}점`} />
+                                                            <RegionalAverageMetric averageScore={scope.averageScore} />
                                                         </div>
                                                         <div style={{ marginTop: '0.55rem', fontSize: '0.72rem', color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                                             원시험 {scope.attemptCount}건 · 재시험 {scope.retakeAttemptCount}건 · 시험 {scope.examCount}개

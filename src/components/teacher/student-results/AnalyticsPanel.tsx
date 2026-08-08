@@ -9,10 +9,8 @@ import type {
     LearningRecommendation,
     WeaknessGroup,
 } from "@/lib/premiumAnalytics";
-import type { StudentProfileInsight } from "@/lib/studentProfileAnalytics";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import StatusPill from "@/components/dashboard/StatusPill";
-import CumulativeGrowthPanel, { type CumulativeLoadStatus } from "./CumulativeGrowthPanel";
 import styles from "./StudentResultHub.module.css";
 
 export interface CurrentExamAnalyticsData {
@@ -27,12 +25,6 @@ interface AnalyticsPanelProps {
     attempt: Attempt;
     exam?: Exam;
     data: CurrentExamAnalyticsData | null;
-    cumulativeInsight: StudentProfileInsight | null;
-    cumulativeStatus: CumulativeLoadStatus;
-    cumulativeError?: string;
-    rosterMatched: boolean;
-    studentGrowthReportsEnabled: boolean;
-    onRetryCumulative: () => void;
 }
 
 function formatAnswer(answer?: number): string {
@@ -101,12 +93,6 @@ export default function AnalyticsPanel({
     attempt,
     exam,
     data,
-    cumulativeInsight,
-    cumulativeStatus,
-    cumulativeError,
-    rosterMatched,
-    studentGrowthReportsEnabled,
-    onRetryCumulative,
 }: AnalyticsPanelProps) {
     const [wrongExpanded, setWrongExpanded] = useState(false);
 
@@ -119,16 +105,6 @@ export default function AnalyticsPanel({
                         시험 정보를 불러오지 못했습니다. 제출 당시 저장된 점수와 제출 정보는 상단 요약과 답안 탭에서 계속 확인할 수 있습니다.
                     </p>
                 </section>
-                <CumulativeGrowthPanel
-                    titleId="analytics-growth-title"
-                    insight={cumulativeInsight}
-                    status={cumulativeStatus}
-                    error={cumulativeError}
-                    rosterMatched={rosterMatched}
-                    enabled={studentGrowthReportsEnabled}
-                    lockedDescription="현재 시험 진단은 계속 볼 수 있으며, 누적 성장 추이는 Pro 이상에서 확인할 수 있습니다."
-                    onRetry={onRetryCumulative}
-                />
             </div>
         );
     }
@@ -207,16 +183,6 @@ export default function AnalyticsPanel({
                 )}
             </section>
 
-            <CumulativeGrowthPanel
-                titleId="analytics-growth-title"
-                insight={cumulativeInsight}
-                status={cumulativeStatus}
-                error={cumulativeError}
-                rosterMatched={rosterMatched}
-                enabled={studentGrowthReportsEnabled}
-                lockedDescription="현재 시험 진단은 계속 볼 수 있으며, 누적 성장 추이는 Pro 이상에서 확인할 수 있습니다."
-                onRetry={onRetryCumulative}
-            />
         </div>
     );
 }
