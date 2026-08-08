@@ -1053,7 +1053,7 @@ function TeacherDashboard() {
                     </div>
                 )}
 
-                {!isDashboardResolving && !isRealDashboardEmpty && !isMockupAccount && activeTab !== "overview" && <div
+                {!isDashboardResolving && !isRealDashboardEmpty && !isMockupAccount && activeTab !== "overview" && activeTab !== "exam" && <div
                     className="dashboard-analysis-actions"
                     aria-label="분석 다음 조치"
                     style={{
