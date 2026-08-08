@@ -11,8 +11,12 @@ import {
 } from "../../scripts/verify-production-deployment.mjs";
 
 const PROJECT_REF = "production-project-ref";
-const BUILD = "a".repeat(40);
+const BUILD = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+    encoding: "utf8",
+}).trim();
 const VERSION = "202608060029";
+const PREVIEW_DEPLOYMENT_ID = "preview_deployment:production-42";
+const PREVIEW_ARTIFACT_DIGEST = `sha256:${"b".repeat(64)}`;
 const READINESS_TOKEN = "readiness-token-which-is-at-least-32-bytes";
 const ANON_KEY = "anon-key-which-is-at-least-32-random-bytes";
 const AUTH_JWT = `eyJhbGciOiJIUzI1NiJ9.${"a".repeat(32)}.${"b".repeat(32)}`;
@@ -28,6 +32,8 @@ function env() {
         OMR_READINESS_TOKEN: READINESS_TOKEN,
         OMR_PRODUCTION_EXPECTED_BUILD: BUILD,
         OMR_PRODUCTION_EXPECTED_READINESS_VERSION: VERSION,
+        OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID: PREVIEW_DEPLOYMENT_ID,
+        OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: PREVIEW_ARTIFACT_DIGEST,
     };
 }
 
@@ -121,7 +127,7 @@ describe("hosted production deployment verification", () => {
         expect(JSON.parse(result.stdout)).toMatchObject({ status: "unverified" });
     });
 
-    it("binds the exact host, build, readiness version, and Supabase project hash", () => {
+    it("binds the checked-out verifier SHA, release identity, readiness version, and Supabase project hash", () => {
         const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-contract-"));
         const config = resolveProductionDeploymentConfig({
             argv: [
@@ -137,11 +143,57 @@ describe("hosted production deployment verification", () => {
             supabaseUrl: `https://${PROJECT_REF}.supabase.co`,
             productionHost: "app.example.com",
             expectedBuild: BUILD,
+            verifierSha: BUILD,
+            previewDeploymentId: PREVIEW_DEPLOYMENT_ID,
+            previewArtifactDigest: PREVIEW_ARTIFACT_DIGEST,
             expectedReadinessVersion: VERSION,
             databaseProjectRefHash: createHash("sha256").update(PROJECT_REF).digest("hex"),
         });
         expect(JSON.stringify(config)).not.toContain(READINESS_TOKEN);
         expect(JSON.stringify(config)).not.toContain(SERVICE_KEY);
+    });
+
+    it("fails closed unless the expected build is the checked-out verifier HEAD", () => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-sha-"));
+        expect(() => resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: { ...env(), OMR_PRODUCTION_EXPECTED_BUILD: "f".repeat(40) },
+            cwd: process.cwd(),
+        })).toThrow(/verifier.*expected build|expected build.*verifier/i);
+    });
+
+    it("rejects a non-canonical expected build even when it identifies the same commit", () => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-canonical-sha-"));
+        expect(() => resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: { ...env(), OMR_PRODUCTION_EXPECTED_BUILD: BUILD.toUpperCase() },
+            cwd: process.cwd(),
+        })).toThrow(/expected production build.*invalid/i);
+    });
+
+    it.each([
+        ["missing deployment ID", "OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID", undefined],
+        ["malformed deployment ID", "OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID", "preview deployment/42"],
+        ["missing artifact digest", "OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST", undefined],
+        ["short artifact digest", "OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST", "sha256:abcdef"],
+        ["uppercase artifact digest", "OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST", `sha256:${"A".repeat(64)}`],
+    ])("fails closed for a %s", (_label, key, value) => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-identity-"));
+        const invalidEnv: Record<string, string | undefined> = { ...env(), [key]: value };
+        expect(() => resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: invalidEnv,
+            cwd: process.cwd(),
+        })).toThrow(/preview.*missing|preview.*invalid/i);
     });
 
     it("requires ready health, direct service readiness, and both anon/authenticated table denials", async () => {
@@ -168,6 +220,12 @@ describe("hosted production deployment verification", () => {
         expect(JSON.stringify(result)).not.toContain(ANON_KEY);
         expect(JSON.stringify(result)).not.toContain(AUTH_JWT);
         expect(JSON.stringify(result)).not.toContain(SERVICE_KEY);
+        expect(result.releaseIdentity).toEqual({
+            verifierSha: BUILD,
+            deployedSha: BUILD,
+            previewDeploymentId: PREVIEW_DEPLOYMENT_ID,
+            previewArtifactDigest: PREVIEW_ARTIFACT_DIGEST,
+        });
     });
 
     it.each([
@@ -195,7 +253,7 @@ describe("hosted production deployment verification", () => {
         expect(workflow).toContain("environment: production");
         expect(workflow).toContain("upload-artifact");
         expect(workflow).toContain("github.event.repository.default_branch");
-        expect(workflow).not.toContain('ref: ${{ inputs.expected_build }}');
+        expect(workflow).toContain('ref: ${{ inputs.expected_build }}');
         expect(execFileSync(process.execPath, ["--check", "scripts/verify-production-deployment.mjs"], { encoding: "utf8" })).toBe("");
     });
 });

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,8 @@ import { probeStaticAssetCompression } from "./verify-initial-operations.mjs";
 const GIT_SHA = /^[a-f0-9]{40}$/;
 const READINESS_VERSION = /^\d{12}$/;
 const PROJECT_REF = /^[a-z0-9][a-z0-9-]{2,62}$/;
+const PREVIEW_DEPLOYMENT_ID = /^[A-Za-z0-9._:-]{3,200}$/;
+const PREVIEW_ARTIFACT_DIGEST = /^sha256:[a-f0-9]{16,128}$/;
 const MAX_RESPONSE_BYTES = 32 * 1024;
 const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
@@ -79,6 +82,22 @@ function safeOutputPath(value, cwd) {
     return output;
 }
 
+function resolveVerifierSha(cwd) {
+    let verifierSha;
+    try {
+        verifierSha = clean(execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+            cwd,
+            encoding: "utf8",
+            env: { PATH: process.env.PATH ?? "" },
+            stdio: ["ignore", "pipe", "ignore"],
+        }));
+    } catch {
+        throw new Error("Verifier checkout HEAD is missing or invalid");
+    }
+    if (!GIT_SHA.test(verifierSha)) throw new Error("Verifier checkout HEAD is missing or invalid");
+    return verifierSha;
+}
+
 export function resolveProductionDeploymentConfig(input) {
     const args = parseArgs(input?.argv ?? []);
     const env = input?.env ?? {};
@@ -89,11 +108,21 @@ export function resolveProductionDeploymentConfig(input) {
     const database = strictOrigin(env.OMR_PRODUCTION_SUPABASE_URL, "Production Supabase URL", ".supabase.co");
     const projectRef = database.hostname.match(/^([a-z0-9-]+)\.supabase\.co$/)?.[1] ?? "";
     if (!PROJECT_REF.test(projectRef)) throw new Error("Production Supabase project ref is invalid");
-    const expectedBuild = clean(env.OMR_PRODUCTION_EXPECTED_BUILD).toLowerCase();
+    const expectedBuild = clean(env.OMR_PRODUCTION_EXPECTED_BUILD);
     const expectedReadinessVersion = clean(env.OMR_PRODUCTION_EXPECTED_READINESS_VERSION);
     if (!GIT_SHA.test(expectedBuild)) throw new Error("Expected production build is missing or invalid");
+    const verifierSha = resolveVerifierSha(input.cwd);
+    if (verifierSha !== expectedBuild) throw new Error("Verifier checkout HEAD does not match expected build");
     if (!READINESS_VERSION.test(expectedReadinessVersion)) {
         throw new Error("Expected readiness version is missing or invalid");
+    }
+    const previewDeploymentId = clean(env.OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID);
+    if (!PREVIEW_DEPLOYMENT_ID.test(previewDeploymentId)) {
+        throw new Error("Preview deployment ID is missing or invalid");
+    }
+    const previewArtifactDigest = clean(env.OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST);
+    if (!PREVIEW_ARTIFACT_DIGEST.test(previewArtifactDigest)) {
+        throw new Error("Preview artifact digest is missing or invalid");
     }
     const readinessToken = strongSecret(env.OMR_READINESS_TOKEN, "Readiness token");
     const anonKey = strongSecret(env.OMR_PRODUCTION_SUPABASE_ANON_KEY, "Production anon key");
@@ -108,6 +137,9 @@ export function resolveProductionDeploymentConfig(input) {
         supabaseUrl: database.origin,
         databaseProjectRefHash: createHash("sha256").update(projectRef).digest("hex"),
         expectedBuild,
+        verifierSha,
+        previewDeploymentId,
+        previewArtifactDigest,
         expectedReadinessVersion,
         outputPath: safeOutputPath(args.outputPath, input.cwd),
     };
@@ -238,6 +270,12 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
         verifiedAt: now.toISOString(),
         productionHost: config.productionHost,
         build: config.expectedBuild,
+        releaseIdentity: Object.freeze({
+            verifierSha: config.verifierSha,
+            deployedSha: health.body.build,
+            previewDeploymentId: config.previewDeploymentId,
+            previewArtifactDigest: config.previewArtifactDigest,
+        }),
         readinessVersion: config.expectedReadinessVersion,
         databaseProjectRefHash: config.databaseProjectRefHash,
         access,

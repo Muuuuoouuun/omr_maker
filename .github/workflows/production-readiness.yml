@@ -7,6 +7,14 @@ on:
         description: Full 40-character Git SHA deployed to production
         required: true
         type: string
+      preview_deployment_id:
+        description: Immutable preview deployment identifier
+        required: true
+        type: string
+      preview_artifact_digest:
+        description: SHA-256 digest of the verified preview artifact
+        required: true
+        type: string
       expected_readiness_version:
         description: Expected Supabase readiness contract version
         required: true
@@ -24,8 +32,7 @@ jobs:
   verify-hosted-boundary:
     name: Hosted build · readiness · access denials
     # Production secrets may only reach workflow code from the protected
-    # default branch. expected_build identifies the deployed artifact; it is
-    # deliberately never used as an executable checkout ref.
+    # default branch. The immutable checkout below binds verifier and artifact.
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     environment: production
@@ -34,7 +41,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ inputs.expected_build }}
+      - name: Verify immutable verifier checkout
+        env:
+          OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
+        run: test "$(git rev-parse --verify HEAD)" = "$OMR_PRODUCTION_EXPECTED_BUILD"
       - uses: actions/setup-node@v4
         with:
           node-version: "22.13.0"
@@ -51,6 +62,8 @@ jobs:
           OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY }}
           OMR_READINESS_TOKEN: ${{ secrets.OMR_READINESS_TOKEN }}
           OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
+          OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID: ${{ inputs.preview_deployment_id }}
+          OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}
           OMR_PRODUCTION_EXPECTED_READINESS_VERSION: ${{ inputs.expected_readiness_version }}
         run: >-
           npm run ops:verify:production --
