@@ -372,6 +372,9 @@ describe("production server-only database boundary", () => {
         expect(profile).toContain("public.omr_operational_job_status");
         expect(profile).toContain("public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)");
         expect(profile).toContain("public.omr_read_operational_job_status_v1(text)");
+        expect(profile).toMatch(
+            /pg_get_function_result\([\s\S]{0,240}omr_record_operational_job_status_v1\(text,text,timestamptz,text,text\)[\s\S]{0,120}= 'jsonb'/i,
+        );
     });
 
     it("keeps operational job heartbeat state RPC-only, bounded, and monotonic", () => {
@@ -392,6 +395,10 @@ describe("production server-only database boundary", () => {
         expect(operationalJobStatusMigration).toMatch(
             /count\(\*\)[\s\S]*omr_remote_asset_cleanup_queue[\s\S]*status = 'dead'/i,
         );
+        expect(operationalJobStatusMigration).toMatch(
+            /omr_record_operational_job_status_v1[\s\S]*returns jsonb/i,
+        );
+        expect(operationalJobStatusMigration).toContain("'deadCount', v_dead_count");
         expect(operationalJobStatusMigration).toContain("'dead_backlog'");
         expect(operationalJobStatusMigration).toMatch(
             /where excluded\.last_attempt_at > current_status\.last_attempt_at/i,
@@ -429,14 +436,19 @@ describe("production server-only database boundary", () => {
     });
 
     it("documents the canonical final-schema contract and exact table count", () => {
+        const expectedCanonicalTableCount = CANONICAL_TABLES.length;
         for (const document of [
             productionReadiness,
             read("docs/operations/backup-restore-runbook.md"),
             supabaseReadme,
         ]) {
             expect(document).toContain("schema.sql baseline + sorted migrations = final schema");
-            expect(document).toMatch(/canonical 39(?:개| tables)/i);
+            expect(document).toMatch(
+                new RegExp(`canonical ${expectedCanonicalTableCount}(?:개| tables)`, "i"),
+            );
         }
+        expect(read("docs/initial-ops-user-journey-audit-2026-08-07.md"))
+            .toContain(`${expectedCanonicalTableCount}개 canonical 테이블 FORCE RLS`);
     });
 
     it("integrates durable rate limits, cleanup epochs, revisioned exams, and feedback CAS into the exact boundary", () => {

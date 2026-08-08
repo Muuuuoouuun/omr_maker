@@ -5374,6 +5374,7 @@ $$;
 do $$
 declare
     v_columns text[];
+    v_recorded jsonb;
     v_snapshot jsonb;
     v_rejected integer := 0;
 begin
@@ -5458,17 +5459,21 @@ begin
     if public.omr_read_operational_job_status_v1('asset_gc') is not null then
         raise exception 'operational job status missing-row read was not null';
     end if;
-    if not public.omr_record_operational_job_status_v1(
+    v_recorded := public.omr_record_operational_job_status_v1(
         'asset_gc', 'healthy', timestamptz '2026-08-08 02:00:00+00',
         '0123456789abcdef0123456789abcdef01234567', null
-    ) then
-        raise exception 'operational job success was not persisted';
+    );
+    if v_recorded->>'status' <> 'healthy'
+       or v_recorded->>'deadCount' <> '0' then
+        raise exception 'operational job success did not return authoritative status';
     end if;
-    if not public.omr_record_operational_job_status_v1(
+    v_recorded := public.omr_record_operational_job_status_v1(
         'asset_gc', 'failed', timestamptz '2026-08-08 03:00:00+00',
         '0123456789abcdef0123456789abcdef01234567', 'cleanup_failed'
-    ) then
-        raise exception 'operational job failure was not persisted';
+    );
+    if v_recorded->>'status' <> 'failed'
+       or v_recorded->>'failureCategory' <> 'cleanup_failed' then
+        raise exception 'operational job failure did not return authoritative status';
     end if;
     v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
     if v_snapshot->>'status' <> 'failed'
@@ -5479,14 +5484,19 @@ begin
        or v_snapshot->>'deadCount' <> '0' then
         raise exception 'operational job failure advanced last success';
     end if;
-    if public.omr_record_operational_job_status_v1(
+    v_recorded := public.omr_record_operational_job_status_v1(
         'asset_gc', 'healthy', timestamptz '2026-08-08 01:00:00+00',
         'ffffffffffffffffffffffffffffffffffffffff', null
-    ) or public.omr_record_operational_job_status_v1(
+    );
+    if v_recorded is distinct from v_snapshot then
+        raise exception 'operational job stale write returned non-authoritative state';
+    end if;
+    v_recorded := public.omr_record_operational_job_status_v1(
         'asset_gc', 'healthy', timestamptz '2026-08-08 03:00:00+00',
         'ffffffffffffffffffffffffffffffffffffffff', null
-    ) then
-        raise exception 'operational job stale write reported as applied';
+    );
+    if v_recorded is distinct from v_snapshot then
+        raise exception 'operational job same-time write returned non-authoritative state';
     end if;
     if public.omr_read_operational_job_status_v1('asset_gc') is distinct from v_snapshot
        or (select count(*) from public.omr_operational_job_status where job_key = 'asset_gc') <> 1 then
@@ -5502,11 +5512,14 @@ begin
         'organizations/live-org-a/operational-dead-fixture.pdf',
         'asset_replaced', 'dead', 10
     );
-    if not public.omr_record_operational_job_status_v1(
+    v_recorded := public.omr_record_operational_job_status_v1(
         'asset_gc', 'healthy', timestamptz '2026-08-08 04:00:00+00',
         '0123456789abcdef0123456789abcdef01234567', null
-    ) then
-        raise exception 'operational job clean run with dead backlog was not persisted';
+    );
+    if v_recorded->>'status' <> 'failed'
+       or v_recorded->>'deadCount' <> '1'
+       or v_recorded->>'failureCategory' <> 'dead_backlog' then
+        raise exception 'operational job clean run did not return durable dead backlog';
     end if;
     v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
     if v_snapshot->>'status' <> 'failed'
@@ -5518,11 +5531,14 @@ begin
     end if;
     delete from public.omr_remote_asset_cleanup_queue
      where source_id = 'operational-dead-fixture';
-    if not public.omr_record_operational_job_status_v1(
+    v_recorded := public.omr_record_operational_job_status_v1(
         'asset_gc', 'healthy', timestamptz '2026-08-08 05:00:00+00',
         '0123456789abcdef0123456789abcdef01234567', null
-    ) then
-        raise exception 'operational job did not recover after dead backlog remediation';
+    );
+    if v_recorded->>'status' <> 'healthy'
+       or v_recorded->>'deadCount' <> '0'
+       or v_recorded->>'failureCategory' is not null then
+        raise exception 'operational job recovery did not return authoritative status';
     end if;
     v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
     if v_snapshot->>'status' <> 'healthy'

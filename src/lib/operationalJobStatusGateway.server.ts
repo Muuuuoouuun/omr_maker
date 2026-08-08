@@ -139,7 +139,7 @@ export async function recordOperationalJobStatus(
         buildSha: string;
         failureCategory: string | null;
     },
-): Promise<void> {
+): Promise<OperationalJobStatus> {
     const attemptedAt = normalizedTimestamp(input.attemptedAt);
     const buildSha = normalizedBuildSha(input.buildSha);
     const failureCategory = normalizedFailureCategory(input.failureCategory);
@@ -160,7 +160,10 @@ export async function recordOperationalJobStatus(
             p_build_sha: buildSha,
             p_failure_category: failureCategory,
         });
-        if (result.error || result.data !== true) throw new Error("rpc failed");
+        if (result.error) throw new Error("rpc failed");
+        const persisted = parseOperationalJobStatus(result.data);
+        if (!persisted) throw new Error("invalid row");
+        return persisted;
     } catch {
         throw new Error("Operational job status record failed");
     }

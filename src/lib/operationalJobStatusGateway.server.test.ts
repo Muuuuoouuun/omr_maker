@@ -56,22 +56,40 @@ describe("operational job status gateway", () => {
         }
     });
 
-    it("records only a bounded attempt through the canonical RPC", async () => {
-        const client = clientWithResult(true);
+    it("returns the authoritative bounded status persisted by the canonical RPC", async () => {
+        const persisted = {
+            status: "failed",
+            lastAttemptAt: "2026-08-08T00:00:00.000Z",
+            lastSuccessAt: "2026-08-07T00:00:00.000Z",
+            deadCount: 2,
+            buildSha: BUILD_SHA,
+            failureCategory: "dead_backlog",
+        };
+        const client = clientWithResult(persisted);
         await expect(recordOperationalJobStatus(client, {
             jobKey: "asset_gc",
-            status: "failed",
+            status: "healthy",
             attemptedAt: "2026-08-08T00:00:00.000Z",
             buildSha: BUILD_SHA,
-            failureCategory: "cleanup_failed",
-        })).resolves.toBeUndefined();
+            failureCategory: null,
+        })).resolves.toEqual(persisted);
         expect(client.rpc).toHaveBeenCalledWith("omr_record_operational_job_status_v1", {
             p_job_key: "asset_gc",
-            p_status: "failed",
+            p_status: "healthy",
             p_attempted_at: "2026-08-08T00:00:00.000Z",
             p_build_sha: BUILD_SHA,
-            p_failure_category: "cleanup_failed",
+            p_failure_category: null,
         });
+    });
+
+    it("fails closed when the record RPC does not return an authoritative status", async () => {
+        await expect(recordOperationalJobStatus(clientWithResult(true), {
+            jobKey: "asset_gc",
+            status: "healthy",
+            attemptedAt: "2026-08-08T00:00:00.000Z",
+            buildSha: BUILD_SHA,
+            failureCategory: null,
+        })).rejects.toThrow("Operational job status record failed");
     });
 
     it("rejects malformed build SHA and failure category before calling the RPC", async () => {

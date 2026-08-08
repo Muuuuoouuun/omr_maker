@@ -72,8 +72,9 @@ export async function GET(request: Request): Promise<Response> {
         });
     }
 
+    let persistedStatus: Awaited<ReturnType<typeof recordOperationalJobStatus>>;
     try {
-        await recordOperationalJobStatus(client, {
+        persistedStatus = await recordOperationalJobStatus(client, {
             jobKey: "asset_gc",
             status: result.failed > 0 ? "failed" : "healthy",
             attemptedAt: new Date().toISOString(),
@@ -88,12 +89,14 @@ export async function GET(request: Request): Promise<Response> {
         });
     }
 
+    const durableFailure = persistedStatus.status !== "healthy"
+        || persistedStatus.deadCount !== 0;
     const heartbeat = await reportOperationalHeartbeat(
         "asset-gc",
-        result.failed > 0 ? "degraded" : "ok",
+        durableFailure ? "degraded" : "ok",
         result,
     ).catch(() => ({ status: "rejected" as const }));
-    if (result.failed > 0) {
+    if (durableFailure) {
         return Response.json({ status: "unavailable" }, {
             status: 503,
             headers: NO_STORE_HEADERS,

@@ -644,6 +644,9 @@ begin
         and pg_catalog.to_regprocedure(
             'public.omr_read_operational_job_status_v1(text)'
         ) is not null
+        and pg_catalog.pg_get_function_result(
+            'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure
+        ) = 'jsonb'
         and pg_catalog.has_function_privilege(
             'service_role',
             'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',

@@ -63,7 +63,7 @@ create function public.omr_record_operational_job_status_v1(
     p_build_sha text,
     p_failure_category text
 )
-returns boolean
+returns jsonb
 language plpgsql
 security definer
 set search_path = ''
@@ -71,10 +71,10 @@ set statement_timeout = '5s'
 set lock_timeout = '2s'
 as $$
 declare
-    v_applied_count integer;
     v_dead_count bigint;
     v_effective_status text;
     v_effective_failure_category text;
+    v_job_status public.omr_operational_job_status%rowtype;
 begin
     if p_job_key is distinct from 'asset_gc'
        or p_status not in ('healthy', 'failed')
@@ -146,8 +146,21 @@ begin
             failure_category = excluded.failure_category
         where excluded.last_attempt_at > current_status.last_attempt_at;
 
-    get diagnostics v_applied_count = row_count;
-    return v_applied_count = 1;
+    select job_status.*
+      into strict v_job_status
+      from public.omr_operational_job_status job_status
+     where job_status.job_key = p_job_key;
+    return pg_catalog.jsonb_build_object(
+        'status', case when v_dead_count > 0 then 'failed' else v_job_status.status end,
+        'lastAttemptAt', v_job_status.last_attempt_at,
+        'lastSuccessAt', v_job_status.last_success_at,
+        'deadCount', v_dead_count,
+        'buildSha', v_job_status.build_sha,
+        'failureCategory', case
+            when v_dead_count > 0 and v_job_status.status = 'healthy' then 'dead_backlog'
+            else v_job_status.failure_category
+        end
+    );
 end;
 $$;
 
