@@ -15,6 +15,10 @@ on:
         description: SHA-256 digest of the verified preview artifact
         required: true
         type: string
+      preview_attestation_signature:
+        description: HMAC-SHA256 signature for the immutable preview identity
+        required: true
+        type: string
       expected_readiness_version:
         description: Expected Supabase readiness contract version
         required: true
@@ -42,10 +46,15 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.expected_build }}
-      - name: Verify immutable verifier checkout
+          fetch-depth: 0
+      - name: Verify trusted immutable verifier checkout
         env:
           OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
-        run: test "$(git rev-parse --verify HEAD)" = "$OMR_PRODUCTION_EXPECTED_BUILD"
+          OMR_PRODUCTION_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          test "$(git rev-parse --verify HEAD)" = "$OMR_PRODUCTION_EXPECTED_BUILD"
+          git rev-parse --verify "origin/$OMR_PRODUCTION_DEFAULT_BRANCH^{commit}" >/dev/null
+          git merge-base --is-ancestor "$OMR_PRODUCTION_EXPECTED_BUILD" "origin/$OMR_PRODUCTION_DEFAULT_BRANCH"
       - uses: actions/setup-node@v4
         with:
           node-version: "22.13.0"
@@ -64,6 +73,8 @@ jobs:
           OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
           OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID: ${{ inputs.preview_deployment_id }}
           OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}
+          OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE: ${{ inputs.preview_attestation_signature }}
+          OMR_RELEASE_ATTESTATION_SECRET: ${{ secrets.OMR_RELEASE_ATTESTATION_SECRET }}
           OMR_PRODUCTION_EXPECTED_READINESS_VERSION: ${{ inputs.expected_readiness_version }}
         run: >-
           npm run ops:verify:production --

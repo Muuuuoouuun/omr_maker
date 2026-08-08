@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { open } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, parse, relative, resolve, sep } from "node:path";
@@ -11,7 +11,8 @@ const GIT_SHA = /^[a-f0-9]{40}$/;
 const READINESS_VERSION = /^\d{12}$/;
 const PROJECT_REF = /^[a-z0-9][a-z0-9-]{2,62}$/;
 const PREVIEW_DEPLOYMENT_ID = /^[A-Za-z0-9._:-]{3,200}$/;
-const PREVIEW_ARTIFACT_DIGEST = /^sha256:[a-f0-9]{16,128}$/;
+const PREVIEW_ARTIFACT_DIGEST = /^sha256:[a-f0-9]{64}$/;
+const PREVIEW_ATTESTATION_SIGNATURE = /^[a-f0-9]{64}$/;
 const MAX_RESPONSE_BYTES = 32 * 1024;
 const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
@@ -67,6 +68,27 @@ function strongSecret(value, label) {
     return secret;
 }
 
+function releaseAttestationSecret(value) {
+    const secret = typeof value === "string" ? value : "";
+    const length = Buffer.byteLength(secret, "utf8");
+    if (length < 32 || length > 512 || /\s/.test(secret)) {
+        throw new Error("Release attestation secret is missing or invalid");
+    }
+    return secret;
+}
+
+function verifyPreviewIdentityAttestation({ expectedBuild, previewDeploymentId, previewArtifactDigest, signature, secret }) {
+    if (!PREVIEW_ATTESTATION_SIGNATURE.test(signature)) {
+        throw new Error("Release attestation signature is missing or invalid");
+    }
+    const payload = `${expectedBuild}\n${previewDeploymentId}\n${previewArtifactDigest}`;
+    const expectedSignature = createHmac("sha256", secret).update(payload, "utf8").digest();
+    const providedSignature = Buffer.from(signature, "hex");
+    if (!timingSafeEqual(expectedSignature, providedSignature)) {
+        throw new Error("Release attestation signature is missing or invalid");
+    }
+}
+
 function safeOutputPath(value, cwd) {
     const raw = clean(value);
     if (!isAbsolute(raw)) throw new Error("Production verification output is missing or invalid");
@@ -108,7 +130,9 @@ export function resolveProductionDeploymentConfig(input) {
     const database = strictOrigin(env.OMR_PRODUCTION_SUPABASE_URL, "Production Supabase URL", ".supabase.co");
     const projectRef = database.hostname.match(/^([a-z0-9-]+)\.supabase\.co$/)?.[1] ?? "";
     if (!PROJECT_REF.test(projectRef)) throw new Error("Production Supabase project ref is invalid");
-    const expectedBuild = clean(env.OMR_PRODUCTION_EXPECTED_BUILD);
+    const expectedBuild = typeof env.OMR_PRODUCTION_EXPECTED_BUILD === "string"
+        ? env.OMR_PRODUCTION_EXPECTED_BUILD
+        : "";
     const expectedReadinessVersion = clean(env.OMR_PRODUCTION_EXPECTED_READINESS_VERSION);
     if (!GIT_SHA.test(expectedBuild)) throw new Error("Expected production build is missing or invalid");
     const verifierSha = resolveVerifierSha(input.cwd);
@@ -116,19 +140,34 @@ export function resolveProductionDeploymentConfig(input) {
     if (!READINESS_VERSION.test(expectedReadinessVersion)) {
         throw new Error("Expected readiness version is missing or invalid");
     }
-    const previewDeploymentId = clean(env.OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID);
+    const previewDeploymentId = typeof env.OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID === "string"
+        ? env.OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID
+        : "";
     if (!PREVIEW_DEPLOYMENT_ID.test(previewDeploymentId)) {
         throw new Error("Preview deployment ID is missing or invalid");
     }
-    const previewArtifactDigest = clean(env.OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST);
+    const previewArtifactDigest = typeof env.OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST === "string"
+        ? env.OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST
+        : "";
     if (!PREVIEW_ARTIFACT_DIGEST.test(previewArtifactDigest)) {
         throw new Error("Preview artifact digest is missing or invalid");
     }
+    const releaseAttestation = releaseAttestationSecret(env.OMR_RELEASE_ATTESTATION_SECRET);
+    const previewAttestationSignature = typeof env.OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE === "string"
+        ? env.OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE
+        : "";
+    verifyPreviewIdentityAttestation({
+        expectedBuild,
+        previewDeploymentId,
+        previewArtifactDigest,
+        signature: previewAttestationSignature,
+        secret: releaseAttestation,
+    });
     const readinessToken = strongSecret(env.OMR_READINESS_TOKEN, "Readiness token");
     const anonKey = strongSecret(env.OMR_PRODUCTION_SUPABASE_ANON_KEY, "Production anon key");
     const authenticatedJwt = strongSecret(env.OMR_PRODUCTION_AUTHENTICATED_JWT, "Production authenticated JWT");
     const serviceRoleKey = strongSecret(env.OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY, "Production service role key");
-    if (new Set([readinessToken, anonKey, authenticatedJwt, serviceRoleKey]).size !== 4) {
+    if (new Set([readinessToken, anonKey, authenticatedJwt, serviceRoleKey, releaseAttestation]).size !== 5) {
         throw new Error("Production verification credentials must be distinct");
     }
     const config = {
@@ -140,6 +179,7 @@ export function resolveProductionDeploymentConfig(input) {
         verifierSha,
         previewDeploymentId,
         previewArtifactDigest,
+        previewIdentityAttested: true,
         expectedReadinessVersion,
         outputPath: safeOutputPath(args.outputPath, input.cwd),
     };
@@ -275,6 +315,7 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
             deployedSha: health.body.build,
             previewDeploymentId: config.previewDeploymentId,
             previewArtifactDigest: config.previewArtifactDigest,
+            previewIdentityAttested: config.previewIdentityAttested,
         }),
         readinessVersion: config.expectedReadinessVersion,
         databaseProjectRefHash: config.databaseProjectRefHash,

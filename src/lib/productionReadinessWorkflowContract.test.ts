@@ -3,9 +3,14 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const workflow = readFileSync(resolve(".github/workflows/production-readiness.yml"), "utf8");
+const defaultBranchOnly = "if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)";
+
+function hasDefaultBranchOnlyGate(candidate: string): boolean {
+    return candidate.split("\n").some((line) => line.trim() === defaultBranchOnly);
+}
 
 describe("production readiness workflow release identity", () => {
-    it.each(["preview_deployment_id", "preview_artifact_digest"])(
+    it.each(["preview_deployment_id", "preview_artifact_digest", "preview_attestation_signature"])(
         "requires the %s dispatch input",
         (input) => {
             expect(workflow).toMatch(new RegExp(
@@ -16,13 +21,37 @@ describe("production readiness workflow release identity", () => {
 
     it("checks out the exact expected build", () => {
         expect(workflow).toContain("          ref: ${{ inputs.expected_build }}");
+        expect(workflow).toContain("          fetch-depth: 0");
         expect(workflow).not.toContain("          ref: ${{ github.event.repository.default_branch }}");
     });
 
-    it("checks HEAD equality before installing any repository code", () => {
-        const headCheck = 'run: test "$(git rev-parse --verify HEAD)" = "$OMR_PRODUCTION_EXPECTED_BUILD"';
-        expect(workflow).toContain(`        ${headCheck}`);
-        expect(workflow.indexOf(headCheck)).toBeLessThan(workflow.indexOf("run: npm ci"));
+    it("rejects a workflow shape that is not restricted to the protected default branch", () => {
+        expect(hasDefaultBranchOnlyGate(workflow)).toBe(true);
+        expect(hasDefaultBranchOnlyGate(workflow.replace(defaultBranchOnly, "if: always()"))).toBe(false);
+        expect(hasDefaultBranchOnlyGate(workflow.replace(
+            defaultBranchOnly,
+            `${defaultBranchOnly} || github.ref == 'refs/heads/untrusted'`,
+        ))).toBe(false);
+    });
+
+    it("checks exact HEAD and default-branch ancestry before repository-controlled commands", () => {
+        const gateStart = workflow.indexOf("- name: Verify trusted immutable verifier checkout");
+        const setupNode = workflow.indexOf("- uses: actions/setup-node@v4");
+        const install = workflow.indexOf("run: npm ci");
+        const verifier = workflow.indexOf("- name: Verify hosted production deployment");
+        const gate = workflow.slice(gateStart, setupNode);
+        const runBlock = gate.slice(gate.indexOf("run: |"));
+
+        expect(gateStart).toBeGreaterThan(-1);
+        expect(gate).toContain("OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}");
+        expect(gate).toContain("OMR_PRODUCTION_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}");
+        expect(runBlock).toContain('test "$(git rev-parse --verify HEAD)" = "$OMR_PRODUCTION_EXPECTED_BUILD"');
+        expect(runBlock).toContain('git rev-parse --verify "origin/$OMR_PRODUCTION_DEFAULT_BRANCH^{commit}"');
+        expect(runBlock).toContain('git merge-base --is-ancestor "$OMR_PRODUCTION_EXPECTED_BUILD" "origin/$OMR_PRODUCTION_DEFAULT_BRANCH"');
+        expect(runBlock).not.toContain("${{");
+        expect(workflow.indexOf("git merge-base --is-ancestor")).toBeLessThan(setupNode);
+        expect(workflow.indexOf("git merge-base --is-ancestor")).toBeLessThan(install);
+        expect(workflow.indexOf("git merge-base --is-ancestor")).toBeLessThan(verifier);
     });
 
     it("passes preview identity through verifier environment without shell logging", () => {
@@ -32,7 +61,13 @@ describe("production readiness workflow release identity", () => {
         expect(workflow).toContain(
             "          OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}",
         );
-        expect(workflow).not.toMatch(/run:.*preview_(?:deployment_id|artifact_digest)/);
+        expect(workflow).toContain(
+            "          OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE: ${{ inputs.preview_attestation_signature }}",
+        );
+        expect(workflow).toContain(
+            "          OMR_RELEASE_ATTESTATION_SECRET: ${{ secrets.OMR_RELEASE_ATTESTATION_SECRET }}",
+        );
+        expect(workflow).not.toMatch(/run:.*preview_(?:deployment_id|artifact_digest|attestation_signature)/);
         expect(workflow).not.toMatch(/(?:echo|print|set -x).*OMR_PRODUCTION_/);
     });
 });

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -17,10 +17,19 @@ const BUILD = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
 const VERSION = "202608060029";
 const PREVIEW_DEPLOYMENT_ID = "preview_deployment:production-42";
 const PREVIEW_ARTIFACT_DIGEST = `sha256:${"b".repeat(64)}`;
+const RELEASE_ATTESTATION_SECRET = "release-attestation-secret-with-strong-entropy-42";
 const READINESS_TOKEN = "readiness-token-which-is-at-least-32-bytes";
 const ANON_KEY = "anon-key-which-is-at-least-32-random-bytes";
 const AUTH_JWT = `eyJhbGciOiJIUzI1NiJ9.${"a".repeat(32)}.${"b".repeat(32)}`;
 const SERVICE_KEY = "service-role-key-which-is-at-least-32-bytes";
+
+function signPreviewIdentity(secret: string): string {
+    return createHmac("sha256", secret)
+        .update(`${BUILD}\n${PREVIEW_DEPLOYMENT_ID}\n${PREVIEW_ARTIFACT_DIGEST}`, "utf8")
+        .digest("hex");
+}
+
+const PREVIEW_ATTESTATION_SIGNATURE = signPreviewIdentity(RELEASE_ATTESTATION_SECRET);
 
 function env() {
     return {
@@ -34,6 +43,8 @@ function env() {
         OMR_PRODUCTION_EXPECTED_READINESS_VERSION: VERSION,
         OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID: PREVIEW_DEPLOYMENT_ID,
         OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: PREVIEW_ARTIFACT_DIGEST,
+        OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE: PREVIEW_ATTESTATION_SIGNATURE,
+        OMR_RELEASE_ATTESTATION_SECRET: RELEASE_ATTESTATION_SECRET,
     };
 }
 
@@ -146,11 +157,14 @@ describe("hosted production deployment verification", () => {
             verifierSha: BUILD,
             previewDeploymentId: PREVIEW_DEPLOYMENT_ID,
             previewArtifactDigest: PREVIEW_ARTIFACT_DIGEST,
+            previewIdentityAttested: true,
             expectedReadinessVersion: VERSION,
             databaseProjectRefHash: createHash("sha256").update(PROJECT_REF).digest("hex"),
         });
         expect(JSON.stringify(config)).not.toContain(READINESS_TOKEN);
         expect(JSON.stringify(config)).not.toContain(SERVICE_KEY);
+        expect(JSON.stringify(config)).not.toContain(RELEASE_ATTESTATION_SECRET);
+        expect(JSON.stringify(config)).not.toContain(PREVIEW_ATTESTATION_SIGNATURE);
     });
 
     it("fails closed unless the expected build is the checked-out verifier HEAD", () => {
@@ -177,11 +191,24 @@ describe("hosted production deployment verification", () => {
         })).toThrow(/expected production build.*invalid/i);
     });
 
+    it("rejects whitespace-padded expected builds", () => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-padded-sha-"));
+        expect(() => resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: { ...env(), OMR_PRODUCTION_EXPECTED_BUILD: ` ${BUILD}` },
+            cwd: process.cwd(),
+        })).toThrow(/expected production build.*invalid/i);
+    });
+
     it.each([
         ["missing deployment ID", "OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID", undefined],
         ["malformed deployment ID", "OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID", "preview deployment/42"],
         ["missing artifact digest", "OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST", undefined],
-        ["short artifact digest", "OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST", "sha256:abcdef"],
+        ["63-character artifact digest", "OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST", `sha256:${"a".repeat(63)}`],
+        ["65-character artifact digest", "OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST", `sha256:${"a".repeat(65)}`],
         ["uppercase artifact digest", "OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST", `sha256:${"A".repeat(64)}`],
     ])("fails closed for a %s", (_label, key, value) => {
         const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-identity-"));
@@ -194,6 +221,50 @@ describe("hosted production deployment verification", () => {
             env: invalidEnv,
             cwd: process.cwd(),
         })).toThrow(/preview.*missing|preview.*invalid/i);
+    });
+
+    it.each([
+        ["missing secret", "OMR_RELEASE_ATTESTATION_SECRET", undefined],
+        ["short secret", "OMR_RELEASE_ATTESTATION_SECRET", "s".repeat(31)],
+        ["long secret", "OMR_RELEASE_ATTESTATION_SECRET", "s".repeat(513)],
+        ["secret containing whitespace", "OMR_RELEASE_ATTESTATION_SECRET", `${"s".repeat(32)} space`],
+        ["missing signature", "OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE", undefined],
+        ["malformed signature", "OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE", "g".repeat(64)],
+        ["incorrect signature", "OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE", "0".repeat(64)],
+    ])("fails closed for an attestation with a %s", (_label, key, value) => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-attestation-"));
+        const invalidEnv: Record<string, string | undefined> = { ...env(), [key]: value };
+        let failure: Error | undefined;
+        try {
+            resolveProductionDeploymentConfig({
+                argv: [
+                    "--confirm-production-host=app.example.com",
+                    `--output=${join(outputRoot, "release.json")}`,
+                ],
+                env: invalidEnv,
+                cwd: process.cwd(),
+            });
+        } catch (error) {
+            failure = error as Error;
+        }
+        expect(failure?.message).toMatch(/release attestation.*missing|release attestation.*invalid/i);
+        expect(failure?.message).not.toContain(String(value));
+    });
+
+    it("rejects a release attestation secret reused as another production credential", () => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-attestation-reuse-"));
+        expect(() => resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: {
+                ...env(),
+                OMR_RELEASE_ATTESTATION_SECRET: READINESS_TOKEN,
+                OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE: signPreviewIdentity(READINESS_TOKEN),
+            },
+            cwd: process.cwd(),
+        })).toThrow(/credentials.*distinct/i);
     });
 
     it("requires ready health, direct service readiness, and both anon/authenticated table denials", async () => {
@@ -220,11 +291,14 @@ describe("hosted production deployment verification", () => {
         expect(JSON.stringify(result)).not.toContain(ANON_KEY);
         expect(JSON.stringify(result)).not.toContain(AUTH_JWT);
         expect(JSON.stringify(result)).not.toContain(SERVICE_KEY);
+        expect(JSON.stringify(result)).not.toContain(RELEASE_ATTESTATION_SECRET);
+        expect(JSON.stringify(result)).not.toContain(PREVIEW_ATTESTATION_SIGNATURE);
         expect(result.releaseIdentity).toEqual({
             verifierSha: BUILD,
             deployedSha: BUILD,
             previewDeploymentId: PREVIEW_DEPLOYMENT_ID,
             previewArtifactDigest: PREVIEW_ARTIFACT_DIGEST,
+            previewIdentityAttested: true,
         });
     });
 
