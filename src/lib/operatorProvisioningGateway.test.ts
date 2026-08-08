@@ -155,4 +155,52 @@ describe("operator provisioning server gateway", () => {
             new Date("2026-08-08T00:00:00.000Z"),
         )).resolves.toEqual({ status: "unavailable", error: "dependency_unavailable" });
     });
+
+    it.each([
+        ["one-row array", [RPC_ROW]],
+        ["multiple-row array", [RPC_ROW, RPC_ROW]],
+        ["extra key", { ...RPC_ROW, secret: `${PASSWORD} ${VERIFIER}` }],
+        ["missing key", {
+            organizationId: RPC_ROW.organizationId,
+            accountId: RPC_ROW.accountId,
+            grantId: RPC_ROW.grantId,
+            plan: RPC_ROW.plan,
+            replayed: RPC_ROW.replayed,
+        }],
+        ["null", null],
+        ["nonplain", Object.assign(new Date(), RPC_ROW)],
+    ])("rejects a %s success envelope without leaking it", async (_label, data) => {
+        const result = await provisionPilotTeacherWithEncodedVerifier(
+            { ...INPUT, initialPassword: undefined, encodedVerifier: VERIFIER },
+            client({ data, error: null }),
+            new Date("2026-08-08T00:00:00.000Z"),
+        );
+        expect(result).toEqual({ status: "unavailable", error: "dependency_unavailable" });
+        expect(JSON.stringify(result)).not.toContain(PASSWORD);
+        expect(JSON.stringify(result)).not.toContain(VERIFIER);
+    });
+
+    it("rejects accessor envelopes without invoking getters or toJSON", async () => {
+        const getter = vi.fn(() => RPC_ROW.accountId);
+        const toJSON = vi.fn(() => ({ secret: PASSWORD }));
+        const data = {
+            organizationId: RPC_ROW.organizationId,
+            get accountId() { return getter(); },
+            grantId: RPC_ROW.grantId,
+            plan: RPC_ROW.plan,
+            expiresAt: RPC_ROW.expiresAt,
+            replayed: RPC_ROW.replayed,
+        };
+        Object.defineProperty(data, "toJSON", { value: toJSON, enumerable: false });
+
+        const result = await provisionPilotTeacherWithEncodedVerifier(
+            { ...INPUT, initialPassword: undefined, encodedVerifier: VERIFIER },
+            client({ data, error: null }),
+            new Date("2026-08-08T00:00:00.000Z"),
+        );
+
+        expect(result).toEqual({ status: "unavailable", error: "dependency_unavailable" });
+        expect(getter).not.toHaveBeenCalled();
+        expect(toJSON).not.toHaveBeenCalled();
+    });
 });

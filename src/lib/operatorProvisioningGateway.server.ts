@@ -131,18 +131,39 @@ function validateInput(
     };
 }
 
-function row(value: unknown): Record<string, unknown> | null {
-    const candidate = Array.isArray(value) ? value[0] : value;
-    return candidate && typeof candidate === "object" && !Array.isArray(candidate)
-        ? candidate as Record<string, unknown>
-        : null;
+const PROVISIONING_RESULT_KEYS = [
+    "organizationId", "accountId", "grantId", "plan", "expiresAt", "replayed",
+] as const;
+
+function exactResultRecord(value: unknown): Record<(typeof PROVISIONING_RESULT_KEYS)[number], unknown> | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    try {
+        if (Object.getPrototypeOf(value) !== Object.prototype) return null;
+        const ownKeys = Reflect.ownKeys(value);
+        const expected = [...PROVISIONING_RESULT_KEYS].sort();
+        if (
+            ownKeys.length !== expected.length
+            || ownKeys.some(key => typeof key !== "string")
+            || (ownKeys as string[]).sort().some((key, index) => key !== expected[index])
+        ) return null;
+        const descriptors = Object.getOwnPropertyDescriptors(value);
+        const snapshot = {} as Record<(typeof PROVISIONING_RESULT_KEYS)[number], unknown>;
+        for (const key of PROVISIONING_RESULT_KEYS) {
+            const descriptor = descriptors[key];
+            if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return null;
+            snapshot[key] = descriptor.value;
+        }
+        return snapshot;
+    } catch {
+        return null;
+    }
 }
 
 function provisionedResult(
     data: unknown,
     expected: Pick<ValidatedProvisioningInput, "plan" | "expiresAt">,
 ): ProvisionPilotTeacherResult | null {
-    const value = row(data);
+    const value = exactResultRecord(data);
     if (!value) return null;
     const organizationId = text(value.organizationId);
     const accountId = text(value.accountId);
