@@ -14,6 +14,7 @@ const ACCOUNT_ID_PATTERN = /^teacher_[a-f0-9]{16}$/;
 const GRANT_ID_PATTERN = /^pilot_grant_[a-f0-9]{24}$/;
 const INPUT_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const RESULT_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,6}Z$/;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 const REQUEST_KEYS = [
     "actor", "credentialStatePath", "displayName", "email", "expiresAt",
     "idempotencyKey", "organizationName", "plan", "reason",
@@ -525,6 +526,7 @@ function validateRequest(raw, now) {
         organizationName.length < 1 || organizationName.length > 120
         || Buffer.byteLength(organizationName, "utf8") > 360 || /[\u0000-\u001f\u007f]/.test(organizationName)
         || email.length < 3 || email.length > 254 || Buffer.byteLength(email, "utf8") > 254
+        || CONTROL_CHARACTER_PATTERN.test(email)
         || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
         || displayName.length < 1 || displayName.length > 80
         || Buffer.byteLength(displayName, "utf8") > 240 || /[\u0000-\u001f\u007f]/.test(displayName)

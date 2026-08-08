@@ -63,6 +63,7 @@ const ACCOUNT_ID_PATTERN = /^teacher_[a-f0-9]{16}$/;
 const GRANT_ID_PATTERN = /^pilot_grant_[a-f0-9]{24}$/;
 const RESULT_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,6}Z$/;
 const MAX_EXPIRY_MS = 366 * 24 * 60 * 60 * 1_000;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 function text(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
@@ -99,6 +100,7 @@ function validateInput(
         || email.length < 3
         || email.length > 254
         || Buffer.byteLength(email, "utf8") > 254
+        || CONTROL_CHARACTER_PATTERN.test(email)
         || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
         || (plan !== "pro" && plan !== "academy")
         || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(expiresAt)
@@ -221,6 +223,9 @@ export async function provisionPilotTeacher(
     input: ProvisionPilotTeacherInput,
     client: OperatorProvisioningGatewayClient,
     now = new Date(),
+    dependencies: {
+        hashPassword(password: string): Promise<string>;
+    } = { hashPassword: hashTeacherAccountPasswordAsync },
 ): Promise<ProvisionPilotTeacherResult> {
     const validated = validateInput(input, now);
     const initialPassword = typeof input.initialPassword === "string" ? input.initialPassword : "";
@@ -231,7 +236,7 @@ export async function provisionPilotTeacher(
     ) return { status: "rejected", error: "invalid_input" };
     let encodedVerifier: string;
     try {
-        encodedVerifier = await hashTeacherAccountPasswordAsync(initialPassword);
+        encodedVerifier = await dependencies.hashPassword(initialPassword);
     } catch {
         return { status: "unavailable", error: "dependency_unavailable" };
     }

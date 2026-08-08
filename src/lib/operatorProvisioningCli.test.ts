@@ -84,6 +84,29 @@ async function receipt(path: string) {
 }
 
 describe("operator teacher provisioning CLI", () => {
+    it.each(["\u0000", "\u0001", "\u007f"])(
+        "rejects email control character %j before credential or journal side effects",
+        async (controlCharacter) => {
+            const current = await fixture();
+            await writeFile(current.requestPath, JSON.stringify({
+                ...current.request,
+                email: `a${controlCharacter}@b.co`,
+            }), { mode: 0o600 });
+            const generatePassword = vi.fn(() => PASSWORD);
+            const hashPassword = vi.fn(async () => VERIFIER);
+
+            await expect(executeOperatorProvisioning(
+                { argv: [`--request=${current.requestPath}`], env: {} },
+                { ...current.deps, generatePassword, hashPassword },
+            )).rejects.toMatchObject({ code: "invalid_request" });
+            expect(generatePassword).not.toHaveBeenCalled();
+            expect(hashPassword).not.toHaveBeenCalled();
+            expect(current.deps.provisionWithVerifier).not.toHaveBeenCalled();
+            await expect(lstat(current.statePath)).rejects.toMatchObject({ code: "ENOENT" });
+            await expect(lstat(`${current.statePath}.receipt`)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+    );
+
     it("bounds the real Supabase transport so an uncertain timeout is retryable", async () => {
         const transport = createOperatorProvisioningDeadlineFetch(10, async (_input, init) => {
             await new Promise<void>((_resolve, reject) => {

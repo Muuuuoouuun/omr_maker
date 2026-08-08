@@ -39,6 +39,23 @@ function client(result: { data: unknown; error: { message?: string } | null } = 
 }
 
 describe("operator provisioning server gateway", () => {
+    it.each(["\u0000", "\u0001", "\u007f"])(
+        "rejects email control character %j before password hashing or RPC",
+        async (controlCharacter) => {
+            const current = client();
+            const hashPassword = vi.fn(async () => VERIFIER);
+            const result = await provisionPilotTeacher(
+                { ...INPUT, email: `a${controlCharacter}@b.co` },
+                current,
+                new Date("2026-08-08T00:00:00.000Z"),
+                { hashPassword },
+            );
+            expect(result).toEqual({ status: "rejected", error: "invalid_input" });
+            expect(hashPassword).not.toHaveBeenCalled();
+            expect(current.rpc).not.toHaveBeenCalled();
+        },
+    );
+
     it("normalizes bounded input, hashes asynchronously, and sends only the encoded verifier", async () => {
         const current = client();
 
