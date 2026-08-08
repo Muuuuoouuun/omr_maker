@@ -32,6 +32,7 @@ import {
     forceFinishTeacherAttempts,
     loadTeacherAttemptSummaries,
     loadTeacherAttempts,
+    resolveTeacherAttemptCollectionCompleteness,
     setTeacherAttemptSubquestionReview,
 } from "./teacherAttemptClient";
 import * as teacherAttemptClient from "./teacherAttemptClient";
@@ -92,6 +93,29 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.unstubAllGlobals();
+});
+
+describe("teacher attempt collection completeness", () => {
+    it.each([
+        [{ items: [baseAttempt], remoteLoaded: false }, "stale"],
+        [{ items: [baseAttempt], remoteLoaded: false, remoteError: "offline" }, "stale"],
+        [{ items: [], remoteLoaded: false, remoteError: "offline" }, "error"],
+        [{ items: [], remoteLoaded: false }, "error"],
+        [{ items: [baseAttempt], remoteLoaded: true, remoteSynced: false, remotePartial: true }, "partial"],
+        [{ items: [baseAttempt], remoteLoaded: true, remoteSynced: true }, "ready"],
+    ] as const)("maps %o to %s", (result, expected) => {
+        expect(resolveTeacherAttemptCollectionCompleteness(result)).toBe(expected);
+    });
+
+    it("lets a transport error outrank partial pagination when cached rows remain usable", () => {
+        expect(resolveTeacherAttemptCollectionCompleteness({
+            items: [baseAttempt],
+            remoteLoaded: true,
+            remoteSynced: false,
+            remotePartial: true,
+            remoteError: "exam metadata unavailable",
+        })).toBe("stale");
+    });
 });
 
 describe("teacher attempt mutation serialization", () => {

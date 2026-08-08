@@ -1,4 +1,4 @@
-import type { Attempt } from "@/types/omr";
+import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
 import { safeScorePercent } from "@/lib/scoreUtils";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
@@ -40,6 +40,49 @@ function organizationsConflict(left: Attempt, right: Attempt): boolean {
     const leftOrganizationId = normalized(left.organizationId);
     const rightOrganizationId = normalized(right.organizationId);
     return Boolean(leftOrganizationId && rightOrganizationId && leftOrganizationId !== rightOrganizationId);
+}
+
+function matchesOrganizationScope(organizationId: string | undefined, selectedOrganizationId: string | undefined): boolean {
+    const selectedOrganization = normalized(selectedOrganizationId);
+    const candidateOrganization = normalized(organizationId);
+    if (!selectedOrganization) return !candidateOrganization;
+    return !candidateOrganization || candidateOrganization === selectedOrganization;
+}
+
+function examRecency(exam: Exam): number {
+    return Date.parse(exam.updatedAt || exam.createdAt) || 0;
+}
+
+export function buildCumulativeExamMap(
+    exams: readonly Exam[],
+    selectedOrganizationId?: string,
+): Map<string, Exam> {
+    const selectedOrganization = normalized(selectedOrganizationId);
+    const scoped = new Map<string, Exam>();
+    for (const exam of exams) {
+        const examId = normalized(exam.id);
+        if (!examId || !matchesOrganizationScope(exam.organizationId, selectedOrganizationId)) continue;
+        const current = scoped.get(examId);
+        if (!current) {
+            scoped.set(examId, exam);
+            continue;
+        }
+        const currentExact = Boolean(selectedOrganization && normalized(current.organizationId) === selectedOrganization);
+        const candidateExact = Boolean(selectedOrganization && normalized(exam.organizationId) === selectedOrganization);
+        const candidatePreferred = Number(candidateExact) > Number(currentExact)
+            || (
+                candidateExact === currentExact
+                && (
+                    examRecency(exam) > examRecency(current)
+                    || (
+                        examRecency(exam) === examRecency(current)
+                        && exam.title.localeCompare(current.title, "ko") < 0
+                    )
+                )
+            );
+        if (candidatePreferred) scoped.set(examId, exam);
+    }
+    return scoped;
 }
 
 function guardedLegacyCompatibility(left: Attempt, right: Attempt): boolean {
@@ -85,11 +128,21 @@ export function matchRosterStudentForAttempt(
     return legacyCandidates.length === 1 ? legacyCandidates[0] : null;
 }
 
+export function markUnresolvedGrowthAttempt(attempt: Attempt): Attempt {
+    return {
+        ...attempt,
+        studentName: "",
+        studentProfileId: undefined,
+        studentId: undefined,
+    };
+}
+
 export function filterCumulativeAttemptsForStudent(
     selectedAttempt: Attempt,
     attempts: Attempt[],
     students: RosterStudent[],
     resolvedSelectedStudent?: RosterStudent | null,
+    selectedOrganizationId?: string,
 ): Attempt[] {
     const matchedSelectedStudent = matchRosterStudentForAttempt(selectedAttempt, students);
     const selectedStudent = resolvedSelectedStudent === undefined
@@ -102,7 +155,11 @@ export function filterCumulativeAttemptsForStudent(
     const selectedStableId = authoritativeStableId(selectedAttempt);
 
     return attempts.filter(candidate => {
-        if (organizationsConflict(selectedAttempt, candidate)) return false;
+        if (selectedOrganizationId) {
+            if (!matchesOrganizationScope(candidate.organizationId, selectedOrganizationId)) return false;
+        } else if (organizationsConflict(selectedAttempt, candidate)) {
+            return false;
+        }
 
         const candidateAttemptId = normalized(candidate.id);
         if (selectedAttemptId && selectedAttemptId === candidateAttemptId) return true;

@@ -1,14 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Attempt } from "@/types/omr";
+import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
 import {
     buildStudentAttemptSeries,
     buildStudentResultHref,
+    buildCumulativeExamMap,
     filterCumulativeAttemptsForStudent,
     matchRosterStudentForAttempt,
+    markUnresolvedGrowthAttempt,
     parseStudentResultView,
     sameStudentAttempt,
 } from "./studentResultHub";
+import { buildStudentProfileInsight } from "./studentProfileAnalytics";
+import { buildStudentReportHeadline } from "./studentReportHeadline";
+import { buildStudentGrowthReport } from "./studentGrowthReport";
 
 function student(partial: Partial<RosterStudent>): RosterStudent {
     return {
@@ -141,6 +146,100 @@ describe("student result hub", () => {
         )).toEqual([selected]);
     });
 
+    it("uses an authoritative organization to scope a legacy selected student's cumulative evidence", () => {
+        const selected = attempt({
+            id: "selected",
+            studentProfileId: "student-a",
+            groupName: "A반",
+        });
+        const orgA = attempt({
+            id: "org-a-history",
+            organizationId: "org-a",
+            studentProfileId: "student-a",
+            groupName: "A반",
+        });
+        const orgB = attempt({
+            id: "org-b-history",
+            organizationId: "org-b",
+            studentProfileId: "student-a",
+            groupName: "A반",
+        });
+        const rosterStudent = student({ id: "student-a" });
+
+        expect(filterCumulativeAttemptsForStudent(
+            selected,
+            [orgB, selected, orgA],
+            [rosterStudent],
+            rosterStudent,
+            "org-a",
+        )).toEqual([selected, orgA]);
+    });
+
+    it("builds deterministic personal evidence from the active organization when ids collide", () => {
+        const selectedStudent = student({ id: "student-a" });
+        const selected = attempt({
+            id: "selected",
+            examId: "shared-exam",
+            examTitle: "legacy title",
+            studentProfileId: "student-a",
+            groupName: "A반",
+            startedAt: "2026-06-01T10:00:00.000Z",
+            finishedAt: "2026-06-01T10:10:00.000Z",
+            answers: { 1: 2 },
+        });
+        const orgAHistory = attempt({
+            id: "org-a-history",
+            examId: "shared-exam",
+            examTitle: "A 조직 시험",
+            organizationId: "org-a",
+            studentProfileId: "student-a",
+            groupName: "A반",
+            startedAt: "2026-05-01T10:00:00.000Z",
+            finishedAt: "2026-05-01T10:20:00.000Z",
+            answers: { 1: 2 },
+        });
+        const orgBHistory = attempt({
+            ...orgAHistory,
+            id: "org-a-history",
+            organizationId: "org-b",
+            startedAt: "2026-05-01T09:00:00.000Z",
+            finishedAt: "2026-05-01T10:00:00.000Z",
+        });
+        const orgAExam: Exam = {
+            id: "shared-exam",
+            title: "A 조직 시험",
+            organizationId: "org-a",
+            createdAt: "2026-05-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 1, score: 1, tags: { concept: "A 개념" } }],
+        };
+        const orgBExam: Exam = {
+            ...orgAExam,
+            title: "B 조직 시험",
+            organizationId: "org-b",
+            questions: [{ id: 1, number: 1, answer: 2, score: 1, tags: { concept: "B 개념" } }],
+        };
+        const personalAttempts = filterCumulativeAttemptsForStudent(
+            selected,
+            [orgBHistory, selected, orgAHistory],
+            [selectedStudent],
+            selectedStudent,
+            "org-a",
+        );
+        const insight = buildStudentProfileInsight(
+            selectedStudent,
+            personalAttempts,
+            buildCumulativeExamMap([orgBExam, orgAExam], "org-a"),
+        );
+        const headline = buildStudentReportHeadline(insight.headlineWeaknessGroups, "fallback");
+
+        expect(insight.attempts.map(item => item.id)).toEqual(["selected", "org-a-history"]);
+        expect(insight.attempts.map(item => item.examTitle)).not.toContain("B 조직 시험");
+        expect(insight.averageElapsedTimeSec).toBe(900);
+        expect(insight.headlineWeaknessGroups.map(group => group.title)).toContain("A 개념");
+        expect(insight.headlineWeaknessGroups.map(group => group.title)).not.toContain("B 개념");
+        expect(headline.headline).toContain("A 개념");
+    });
+
     it("excludes an ambiguous id-less legacy attempt for duplicate roster students", () => {
         const selected = attempt({ id: "selected", studentProfileId: "student-a", groupName: "A반" });
         const exactA = attempt({ id: "exact-a", studentId: "student-a", groupName: "A반" });
@@ -192,6 +291,35 @@ describe("student result hub", () => {
             [unrelated],
             unrelated,
         )).toEqual([selected]);
+    });
+
+    it("preserves an unresolved in-scope row as omitted evidence without merging its ambiguous name", () => {
+        const selected = attempt({
+            id: "selected",
+            examId: "exam-1",
+            studentProfileId: "student-a",
+            classId: "class-a",
+            score: 80,
+        });
+        const unresolved = markUnresolvedGrowthAttempt(attempt({
+            id: "ambiguous",
+            examId: "exam-1",
+            studentName: "김학생",
+            classId: "class-a",
+            score: 60,
+        }));
+        const model = buildStudentGrowthReport({
+            selectedStudentId: "student-a",
+            selectedAttemptId: selected.id,
+            selectedClassKey: "class-a",
+            dataStatus: "ready",
+            attempts: [selected, unresolved],
+            exams: [{ id: "exam-1", title: "시험", createdAt: "2026-01-01T00:00:00.000Z", questions: [] }],
+        });
+
+        expect(unresolved).toMatchObject({ studentName: "", studentProfileId: undefined, studentId: undefined });
+        expect(model.rows[0]).toMatchObject({ participantCount: 1, studentScore: 80 });
+        expect(model.omittedCount).toBe(1);
     });
 
     it("defaults missing or invalid views to answers while retaining handwriting", () => {

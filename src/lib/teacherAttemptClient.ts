@@ -40,6 +40,26 @@ export interface TeacherAttemptCollectionLoadResult {
     };
 }
 
+export type TeacherAttemptCollectionCompleteness = "ready" | "partial" | "stale" | "error";
+
+export function resolveTeacherAttemptCollectionCompleteness(input: {
+    items: readonly Attempt[];
+    remoteLoaded: boolean;
+    remoteSynced?: boolean;
+    remotePartial?: boolean;
+    remoteError?: string;
+}): TeacherAttemptCollectionCompleteness {
+    const hasUsableItems = input.items.length > 0;
+    // A source error means the available rows are cached evidence, even when the
+    // remote response also carries pagination metadata.
+    if (input.remoteError) return hasUsableItems ? "stale" : "error";
+    if (input.remotePartial) return hasUsableItems ? "partial" : "error";
+    if (!input.remoteLoaded || input.remoteSynced === false) {
+        return hasUsableItems ? "stale" : "error";
+    }
+    return "ready";
+}
+
 export async function loadTeacherActiveAttemptSessions(examId: string): Promise<{
     items: TeacherActiveAttemptSession[];
     remoteLoaded: boolean;

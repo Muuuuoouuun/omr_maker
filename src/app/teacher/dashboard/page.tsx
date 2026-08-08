@@ -34,7 +34,11 @@ import { createDashboardRevalidationGate, isTeacherDashboardStorageKey } from "@
 import { buildDemoDashboardData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
 import { readLocalAttempts, readLocalExams, saveLocalAttempt } from "@/lib/omrPersistence";
-import { loadTeacherAttemptSummaries, loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import {
+    loadTeacherAttemptSummaries,
+    loadTeacherAttempts,
+    resolveTeacherAttemptCollectionCompleteness,
+} from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
 import { readLocalRosterSnapshot } from "@/lib/rosterPersistence";
@@ -48,10 +52,7 @@ import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
 import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient";
 import type { TeacherAttemptAggregate } from "@/lib/teacherAttemptReportingGateway";
 import { loadTeacherIndividualAssignmentTargetCounts } from "@/app/actions/teacherAssignment";
-import {
-    resolveExamAnalyticsSampleStatus,
-    type ExamAnalyticsSampleStatus,
-} from "@/lib/examAnalyticsReport";
+import type { ExamAnalyticsSampleStatus } from "@/lib/examAnalyticsReport";
 
 type TabType = 'overview' | 'exam' | 'student';
 type DashboardDataMode = "real" | "demo";
@@ -223,8 +224,15 @@ function TeacherDashboard() {
             try {
                 const result = await activeLoad.promise;
                 if (requestedGeneration !== detailedAttemptGenerationRef.current) continue;
-                if (result.remoteError) throw new Error(result.remoteError);
-                const sampleStatus = resolveExamAnalyticsSampleStatus(result);
+                const completeness = resolveTeacherAttemptCollectionCompleteness(result);
+                if (completeness === "error") {
+                    throw new Error(result.remoteError || "상세 제출 데이터를 확인하지 못했습니다.");
+                }
+                const sampleStatus: ExamAnalyticsSampleStatus = completeness === "partial"
+                    ? "partial"
+                    : completeness === "stale"
+                        ? "stale"
+                        : "ready";
                 detailedAttemptCacheRef.current = {
                     generation: requestedGeneration,
                     items: result.items,

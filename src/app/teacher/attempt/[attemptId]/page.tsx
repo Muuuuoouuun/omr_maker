@@ -16,6 +16,7 @@ import {
     answerTeacherAttemptQuestion,
     loadTeacherAttemptDetail as loadTeacherAttemptRecord,
     loadTeacherAttempts,
+    resolveTeacherAttemptCollectionCompleteness,
     setTeacherAttemptSubquestionReview,
 } from "@/lib/teacherAttemptClient";
 import { loadTeacherExam, loadTeacherExams } from "@/lib/teacherExamClient";
@@ -54,7 +55,9 @@ import {
 } from "@/lib/teacherFeedbackClient";
 import {
     buildStudentAttemptSeries,
+    buildCumulativeExamMap,
     filterCumulativeAttemptsForStudent,
+    markUnresolvedGrowthAttempt,
     matchRosterStudentForAttempt,
     parseStudentResultView,
 } from "@/lib/studentResultHub";
@@ -414,6 +417,10 @@ export default function TeacherAttemptPage() {
                 const matchedStudent = matchRosterStudentForAttempt(attempt, rosterResult.students);
                 const warnings = [attemptResult.remoteError, examResult.remoteError, rosterResult.remoteError]
                     .filter((message): message is string => Boolean(message));
+                const attemptCompleteness = resolveTeacherAttemptCollectionCompleteness({
+                    ...attemptResult,
+                    remoteError: warnings.join(" ") || undefined,
+                });
                 setCumulativeAttempts(attemptResult.items);
                 setCumulativeExams(examResult.items);
                 setCumulativeRoster({
@@ -422,18 +429,12 @@ export default function TeacherAttemptPage() {
                 });
                 setRosterStudent(matchedStudent || null);
                 cumulativeSettledAttemptIdRef.current = targetAttemptId;
-                setCumulativeError(warnings.join(" "));
-                if (warnings.length > 0) {
-                    if (attemptResult.items.length > 0) {
-                        setCumulativeStatus("stale");
-                    } else {
-                        setCumulativeStatus("error");
-                    }
-                } else if (attemptResult.remotePartial) {
-                    setCumulativeStatus("partial");
-                } else {
-                    setCumulativeStatus("ready");
-                }
+                setCumulativeError(
+                    warnings.join(" ")
+                    || (attemptCompleteness === "stale" ? "서버 동기화 전 로컬 제출 기준입니다." : "")
+                    || (attemptCompleteness === "error" ? "서버에서 성장 데이터를 확인하지 못했습니다." : ""),
+                );
+                setCumulativeStatus(attemptCompleteness);
             } catch {
                 if (!isCurrentCumulativeRequest()) return;
                 setCumulativeError("잠시 후 다시 시도해 주세요.");
@@ -487,28 +488,30 @@ export default function TeacherAttemptPage() {
 
     const cumulativeInsight = useMemo(() => {
         if (!attempt || cumulativeAttemptId !== attempt.id || !rosterStudent) return null;
+        const selectedOrganizationId = activeOrganizationId || attempt.organizationId;
         const personalAttempts = filterCumulativeAttemptsForStudent(
             attempt,
             cumulativeAttempts,
             cumulativeRoster.students,
             rosterStudent,
+            selectedOrganizationId,
         );
         return buildStudentProfileInsight(
             rosterStudent,
             personalAttempts,
-            new Map(cumulativeExams.map(item => [item.id, item])),
+            buildCumulativeExamMap(cumulativeExams, selectedOrganizationId),
             { recentLimit: 8, weaknessLimit: 6 },
         );
-    }, [attempt, cumulativeAttemptId, cumulativeAttempts, cumulativeExams, cumulativeRoster.students, rosterStudent]);
+    }, [activeOrganizationId, attempt, cumulativeAttemptId, cumulativeAttempts, cumulativeExams, cumulativeRoster.students, rosterStudent]);
 
     const growthAttempts = useMemo(() => cumulativeAttempts
         .map(candidate => {
             const matchedStudent = candidate.id === attempt?.id
                 ? rosterStudent
                 : matchRosterStudentForAttempt(candidate, cumulativeRoster.students);
-            return enrichGrowthAttemptContext(candidate, matchedStudent, cumulativeRoster.groups);
-        })
-        .filter((candidate): candidate is Attempt => candidate !== null), [attempt?.id, cumulativeAttempts, cumulativeRoster.groups, cumulativeRoster.students, rosterStudent]);
+            return enrichGrowthAttemptContext(candidate, matchedStudent, cumulativeRoster.groups)
+                || markUnresolvedGrowthAttempt(candidate);
+        }), [attempt?.id, cumulativeAttempts, cumulativeRoster.groups, cumulativeRoster.students, rosterStudent]);
 
     const selectedGrowthAttempt = useMemo(() => attempt
         ? enrichGrowthAttemptContext(attempt, rosterStudent, cumulativeRoster.groups)

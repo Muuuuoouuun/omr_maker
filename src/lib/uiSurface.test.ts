@@ -1350,27 +1350,35 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("attemptResult.remoteError");
         expect(teacherAttemptPage).toContain("examResult.remoteError");
         expect(teacherAttemptPage).toContain("rosterResult.remoteError");
-        expect(teacherAttemptPage).toContain("attemptResult.remotePartial");
-        expect(teacherAttemptPage).toContain('setCumulativeStatus("partial")');
-        expect(teacherAttemptPage).toContain('setCumulativeStatus("stale")');
+        expect(teacherAttemptPage).toContain("resolveTeacherAttemptCollectionCompleteness");
+        expect(teacherAttemptPage).toContain("setCumulativeStatus(attemptCompleteness)");
         expect(teacherAttemptPage).toContain("const retryCumulativeLoad = useCallback");
         expect(reportPanel).toContain("<StudentGrowthReport");
         expect(reportPanel).toContain("onRetry={onRetryCumulative}");
         expect(analyticsPanel).not.toContain("CumulativeGrowthPanel");
     });
 
-    it("keeps mixed exam or roster failures retryable ahead of partial pagination", () => {
+    it("uses the shared completeness policy for cumulative growth data", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
-        const partialBranchIndex = teacherAttemptPage.indexOf("if (attemptResult.remotePartial)");
-        const warningBranchIndex = teacherAttemptPage.indexOf("if (warnings.length > 0)");
-        const statusBlock = teacherAttemptPage.slice(warningBranchIndex, partialBranchIndex + 160);
+        const loaderStart = teacherAttemptPage.indexOf("const [attemptResult, examResult, rosterResult]");
+        const loaderEnd = teacherAttemptPage.indexOf("} catch", loaderStart);
+        const loaderBlock = teacherAttemptPage.slice(loaderStart, loaderEnd);
 
-        expect(partialBranchIndex).toBeGreaterThan(-1);
-        expect(warningBranchIndex).toBeGreaterThan(-1);
-        expect(warningBranchIndex).toBeLessThan(partialBranchIndex);
-        expect(statusBlock).toContain('setCumulativeStatus("stale")');
-        expect(statusBlock).toContain('setCumulativeStatus("error")');
-        expect(statusBlock).toContain('setCumulativeStatus("partial")');
+        expect(loaderBlock).toContain("resolveTeacherAttemptCollectionCompleteness({");
+        expect(loaderBlock).toContain("remoteError: warnings.join");
+        expect(loaderBlock).toContain("setCumulativeStatus(attemptCompleteness)");
+        expect(loaderBlock).not.toContain("if (attemptResult.remotePartial)");
+    });
+
+    it("keeps mixed exam or roster failures retryable ahead of partial pagination", () => {
+        const collectionClient = readProjectFile("src/lib/teacherAttemptClient.ts");
+        const resolverStart = collectionClient.indexOf("export function resolveTeacherAttemptCollectionCompleteness");
+        const resolverEnd = collectionClient.indexOf("export async function loadTeacherActiveAttemptSessions", resolverStart);
+        const resolverBlock = collectionClient.slice(resolverStart, resolverEnd);
+
+        expect(resolverBlock.indexOf("input.remoteError")).toBeLessThan(resolverBlock.indexOf("input.remotePartial"));
+        expect(resolverBlock).toContain('hasUsableItems ? "stale" : "error"');
+        expect(resolverBlock).toContain('hasUsableItems ? "partial" : "error"');
     });
 
     it("retains cohort attempts for growth while filtering only the personal insight", () => {
@@ -1383,6 +1391,29 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("rosterStudent,");
         expect(teacherAttemptPage).toContain("buildStudentProfileInsight(");
         expect(teacherAttemptPage).not.toContain("rosterResult.students.find(student => attemptMatchesStudentProfile");
+    });
+
+    it("scopes personal cumulative attempts and exam metadata to the active organization", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const insightIndex = teacherAttemptPage.indexOf("const cumulativeInsight = useMemo");
+        const growthIndex = teacherAttemptPage.indexOf("const growthAttempts = useMemo", insightIndex);
+        const insightBlock = teacherAttemptPage.slice(insightIndex, growthIndex);
+
+        expect(insightBlock).toContain("activeOrganizationId || attempt.organizationId");
+        expect(insightBlock).toContain("buildCumulativeExamMap(");
+        expect(insightBlock).not.toContain("new Map(cumulativeExams.map");
+    });
+
+    it("preserves unresolved growth candidates for explicit omission accounting", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const growthReport = readProjectFile("src/components/teacher/student-results/StudentGrowthReport.tsx");
+        const growthAttemptsIndex = teacherAttemptPage.indexOf("const growthAttempts = useMemo");
+        const selectedGrowthIndex = teacherAttemptPage.indexOf("const selectedGrowthAttempt = useMemo", growthAttemptsIndex);
+        const growthBlock = teacherAttemptPage.slice(growthAttemptsIndex, selectedGrowthIndex);
+
+        expect(growthBlock).toContain("markUnresolvedGrowthAttempt(candidate)");
+        expect(growthBlock).not.toContain("candidate is Attempt => candidate !== null");
+        expect(growthReport).toContain("<GrowthOmissionNotice count={model.omittedCount}");
     });
 
     it("builds one class-scoped growth model from the complete cohort", () => {
@@ -1550,7 +1581,8 @@ describe("service UI surface", () => {
         expect(resolvedRows).toEqual([]);
 
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
-        expect(teacherAttemptPage).toContain(".filter((candidate): candidate is Attempt => candidate !== null)");
+        expect(teacherAttemptPage).toContain("markUnresolvedGrowthAttempt(candidate)");
+        expect(teacherAttemptPage).not.toContain(".filter((candidate): candidate is Attempt => candidate !== null)");
         expect(teacherAttemptPage).toContain("학생·반 연결 정보가 부족해 성장 데이터를 비교할 수 없습니다.");
     });
 

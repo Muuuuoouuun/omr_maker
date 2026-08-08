@@ -36,6 +36,18 @@ describe("teacher dashboard detailed attempt cache", () => {
         expect(repairBlock).toContain("generation: detailedAttemptGenerationRef.current");
     });
 
+    it("publishes usable stale detail rows through the shared completeness policy", () => {
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const loaderStart = dashboard.indexOf("const loadDetailedAttempts = useCallback");
+        const loaderEnd = dashboard.indexOf("useEffect(() =>", loaderStart);
+        const loaderBlock = dashboard.slice(loaderStart, loaderEnd);
+
+        expect(loaderBlock).toContain("resolveTeacherAttemptCollectionCompleteness(result)");
+        expect(loaderBlock).toContain('if (completeness === "error")');
+        expect(loaderBlock).not.toContain("if (result.remoteError) throw");
+        expect(loaderBlock).toContain("setDetailedAttempts(result.items)");
+    });
+
     it("turns a failed CSV detail load into a retryable user-visible error", () => {
         const overview = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
 
