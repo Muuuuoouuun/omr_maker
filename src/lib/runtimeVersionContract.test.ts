@@ -30,12 +30,26 @@ function versionNumber(version: string): number {
 
 function extractNodeVersions(workflow: string): string[] {
     return Array.from(
-        workflow.matchAll(/^\s*node-version:\s*["']?([^\s"']+)["']?\s*$/gm),
+        workflow.matchAll(/^\s*node-version:\s*"([^"\r\n]+)"\s*$/gm),
         (match) => match[1],
     );
 }
 
 describe("Node runtime contract", () => {
+    it("extracts only double-quoted Node versions", () => {
+        const invalidQuoting = [
+            "node-version: 22.13.0",
+            "node-version: '22.13.0'",
+            "node-version: \"22.13.0'",
+            "node-version: '22.13.0\"",
+        ].join("\n");
+
+        expect(extractNodeVersions(invalidQuoting)).toEqual([]);
+        expect(extractNodeVersions('node-version: "22.13.0"')).toEqual([
+            "22.13.0",
+        ]);
+    });
+
     it("requires a package engine of at least Node 22.13.0", () => {
         const engine = packageJson.engines?.node;
 
