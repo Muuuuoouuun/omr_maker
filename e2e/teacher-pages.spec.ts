@@ -3,6 +3,7 @@ import path from "node:path";
 import { mintTeacherToken } from "../src/lib/teacherAuth";
 import { MOCKUP_TEACHER_IDENTITY } from "../src/lib/mockupAccount";
 import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
+import { loginAsShowcaseTeacher } from "./helpers";
 import {
     createTeacherSession,
     LEGACY_TEACHER_TOKEN_KEY,
@@ -371,6 +372,7 @@ test("opens one student result hub and preserves the selected view across attemp
 
 test("connects the editorial exam overview to a dense personal growth report", async ({ page }) => {
     const consoleIssues: Array<{ type: string; text: string; url: string }> = [];
+    const pageErrors: string[] = [];
     page.on("console", message => {
         if (message.type() !== "warning" && message.type() !== "error") return;
         consoleIssues.push({
@@ -379,10 +381,9 @@ test("connects the editorial exam overview to a dense personal growth report", a
             url: message.location().url,
         });
     });
+    page.on("pageerror", error => pageErrors.push(error.stack || error.message));
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto("/?role=teacher");
-    await page.getByRole("button", { name: "데모 계정으로 둘러보기" }).click();
-    await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1/);
+    await loginAsShowcaseTeacher(page);
     await page.goto("/teacher/dashboard?showcase=1&tab=exam");
 
     const overviewHeadings = page.locator('[role="tabpanel"][aria-label="시험 통계 요약"] > * h2');
@@ -416,6 +417,11 @@ test("connects the editorial exam overview to a dense personal growth report", a
         consoleIssues.filter(issue => /width\(0\).*height\(0\).*chart/i.test(issue.text)),
         JSON.stringify(consoleIssues, null, 2),
     ).toEqual([]);
+    expect(
+        consoleIssues.filter(issue => issue.type === "error"),
+        JSON.stringify(consoleIssues, null, 2),
+    ).toEqual([]);
+    expect(pageErrors, JSON.stringify(pageErrors, null, 2)).toEqual([]);
 });
 
 test.describe("Teacher dashboard", () => {

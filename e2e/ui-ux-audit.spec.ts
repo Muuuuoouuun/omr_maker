@@ -433,12 +433,19 @@ test.describe("UI-UX PROMAX layout audit", () => {
         await expect(countUps.first()).toHaveAttribute("data-count-up-raf", "idle");
     });
 
+});
+
+test.describe("Cross-browser personal growth report acceptance", () => {
     test("keeps the personal growth chart contained, readable, and still when motion is off", async ({ page }) => {
         let consolePhase = "setup";
         const consoleIssues: Array<{ phase: string; type: string; text: string; url: string }> = [];
+        const pageErrors: Array<{ phase: string; message: string }> = [];
         page.on("console", message => {
             if (message.type() !== "warning" && message.type() !== "error") return;
             consoleIssues.push({ phase: consolePhase, type: message.type(), text: message.text(), url: message.location().url });
+        });
+        page.on("pageerror", error => {
+            pageErrors.push({ phase: consolePhase, message: error.stack || error.message });
         });
         await page.setViewportSize({ width: 390, height: 844 });
         await page.addInitScript(() => {
@@ -565,7 +572,16 @@ test.describe("UI-UX PROMAX layout audit", () => {
             consoleIssues.filter(issue => /width\(0\).*height\(0\).*chart/i.test(issue.text)),
             JSON.stringify(consoleIssues, null, 2),
         ).toEqual([]);
+        expect(
+            consoleIssues.filter(issue => issue.type === "error"),
+            JSON.stringify(consoleIssues, null, 2),
+        ).toEqual([]);
+        expect(pageErrors, JSON.stringify(pageErrors, null, 2)).toEqual([]);
     });
+});
+
+test.describe("UI-UX PROMAX layout audit continued", () => {
+    test.skip(({ browserName }) => browserName !== "chromium", "Layout audit runs on Chromium only.");
 
     test("keeps one visible landing landmark and one role-specific level-one heading", async ({ browser }) => {
         const landingStates = [
