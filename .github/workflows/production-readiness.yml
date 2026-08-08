@@ -92,6 +92,7 @@ jobs:
           OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE: ${{ inputs.preview_attestation_signature }}
           OMR_RELEASE_ATTESTATION_SECRET: ${{ secrets.OMR_RELEASE_ATTESTATION_SECRET }}
           OMR_PRODUCTION_EXPECTED_READINESS_VERSION: ${{ inputs.expected_readiness_version }}
+          OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: ${{ secrets.OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID }}
         run: >-
           npm run ops:verify:production --
           --confirm-production-host="$OMR_PRODUCTION_HOST"

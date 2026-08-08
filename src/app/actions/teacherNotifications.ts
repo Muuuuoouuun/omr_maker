@@ -26,6 +26,7 @@ import {
     mutateTeacherNotificationStateWithGateway,
     type TeacherNotificationStateGatewayClient,
 } from "@/lib/teacherNotificationStateGateway";
+import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 
 type NotificationClient = TeacherNotificationSummaryGatewayClient & TeacherNotificationStateGatewayClient;
 type NotificationActionContext = {
@@ -33,7 +34,7 @@ type NotificationActionContext = {
     context: ReturnType<typeof workspaceContextFromTeacherSession>;
 } | { status: "local_only" | "unauthorized" | "service_unavailable" };
 
-async function notificationActionContext(): Promise<NotificationActionContext> {
+async function notificationActionContext(requireWrite = false): Promise<NotificationActionContext> {
     const headerStore = await headers();
     if (!isSameOriginServerActionRequest(headerStore)) return { status: "unauthorized" };
     const cookieStore = await cookies();
@@ -41,6 +42,7 @@ async function notificationActionContext(): Promise<NotificationActionContext> {
         cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
     );
     if (!session) return { status: "unauthorized" };
+    if (requireWrite && !isTeacherMutationAuthorized(session)) return { status: "unauthorized" };
     const context = workspaceContextFromTeacherSession(session);
     const config = getSupabaseServerConfigFromEnv();
     if (!config) {
@@ -101,7 +103,7 @@ export async function mutateTeacherNotificationState(
         if (!notificationIds || notificationIds.length === 0 || !["mark_read", "dismiss"].includes(operation)) {
             return { status: "invalid_request" };
         }
-        const gateway = await notificationActionContext();
+        const gateway = await notificationActionContext(true);
         if ("status" in gateway) return gateway;
         const summary = await loadTeacherNotificationSummaryWithGateway(gateway.client, gateway.context);
         if (summary.status !== "loaded") return { status: "service_unavailable" };

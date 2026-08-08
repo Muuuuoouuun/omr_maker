@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { createTeacherSession, isTeacherSessionActive, type TeacherSession, type TeacherSessionIdentity } from "@/lib/teacherSession";
 import { resolveServerSigningSecret } from "@/lib/serverSigningSecret";
 import { resolveTeacherIdentityModeForEnvironment } from "@/lib/teacherIdentityModePolicy";
+import { isExactMockupTeacherIdentity } from "@/lib/mockupAccount";
 import {
     validateActiveTeacherAccountSession,
     validateProvisionedTeacherSession,
@@ -90,6 +91,7 @@ export function createSignedTeacherSessionCookie(
 ): string | null {
     const secret = resolveTeacherSessionSecret(env);
     if (!secret) return null;
+    if (identity?.sessionAuthority === "mockup" && !isExactMockupTeacherIdentity(identity)) return null;
 
     const session = createTeacherSession(token, now, identity);
     const payload = base64UrlEncode(JSON.stringify(session));
@@ -121,6 +123,8 @@ export function parseSignedTeacherSessionCookie(
 export interface ResolveAuthorizedTeacherSessionOptions {
     env?: Env;
     now?: number;
+    /** Public showcase rendering only. Mutating Server Actions must leave this false. */
+    allowMockup?: boolean;
     /** Test/controlled injection. An explicit null means fail closed. */
     accountClient?: TeacherAccountGatewayClient | null;
 }
@@ -151,8 +155,13 @@ export async function resolveAuthorizedTeacherSessionCookie(
     );
     if (!session) return null;
     const identityMode = resolveTeacherIdentityModeForEnvironment(options.env || process.env);
-    if (identityMode === "provisioned_only" && session.sessionAuthority !== "account") return null;
+    if (identityMode === "provisioned_only"
+        && session.sessionAuthority !== "account"
+        && session.sessionAuthority !== "mockup") return null;
     if (identityMode === "self_service" && session.sessionAuthority === "account") return null;
+    if (session.sessionAuthority === "mockup") {
+        return options.allowMockup === true && isExactMockupTeacherIdentity(session) ? session : null;
+    }
     if (session.sessionAuthority === "bootstrap") return session;
     if (
         (session.sessionAuthority !== "account" && session.sessionAuthority !== "legacy_account")

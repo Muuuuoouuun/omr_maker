@@ -71,6 +71,31 @@ const readyDatabaseProbe = {
 };
 
 describe("deployment readiness", () => {
+    it("requires an exact non-PII provisioned teacher canary id only in provisioned mode", () => {
+        const base = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+        };
+        const missing = buildDeploymentReadiness(base, readyDatabaseProbe);
+        expect(missing.checks).toContainEqual(expect.objectContaining({
+            key: "provisioned_teacher_canary", tone: "error",
+        }));
+        const configured = buildDeploymentReadiness({
+            ...base,
+            OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: "teacher_0123456789abcdef",
+        }, readyDatabaseProbe);
+        expect(configured.checks).toContainEqual(expect.objectContaining({
+            key: "provisioned_teacher_canary", tone: "ready",
+        }));
+        const selfService = buildDeploymentReadiness({
+            ...base,
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+        }, readyDatabaseProbe);
+        expect(selfService.checks).toContainEqual(expect.objectContaining({
+            key: "provisioned_teacher_canary", tone: "ready",
+        }));
+    });
+
     it("flags production teacher login when no server credentials exist", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",

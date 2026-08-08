@@ -1,3 +1,5 @@
+import { isExactMockupTeacherIdentity } from "@/lib/mockupAccount";
+
 export const TEACHER_SESSION_KEY = "omr_teacher_session";
 export const LEGACY_TEACHER_TOKEN_KEY = "omr_teacher_token";
 
@@ -29,11 +31,12 @@ function normalizePlan(value: unknown): TeacherPlanCeiling | undefined {
 
 function normalizeOrganizationId(value: unknown, authority?: TeacherSessionAuthority): string | undefined {
     const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (authority === "mockup") return normalized || undefined;
     const pattern = authority === "account" ? PILOT_ORGANIZATION_ID_PATTERN : LEGACY_ORGANIZATION_ID_PATTERN;
     return pattern.test(normalized) ? normalized : undefined;
 }
 
-export type TeacherSessionAuthority = "account" | "legacy_account" | "bootstrap";
+export type TeacherSessionAuthority = "account" | "legacy_account" | "bootstrap" | "mockup";
 
 export interface TeacherSession {
     schemaVersion: 1;
@@ -137,6 +140,7 @@ export function isTeacherSessionActive(session: TeacherSession | null | undefine
             && Number.isSafeInteger(session.accountSessionGeneration)
             && (session.accountSessionGeneration || 0) >= 1;
     }
+    if (session.sessionAuthority === "mockup") return isExactMockupTeacherIdentity(session);
     return session.sessionAuthority === "legacy_account" || session.sessionAuthority === "bootstrap";
 }
 
@@ -147,8 +151,10 @@ export function parseTeacherSession(raw: string | null | undefined, now = Date.n
         const sessionAuthority = parsed.sessionAuthority === "account"
             || parsed.sessionAuthority === "legacy_account"
             || parsed.sessionAuthority === "bootstrap"
+            || parsed.sessionAuthority === "mockup"
             ? parsed.sessionAuthority
             : undefined;
+        if (sessionAuthority === "mockup" && !isExactMockupTeacherIdentity(parsed)) return null;
         const session: TeacherSession = {
             schemaVersion: parsed.schemaVersion === 1 ? 1 : 1,
             role: "teacher",

@@ -30,6 +30,7 @@ import {
     TEACHER_SERVER_SESSION_COOKIE,
 } from "@/lib/teacherServerSession";
 import { applyDurableRateLimit } from "@/lib/durableRateLimit";
+import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 
 const AI_ACTION_DURABLE_POLICY = { limit: 6, windowMs: 60 * 1000 };
 
@@ -38,7 +39,7 @@ async function requireTeacherAiAccess(): Promise<void> {
     const cookieStore = await cookies();
     const rawSessionCookie = cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value;
     const serverSession = await resolveAuthorizedTeacherSessionCookie(rawSessionCookie);
-    if (!serverSession) {
+    if (!serverSession || !isTeacherMutationAuthorized(serverSession)) {
         throw new Error("교사 로그인이 필요한 기능입니다. 다시 로그인해주세요.");
     }
     const authorization = authorizeTeacherAiActionRequest(

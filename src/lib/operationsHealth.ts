@@ -20,6 +20,10 @@ import {
 import { isRemoteAssetCleanupScheduled } from "./remoteAssetCleanup.server";
 import { resolveTeacherIdentityMode } from "./teacherIdentityMode.server";
 import {
+    probeConfiguredProvisionedTeacherCanary,
+    type ProvisionedTeacherCanaryReadiness,
+} from "./provisionedTeacherCanary.server";
+import {
     evaluateAssetGcReadiness,
     operationalRuntimeBuildSha,
     readOperationalJobStatusWithServiceRole,
@@ -146,6 +150,7 @@ export async function probeOperationalReadiness(
     ) => DeploymentReadinessSummary = buildDeploymentReadiness,
     deliveryProbe: (env: Env) => Promise<TeacherAccountDeliveryReadiness> = probeTeacherAccountDelivery,
     jobStatusProbe: (env: Env) => Promise<OperationalJobStatus | null> = readOperationalJobStatusWithServiceRole,
+    canaryProbe: (env: Env, signal?: AbortSignal) => Promise<ProvisionedTeacherCanaryReadiness> = probeConfiguredProvisionedTeacherCanary,
 ): Promise<OperationalReadinessPayload> {
     const sinkPromise = sinkProbe(env).catch(() => "probe_failed" as const);
     const attestation = stagingDeploymentAttestation(env);
@@ -204,6 +209,31 @@ export async function probeOperationalReadiness(
                 ...(result.version ? { version: result.version } : {}),
                 failedChecks: fatalConfigurationChecks,
             };
+        }
+        if (identityMode === "provisioned_only") {
+            let canaryTimer: ReturnType<typeof setTimeout> | undefined;
+            const canaryController = new AbortController();
+            const canaryReadiness = await Promise.race([
+                canaryProbe(env, canaryController.signal).catch(() => "not_ready" as const),
+                new Promise<"not_ready">(resolve => {
+                    canaryTimer = setTimeout(() => {
+                        canaryController.abort(new DOMException("Canary probe timed out", "TimeoutError"));
+                        resolve("not_ready");
+                    }, Math.max(1, timeoutMs));
+                }),
+            ]);
+            if (canaryTimer) clearTimeout(canaryTimer);
+            if (canaryReadiness !== "ready") {
+                return {
+                    status: "not_ready",
+                    database: "ready",
+                    observability,
+                    configuration: "not_ready",
+                    ...attestation,
+                    ...(result.version ? { version: result.version } : {}),
+                    failedChecks: ["configuration:provisioned_teacher_canary"],
+                };
+            }
         }
         const deliveryReadiness = identityMode === "self_service"
             ? await deliveryProbe(env).catch(() => "probe_failed" as const)

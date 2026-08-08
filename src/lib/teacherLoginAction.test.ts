@@ -99,7 +99,7 @@ vi.mock("@/lib/workspaceContext", () => ({
     workspaceContextFromIdentity: (identity: unknown) => identity,
 }));
 
-import { verifyTeacherPassword } from "@/app/actions/auth";
+import { startMockupTeacherSession, verifyTeacherPassword } from "@/app/actions/auth";
 
 const provisionedAccount = {
     accountId: "teacher_0123456789abcdef",
@@ -152,6 +152,27 @@ describe("teacher login action identity binding", () => {
         expect(controls.cookieSet).toHaveBeenCalledOnce();
         expect(controls.bootstrap).not.toHaveBeenCalled();
         expect(controls.loginSuccess).toHaveBeenCalledOnce();
+    });
+
+    it("returns one exact client-safe showcase snapshot without workspace bootstrap", async () => {
+        await expect(startMockupTeacherSession()).resolves.toMatchObject({
+            success: true,
+            teacher: {
+                teacherId: "omr-showcase",
+                email: "demo@omrmaker.kr",
+                displayName: "김하늘 선생님",
+                plan: "academy",
+            },
+            session: {
+                teacherId: "omr-showcase",
+                email: "demo@omrmaker.kr",
+                displayName: "김하늘 선생님",
+                plan: "academy",
+                sessionAuthority: "mockup",
+            },
+        });
+        expect(controls.cookieSet).toHaveBeenCalledOnce();
+        expect(controls.bootstrap).not.toHaveBeenCalled();
     });
 
     it("keeps all provisioned candidate failures non-enumerating and constant-work", async () => {

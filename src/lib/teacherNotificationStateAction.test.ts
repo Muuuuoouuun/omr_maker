@@ -123,6 +123,11 @@ describe("teacher notification state server action", () => {
         await expect(mutateTeacherNotificationState({ operation: "mark_read", notificationIds: [ID] }))
             .resolves.toEqual({ status: "unauthorized" });
 
+        controls.session = { teacherId: "omr-showcase", sessionAuthority: "mockup" };
+        await expect(mutateTeacherNotificationState({ operation: "mark_read", notificationIds: [ID] }))
+            .resolves.toEqual({ status: "unauthorized" });
+        expect(controls.loadSummary).not.toHaveBeenCalled();
+
         controls.session = { teacherId: "teacher-user", memberRole: "teacher" };
         await expect(mutateTeacherNotificationState({ operation: "clear", notificationIds: [ID] } as never))
             .resolves.toEqual({ status: "invalid_request" });

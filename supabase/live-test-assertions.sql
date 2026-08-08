@@ -7004,7 +7004,6 @@ begin
 end
 $$;
 
-select 'OMR live PostgreSQL verification passed' as result;
 -- Phase B: provisioned account -> exact tenant/owner/effective-plan login and
 -- request-time validation. These fixtures intentionally mutate the graph
 -- between calls to prove denial instead of repair.
@@ -7063,11 +7062,27 @@ begin
         raise exception 'provisioned teacher valid lookup envelope failed: %', v_result;
     end if;
     v_result := public.omr_lookup_teacher_account_v1('phase-b@example.com');
-    if pg_catalog.jsonb_typeof(v_result) <> 'object'
-       or v_result ->> 'id' <> v_account
-       or (select count(*) from pg_catalog.jsonb_object_keys(v_result)) <> 6 then
-        raise exception 'legacy self-service teacher lookup was not one exact JSONB object: %', v_result;
+    if v_result is not null
+       or public.omr_validate_teacher_session_v1(v_account, 7)
+       or public.omr_begin_teacher_password_reset_v1(
+           'teacher_token_' || repeat('p', 24), 'phase-b@example.com', repeat('9', 64),
+           now() + interval '1 hour'
+       ) then
+        raise exception 'pilot-ledger account entered a legacy lookup/session/reset path: %', v_result;
     end if;
+    insert into public.omr_teacher_account_tokens (
+        id, account_id, purpose, token_hash, expires_at
+    ) values (
+        'teacher_token_' || repeat('q', 24), v_account, 'password_reset',
+        repeat('8', 64), now() + interval '1 hour'
+    );
+    if public.omr_complete_teacher_password_reset_v1(
+        repeat('8', 64),
+        'pbkdf2-sha256:120000:ffeeddccbbaa99887766554433221100:' || repeat('b', 64)
+    ) or (select password_hash from public.omr_teacher_accounts where id = v_account) <> v_hash then
+        raise exception 'pilot-ledger account completed a legacy password reset';
+    end if;
+    delete from public.omr_teacher_account_tokens where id = 'teacher_token_' || repeat('q', 24);
     v_result := public.omr_validate_provisioned_teacher_session_v1(v_account, 7, v_org);
     if v_result is null or v_result ->> 'plan' <> 'pro'
        or (select count(*) from pg_catalog.jsonb_object_keys(v_result)) <> 7 then
@@ -7122,6 +7137,15 @@ begin
     end if;
     delete from public.omr_organization_members where organization_id = v_other_org and user_id = v_account;
 
+    insert into public.omr_organization_members (
+        organization_id, user_id, email, display_name, role, status
+    ) values (v_other_org, v_account, 'phase-b@example.com', 'Phase B 교사', 'owner', 'suspended');
+    if public.omr_lookup_provisioned_teacher_login_v1('phase-b@example.com') is not null
+       or public.omr_validate_provisioned_teacher_session_v1(v_account, 7, v_org) is not null then
+        raise exception 'provisioned teacher extra inactive membership was accepted or repaired';
+    end if;
+    delete from public.omr_organization_members where organization_id = v_other_org and user_id = v_account;
+
     delete from public.omr_teacher_profiles where organization_id = v_org and user_id = v_account;
     if public.omr_lookup_provisioned_teacher_login_v1('phase-b@example.com') is not null then
         raise exception 'provisioned teacher zero active profiles were accepted';
@@ -7140,11 +7164,39 @@ begin
     end if;
     delete from public.omr_teacher_profiles where organization_id = v_other_org and user_id = v_account;
 
+    insert into public.omr_teacher_profiles (organization_id, user_id, display_name, status)
+    values (v_other_org, v_account, 'Phase B 교사', 'inactive');
+    if public.omr_lookup_provisioned_teacher_login_v1('phase-b@example.com') is not null
+       or public.omr_validate_provisioned_teacher_session_v1(v_account, 7, v_org) is not null then
+        raise exception 'provisioned teacher extra inactive profile was accepted or repaired';
+    end if;
+    delete from public.omr_teacher_profiles where organization_id = v_other_org and user_id = v_account;
+
     update public.omr_teacher_accounts set status = 'disabled' where id = v_account;
     if public.omr_lookup_provisioned_teacher_login_v1('phase-b@example.com') is not null then
         raise exception 'provisioned teacher disabled account was accepted';
     end if;
     update public.omr_teacher_accounts set status = 'active' where id = v_account;
+
+    update public.omr_pilot_plan_grants
+       set state = 'superseded', superseded_at = now(), updated_at = now()
+     where id = 'pilot_grant_aaaaaaaaaaaaaaaaaaaaaaaa';
+    insert into public.omr_pilot_plan_grants (
+        id, idempotency_key_hash, request_hash, organization_id, account_id,
+        plan, expires_at, state
+    ) values (
+        'pilot_grant_ffffffffffffffffffffffff', repeat('f', 64), repeat('e', 64),
+        v_org, v_zero_account, 'academy', now() + interval '2 hours', 'active'
+    );
+    if public.omr_lookup_provisioned_teacher_login_v1('phase-b@example.com') is not null
+       or public.omr_validate_provisioned_teacher_session_v1(v_account, 7, v_org) is not null then
+        raise exception 'provisioned teacher inherited another account grant in the same organization';
+    end if;
+    delete from public.omr_pilot_plan_grants
+     where id = 'pilot_grant_ffffffffffffffffffffffff';
+    update public.omr_pilot_plan_grants
+       set state = 'active', superseded_at = null, updated_at = now()
+     where id = 'pilot_grant_aaaaaaaaaaaaaaaaaaaaaaaa';
 
     update public.omr_pilot_plan_grants
        set created_at = now() - interval '2 hours',
@@ -7172,21 +7224,31 @@ declare
 begin
     foreach v_role in array array['anon', 'authenticated'] loop
         if pg_catalog.has_function_privilege(v_role, 'public.omr_lookup_teacher_account_v1(text)', 'EXECUTE')
+           or pg_catalog.has_function_privilege(v_role, 'public.omr_validate_teacher_session_v1(text,bigint)', 'EXECUTE')
+           or pg_catalog.has_function_privilege(v_role, 'public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz)', 'EXECUTE')
+           or pg_catalog.has_function_privilege(v_role, 'public.omr_complete_teacher_password_reset_v1(text,text)', 'EXECUTE')
            or pg_catalog.has_function_privilege(v_role, 'public.omr_lookup_provisioned_teacher_login_v1(text)', 'EXECUTE')
-           or pg_catalog.has_function_privilege(v_role, 'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)', 'EXECUTE') then
+           or pg_catalog.has_function_privilege(v_role, 'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)', 'EXECUTE')
+           or pg_catalog.has_function_privilege(v_role, 'public.omr_probe_provisioned_teacher_canary_v1(text)', 'EXECUTE') then
             raise exception 'provisioned teacher login RPC exposed to %', v_role;
         end if;
     end loop;
     if not pg_catalog.has_function_privilege('service_role', 'public.omr_lookup_teacher_account_v1(text)', 'EXECUTE')
+       or not pg_catalog.has_function_privilege('service_role', 'public.omr_validate_teacher_session_v1(text,bigint)', 'EXECUTE')
+       or not pg_catalog.has_function_privilege('service_role', 'public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz)', 'EXECUTE')
+       or not pg_catalog.has_function_privilege('service_role', 'public.omr_complete_teacher_password_reset_v1(text,text)', 'EXECUTE')
        or not pg_catalog.has_function_privilege('service_role', 'public.omr_lookup_provisioned_teacher_login_v1(text)', 'EXECUTE')
-       or not pg_catalog.has_function_privilege('service_role', 'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)', 'EXECUTE') then
+       or not pg_catalog.has_function_privilege('service_role', 'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)', 'EXECUTE')
+       or not pg_catalog.has_function_privilege('service_role', 'public.omr_probe_provisioned_teacher_canary_v1(text)', 'EXECUTE') then
         raise exception 'provisioned teacher login RPC unavailable to service_role';
     end if;
 end
 $phase_b_acl$;
 
 begin;
-delete from public.omr_teacher_accounts where id = 'teacher_cccccccccccccccc';
+delete from public.omr_teacher_accounts where id in (
+    'teacher_cccccccccccccccc', 'teacher_dddddddddddddddd'
+);
 delete from public.omr_organizations where id = 'pilot_org_cccccccccccccccccccccccc';
 insert into public.omr_organizations (id, name, plan, metadata)
 values ('pilot_org_cccccccccccccccccccccccc', 'Service Role 학원', 'free', '{}'::jsonb);
@@ -7196,6 +7258,13 @@ insert into public.omr_teacher_accounts (
     'teacher_cccccccccccccccc', 'phase-b-service@example.com', 'Service Role 교사',
     'pbkdf2-sha256:120000:00112233445566778899aabbccddeeff:' || repeat('c', 64),
     'active', now(), 11
+);
+insert into public.omr_teacher_accounts (
+    id, email, display_name, password_hash, status, email_verified_at, session_generation
+) values (
+    'teacher_dddddddddddddddd', 'phase-b-legacy@example.com', 'Legacy 교사',
+    'pbkdf2-sha256:120000:00112233445566778899aabbccddeeff:' || repeat('d', 64),
+    'active', now(), 4
 );
 insert into public.omr_organization_members (
     organization_id, user_id, email, display_name, role, status
@@ -7216,9 +7285,29 @@ insert into public.omr_pilot_plan_grants (
     'pilot_org_cccccccccccccccccccccccc', 'teacher_cccccccccccccccc',
     'academy', now() + interval '2 hours', 'active'
 );
+insert into public.omr_audit_logs (
+    id, organization_id, actor_user_id, action, entity_type, entity_id, metadata
+)
+select 'audit_pilot_' || repeat('c', 24), grant_row.organization_id, 'operator:live',
+       'operator.pilot_teacher_provisioned', 'pilot_plan_grant', grant_row.id,
+       pg_catalog.jsonb_build_object(
+           'grantId', grant_row.id,
+           'afterPlan', grant_row.plan,
+           'expiresAt', pg_catalog.to_char(
+               grant_row.expires_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+           ),
+           'afterSessionGeneration', 11
+       )
+  from public.omr_pilot_plan_grants grant_row
+ where grant_row.id = 'pilot_grant_cccccccccccccccccccccccc';
 do $phase_b_service_fixture$
 declare
     v_result jsonb;
+    v_audit public.omr_audit_logs%rowtype;
+    v_created_at timestamptz;
+    v_expires_at timestamptz;
+    v_before jsonb;
+    v_after jsonb;
 begin
     v_result := public.omr_validate_provisioned_teacher_session_v1(
         'teacher_cccccccccccccccc', 11, 'pilot_org_cccccccccccccccccccccccc'
@@ -7228,6 +7317,117 @@ begin
        or v_result ->> 'plan' <> 'academy' then
         raise exception 'provisioned teacher postgres fixture validation failed: %', v_result;
     end if;
+    v_before := pg_catalog.jsonb_build_object(
+        'accounts', (select count(*) from public.omr_teacher_accounts),
+        'members', (select count(*) from public.omr_organization_members),
+        'profiles', (select count(*) from public.omr_teacher_profiles),
+        'grants', (select count(*) from public.omr_pilot_plan_grants),
+        'audits', (select count(*) from public.omr_audit_logs)
+    );
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')
+       <> '{"ready": true}'::jsonb
+       or public.omr_probe_provisioned_teacher_canary_v1('teacher_bad')
+       <> '{"ready": false}'::jsonb then
+        raise exception 'provisioned teacher canary valid/invalid envelope failed';
+    end if;
+    v_after := pg_catalog.jsonb_build_object(
+        'accounts', (select count(*) from public.omr_teacher_accounts),
+        'members', (select count(*) from public.omr_organization_members),
+        'profiles', (select count(*) from public.omr_teacher_profiles),
+        'grants', (select count(*) from public.omr_pilot_plan_grants),
+        'audits', (select count(*) from public.omr_audit_logs)
+    );
+    if v_after is distinct from v_before then raise exception 'canary probe mutated state'; end if;
+
+    select * into v_audit from public.omr_audit_logs
+     where id = 'audit_pilot_' || repeat('c', 24);
+    delete from public.omr_audit_logs where id = v_audit.id;
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted missing audit'; end if;
+    insert into public.omr_audit_logs select (v_audit).*;
+    insert into public.omr_audit_logs (
+        id, organization_id, actor_user_id, action, entity_type, entity_id, metadata, created_at
+    ) values (
+        'audit_pilot_' || repeat('d', 24), v_audit.organization_id, v_audit.actor_user_id,
+        v_audit.action, v_audit.entity_type, v_audit.entity_id, v_audit.metadata, v_audit.created_at
+    );
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted duplicate matching audit'; end if;
+    delete from public.omr_audit_logs where id = 'audit_pilot_' || repeat('d', 24);
+    update public.omr_audit_logs
+       set metadata = pg_catalog.jsonb_set(metadata, '{afterSessionGeneration}', '10'::jsonb)
+     where id = v_audit.id;
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted mismatched audit generation'; end if;
+    update public.omr_audit_logs set metadata = v_audit.metadata where id = v_audit.id;
+
+    update public.omr_teacher_accounts set status = 'disabled' where id = 'teacher_cccccccccccccccc';
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted disabled account'; end if;
+    update public.omr_teacher_accounts set status = 'active', session_generation = 11
+     where id = 'teacher_cccccccccccccccc';
+    update public.omr_organizations set plan = 'academy'
+     where id = 'pilot_org_cccccccccccccccccccccccc';
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted forged legacy organization plan'; end if;
+    update public.omr_organizations set plan = 'free'
+     where id = 'pilot_org_cccccccccccccccccccccccc';
+
+    insert into public.omr_organization_members (
+        organization_id, user_id, email, display_name, role, status
+    ) values (
+        'pilot_org_bbbbbbbbbbbbbbbbbbbbbbbb', 'teacher_cccccccccccccccc',
+        'phase-b-service@example.com', 'Service Role 교사', 'owner', 'suspended'
+    );
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted extra inactive membership'; end if;
+    delete from public.omr_organization_members
+     where organization_id = 'pilot_org_bbbbbbbbbbbbbbbbbbbbbbbb'
+       and user_id = 'teacher_cccccccccccccccc';
+    insert into public.omr_teacher_profiles (organization_id, user_id, display_name, status)
+    values (
+        'pilot_org_bbbbbbbbbbbbbbbbbbbbbbbb', 'teacher_cccccccccccccccc',
+        'Service Role 교사', 'inactive'
+    );
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted extra inactive profile'; end if;
+    delete from public.omr_teacher_profiles
+     where organization_id = 'pilot_org_bbbbbbbbbbbbbbbbbbbbbbbb'
+       and user_id = 'teacher_cccccccccccccccc';
+
+    insert into public.omr_pilot_plan_grants (
+        id, idempotency_key_hash, request_hash, organization_id, account_id,
+        plan, expires_at, state, created_at, updated_at
+    ) values (
+        'pilot_grant_' || repeat('e', 24), repeat('e', 64), repeat('f', 64),
+        'pilot_org_bbbbbbbbbbbbbbbbbbbbbbbb', 'teacher_cccccccccccccccc',
+        'pro', now() - interval '1 hour', 'active', now() - interval '2 hours', now()
+    );
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted extra expired unsuperseded grant'; end if;
+    delete from public.omr_pilot_plan_grants where id = 'pilot_grant_' || repeat('e', 24);
+
+    select created_at, expires_at into v_created_at, v_expires_at
+      from public.omr_pilot_plan_grants where id = 'pilot_grant_cccccccccccccccccccccccc';
+    update public.omr_pilot_plan_grants
+       set created_at = pg_catalog.clock_timestamp() - interval '2 hours',
+           expires_at = pg_catalog.clock_timestamp() - interval '1 hour',
+           updated_at = pg_catalog.clock_timestamp()
+     where id = 'pilot_grant_cccccccccccccccccccccccc';
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted expired grant'; end if;
+    update public.omr_pilot_plan_grants
+       set created_at = v_created_at, expires_at = v_expires_at, updated_at = pg_catalog.clock_timestamp()
+     where id = 'pilot_grant_cccccccccccccccccccccccc';
+    update public.omr_pilot_plan_grants
+       set state = 'superseded', superseded_at = pg_catalog.clock_timestamp(),
+           updated_at = pg_catalog.clock_timestamp()
+     where id = 'pilot_grant_cccccccccccccccccccccccc';
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')->>'ready' <> 'false'
+    then raise exception 'canary accepted superseded grant'; end if;
+    update public.omr_pilot_plan_grants
+       set state = 'active', superseded_at = null, updated_at = pg_catalog.clock_timestamp()
+     where id = 'pilot_grant_cccccccccccccccccccccccc';
 end
 $phase_b_service_fixture$;
 set local role service_role;
@@ -7235,6 +7435,10 @@ do $phase_b_service_role$
 declare
     v_result jsonb;
 begin
+    if public.omr_probe_provisioned_teacher_canary_v1('teacher_cccccccccccccccc')
+       <> '{"ready": true}'::jsonb then
+        raise exception 'provisioned teacher canary service_role execution failed';
+    end if;
     v_result := public.omr_validate_provisioned_teacher_session_v1(
         'teacher_cccccccccccccccc', 11, 'pilot_org_cccccccccccccccccccccccc'
     );
@@ -7251,12 +7455,111 @@ begin
         raise exception 'provisioned teacher lookup service_role execution failed: %', v_result;
     end if;
     v_result := public.omr_lookup_teacher_account_v1('phase-b-service@example.com');
-    if v_result ->> 'id' <> 'teacher_cccccccccccccccc' then
-        raise exception 'legacy self-service lookup service_role execution failed: %', v_result;
+    if v_result is not null
+       or public.omr_validate_teacher_session_v1('teacher_cccccccccccccccc', 11)
+       or public.omr_begin_teacher_password_reset_v1(
+           'teacher_token_' || repeat('s', 24), 'phase-b-service@example.com',
+           repeat('7', 64), now() + interval '1 hour'
+       ) then
+        raise exception 'pilot account entered legacy service_role path: %', v_result;
+    end if;
+    v_result := public.omr_lookup_teacher_account_v1('phase-b-legacy@example.com');
+    if v_result ->> 'id' <> 'teacher_dddddddddddddddd'
+       or not public.omr_validate_teacher_session_v1('teacher_dddddddddddddddd', 4)
+       or not public.omr_begin_teacher_password_reset_v1(
+           'teacher_token_' || repeat('l', 24), 'phase-b-legacy@example.com',
+           repeat('6', 64), now() + interval '1 hour'
+       ) then
+        raise exception 'genuine legacy self-service boundary failed: %', v_result;
     end if;
 end
 $phase_b_service_role$;
 rollback;
+
+-- Password-reset ingress and pilot provisioning share the exact email lock.
+-- Regardless of which connection wins, no usable legacy reset token may remain.
+delete from public.omr_teacher_accounts where id = 'teacher_eeeeeeeeeeeeeeee';
+delete from public.omr_organizations where id = 'pilot_org_ffffffffffffffffffffffff';
+insert into public.omr_organizations (id, name, plan, metadata)
+values ('pilot_org_ffffffffffffffffffffffff', 'Reset Race School', 'free', '{}'::jsonb);
+insert into public.omr_teacher_accounts (
+    id, email, display_name, password_hash, status, email_verified_at, session_generation
+) values (
+    'teacher_eeeeeeeeeeeeeeee', 'reset-race@example.test', 'Reset Race Teacher',
+    'pbkdf2-sha256:120000:0123456789abcdef0123456789abcdef:' || repeat('a', 64),
+    'active', now(), 3
+);
+insert into public.omr_organization_members (
+    organization_id, user_id, email, display_name, role, status
+) values (
+    'pilot_org_ffffffffffffffffffffffff', 'teacher_eeeeeeeeeeeeeeee',
+    'reset-race@example.test', 'Reset Race Teacher', 'owner', 'active'
+);
+insert into public.omr_teacher_profiles (organization_id, user_id, display_name, status)
+values (
+    'pilot_org_ffffffffffffffffffffffff', 'teacher_eeeeeeeeeeeeeeee',
+    'Reset Race Teacher', 'active'
+);
+do $phase_b_reset_race$
+declare
+    v_reset_result text;
+    v_provision_result text;
+    v_sent integer;
+    v_expiry timestamptz := pg_catalog.clock_timestamp() + interval '1 day';
+begin
+    perform extensions.dblink_connect(
+        'phase-b-reset-race',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_connect(
+        'phase-b-provision-race',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    v_sent := extensions.dblink_send_query(
+        'phase-b-reset-race',
+        'select public.omr_begin_teacher_password_reset_v1('
+        || quote_literal('teacher_token_' || repeat('r', 24)) || ','
+        || quote_literal('reset-race@example.test') || ',' || quote_literal(repeat('5', 64)) || ','
+        || quote_literal(v_expiry) || '::timestamptz)::text'
+    );
+    if v_sent <> 1 then raise exception 'reset race query was not dispatched'; end if;
+    v_sent := extensions.dblink_send_query(
+        'phase-b-provision-race',
+        'select public.omr_provision_pilot_teacher_v1('
+        || quote_literal('Reset Race School') || ',' || quote_literal('reset-race@example.test') || ','
+        || quote_literal('Reset Race Teacher') || ','
+        || quote_literal('pbkdf2-sha256:120000:0123456789abcdef0123456789abcdef:' || repeat('b', 64)) || ','
+        || quote_literal('pro') || ',' || quote_literal(v_expiry) || '::timestamptz,'
+        || quote_literal('operator:live') || ',' || quote_literal('reset_race') || ','
+        || quote_literal('prov_reset_race_0123456789abcdef0123456789abcdef') || ')::text'
+    );
+    if v_sent <> 1 then raise exception 'provision race query was not dispatched'; end if;
+    select result.recorded into v_reset_result
+      from extensions.dblink_get_result('phase-b-reset-race') as result(recorded text);
+    select result.recorded into v_provision_result
+      from extensions.dblink_get_result('phase-b-provision-race') as result(recorded text);
+    perform extensions.dblink_disconnect('phase-b-reset-race');
+    perform extensions.dblink_disconnect('phase-b-provision-race');
+    if v_provision_result is null
+       or v_reset_result not in ('true', 'false')
+       or not exists (
+           select 1 from public.omr_pilot_plan_grants
+            where account_id = 'teacher_eeeeeeeeeeeeeeee'
+       )
+       or exists (
+           select 1 from public.omr_teacher_account_tokens
+            where account_id = 'teacher_eeeeeeeeeeeeeeee'
+              and purpose = 'password_reset' and consumed_at is null
+       ) then
+        raise exception 'reset/provision race left a usable pilot legacy token: reset=%, provision=%',
+            v_reset_result, v_provision_result;
+    end if;
+end
+$phase_b_reset_race$;
+delete from public.omr_teacher_accounts where id = 'teacher_eeeeeeeeeeeeeeee';
+delete from public.omr_organizations where id = 'pilot_org_ffffffffffffffffffffffff';
 
 do $phase_b_drift$
 declare
@@ -7265,6 +7568,12 @@ declare
     );
     v_definition text := pg_catalog.pg_get_functiondef(
         'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'::pg_catalog.regprocedure
+    );
+    v_legacy_validator_definition text := pg_catalog.pg_get_functiondef(
+        'public.omr_validate_teacher_session_v1(text,bigint)'::pg_catalog.regprocedure
+    );
+    v_canary_definition text := pg_catalog.pg_get_functiondef(
+        'public.omr_probe_provisioned_teacher_canary_v1(text)'::pg_catalog.regprocedure
     );
     v_readiness jsonb;
 begin
@@ -7296,6 +7605,37 @@ begin
         raise exception 'provisioned teacher validator body drift passed named readiness: %', v_readiness;
     end if;
     execute v_definition;
+    execute $legacy_validator_replace$
+        create or replace function public.omr_validate_teacher_session_v1(
+            p_account_id text, p_session_generation bigint
+        ) returns boolean language sql stable security definer set search_path = ''
+          set statement_timeout = '5s' set lock_timeout = '2s'
+        as 'select true'
+    $legacy_validator_replace$;
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness ->> 'provisionedTeacherLoginReady' <> 'false'
+       or v_readiness ->> 'ready' <> 'false' then
+        execute v_legacy_validator_definition;
+        raise exception 'legacy validator provenance body drift passed readiness: %', v_readiness;
+    end if;
+    execute v_legacy_validator_definition;
+    execute $canary_replace$
+        create or replace function public.omr_probe_provisioned_teacher_canary_v1(
+            p_account_id text
+        ) returns jsonb language sql stable security definer set search_path = ''
+          set statement_timeout = '5s' set lock_timeout = '2s'
+        as 'select ''{"ready": true}''::jsonb'
+    $canary_replace$;
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness ->> 'provisionedTeacherLoginReady' <> 'false'
+       or v_readiness ->> 'ready' <> 'false' then
+        execute v_canary_definition;
+        raise exception 'provisioned canary body drift passed named readiness: %', v_readiness;
+    end if;
+    execute v_canary_definition;
+    if public.omr_service_readiness_v1() ->> 'provisionedTeacherLoginReady' <> 'true' then
+        raise exception 'provisioned canary body restore did not recover readiness';
+    end if;
     execute $overload$
         create function public.omr_validate_provisioned_teacher_session_v1(
             p_account_id text, p_session_generation bigint, p_organization_id text,
@@ -7315,3 +7655,5 @@ delete from public.omr_teacher_accounts
  where id in ('teacher_aaaaaaaaaaaaaaaa', 'teacher_bbbbbbbbbbbbbbbb');
 delete from public.omr_organizations
  where id in ('pilot_org_aaaaaaaaaaaaaaaaaaaaaaaa', 'pilot_org_bbbbbbbbbbbbbbbbbbbbbbbb');
+
+select 'OMR live PostgreSQL verification passed' as result;

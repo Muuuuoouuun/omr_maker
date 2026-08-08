@@ -1316,18 +1316,15 @@ begin
         );
 
     v_provisioned_teacher_login_ready :=
-        pg_catalog.to_regprocedure(
-            'public.omr_lookup_teacher_account_v1(text)'
-        ) is not null
-        and
-        pg_catalog.to_regprocedure(
-            'public.omr_lookup_provisioned_teacher_login_v1(text)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'
-        ) is not null
+        pg_catalog.to_regprocedure('public.omr_lookup_teacher_account_v1(text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_validate_teacher_session_v1(text,bigint)') is not null
+        and pg_catalog.to_regprocedure('public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz)') is not null
+        and pg_catalog.to_regprocedure('public.omr_complete_teacher_password_reset_v1(text,text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_lookup_provisioned_teacher_login_v1(text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_probe_provisioned_teacher_canary_v1(text)') is not null
         and (
-            select pg_catalog.count(*) = 3
+            select pg_catalog.count(*) = 7
                and pg_catalog.bool_and(
                    routine.prosecdef
                    and routine.prokind = 'f'
@@ -1335,14 +1332,42 @@ begin
                        (routine.proname = 'omr_lookup_teacher_account_v1'
                         and pg_catalog.oidvectortypes(routine.proargtypes) = 'text')
                        or
+                       (routine.proname = 'omr_validate_teacher_session_v1'
+                        and pg_catalog.oidvectortypes(routine.proargtypes) = 'text, bigint')
+                       or
+                       (routine.proname = 'omr_begin_teacher_password_reset_v1'
+                        and pg_catalog.oidvectortypes(routine.proargtypes) = 'text, text, text, timestamp with time zone')
+                       or
+                       (routine.proname = 'omr_complete_teacher_password_reset_v1'
+                        and pg_catalog.oidvectortypes(routine.proargtypes) = 'text, text')
+                       or
                        (routine.proname = 'omr_lookup_provisioned_teacher_login_v1'
                         and pg_catalog.oidvectortypes(routine.proargtypes) = 'text')
                        or
                        (routine.proname = 'omr_validate_provisioned_teacher_session_v1'
                         and pg_catalog.oidvectortypes(routine.proargtypes) = 'text, bigint, text')
+                       or
+                       (routine.proname = 'omr_probe_provisioned_teacher_canary_v1'
+                        and pg_catalog.oidvectortypes(routine.proargtypes) = 'text')
                    )
                    and pg_catalog.pg_get_userbyid(routine.proowner) = 'postgres'
-                   and pg_catalog.pg_get_function_result(routine.oid) = 'jsonb'
+                   and (
+                       (routine.proname in (
+                           'omr_validate_teacher_session_v1',
+                           'omr_begin_teacher_password_reset_v1',
+                           'omr_complete_teacher_password_reset_v1'
+                        ) and pg_catalog.pg_get_function_result(routine.oid) = 'boolean')
+                       or
+                       (routine.proname not in (
+                           'omr_validate_teacher_session_v1',
+                           'omr_begin_teacher_password_reset_v1',
+                           'omr_complete_teacher_password_reset_v1'
+                        ) and pg_catalog.pg_get_function_result(routine.oid) = 'jsonb')
+                   )
+                   and (
+                       routine.proname <> 'omr_probe_provisioned_teacher_canary_v1'
+                       or routine.provolatile = 's'
+                   )
                    and routine.proconfig @> array[
                        'search_path=""', 'statement_timeout=5s', 'lock_timeout=2s'
                    ]::text[]
@@ -1355,14 +1380,30 @@ begin
              where namespace.nspname = 'public'
                and routine.proname in (
                    'omr_lookup_teacher_account_v1',
+                   'omr_validate_teacher_session_v1',
+                   'omr_begin_teacher_password_reset_v1',
+                   'omr_complete_teacher_password_reset_v1',
                    'omr_lookup_provisioned_teacher_login_v1',
-                   'omr_validate_provisioned_teacher_session_v1'
+                   'omr_validate_provisioned_teacher_session_v1',
+                   'omr_probe_provisioned_teacher_canary_v1'
                )
         )
         and pg_catalog.obj_description(
             'public.omr_lookup_teacher_account_v1(text)'::pg_catalog.regprocedure,
             'pg_proc'
         ) = 'exact legacy self-service teacher account lookup envelope:202608080007'
+        and pg_catalog.obj_description(
+            'public.omr_validate_teacher_session_v1(text,bigint)'::pg_catalog.regprocedure,
+            'pg_proc'
+        ) = 'legacy self-service session validation excluding pilot provenance:202608080007'
+        and pg_catalog.obj_description(
+            'public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz)'::pg_catalog.regprocedure,
+            'pg_proc'
+        ) = 'legacy self-service password-reset ingress excluding pilot provenance:202608080007'
+        and pg_catalog.obj_description(
+            'public.omr_complete_teacher_password_reset_v1(text,text)'::pg_catalog.regprocedure,
+            'pg_proc'
+        ) = 'legacy self-service password-reset completion excluding pilot provenance:202608080007'
         and pg_catalog.obj_description(
             'public.omr_lookup_provisioned_teacher_login_v1(text)'::pg_catalog.regprocedure,
             'pg_proc'
@@ -1371,15 +1412,31 @@ begin
             'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'::pg_catalog.regprocedure,
             'pg_proc'
         ) = 'request-time provisioned teacher binding and entitlement validation:202608080007'
+        and pg_catalog.obj_description(
+            'public.omr_probe_provisioned_teacher_canary_v1(text)'::pg_catalog.regprocedure,
+            'pg_proc'
+        ) = 'side-effect-free exact provisioned teacher release canary:202608080007'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_lookup_teacher_account_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '742e37f333ed502c7c78f183fd28474770a30b3df1725550c8193436d7f3d70c'
+        ), 'sha256'), 'hex') = '1516cbbe5f44bddf3c683f90b99721b3f7399d5d1c8a84fa4a5bc71f1f7a5101'
+        and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
+            'public.omr_validate_teacher_session_v1(text,bigint)'::pg_catalog.regprocedure
+        ), 'sha256'), 'hex') = 'bf69cc465b78ca4bfc8fdd9a117320ea056f5d2508666f77ceb9ac3b4079d5a4'
+        and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
+            'public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz)'::pg_catalog.regprocedure
+        ), 'sha256'), 'hex') = 'e40b1ef3b480d17343722d65768cac963ecce235e9c1c0c848b7ad41a344a3e9'
+        and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
+            'public.omr_complete_teacher_password_reset_v1(text,text)'::pg_catalog.regprocedure
+        ), 'sha256'), 'hex') = 'c0398cd9badc1b495517f39902e7383413f8051e487425cdd1e18880213b64ba'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_lookup_provisioned_teacher_login_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '2d11e1024fd3ae900f1d0cd7cc451186487d727227dabb97471ea4f7c8816785'
+        ), 'sha256'), 'hex') = 'aabf7ecf6c20e281b8c19662280f5af0b3f25bf0f874053adc76f77ff0799de9'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '2a7b831a133a947f9aee5e499c50a679c2ac526441d51ecbd5b4b3395b9a0190';
+        ), 'sha256'), 'hex') = '62b67281c2132c3f80a6a8cf415227ba38a24e0bfffa483be01ce7437b5227c9'
+        and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
+            'public.omr_probe_provisioned_teacher_canary_v1(text)'::pg_catalog.regprocedure
+        ), 'sha256'), 'hex') = '0302d984bd9f280d887ff17d7953f1e3346b36631ed0bc40ef2e55be5a61cb4e';
 
     v_teacher_live_sessions_ready :=
         pg_catalog.to_regclass('public.omr_attempt_sessions_teacher_live_idx') is not null
@@ -1602,7 +1659,7 @@ begin
                and trigger_row.tgenabled <> 'D'
         )
         and position(
-            'session_generation = session_generation + 1' in lower(pg_catalog.pg_get_functiondef(
+            'session_generation = account.session_generation + 1' in lower(pg_catalog.pg_get_functiondef(
                 'public.omr_complete_teacher_password_reset_v1(text,text)'::pg_catalog.regprocedure
             ))
         ) > 0

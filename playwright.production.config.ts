@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
     testDir: "./e2e",
     testMatch: /(?:full-journey|teacher-pages|production-security)\.spec\.ts/,
-    grep: /Teacher and student full journey|issued student start code gates the student portal login|production root boot scrubs legacy student start codes/,
+    grep: /Teacher and student full journey|issued student start code gates the student portal login|production root boot scrubs legacy student start codes|production showcase button preserves exact read-only mockup authority/,
     fullyParallel: false,
     forbidOnly: !!process.env.CI,
     retries: process.env.CI ? 1 : 0,

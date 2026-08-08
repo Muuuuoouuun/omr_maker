@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { TeacherAccountGatewayClient } from "./teacherAccountGateway";
+import { MOCKUP_TEACHER_IDENTITY } from "./mockupAccount";
 import * as teacherServerSession from "./teacherServerSession";
 
 const TOKEN = "tkn_abc123_0123456789abcdef0123456789abcdef";
@@ -170,6 +171,73 @@ describe("teacher account session revocation", () => {
             legacyAccountCookie,
             { env: ENV, now: 1_000, accountClient: client },
         )).resolves.toBeNull();
+        expect(client.rpc).not.toHaveBeenCalled();
+    });
+
+    it("accepts only the exact signed showcase authority in provisioned-only mode", async () => {
+        const exact = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            sessionAuthority: "mockup" as never,
+        }, ENV, 1_000);
+        const bootstrapLookalike = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            sessionAuthority: "bootstrap",
+        }, ENV, 1_000);
+        const wrongId = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            teacherId: "omr-showcase-copy",
+            sessionAuthority: "mockup" as never,
+        }, ENV, 1_000);
+        const roleEscalation = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            memberRole: "owner",
+            sessionAuthority: "mockup" as never,
+        }, ENV, 1_000);
+        const tenantEscalation = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "Injected",
+            sessionAuthority: "mockup" as never,
+        }, ENV, 1_000);
+        const wrongEmail = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            email: "attacker@example.com",
+            sessionAuthority: "mockup" as never,
+        }, ENV, 1_000);
+        const wrongDisplay = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            displayName: "Injected",
+            sessionAuthority: "mockup" as never,
+        }, ENV, 1_000);
+        const wrongPlan = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            plan: "free",
+            sessionAuthority: "mockup" as never,
+        }, ENV, 1_000);
+        const generationEscalation = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            accountSessionGeneration: 1,
+            sessionAuthority: "mockup" as never,
+        }, ENV, 1_000);
+        const client = clientWith(true);
+
+        await expect(teacherServerSession.resolveAuthorizedTeacherSessionCookie(
+            exact, { env: ENV, now: 1_000, accountClient: client },
+        )).resolves.toBeNull();
+        await expect(teacherServerSession.resolveAuthorizedTeacherSessionCookie(
+            exact, { env: ENV, now: 1_000, accountClient: client, allowMockup: true },
+        )).resolves.toMatchObject({
+            ...MOCKUP_TEACHER_IDENTITY,
+            sessionAuthority: "mockup",
+        });
+        for (const cookie of [
+            bootstrapLookalike, wrongId, roleEscalation, tenantEscalation,
+            wrongEmail, wrongDisplay, wrongPlan, generationEscalation,
+        ]) {
+            await expect(teacherServerSession.resolveAuthorizedTeacherSessionCookie(
+                cookie, { env: ENV, now: 1_000, accountClient: client, allowMockup: true },
+            )).resolves.toBeNull();
+        }
         expect(client.rpc).not.toHaveBeenCalled();
     });
 

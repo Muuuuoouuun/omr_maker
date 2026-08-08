@@ -175,6 +175,7 @@ declare
         'omr_read_effective_workspace_plan_v1',
         'omr_lookup_provisioned_teacher_login_v1',
         'omr_validate_provisioned_teacher_session_v1',
+        'omr_probe_provisioned_teacher_canary_v1',
         'omr_authorize_teacher_asset_finalize_v1',
         'omr_enqueue_remote_asset_cleanup_v1',
         'omr_enqueue_exam_asset_cleanup_v1',

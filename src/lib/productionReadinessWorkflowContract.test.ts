@@ -14,6 +14,13 @@ function hasDefaultBranchOnlyGate(candidate: string): boolean {
 }
 
 describe("production readiness workflow release identity", () => {
+    it("passes the protected opaque provisioned teacher canary to the hosted verifier", () => {
+        expect(workflow).toContain(
+            "OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: ${{ secrets.OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID }}",
+        );
+        expect(operationsGuide).toContain("OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID");
+        expect(operationsGuide).toContain("configuration:provisioned_teacher_canary");
+    });
     it("documents the post-deploy one-shot GC before readiness while writes remain paused", () => {
         const bootstrap = operationsGuide.indexOf("/api/internal/asset-gc");
         const readiness = operationsGuide.indexOf("/api/readyz", bootstrap);

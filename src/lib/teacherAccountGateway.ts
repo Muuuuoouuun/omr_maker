@@ -4,7 +4,12 @@ export interface TeacherAccountGatewayClient {
     rpc(functionName: string, args: Record<string, unknown>): PromiseLike<{
         data: unknown;
         error: { message?: string } | null;
-    }>;
+    }> & {
+        abortSignal?(signal: AbortSignal): PromiseLike<{
+            data: unknown;
+            error: { message?: string } | null;
+        }>;
+    };
 }
 
 export interface ActiveTeacherAccount {
@@ -263,6 +268,27 @@ export async function validateProvisionedTeacherSession(
         memberRole: "owner", plan: plan as ProvisionedTeacherSessionValidation["plan"],
         grantExpiresAt: row.grantExpiresAt,
     };
+}
+
+/** Side-effect-free release canary; the envelope intentionally carries no account data. */
+export async function probeProvisionedTeacherCanary(
+    client: TeacherAccountGatewayClient,
+    accountId: string,
+    signal?: AbortSignal,
+): Promise<boolean> {
+    if (!ACCOUNT_ID_PATTERN.test(accountId)) return false;
+    let result: Awaited<ReturnType<TeacherAccountGatewayClient["rpc"]>>;
+    try {
+        const query = client.rpc("omr_probe_provisioned_teacher_canary_v1", {
+            p_account_id: accountId,
+        });
+        result = await (signal && query.abortSignal ? query.abortSignal(signal) : query);
+    } catch {
+        return false;
+    }
+    if (result.error) return false;
+    const row = exactOwnDataRecord(result.data, ["ready"]);
+    return row?.ready === true;
 }
 
 /** Lightweight request-time check; it never returns password/account data. */

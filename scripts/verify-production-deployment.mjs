@@ -13,6 +13,7 @@ const PROJECT_REF = /^[a-z0-9][a-z0-9-]{2,62}$/;
 const PREVIEW_DEPLOYMENT_ID = /^[A-Za-z0-9._:-]{3,200}$/;
 const PREVIEW_ARTIFACT_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const PREVIEW_ATTESTATION_SIGNATURE = /^[a-f0-9]{64}$/;
+const PROVISIONED_TEACHER_ACCOUNT_ID = /^teacher_[a-f0-9]{16}$/;
 const MAX_RESPONSE_BYTES = 32 * 1024;
 const REQUEST_TIMEOUT_MS = 12_000;
 const ASSET_GC_REQUEST_TIMEOUT_MS = 65_000;
@@ -194,6 +195,10 @@ export function resolveProductionDeploymentConfig(input) {
     const authenticatedJwt = strongSecret(env.OMR_PRODUCTION_AUTHENTICATED_JWT, "Production authenticated JWT");
     const serviceRoleKey = strongSecret(env.OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY, "Production service role key");
     const gcCronSecret = assetGcCronSecret(env.OMR_ASSET_GC_CRON_SECRET);
+    const canaryAccountId = env.OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID;
+    if (typeof canaryAccountId !== "string" || !PROVISIONED_TEACHER_ACCOUNT_ID.test(canaryAccountId)) {
+        throw new Error("Provisioned teacher canary account ID is missing or invalid");
+    }
     if (new Set([
         readinessToken,
         anonKey,
@@ -226,6 +231,7 @@ export function resolveProductionDeploymentConfig(input) {
         authenticatedJwt: { value: authenticatedJwt, enumerable: false },
         serviceRoleKey: { value: serviceRoleKey, enumerable: false },
         gcCronSecret: { value: gcCronSecret, enumerable: false },
+        canaryAccountId: { value: canaryAccountId, enumerable: false },
     });
     return Object.freeze(config);
 }
@@ -383,6 +389,25 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
         throw new Error("Production database readiness mismatch");
     }
 
+    const canaryUrl = new URL(
+        "/rest/v1/rpc/omr_probe_provisioned_teacher_canary_v1",
+        `${config.supabaseUrl}/`,
+    );
+    const canary = await requestJson(canaryUrl, {
+        method: "POST",
+        headers: {
+            accept: "application/json",
+            apikey: config.serviceRoleKey,
+            authorization: `Bearer ${config.serviceRoleKey}`,
+            "content-type": "application/json",
+            "user-agent": "omr-production-verifier/1",
+        },
+        body: JSON.stringify({ p_account_id: config.canaryAccountId }),
+    }, fetchImpl, [200]);
+    if (canary.body?.ready !== true || Object.keys(canary.body).length !== 1) {
+        throw new Error("Production provisioned teacher canary mismatch");
+    }
+
     const tableUrl = new URL("/rest/v1/omr_exams?select=id&limit=1", `${config.supabaseUrl}/`);
     const access = {};
     for (const [actor, bearer] of [["anon", config.anonKey], ["authenticated", config.authenticatedJwt]]) {
@@ -411,6 +436,7 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
             previewIdentityAttested: config.previewIdentityAttested,
         }),
         readinessVersion: config.expectedReadinessVersion,
+        provisionedTeacherCanary: "ready",
         databaseProjectRefHash: config.databaseProjectRefHash,
         schedulerPauseConfirmationHash: config.schedulerPauseConfirmationHash,
         assetGcBootstrap: Object.freeze({

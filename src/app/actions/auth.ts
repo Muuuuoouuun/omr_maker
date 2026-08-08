@@ -268,6 +268,7 @@ export async function startMockupTeacherSession(): Promise<{
     success: boolean;
     token?: string;
     teacher?: TeacherLoginIdentity;
+    session?: TeacherSession;
     error?: string;
 }> {
     const headerStore = await headers();
@@ -276,7 +277,11 @@ export async function startMockupTeacherSession(): Promise<{
     }
 
     const token = mintTeacherToken();
-    const serverSession = createSignedTeacherSessionCookie(token, MOCKUP_TEACHER_IDENTITY);
+    const mockupIdentity = {
+        ...MOCKUP_TEACHER_IDENTITY,
+        sessionAuthority: "mockup" as const,
+    };
+    const serverSession = createSignedTeacherSessionCookie(token, mockupIdentity);
     if (!serverSession) {
         return { success: false, error: TEACHER_AUTH_SESSION_CONFIG_ERROR };
     }
@@ -299,6 +304,7 @@ export async function startMockupTeacherSession(): Promise<{
         success: true,
         token,
         teacher: MOCKUP_TEACHER_IDENTITY,
+        session: createTeacherSession(token, Date.now(), mockupIdentity),
     };
 }
 

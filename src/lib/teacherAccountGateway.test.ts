@@ -5,6 +5,7 @@ import {
     completeTeacherPasswordReset,
     findActiveTeacherAccount,
     lookupProvisionedTeacherLogin,
+    probeProvisionedTeacherCanary,
     validateProvisionedTeacherSession,
     verifyTeacherEmail,
     type TeacherAccountGatewayClient,
@@ -111,6 +112,7 @@ describe("provisioned teacher account gateway", () => {
         expect(client.rpc).toHaveBeenCalledWith("omr_lookup_provisioned_teacher_login_v1", {
             p_identifier: "teacher@example.com",
         });
+        expect(client.rpc).toHaveBeenCalledTimes(1);
         await expect(lookupProvisionedTeacherLogin(clientWith({
             omr_lookup_provisioned_teacher_login_v1: { ...valid, unexpected: true },
         }), "teacher@example.com")).resolves.toBeNull();
@@ -144,7 +146,31 @@ describe("provisioned teacher account gateway", () => {
             p_session_generation: 3,
             p_organization_id: valid.organizationId,
         });
+        expect(client.rpc).toHaveBeenCalledTimes(1);
         await expect(validateProvisionedTeacherSession(client, valid.accountId, 3, "teacher_legacy1"))
             .resolves.toBeNull();
+    });
+
+    it("accepts only the exact one-call canary envelope", async () => {
+        const client = clientWith({ omr_probe_provisioned_teacher_canary_v1: { ready: true } });
+        await expect(probeProvisionedTeacherCanary(client, valid.accountId)).resolves.toBe(true);
+        expect(client.rpc).toHaveBeenCalledTimes(1);
+        expect(client.rpc).toHaveBeenCalledWith("omr_probe_provisioned_teacher_canary_v1", {
+            p_account_id: valid.accountId,
+        });
+        for (const data of [
+            { ready: false }, { ready: true, accountId: valid.accountId }, [{ ready: true }], null,
+        ]) {
+            await expect(probeProvisionedTeacherCanary(
+                clientWith({ omr_probe_provisioned_teacher_canary_v1: data }), valid.accountId,
+            )).resolves.toBe(false);
+        }
+        const getter = Object.defineProperty({}, "ready", { enumerable: true, get: () => true });
+        await expect(probeProvisionedTeacherCanary(
+            clientWith({ omr_probe_provisioned_teacher_canary_v1: getter }), valid.accountId,
+        )).resolves.toBe(false);
+        const invalid = clientWith({ omr_probe_provisioned_teacher_canary_v1: { ready: true } });
+        await expect(probeProvisionedTeacherCanary(invalid, "teacher_bad")).resolves.toBe(false);
+        expect(invalid.rpc).not.toHaveBeenCalled();
     });
 });

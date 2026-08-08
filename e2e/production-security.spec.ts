@@ -3,6 +3,28 @@ import { expect, test } from "@playwright/test";
 const LEGACY_STUDENT_CODES_KEY = "omr_student_codes";
 const LEGACY_RAW_CODE = "LEGACY-RAW-CODE-SECRET";
 
+test("production showcase button preserves exact read-only mockup authority", async ({ page }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("prod-"), "Production-build security contract.");
+    await page.goto("/?role=teacher");
+    await page.getByRole("button", { name: "데모 계정으로 둘러보기" }).click();
+    await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1$/, { timeout: 15_000 });
+    const session = await page.evaluate(() => JSON.parse(
+        window.sessionStorage.getItem("omr_teacher_session") || "null",
+    ));
+    expect(session).toMatchObject({
+        teacherId: "omr-showcase",
+        sessionAuthority: "mockup",
+        email: "demo@omrmaker.kr",
+        displayName: "김하늘 선생님",
+        plan: "academy",
+    });
+    expect(session).not.toHaveProperty("organizationId");
+    expect(session).not.toHaveProperty("memberRole");
+    expect(session).not.toHaveProperty("accountSessionGeneration");
+    await page.goto("/create");
+    await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1$/, { timeout: 15_000 });
+});
+
 test("production root boot scrubs legacy student start codes without reading or displaying them", async ({ page }, testInfo) => {
     test.skip(!testInfo.project.name.startsWith("prod-"), "Production-build security contract.");
 

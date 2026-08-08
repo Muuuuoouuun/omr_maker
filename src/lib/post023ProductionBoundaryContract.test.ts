@@ -37,7 +37,7 @@ describe("post-023 production boundary integration", () => {
         expect(boundary).toContain("session_generation");
         expect(boundary).toContain("omr_teacher_accounts_advance_session_on_disable");
         expect(boundary).toContain("omr_validate_teacher_session_v1(text,bigint)");
-        expect(boundary).toContain("session_generation = session_generation + 1");
+        expect(boundary).toContain("session_generation = account.session_generation + 1");
         expect(rollback).toContain("omr_validate_teacher_session_v1");
         expect(boundaryAssertions).toContain("omr_validate_teacher_session_v1(text,bigint)");
         expect(rollbackAssertions).toContain("omr_validate_teacher_session_v1(text,bigint)");

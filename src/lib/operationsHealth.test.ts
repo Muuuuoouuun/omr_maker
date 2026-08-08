@@ -44,6 +44,57 @@ function completeReadyProbe(): SupabaseDeploymentProbe {
 }
 
 describe("operational health", () => {
+    it("requires a bounded redacted dynamic canary only in provisioned mode", async () => {
+        const env = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: "teacher_0123456789abcdef",
+        };
+        const readyCanary = vi.fn(async () => "ready" as const);
+        await expect(probeOperationalReadiness(
+            env, async () => completeReadyProbe(), 20, async () => "ready",
+            readyConfigurationProbe, async () => "ready", async () => null, readyCanary,
+        )).resolves.toMatchObject({ status: "ready" });
+        expect(readyCanary).toHaveBeenCalledOnce();
+
+        for (const canary of [
+            vi.fn(async () => "not_ready" as const),
+            vi.fn(async () => { throw new Error(env.OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID); }),
+        ]) {
+            const result = await probeOperationalReadiness(
+                env, async () => completeReadyProbe(), 20, async () => "ready",
+                readyConfigurationProbe, async () => "ready", async () => null, canary,
+            );
+            expect(result).toMatchObject({
+                status: "not_ready",
+                configuration: "not_ready",
+                failedChecks: ["configuration:provisioned_teacher_canary"],
+            });
+            expect(JSON.stringify(result)).not.toContain(env.OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID);
+        }
+
+        let timeoutSignal: AbortSignal | undefined;
+        const hanging = vi.fn((_env: object, signal?: AbortSignal) => new Promise<"not_ready">(resolve => {
+            timeoutSignal = signal;
+            signal?.addEventListener("abort", () => resolve("not_ready"), { once: true });
+        }));
+        await expect(probeOperationalReadiness(
+            env, async () => completeReadyProbe(), 20, async () => "ready",
+            readyConfigurationProbe, async () => "ready", async () => null, hanging,
+        )).resolves.toMatchObject({
+            failedChecks: ["configuration:provisioned_teacher_canary"],
+        });
+        expect(timeoutSignal?.aborted).toBe(true);
+
+        const skipped = vi.fn(async () => "not_ready" as const);
+        await expect(probeOperationalReadiness(
+            { ...env, OMR_TEACHER_IDENTITY_MODE: "self_service" },
+            async () => completeReadyProbe(), 20, async () => "ready",
+            readyConfigurationProbe, async () => "ready", async () => null, skipped,
+        )).resolves.toMatchObject({ status: "ready" });
+        expect(skipped).not.toHaveBeenCalled();
+    });
+
     it("exposes only a bounded public liveness payload", () => {
         expect(buildLivenessPayload({
             VERCEL_GIT_COMMIT_SHA: "abc123def456",
@@ -73,7 +124,8 @@ describe("operational health", () => {
             OMR_OPERATIONAL_SINK_TOKEN: "ops_sink_token_0123456789_abcdef",
         };
         await expect(probeOperationalReadiness(env, async () => completeReadyProbe(), 50,
-        async () => "ready", readyConfigurationProbe, async () => "ready")).resolves.toEqual({
+        async () => "ready", readyConfigurationProbe, async () => "ready",
+        async () => null, async () => "ready")).resolves.toEqual({
             status: "ready",
             database: "ready",
             observability: "ready",
@@ -258,7 +310,7 @@ describe("operational health", () => {
             OMR_DEPLOYMENT_TIER: "staging",
             VERCEL_GIT_COMMIT_SHA: "a".repeat(40),
         }, async () => completeReadyProbe(), 50, async () => "ready",
-        readyConfigurationProbe, async () => "ready");
+        readyConfigurationProbe, async () => "ready", async () => null, async () => "ready");
 
         expect(result).toEqual({
             status: "ready",
@@ -278,7 +330,7 @@ describe("operational health", () => {
         const databaseProbe = vi.fn(async () => completeReadyProbe());
         const base = { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "key" };
 
-        await expect(probeOperationalReadiness(base, databaseProbe, 20, async () => "not_configured", readyConfigurationProbe, async () => "ready"))
+        await expect(probeOperationalReadiness(base, databaseProbe, 20, async () => "not_configured", readyConfigurationProbe, async () => "ready", async () => null, async () => "ready"))
             .resolves.toEqual({
                 status: "degraded",
                 database: "ready",
@@ -290,7 +342,7 @@ describe("operational health", () => {
             ...base,
             OMR_OPERATIONAL_SINK_URL: "https://ops.example.test/events",
             OMR_OPERATIONAL_SINK_TOKEN: "ops_sink_token_0123456789_abcdef",
-        }, databaseProbe, 20, async () => "probe_failed", readyConfigurationProbe, async () => "ready")).resolves.toEqual({
+        }, databaseProbe, 20, async () => "probe_failed", readyConfigurationProbe, async () => "ready", async () => null, async () => "ready")).resolves.toEqual({
             status: "degraded",
             database: "ready",
             observability: "probe_failed",
@@ -349,6 +401,7 @@ describe("operational health", () => {
             readyConfigurationProbe,
             async () => "ready",
             async () => null,
+            async () => "ready",
         )).resolves.toEqual({
             status: "not_ready",
             database: "ready",
@@ -375,6 +428,7 @@ describe("operational health", () => {
                 latestStartedSequence: 19,
                 latestCompletedSequence: 19,
             }),
+            async () => "ready",
         )).resolves.toMatchObject({ status: "ready" });
     });
 
@@ -391,6 +445,7 @@ describe("operational health", () => {
             readyConfigurationProbe,
             async () => "ready",
             async () => null,
+            async () => "ready",
         )).resolves.toEqual({
             status: "not_ready",
             database: "ready",

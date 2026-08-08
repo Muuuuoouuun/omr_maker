@@ -79,11 +79,23 @@ identity is uncertain, preserve the file and escalate; never use a wildcard dele
 ## Phase B login bridge (implemented in migration 202608080007)
 
 Migration `202608080007_provisioned_teacher_login.sql` and the server gateway now bind login and every
-protected account request to one exact active owner membership, one matching active teacher profile,
-the signed `pilot_org_<24 hex>` tenant, and the current effective grant. Expiry, supersession, account
+protected account request to exactly one total membership and one total teacher profile; the sole rows
+must be active, owner-bound, and identity-matched. Extra inactive/suspended/removed rows deny access.
+The bridge also binds the signed `pilot_org_<24 hex>` tenant and the current effective grant. Expiry,
+supersession, account
 generation, membership/profile drift, and forged `omr_organizations.plan` are exercised on PostgreSQL
 17 and fail closed without workspace repair. Explicit nonproduction `self_service` uses the separate
 signed `legacy_account` authority; provisioned `account` sessions never bootstrap.
+Any account that has ever appeared in the pilot grant ledger is excluded from legacy lookup, legacy
+session validation, and legacy reset begin/complete. Reset and provisioning serialize on the same
+normalized-email advisory lock so a race cannot leave a usable pilot reset token.
+
+For hosted release gating, copy the opaque `teacher_<16 hex>` account ID from the successful CLI
+receipt into `OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID` and the protected workflow secret
+`OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID`. The side-effect-free canary returns only
+`{"ready":true|false}` and verifies the exact current grant and provisioning audit; never print the
+configured ID or raw probe error in logs or release artifacts. This canary is skipped only for explicit
+nonproduction `self_service` mode.
 Until trusted proxy provenance is attested, login also uses a shared 500-attempt/10-minute durable
 PBKDF2 safety ceiling (100 launch users times five identifier attempts) in addition to the five-attempt
 per-identifier bucket. It counts all attempts and success does not clear it. This avoids trusting raw

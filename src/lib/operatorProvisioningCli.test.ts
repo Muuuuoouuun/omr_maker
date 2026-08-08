@@ -263,7 +263,10 @@ describe("operator teacher provisioning CLI", () => {
 
         expect(results.map(result => result.code)).toEqual([1, 1]);
         expect(results.every(result => result.stdout === "")).toBe(true);
-        expect(results.every(result => /^provision_failed: (dependency_unavailable|unsafe_state)\n$/.test(result.stderr))).toBe(true);
+        expect(
+            results.every(result => /^provision_failed: (dependency_unavailable|unsafe_state)\n$/.test(result.stderr)),
+            `unexpected competing CLI result: ${JSON.stringify(results)}`,
+        ).toBe(true);
         const pending = JSON.parse(await readFile(current.statePath, "utf8"));
         expect(pending).toMatchObject({ status: "pending", idempotencyKey: IDEMPOTENCY_KEY });
         expect(pending.initialPassword).toMatch(/^Omr-[A-Za-z0-9_-]{24,120}!$/);

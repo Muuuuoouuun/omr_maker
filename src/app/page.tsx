@@ -598,11 +598,11 @@ export default function Home() {
     setError("");
     try {
       const res = await startMockupTeacherSession();
-      if (!res.success || !res.token) {
+      if (!res.success || !res.token || !res.session) {
         setError(res.error || "데모 계정을 시작하지 못했습니다.");
         return;
       }
-      const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
+      const saved = saveTeacherSessionSnapshot(res.session);
       if (!saved) {
         setError("브라우저 세션 저장을 사용할 수 없습니다.");
         return;

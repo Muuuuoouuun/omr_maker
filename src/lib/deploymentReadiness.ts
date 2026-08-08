@@ -8,6 +8,7 @@ import { operationalEventSinkConfiguration } from "./operationalEventSink.server
 import { PRODUCTION_SIGNING_SECRET_MIN_BYTES } from "./serverSigningSecret";
 import { resolveTeacherAccountDeliveryAdapter } from "./teacherAccountDelivery";
 import { resolveTeacherIdentityMode } from "./teacherIdentityMode.server";
+import { resolveProvisionedTeacherCanaryAccountId } from "./provisionedTeacherCanary.server";
 import {
     SUPABASE_READINESS_CHECK_KEYS,
     SUPABASE_READINESS_VERSION,
@@ -214,6 +215,24 @@ function teacherAccountDeliveryCheck(env: Env): DeploymentReadinessCheck {
             ? "교사 가입 확인과 비밀번호 복구용 HMAC 서명 HTTPS delivery adapter가 설정되어 있습니다. /api/readyz가 서명된 무부작용 HEAD로 도달 가능성을 확인하며, 실제 이메일 수신은 배포 후 canary로 확인해야 합니다."
             : "교사 가입 확인과 비밀번호 복구용 이메일 delivery adapter가 연결되지 않아 토큰 요청은 DB 변경 전에 안전하게 거부됩니다.",
         tone: configured ? "ready" : production ? "error" : "warning",
+    };
+}
+
+function provisionedTeacherCanaryCheck(env: Env): DeploymentReadinessCheck {
+    if (resolveTeacherIdentityMode(env) === "self_service") return {
+        key: "provisioned_teacher_canary",
+        label: "프로비저닝 교사 동적 카나리",
+        detail: "self-service 모드에서는 파일럿 프로비저닝 카나리를 요구하지 않습니다.",
+        tone: "ready",
+    };
+    const configured = !!resolveProvisionedTeacherCanaryAccountId(env);
+    return {
+        key: "provisioned_teacher_canary",
+        label: "프로비저닝 교사 동적 카나리",
+        detail: configured
+            ? "비식별 카나리 계정 ID가 설정됐습니다. /api/readyz가 계정·조직·grant·감사 결속을 무부작용 RPC로 확인합니다."
+            : "OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID에 운영 CLI 영수증의 정확한 teacher_<16hex> 계정 ID를 설정하세요.",
+        tone: configured ? "ready" : "error",
     };
 }
 
@@ -427,6 +446,7 @@ export function buildDeploymentReadiness(
             tone: teacherCredentialsTone,
         },
         teacherAccountDeliveryCheck(env),
+        provisionedTeacherCanaryCheck(env),
         sessionSecretCheck(env),
         studentSessionSecretCheck(env),
         studentAttemptSecretCheck(env),

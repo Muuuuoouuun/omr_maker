@@ -64,6 +64,18 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
    응답이 제한 시간 안에 JSON `{ "accepted": true }`를 반환하지 않으면 요청은
    실패합니다. 실제 전달 실패·재시도 증거를 확인하기 전에는 가입 확인과
    비밀번호 복구가 준비됐다고 표시하지 않습니다.
+
+   `provisioned_only` 배포에는 운영 CLI 영수증의 비식별 계정 ID를
+   `OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID=teacher_<16 hex>`로 앱 서버에 설정합니다.
+   protected workflow environment에는 같은 값을
+   `OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID` secret으로 등록합니다.
+   `/api/readyz`와 hosted verifier는 자격 증명이나 PII를 사용하지 않고 service-role 전용
+   `omr_probe_provisioned_teacher_canary_v1`을 호출해 active 계정, 정확히 한 개의 전체
+   membership/profile, Free legacy plan, 하나의 현재 미만료 grant와 정확히 한 개의
+   provisioning audit를 동적으로 확인합니다. 누락·오류·timeout·만료·supersession·감사
+   drift는 고정된 `configuration:provisioned_teacher_canary`로 배포를 차단하며 ID나 원본
+   오류는 payload/log/artifact에 남기지 않습니다. 명시적 비운영 `self_service` 모드는
+   이 카나리를 호출하거나 요구하지 않습니다.
 6. 릴리스 증거에 커밋 SHA, 정책 해시(SHA-256), CI 실행 URL, 대상 DB 프로젝트,
    실행자·시각, preflight 결과, anon/authenticated 공격 거부 결과를 기록합니다.
 7. 같은 커밋의 서버 빌드를 배포하고 교사·학생 server action 여정을 확인한 뒤 쓰기를 재개합니다.

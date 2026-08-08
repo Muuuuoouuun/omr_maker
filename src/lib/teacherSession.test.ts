@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MOCKUP_TEACHER_IDENTITY } from "./mockupAccount";
 import {
     buildTeacherSessionDisplay,
     canTeacherRoleWrite,
@@ -101,6 +102,26 @@ describe("teacher session", () => {
             issuedAt: 1000,
             expiresAt: session.expiresAt,
         });
+    });
+
+    it("accepts only the structurally exact showcase snapshot in browser storage", () => {
+        const exact = createTeacherSession(VALID_TOKEN, 1_000, {
+            ...MOCKUP_TEACHER_IDENTITY,
+            sessionAuthority: "mockup",
+        });
+        expect(parseTeacherSession(JSON.stringify(exact), 1_000)).toMatchObject({
+            ...MOCKUP_TEACHER_IDENTITY,
+            sessionAuthority: "mockup",
+        });
+        for (const escalation of [
+            { memberRole: "owner" },
+            { organizationId: "pilot_org_0123456789abcdef01234567" },
+            { accountSessionGeneration: 1 },
+            { plan: "free" },
+            { email: "attacker@example.com" },
+        ]) {
+            expect(parseTeacherSession(JSON.stringify({ ...exact, ...escalation }), 1_000)).toBeNull();
+        }
     });
 
     it("rejects malformed and expired sessions", () => {

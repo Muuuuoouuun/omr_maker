@@ -41,6 +41,7 @@ const AUTH_JWT = `eyJhbGciOiJIUzI1NiJ9.${"a".repeat(32)}.${"b".repeat(32)}`;
 const SERVICE_KEY = "service-role-key-which-is-at-least-32-bytes";
 const ASSET_GC_CRON_SECRET = "asset-gc-cron-secret-with-strong-entropy-42";
 const SCHEDULER_PAUSE_CONFIRMATION = "asset-gc-paused:app.example.com";
+const CANARY_ACCOUNT_ID = "teacher_0123456789abcdef";
 
 function signPreviewIdentity(secret: string): string {
     return createHmac("sha256", secret)
@@ -70,6 +71,7 @@ function env() {
         OMR_RELEASE_ATTESTATION_SECRET: RELEASE_ATTESTATION_SECRET,
         OMR_ASSET_GC_CRON_SECRET: ASSET_GC_CRON_SECRET,
         OMR_PRODUCTION_ASSET_GC_PAUSED_REF: SCHEDULER_PAUSE_CONFIRMATION,
+        OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: CANARY_ACCOUNT_ID,
     };
 }
 
@@ -91,6 +93,7 @@ function fetchFor(options: {
     assetGcStatus?: number;
     assetGcObservability?: string;
     assetGcBody?: Record<string, unknown>;
+    canaryReady?: boolean;
 } = {}) {
     return vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
         const url = String(input);
@@ -161,6 +164,13 @@ function fetchFor(options: {
         if (url.endsWith("/rest/v1/rpc/omr_service_readiness_v1")) {
             expect(new Headers(init?.headers).get("apikey")).toBe(SERVICE_KEY);
             const result = response(url, { ready: true, version: VERSION });
+            Object.defineProperties(result, { url: { value: url }, redirected: { value: false } });
+            return result;
+        }
+        if (url.endsWith("/rest/v1/rpc/omr_probe_provisioned_teacher_canary_v1")) {
+            expect(new Headers(init?.headers).get("apikey")).toBe(SERVICE_KEY);
+            expect(JSON.parse(String(init?.body))).toEqual({ p_account_id: CANARY_ACCOUNT_ID });
+            const result = response(url, { ready: options.canaryReady ?? true });
             Object.defineProperties(result, { url: { value: url }, redirected: { value: false } });
             return result;
         }
@@ -322,6 +332,7 @@ describe("hosted production deployment verification", () => {
         expect(JSON.stringify(config)).not.toContain(PREVIEW_ATTESTATION_SIGNATURE);
         expect(JSON.stringify(config)).not.toContain(ASSET_GC_CRON_SECRET);
         expect(JSON.stringify(config)).not.toContain(SCHEDULER_PAUSE_CONFIRMATION);
+        expect(JSON.stringify(config)).not.toContain(CANARY_ACCOUNT_ID);
     });
 
     it.each([
@@ -522,6 +533,7 @@ describe("hosted production deployment verification", () => {
         expect(JSON.stringify(result)).not.toContain(PREVIEW_ATTESTATION_SIGNATURE);
         expect(JSON.stringify(result)).not.toContain(ASSET_GC_CRON_SECRET);
         expect(JSON.stringify(result)).not.toContain(SCHEDULER_PAUSE_CONFIRMATION);
+        expect(JSON.stringify(result)).not.toContain(CANARY_ACCOUNT_ID);
         expect(result.releaseIdentity).toEqual({
             verifierSha: BUILD,
             deployedSha: BUILD,
@@ -621,6 +633,7 @@ describe("hosted production deployment verification", () => {
     it.each([
         ["wrong build", { build: "b".repeat(40) }],
         ["degraded readiness", { readyStatus: "degraded" }],
+        ["failed provisioned teacher canary", { canaryReady: false }],
         ["anon/auth read succeeds", { denyStatus: 200 }],
     ])("rejects %s", async (_label, fetchOptions) => {
         const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-reject-"));
