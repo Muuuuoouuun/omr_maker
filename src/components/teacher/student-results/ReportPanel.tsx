@@ -5,6 +5,7 @@ import { Download, Lock } from "lucide-react";
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import type { AttemptScoreSummary, WeaknessGroup } from "@/lib/premiumAnalytics";
 import type { StudentProfileInsight } from "@/lib/studentProfileAnalytics";
+import { buildStudentReportHeadline } from "@/lib/studentReportHeadline";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
 import StudentGrowthReport, { type StudentGrowthReportState } from "./StudentGrowthReport";
@@ -51,6 +52,25 @@ function Stat({ label, value }: { label: string; value: string | number }) {
     );
 }
 
+function formatElapsedTime(totalSec: number): string {
+    const safeSec = Math.max(0, Math.round(totalSec));
+    if (safeSec === 0) return "기록 없음";
+    if (safeSec < 60) return `${safeSec}초`;
+    const minutes = Math.floor(safeSec / 60);
+    const seconds = safeSec % 60;
+    if (minutes < 60) return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return remainingMinutes > 0 ? `${hours}시간 ${remainingMinutes}분` : `${hours}시간`;
+}
+
+function formatGrowthTrend(trend: "up" | "down" | "flat" | "insufficient"): string {
+    if (trend === "up") return "상승";
+    if (trend === "down") return "하락";
+    if (trend === "flat") return "유지";
+    return "비교 자료 부족";
+}
+
 export default function ReportPanel({
     attempt,
     exam,
@@ -78,6 +98,20 @@ export default function ReportPanel({
             : analytics.wrongResults.length
                 ? `${scorePercent}%를 기록했고, 오답·미응답 ${analytics.wrongResults.length}문항을 우선 복습하면 좋습니다.`
                 : `${scorePercent}%를 기록했고, 현재 시험에서 확인된 오답·미응답이 없습니다.`;
+    const growthModel = studentGrowthReportsEnabled && "model" in growthReportState
+        ? growthReportState.model
+        : null;
+    const reportHeadline = buildStudentReportHeadline(cumulativeInsight?.weaknessGroups ?? [], headline);
+    const recentScore = growthModel
+        ? growthModel.latestScore == null ? "기록 없음" : `${growthModel.latestScore}점`
+        : "확인 불가";
+    const percentile = growthModel?.currentPercentile == null
+        ? "비교 불가"
+        : `상위 ${growthModel.currentPercentile}%`;
+    const growthTrend = growthModel ? formatGrowthTrend(growthModel.trend) : "확인 불가";
+    const averageElapsedTime = cumulativeInsight
+        ? formatElapsedTime(cumulativeInsight.averageElapsedTimeSec)
+        : "확인 불가";
 
     return (
         <div id="student-result-report-print-root" className={`${styles.reportPrintRoot} student-result-report-print-root`}>
@@ -125,7 +159,14 @@ export default function ReportPanel({
 
                     <section className={`bento-card ${styles.reportPreludeSection} ${styles.reportPreludeHeadline}`} aria-labelledby="report-headline-title">
                         <h2 id="report-headline-title" className={styles.reportSectionTitle}>핵심 해석</h2>
-                        <p className={styles.reportFeedback}>{headline}</p>
+                        <p className={styles.reportFeedback}>{reportHeadline.headline}</p>
+                        <dl className={styles.reportSignalGrid} role="group" aria-label="개인 리포트 핵심 지표">
+                            <div><dt>최근 점수</dt><dd>{recentScore}</dd></div>
+                            <div><dt>반 백분위</dt><dd>{percentile}</dd></div>
+                            <div><dt>성장 추세</dt><dd>{growthTrend}</dd></div>
+                            <div><dt>반복 약점</dt><dd>{reportHeadline.weaknessLabel}</dd></div>
+                            <div><dt>평균 풀이 시간</dt><dd>{averageElapsedTime}</dd></div>
+                        </dl>
                         {attempt.retake && (
                             retakeScoreDelta ? (
                                 <p className={styles.reportDelta}>

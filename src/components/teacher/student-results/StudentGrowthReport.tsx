@@ -44,18 +44,19 @@ function formatRank(model: StudentGrowthReportModel, latest: StudentGrowthRow | 
 }
 
 function formatTrend(model: StudentGrowthReportModel): string {
-    const scoreTrend = model.trend === "up"
+    return model.trend === "up"
         ? "점수 상승 흐름"
         : model.trend === "down"
             ? "점수 하락 흐름"
             : model.trend === "flat"
                 ? "점수 흐름 유지"
                 : "비교 자료 부족";
-    if (model.rankDelta == null) return scoreTrend;
-    const rankTrend = model.rankDelta === 0
-        ? "등수 유지"
-        : `${Math.abs(model.rankDelta)}계단 ${model.rankDelta > 0 ? "상승" : "하락"}`;
-    return `${scoreTrend} · ${rankTrend}`;
+}
+
+function formatRankDelta(model: StudentGrowthReportModel): string {
+    if (model.rankDelta == null) return "비교 불가";
+    if (model.rankDelta === 0) return "등수 유지";
+    return `${Math.abs(model.rankDelta)}계단 ${model.rankDelta > 0 ? "상승" : "하락"}`;
 }
 
 function GrowthSummaryRail({ model }: { model: StudentGrowthReportModel }) {
@@ -67,7 +68,11 @@ function GrowthSummaryRail({ model }: { model: StudentGrowthReportModel }) {
                 <dd className="numeric-emphasis">{model.latestScore == null ? "기록 없음" : `${model.latestScore}점`}</dd>
             </div>
             <div>
-                <dt>평균 격차</dt>
+                <dt>반 백분위</dt>
+                <dd className="numeric-emphasis">{model.currentPercentile == null ? "비교 불가" : `상위 ${model.currentPercentile}%`}</dd>
+            </div>
+            <div>
+                <dt>최근 6개 평균 격차</dt>
                 <dd className="numeric-emphasis">{model.averageGap == null ? "반 비교 불가" : formatGap(model.averageGap)}</dd>
             </div>
             <div>
@@ -75,7 +80,11 @@ function GrowthSummaryRail({ model }: { model: StudentGrowthReportModel }) {
                 <dd>{formatRank(model, latest)}</dd>
             </div>
             <div>
-                <dt>성장 흐름</dt>
+                <dt>등수 변화</dt>
+                <dd>{formatRankDelta(model)}</dd>
+            </div>
+            <div>
+                <dt>최근 추세</dt>
                 <dd>{formatTrend(model)}</dd>
             </div>
         </dl>

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StudentGrowthReportModel } from "@/lib/studentGrowthReport";
@@ -131,6 +131,23 @@ afterEach(() => {
 });
 
 describe("StudentGrowthReport", () => {
+    it("shows percentile and keeps the complete summary rail signals", () => {
+        render(<StudentGrowthReport state={{ status: "ready", model: manyPointModel }} enabled onRetry={() => {}} />);
+        const summary = screen.getByLabelText("최근 시험 요약");
+
+        for (const [label, value] of [
+            ["최근 점수", "82점"],
+            ["반 백분위", "상위 17%"],
+            ["최근 6개 평균 격차", "-2%p"],
+            ["현재 등수", "2등 / 12명"],
+            ["등수 변화", "1계단 상승"],
+            ["최근 추세", "점수 상승 흐름"],
+        ]) {
+            const term = within(summary).getByText(label);
+            expect(term.closest("div")).toHaveTextContent(value);
+        }
+    });
+
     it("switches between summary and trend-only panels while keeping the chart available", async () => {
         render(<StudentGrowthReport state={{ status: "ready", model: manyPointModel }} enabled onRetry={() => {}} />);
 
