@@ -3803,7 +3803,7 @@ declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202608060029'
+    if readiness->>'version' <> '202608080005'
         or readiness->>'ready' <> 'true'
         or exists (
             select 1
@@ -5425,7 +5425,7 @@ begin
         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+        'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_read_operational_job_status_v1(text)', 'EXECUTE'
@@ -5434,7 +5434,7 @@ begin
     end if;
     if pg_catalog.has_function_privilege(
         'anon',
-        'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+        'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',
         'EXECUTE'
     ) or pg_catalog.has_function_privilege(
         'authenticated', 'public.omr_read_operational_job_status_v1(text)', 'EXECUTE'
@@ -5445,7 +5445,7 @@ begin
               coalesce(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
           ) privilege
          where routine.oid in (
-             'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)'::pg_catalog.regprocedure,
+             'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure,
              'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
          )
            and privilege.grantee = 0
@@ -5459,13 +5459,13 @@ begin
         raise exception 'operational job status missing-row read was not null';
     end if;
     if not public.omr_record_operational_job_status_v1(
-        'asset_gc', 'healthy', timestamptz '2026-08-08 02:00:00+00', 0,
+        'asset_gc', 'healthy', timestamptz '2026-08-08 02:00:00+00',
         '0123456789abcdef0123456789abcdef01234567', null
     ) then
         raise exception 'operational job success was not persisted';
     end if;
     if not public.omr_record_operational_job_status_v1(
-        'asset_gc', 'failed', timestamptz '2026-08-08 03:00:00+00', 1,
+        'asset_gc', 'failed', timestamptz '2026-08-08 03:00:00+00',
         '0123456789abcdef0123456789abcdef01234567', 'cleanup_failed'
     ) then
         raise exception 'operational job failure was not persisted';
@@ -5476,14 +5476,14 @@ begin
             is distinct from timestamptz '2026-08-08 02:00:00+00'
        or (v_snapshot->>'lastAttemptAt')::timestamptz
             is distinct from timestamptz '2026-08-08 03:00:00+00'
-       or v_snapshot->>'deadCount' <> '1' then
+       or v_snapshot->>'deadCount' <> '0' then
         raise exception 'operational job failure advanced last success';
     end if;
     if public.omr_record_operational_job_status_v1(
-        'asset_gc', 'healthy', timestamptz '2026-08-08 01:00:00+00', 0,
+        'asset_gc', 'healthy', timestamptz '2026-08-08 01:00:00+00',
         'ffffffffffffffffffffffffffffffffffffffff', null
     ) or public.omr_record_operational_job_status_v1(
-        'asset_gc', 'healthy', timestamptz '2026-08-08 03:00:00+00', 0,
+        'asset_gc', 'healthy', timestamptz '2026-08-08 03:00:00+00',
         'ffffffffffffffffffffffffffffffffffffffff', null
     ) then
         raise exception 'operational job stale write reported as applied';
@@ -5493,9 +5493,47 @@ begin
         raise exception 'operational job stale write overwrote newer state';
     end if;
 
+    insert into public.omr_remote_asset_cleanup_queue (
+        organization_id, source_type, source_id, storage_bucket, object_path,
+        reason, status, attempts
+    ) values (
+        'live-org-a', 'remote_asset', 'operational-dead-fixture',
+        'omr-private-assets',
+        'organizations/live-org-a/operational-dead-fixture.pdf',
+        'asset_replaced', 'dead', 10
+    );
+    if not public.omr_record_operational_job_status_v1(
+        'asset_gc', 'healthy', timestamptz '2026-08-08 04:00:00+00',
+        '0123456789abcdef0123456789abcdef01234567', null
+    ) then
+        raise exception 'operational job clean run with dead backlog was not persisted';
+    end if;
+    v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
+    if v_snapshot->>'status' <> 'failed'
+       or v_snapshot->>'deadCount' <> '1'
+       or v_snapshot->>'failureCategory' <> 'dead_backlog'
+       or (v_snapshot->>'lastSuccessAt')::timestamptz
+            is distinct from timestamptz '2026-08-08 02:00:00+00' then
+        raise exception 'operational job clean run ignored durable dead backlog';
+    end if;
+    delete from public.omr_remote_asset_cleanup_queue
+     where source_id = 'operational-dead-fixture';
+    if not public.omr_record_operational_job_status_v1(
+        'asset_gc', 'healthy', timestamptz '2026-08-08 05:00:00+00',
+        '0123456789abcdef0123456789abcdef01234567', null
+    ) then
+        raise exception 'operational job did not recover after dead backlog remediation';
+    end if;
+    v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
+    if v_snapshot->>'status' <> 'healthy'
+       or v_snapshot->>'deadCount' <> '0'
+       or v_snapshot->>'failureCategory' is not null then
+        raise exception 'operational job remained failed after dead backlog remediation';
+    end if;
+
     begin
         perform public.omr_record_operational_job_status_v1(
-            'asset_gc', 'healthy', timestamptz '2026-08-08 04:00:00+00', 0,
+            'asset_gc', 'healthy', timestamptz '2026-08-08 06:00:00+00',
             'short', null
         );
     exception when others then
@@ -5503,7 +5541,7 @@ begin
     end;
     begin
         perform public.omr_record_operational_job_status_v1(
-            'asset_gc', 'failed', timestamptz '2026-08-08 04:00:00+00', 0,
+            'asset_gc', 'failed', timestamptz '2026-08-08 06:00:00+00',
             '0123456789abcdef0123456789abcdef01234567', 'Student@example.com'
         );
     exception when others then

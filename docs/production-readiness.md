@@ -33,7 +33,7 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
 5. `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
    `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
    CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
-   service-role 전용 readiness probe 버전은 `202608060029`이어야 합니다.
+   service-role 전용 readiness probe 버전은 `202608080005`이어야 합니다.
    브라우저 schema/table/column/sequence/function 실효 권한과 PostgreSQL 17
    `MAINTAIN` 차단, 정확한 canonical 39개 allowlist의 ENABLE+FORCE RLS, public
    정책 0개, 조직 preflight 4개 count 0, 정확한 목적별 교사 RPC signature,

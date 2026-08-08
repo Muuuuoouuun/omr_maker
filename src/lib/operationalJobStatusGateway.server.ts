@@ -136,7 +136,6 @@ export async function recordOperationalJobStatus(
         jobKey: "asset_gc";
         status: "healthy" | "failed";
         attemptedAt: string;
-        deadCount: number;
         buildSha: string;
         failureCategory: string | null;
     },
@@ -148,11 +147,8 @@ export async function recordOperationalJobStatus(
         !validJobKey(input.jobKey)
         || (input.status !== "healthy" && input.status !== "failed")
         || !attemptedAt
-        || !Number.isSafeInteger(input.deadCount)
-        || input.deadCount < 0
-        || input.deadCount > MAX_DEAD_COUNT
         || !buildSha
-        || (input.status === "healthy" && (input.deadCount !== 0 || input.failureCategory !== null))
+        || (input.status === "healthy" && input.failureCategory !== null)
         || (input.status === "failed" && failureCategory === null)
     ) throw new Error("Invalid operational job status");
 
@@ -161,7 +157,6 @@ export async function recordOperationalJobStatus(
             p_job_key: input.jobKey,
             p_status: input.status,
             p_attempted_at: attemptedAt,
-            p_dead_count: input.deadCount,
             p_build_sha: buildSha,
             p_failure_category: failureCategory,
         });

@@ -7,7 +7,7 @@ import {
 
 const readyV22Payload = {
     ready: true,
-    version: "202608060029",
+    version: "202608080005",
     browserSchemaPrivilegesDenied: true,
     anonTablePrivilegesDenied: true,
     authenticatedCanonicalPrivilegesDenied: true,
@@ -52,13 +52,14 @@ const readyV22Payload = {
     initialOperationsLoadControlReady: true,
     individualStudentAssignmentsReady: true,
     teacherAttemptReportingReady: true,
+    operationalJobStatusReady: true,
 };
 
 describe("Supabase deployment readiness probe", () => {
     it("accepts only the complete v22 effective-boundary and gateway evidence", () => {
         expect(parseSupabaseDeploymentProbe(readyV22Payload)).toEqual({
             ready: true,
-            version: "202608060029",
+            version: "202608080005",
             browserSchemaPrivilegesDenied: true,
             anonTablePrivilegesDenied: true,
             authenticatedCanonicalPrivilegesDenied: true,
@@ -103,6 +104,7 @@ describe("Supabase deployment readiness probe", () => {
             initialOperationsLoadControlReady: true,
             individualStudentAssignmentsReady: true,
             teacherAttemptReportingReady: true,
+            operationalJobStatusReady: true,
             failedChecks: [],
         });
     });
@@ -152,6 +154,7 @@ describe("Supabase deployment readiness probe", () => {
             "initialOperationsLoadControlReady",
             "individualStudentAssignmentsReady",
             "teacherAttemptReportingReady",
+            "operationalJobStatusReady",
         ] as const) {
             expect(parseSupabaseDeploymentProbe({
                 ...readyV22Payload,
@@ -177,10 +180,10 @@ describe("Supabase deployment readiness probe", () => {
         expect(parseSupabaseDeploymentProbe({ ready: true })).toMatchObject({ ready: false });
         expect(parseSupabaseDeploymentProbe({
             ...readyV22Payload,
-            version: "202607140018",
+            version: "202608060029",
         })).toMatchObject({
             ready: false,
-            version: "202607140018",
+            version: "202608060029",
             failedChecks: ["probeVersion"],
         });
         expect(parseSupabaseDeploymentProbe({
@@ -191,6 +194,17 @@ describe("Supabase deployment readiness probe", () => {
             failedChecks: ["databaseDeclaredReady"],
         });
         expect(parseSupabaseDeploymentProbe(null)).toMatchObject({ ready: false });
+    });
+
+    it("rejects a new-version payload missing durable operational job status evidence", () => {
+        const oldShape = { ...readyV22Payload } as Record<string, unknown>;
+        delete oldShape.operationalJobStatusReady;
+        expect(parseSupabaseDeploymentProbe(oldShape)).toMatchObject({
+            ready: false,
+            version: "202608080005",
+            operationalJobStatusReady: false,
+            failedChecks: ["operationalJobStatusReady"],
+        });
     });
 
     it("rejects every array shape because the RPC contract is one JSON object", () => {

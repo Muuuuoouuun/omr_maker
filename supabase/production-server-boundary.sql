@@ -175,7 +175,7 @@ grant execute on function public.omr_ack_remote_asset_cleanup_v1(text,text,integ
     to service_role;
 grant execute on function public.omr_fail_remote_asset_cleanup_v1(text,text,integer,text)
     to service_role;
-grant execute on function public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)
+grant execute on function public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)
     to service_role;
 grant execute on function public.omr_read_operational_job_status_v1(text)
     to service_role;
@@ -639,14 +639,14 @@ begin
     v_operational_job_status_ready :=
         pg_catalog.to_regclass('public.omr_operational_job_status') is not null
         and pg_catalog.to_regprocedure(
-            'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)'
+            'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'
         ) is not null
         and pg_catalog.to_regprocedure(
             'public.omr_read_operational_job_status_v1(text)'
         ) is not null
         and pg_catalog.has_function_privilege(
             'service_role',
-            'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+            'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',
             'EXECUTE'
         )
         and pg_catalog.has_function_privilege(
@@ -654,6 +654,21 @@ begin
             'public.omr_read_operational_job_status_v1(text)',
             'EXECUTE'
         )
+        and position(
+            'cleanup.status = ''dead''' in pg_catalog.pg_get_functiondef(
+                'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'lock table public.omr_remote_asset_cleanup_queue in share mode' in pg_catalog.pg_get_functiondef(
+                'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'cleanup.status = ''dead''' in pg_catalog.pg_get_functiondef(
+                'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
+            )
+        ) > 0
         and not exists (
             select 1
               from pg_catalog.unnest(array['anon', 'authenticated']) browser_role(role_name)
@@ -664,7 +679,7 @@ begin
                    )
                 or pg_catalog.has_function_privilege(
                        browser_role.role_name,
-                       'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+                       'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',
                        'EXECUTE'
                    )
                 or pg_catalog.has_function_privilege(
@@ -689,7 +704,7 @@ begin
                   coalesce(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
               ) privilege
              where routine.oid in (
-                 'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)'::pg_catalog.regprocedure,
+                 'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)'::pg_catalog.regprocedure,
                  'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
              )
                and privilege.grantee = 0
@@ -1693,7 +1708,6 @@ begin
       into v_legacy_gateway_catalog_ready;
 
     v_server_gateway_capabilities_ready := v_legacy_gateway_catalog_ready
-        and v_operational_job_status_ready
         and v_roster_snapshot_cas_ready
         and v_cleanup_epoch_ready
         and v_attempt_sessions_ready
@@ -1720,6 +1734,7 @@ begin
 
     v_ready := v_canonical_tables_force_rls
         and v_service_role_privileges_ready
+        and v_operational_job_status_ready
         and v_server_gateway_capabilities_ready
         and not exists (
             select 1
@@ -1735,10 +1750,11 @@ begin
             - 'serviceRolePrivilegesReady' - 'serverGatewayCapabilitiesReady'
             - 'teacherUploadCleanupQueueReady' - 'studentAttemptSessionsReady')
         || pg_catalog.jsonb_build_object(
-            'version', '202608060029',
+            'version', '202608080005',
             'canonicalTablesForceRls', v_canonical_tables_force_rls,
             'serviceRolePrivilegesReady', v_service_role_privileges_ready,
             'serverGatewayCapabilitiesReady', v_server_gateway_capabilities_ready,
+            'operationalJobStatusReady', v_operational_job_status_ready,
             'teacherUploadCleanupQueueReady', v_cleanup_epoch_ready,
             'studentAttemptSessionsReady', v_attempt_sessions_ready,
             'durableRateLimitsReady', v_durable_rate_limits_ready,

@@ -60,7 +60,6 @@ create function public.omr_record_operational_job_status_v1(
     p_job_key text,
     p_status text,
     p_attempted_at timestamptz,
-    p_dead_count integer,
     p_build_sha text,
     p_failure_category text
 )
@@ -73,6 +72,9 @@ set lock_timeout = '2s'
 as $$
 declare
     v_applied_count integer;
+    v_dead_count bigint;
+    v_effective_status text;
+    v_effective_failure_category text;
 begin
     if p_job_key is distinct from 'asset_gc'
        or p_status not in ('healthy', 'failed')
@@ -80,13 +82,11 @@ begin
        or not pg_catalog.isfinite(p_attempted_at)
        or p_attempted_at < timestamptz '2020-01-01 00:00:00+00'
        or p_attempted_at > pg_catalog.clock_timestamp() + interval '5 minutes'
-       or p_dead_count is null
-       or p_dead_count not between 0 and 1000000
        or p_build_sha is null
        or p_build_sha !~ '^[a-f0-9]{40}$'
        or (
            p_status = 'healthy'
-           and (p_dead_count <> 0 or p_failure_category is not null)
+           and p_failure_category is not null
        )
        or (
            p_status = 'failed'
@@ -98,6 +98,25 @@ begin
         raise exception 'invalid operational job status';
     end if;
 
+    -- Serialize this snapshot with cleanup outbox mutations. The caller reports
+    -- only the current run outcome; durable dead-letter truth remains DB-owned.
+    lock table public.omr_remote_asset_cleanup_queue in share mode;
+    select pg_catalog.count(*)::bigint
+      into v_dead_count
+      from public.omr_remote_asset_cleanup_queue cleanup
+     where cleanup.status = 'dead';
+    if v_dead_count > 1000000 then
+        raise exception 'operational cleanup backlog exceeds bounded status';
+    end if;
+    v_effective_status := case
+        when v_dead_count > 0 then 'failed'
+        else p_status
+    end;
+    v_effective_failure_category := case
+        when v_dead_count > 0 and p_status = 'healthy' then 'dead_backlog'
+        else p_failure_category
+    end;
+
     insert into public.omr_operational_job_status as current_status (
         job_key,
         status,
@@ -108,12 +127,12 @@ begin
         failure_category
     ) values (
         p_job_key,
-        p_status,
+        v_effective_status,
         p_attempted_at,
-        case when p_status = 'healthy' then p_attempted_at else null end,
-        p_dead_count,
+        case when v_effective_status = 'healthy' then p_attempted_at else null end,
+        v_dead_count::integer,
         p_build_sha,
-        p_failure_category
+        v_effective_failure_category
     )
     on conflict (job_key) do update
         set status = excluded.status,
@@ -141,41 +160,55 @@ set search_path = ''
 set statement_timeout = '5s'
 as $$
 declare
-    v_result jsonb;
+    v_job_status public.omr_operational_job_status%rowtype;
+    v_dead_count bigint;
 begin
     if p_job_key is distinct from 'asset_gc' then
         raise exception 'invalid operational job key';
     end if;
 
-    select pg_catalog.jsonb_build_object(
-        'status', job_status.status,
-        'lastAttemptAt', job_status.last_attempt_at,
-        'lastSuccessAt', job_status.last_success_at,
-        'deadCount', job_status.dead_count,
-        'buildSha', job_status.build_sha,
-        'failureCategory', job_status.failure_category
-    )
-      into v_result
+    select job_status.*
+      into v_job_status
       from public.omr_operational_job_status job_status
      where job_status.job_key = p_job_key;
-    return v_result;
+    if not found then
+        return null;
+    end if;
+    select pg_catalog.count(*)::bigint
+      into v_dead_count
+      from public.omr_remote_asset_cleanup_queue cleanup
+     where cleanup.status = 'dead';
+    if v_dead_count > 1000000 then
+        raise exception 'operational cleanup backlog exceeds bounded status';
+    end if;
+    return pg_catalog.jsonb_build_object(
+        'status', case when v_dead_count > 0 then 'failed' else v_job_status.status end,
+        'lastAttemptAt', v_job_status.last_attempt_at,
+        'lastSuccessAt', v_job_status.last_success_at,
+        'deadCount', v_dead_count,
+        'buildSha', v_job_status.build_sha,
+        'failureCategory', case
+            when v_dead_count > 0 and v_job_status.status = 'healthy' then 'dead_backlog'
+            else v_job_status.failure_category
+        end
+    );
 end;
 $$;
 
 revoke all on function public.omr_record_operational_job_status_v1(
-    text, text, timestamptz, integer, text, text
+    text, text, timestamptz, text, text
 ) from public, anon, authenticated;
 revoke all on function public.omr_read_operational_job_status_v1(text)
     from public, anon, authenticated;
 grant execute on function public.omr_record_operational_job_status_v1(
-    text, text, timestamptz, integer, text, text
+    text, text, timestamptz, text, text
 ) to service_role;
 grant execute on function public.omr_read_operational_job_status_v1(text)
     to service_role;
 
 comment on table public.omr_operational_job_status is
     'Bounded server-only operational job heartbeat state without raw errors or tenant identifiers.';
-comment on function public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)
+comment on function public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)
     is 'monotonic-operational-job-heartbeat:202608080005';
 comment on function public.omr_read_operational_job_status_v1(text)
     is 'bounded-operational-job-heartbeat-read:202608080005';

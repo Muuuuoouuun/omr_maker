@@ -96,7 +96,7 @@ describe("teacher notification summary server surface", () => {
         const probe = readFileSync(path("src/lib/supabaseReadinessProbe.ts"), "utf8");
         const boundary = readFileSync(path("supabase/production-server-boundary.sql"), "utf8");
 
-        expect(probe).toContain('SUPABASE_READINESS_VERSION = "202608060029"');
+        expect(probe).toContain('SUPABASE_READINESS_VERSION = "202608080005"');
         expect(probe).toContain('"teacherNotificationSummaryReady"');
         expect(probe).toContain('"teacherNotificationStateReady"');
         expect(boundary).toContain("v_teacher_notification_summary_ready");

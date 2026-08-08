@@ -62,7 +62,6 @@ describe("operational job status gateway", () => {
             jobKey: "asset_gc",
             status: "failed",
             attemptedAt: "2026-08-08T00:00:00.000Z",
-            deadCount: 1,
             buildSha: BUILD_SHA,
             failureCategory: "cleanup_failed",
         })).resolves.toBeUndefined();
@@ -70,7 +69,6 @@ describe("operational job status gateway", () => {
             p_job_key: "asset_gc",
             p_status: "failed",
             p_attempted_at: "2026-08-08T00:00:00.000Z",
-            p_dead_count: 1,
             p_build_sha: BUILD_SHA,
             p_failure_category: "cleanup_failed",
         });
@@ -85,7 +83,6 @@ describe("operational job status gateway", () => {
             await expect(recordOperationalJobStatus(client, {
                 jobKey: "asset_gc",
                 attemptedAt: NOW.toISOString(),
-                deadCount: 0,
                 ...input,
             })).rejects.toThrow("Invalid operational job status");
             expect(client.rpc).not.toHaveBeenCalled();

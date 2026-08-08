@@ -13,7 +13,7 @@ begin
         raise exception 'production boundary left browser canonical access';
     end if;
     readiness := public.omr_service_readiness_v1();
-    if readiness ->> 'version' <> '202608060029'
+    if readiness ->> 'version' <> '202608080005'
        or readiness ->> 'ready' <> 'true'
        or readiness ->> 'teacherUploadCleanupQueueReady' <> 'true'
        or readiness ->> 'studentAttemptSessionsReady' <> 'true'
@@ -37,7 +37,8 @@ begin
        or readiness ->> 'teacherAccountLifecycleReady' <> 'true'
        or readiness ->> 'initialOperationsLoadControlReady' <> 'true'
        or readiness ->> 'individualStudentAssignmentsReady' <> 'true'
-       or readiness ->> 'teacherAttemptReportingReady' <> 'true' then
+       or readiness ->> 'teacherAttemptReportingReady' <> 'true'
+       or readiness ->> 'operationalJobStatusReady' <> 'true' then
         raise exception 'production boundary readiness failed: %', readiness;
     end if;
     if pg_catalog.has_table_privilege(
@@ -67,7 +68,7 @@ begin
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_record_operational_job_status_v1(text,text,timestamptz,integer,text,text)',
+        'public.omr_record_operational_job_status_v1(text,text,timestamptz,text,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',

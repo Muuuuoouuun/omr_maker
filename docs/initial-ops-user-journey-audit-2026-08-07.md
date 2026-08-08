@@ -153,7 +153,7 @@ self-signup이 제품 요구라면 현재는 미구현이다.
 - 대시보드는 summary/detail 읽기를 분리하고, rich detail은 필요할 때만 읽는다.
 - 실시간 selected-exam polling은 요청 완료 후 다음 poll을 예약하고 background refresh 중 기존 데이터를 유지한다.
 - Storage cleanup은 bounded claim, lease, backoff, dead-letter, generation fence를 사용한다.
-- readiness `202608060029`은 NULL checkpoint CAS, secure submission replay marker, 나머지 학생 세션 변경 CAS,
+- readiness `202608080005`은 NULL checkpoint CAS, secure submission replay marker, 나머지 학생 세션 변경 CAS,
   제출 세션 안전 시험 삭제, roster snapshot CAS, 학생 질문 원자 저장과 무료 코어 피드백 경계를 요구한다.
 - `/api/readyz`는 치명적 배포 설정뿐 아니라 계정 전달 webhook에 HMAC 서명된 무부작용
   `HEAD`를 보내 DNS·timeout·5xx를 fail-closed로 처리한다.

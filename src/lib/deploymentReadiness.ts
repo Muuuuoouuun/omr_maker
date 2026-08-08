@@ -290,6 +290,7 @@ function productionRlsCheck(
             initialOperationsLoadControlReady: "초기 운영 부하 제어 gateway",
             individualStudentAssignmentsReady: "개별 학생 배정·응시 결속 gateway",
             teacherAttemptReportingReady: "전체 제출 정확 집계·커서 내보내기 gateway",
+            operationalJobStatusReady: "운영 작업 상태·dead-letter heartbeat 경계",
             probeVersion: "probe 버전",
             databaseDeclaredReady: "DB 최종 readiness 판정",
             probeExecution: "probe 실행",

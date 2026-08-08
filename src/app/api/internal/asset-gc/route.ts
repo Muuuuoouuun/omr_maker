@@ -59,7 +59,6 @@ export async function GET(request: Request): Promise<Response> {
                 jobKey: "asset_gc",
                 status: "failed",
                 attemptedAt: new Date().toISOString(),
-                deadCount: 0,
                 buildSha: operationalRuntimeBuildSha(),
                 failureCategory: "cleanup_exception",
             });
@@ -78,7 +77,6 @@ export async function GET(request: Request): Promise<Response> {
             jobKey: "asset_gc",
             status: result.failed > 0 ? "failed" : "healthy",
             attemptedAt: new Date().toISOString(),
-            deadCount: result.failed,
             buildSha: operationalRuntimeBuildSha(),
             failureCategory: result.failed > 0 ? "cleanup_failed" : null,
         });

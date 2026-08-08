@@ -65,7 +65,6 @@ describe("remote asset cleanup route behavior", () => {
             jobKey: "asset_gc",
             status: "healthy",
             attemptedAt: expect.any(String),
-            deadCount: 0,
             buildSha: "0123456789abcdef0123456789abcdef01234567",
             failureCategory: null,
         });
@@ -86,7 +85,7 @@ describe("remote asset cleanup route behavior", () => {
         });
         expect(mocks.recordJobStatus).toHaveBeenCalledWith(
             expect.anything(),
-            expect.objectContaining({ status: "healthy", deadCount: 0 }),
+            expect.objectContaining({ status: "healthy" }),
         );
     });
 
@@ -107,7 +106,6 @@ describe("remote asset cleanup route behavior", () => {
             expect.anything(),
             expect.objectContaining({
                 status: "failed",
-                deadCount: 1,
                 failureCategory: "cleanup_failed",
             }),
         );

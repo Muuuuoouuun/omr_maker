@@ -22,7 +22,7 @@ on:
       expected_readiness_version:
         description: Expected Supabase readiness contract version
         required: true
-        default: "202608060029"
+        default: "202608080005"
         type: string
 
 concurrency:
