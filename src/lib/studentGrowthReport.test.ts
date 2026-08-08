@@ -287,7 +287,7 @@ describe("student growth report", () => {
         });
     });
 
-    it("inherits invalid-denominator handling and clamping from score resolution", () => {
+    it("excludes completely ungraded attempts from growth rows and class comparisons", () => {
         const model = build([
             attempt({ id: "selected", examId: "exam-1", studentId: "student-1", classId: "class-a", score: 15, totalScore: 10 }),
             attempt({ id: "peer", examId: "exam-1", studentId: "student-2", classId: "class-a", score: 5, totalScore: 0 }),
@@ -295,9 +295,9 @@ describe("student growth report", () => {
 
         expect(model.rows[0]).toMatchObject({
             studentScore: 100,
-            classAverage: 50,
-            participantCount: 2,
-            rank: 1,
+            classAverage: 100,
+            participantCount: 1,
+            rank: null,
         });
     });
 
@@ -411,6 +411,25 @@ describe("student growth report", () => {
 
         expect(model.rows[0]?.examTitle).toBe("A 조직 시험");
         expect(model.omittedCount).toBe(0);
+    });
+
+    it("selects duplicate exam metadata deterministically by organization, revision, updated time, then stable key", () => {
+        const candidates: Exam[] = [
+            { ...exam("exam-1", "레거시 최신"), revision: 99, updatedAt: "2026-12-01T00:00:00.000Z" },
+            { ...exam("exam-1", "낮은 리비전"), organizationId: "org-a", revision: 1, updatedAt: "2026-12-01T00:00:00.000Z" },
+            { ...exam("exam-1", "오래된 수정"), organizationId: "org-a", revision: 2, updatedAt: "2026-01-01T00:00:00.000Z" },
+            { ...exam("exam-1", "가 안정 키"), organizationId: "org-a", revision: 2, updatedAt: "2026-02-01T00:00:00.000Z" },
+            { ...exam("exam-1", "나 안정 키"), organizationId: "org-a", revision: 2, updatedAt: "2026-02-01T00:00:00.000Z" },
+        ];
+        const attempts = [
+            attempt({ id: "selected", examId: "exam-1", organizationId: "org-a", studentId: "student-1", classId: "class-a", score: 80 }),
+        ];
+
+        const forward = build(attempts, candidates, { selectedOrganizationId: "org-a" });
+        const reversed = build(attempts, [...candidates].reverse(), { selectedOrganizationId: "org-a" });
+
+        expect(forward.rows[0]?.examTitle).toBe("가 안정 키");
+        expect(reversed.rows).toEqual(forward.rows);
     });
 
     it.each(["partial", "stale"] as const)("propagates a %s data status", dataStatus => {

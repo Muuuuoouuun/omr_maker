@@ -45,7 +45,12 @@ import { readLocalRosterSnapshot } from "@/lib/rosterPersistence";
 import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
-import { preferLocalDashboardItems } from "@/lib/teacherDashboardLoad";
+import {
+    beginDashboardDetailBackgroundRetry,
+    preferLocalDashboardItems,
+    resolveDashboardDetailRetryFailure,
+    type DashboardDetailSnapshot,
+} from "@/lib/teacherDashboardLoad";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { readTeacherSession } from "@/lib/teacherSession";
 import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
@@ -142,11 +147,7 @@ function TeacherDashboard() {
     const [detailedAttemptStatus, setDetailedAttemptStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
     const [detailedAttemptGeneration, setDetailedAttemptGeneration] = useState(0);
     const detailedAttemptGenerationRef = useRef(0);
-    const detailedAttemptCacheRef = useRef<{
-        generation: number;
-        items: Attempt[];
-        sampleStatus: ExamAnalyticsSampleStatus;
-    } | null>(null);
+    const detailedAttemptCacheRef = useRef<DashboardDetailSnapshot<Attempt> | null>(null);
     const detailedAttemptLoadRef = useRef<DetailedAttemptLoad | null>(null);
     const attemptSummarySignalRef = useRef<string | null>(null);
     const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
@@ -171,6 +172,7 @@ function TeacherDashboard() {
     const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
     const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);
     const [detailedAttemptSampleStatus, setDetailedAttemptSampleStatus] = useState<ExamAnalyticsSampleStatus>("ready");
+    const [detailedAttemptWarning, setDetailedAttemptWarning] = useState("");
     const analyticsAttempts = useMemo(
         () => dataMode === "demo" ? attempts : detailedAttempts || [],
         [attempts, dataMode, detailedAttempts],
@@ -195,12 +197,22 @@ function TeacherDashboard() {
         setDetailedAttempts(null);
         setDetailedAttemptStatus("idle");
         setDetailedAttemptSampleStatus("ready");
+        setDetailedAttemptWarning("");
         setDetailedAttemptGeneration(nextGeneration);
     }, []);
 
     const retryDetailedAttempts = useCallback(() => {
-        invalidateDetailedAttempts();
-    }, [invalidateDetailedAttempts]);
+        const retry = beginDashboardDetailBackgroundRetry({
+            generation: detailedAttemptGenerationRef.current,
+            snapshot: detailedAttemptCacheRef.current,
+        });
+        detailedAttemptGenerationRef.current = retry.generation;
+        setDetailedAttempts(retry.items);
+        setDetailedAttemptStatus(retry.loadStatus);
+        setDetailedAttemptSampleStatus(retry.sampleStatus);
+        setDetailedAttemptWarning("");
+        setDetailedAttemptGeneration(retry.generation);
+    }, []);
 
     const loadDetailedAttempts = useCallback(async (): Promise<Attempt[]> => {
         if (dataMode === "demo") return attempts;
@@ -217,7 +229,9 @@ function TeacherDashboard() {
 
             let activeLoad = detailedAttemptLoadRef.current;
             if (!activeLoad || activeLoad.generation !== requestedGeneration) {
-                setDetailedAttemptStatus("loading");
+                if (!detailedAttemptCacheRef.current) {
+                    setDetailedAttemptStatus("loading");
+                }
                 activeLoad = {
                     generation: requestedGeneration,
                     promise: loadTeacherAttempts(),
@@ -244,11 +258,31 @@ function TeacherDashboard() {
                 };
                 setDetailedAttempts(result.items);
                 setDetailedAttemptSampleStatus(sampleStatus);
+                setDetailedAttemptWarning(sampleStatus === "stale" ? result.remoteError || "최신 서버 데이터를 확인하지 못했습니다." : "");
                 setDetailedAttemptStatus("ready");
                 return result.items;
             } catch (error) {
-                if (requestedGeneration !== detailedAttemptGenerationRef.current) continue;
-                setDetailedAttemptStatus("error");
+                const message = error instanceof Error ? error.message : "상세 제출 데이터를 확인하지 못했습니다.";
+                const failure = resolveDashboardDetailRetryFailure({
+                    requestedGeneration,
+                    currentGeneration: detailedAttemptGenerationRef.current,
+                    snapshot: detailedAttemptCacheRef.current,
+                    message,
+                });
+                if (failure.kind === "obsolete") continue;
+                setDetailedAttemptWarning(failure.warning);
+                if (failure.kind === "cached") {
+                    detailedAttemptCacheRef.current = {
+                        generation: requestedGeneration,
+                        items: failure.items,
+                        sampleStatus: failure.sampleStatus,
+                    };
+                    setDetailedAttempts(failure.items);
+                    setDetailedAttemptSampleStatus(failure.sampleStatus);
+                    setDetailedAttemptStatus(failure.loadStatus);
+                    return failure.items;
+                }
+                setDetailedAttemptStatus(failure.loadStatus);
                 throw error;
             } finally {
                 if (detailedAttemptLoadRef.current === activeLoad) {
@@ -1264,7 +1298,7 @@ function TeacherDashboard() {
                                     {detailedAttemptSampleStatus === "partial" ? "일부 제출 기준 분석" : "저장된 제출 기준 분석"}
                                 </strong>
                                 <p style={{ margin: '0.2rem 0 0', color: 'var(--muted)', fontSize: '0.8rem' }}>
-                                    최신 서버 데이터와 차이가 있을 수 있습니다.
+                                    {detailedAttemptWarning || "최신 서버 데이터와 차이가 있을 수 있습니다."}
                                 </p>
                             </div>
                             <button type="button" className="btn btn-secondary" onClick={retryDetailedAttempts}>

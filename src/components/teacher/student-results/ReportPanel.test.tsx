@@ -173,6 +173,36 @@ function renderReport({
 afterEach(cleanup);
 
 describe("ReportPanel", () => {
+    it("labels a completely ungraded attempt without publishing a false zero-percent headline", () => {
+        const ungradedAttempt = { ...attempt, score: 0, totalScore: 0 };
+        render(
+            <ReportPanel
+                attempt={ungradedAttempt}
+                exam={exam}
+                analytics={{
+                    score: { earnedScore: 0, totalScore: 0, scorePercent: 0, gradedQuestionCount: 0, ungradedQuestionCount: 10 },
+                    counts: { correctCount: 0, incorrectCount: 0, unansweredCount: 0, ungradedCount: 10 },
+                    wrongResults: [],
+                    weaknessGroups: [],
+                }}
+                selectedAttemptLabel="원시험"
+                feedbackSummary=""
+                retakeScoreDelta={null}
+                cumulativeInsight={null}
+                growthReportState={{ status: "empty", message: "표시할 성장 데이터가 없습니다." }}
+                studentGrowthReportsEnabled
+                pdfExportEnabled={false}
+                onRetryCumulative={() => {}}
+            />,
+        );
+
+        const scoreSection = screen.getByRole("region", { name: "점수와 답안 현황" });
+        expect(scoreSection).toHaveTextContent("미채점");
+        expect(scoreSection).toHaveTextContent("비교 불가");
+        expect(scoreSection).not.toHaveTextContent("0%");
+        expect(screen.getByRole("region", { name: "핵심 해석" })).not.toHaveTextContent("0%를 기록");
+    });
+
     it("renders all five personal report signals together with the cumulative headline", () => {
         renderReport();
         const signals = screen.getByRole("group", { name: "개인 리포트 핵심 지표" });

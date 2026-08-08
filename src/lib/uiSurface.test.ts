@@ -1678,10 +1678,12 @@ describe("service UI surface", () => {
 
         expect(reportPanel).toContain("시험 정보를 불러오지 못해 오답과 약점을 계산할 수 없습니다.");
         expect(reportPanel).toContain("analytics ? (");
-        const unavailableHeadlineIndex = reportPanel.indexOf("const headline = !analytics");
+        const unavailableHeadlineIndex = reportPanel.indexOf("const headline = !hasGradableScore");
         const retakeHeadlineIndex = reportPanel.indexOf("retakeScoreDelta", unavailableHeadlineIndex);
         expect(unavailableHeadlineIndex).toBeGreaterThan(-1);
         expect(retakeHeadlineIndex).toBeGreaterThan(unavailableHeadlineIndex);
+        expect(reportPanel).toContain("채점 가능한 문항이 없어 점수와 비교 지표를 표시하지 않습니다.");
+        expect(reportPanel).toContain('hasGradableScore ? `${scorePercent}%` : "미채점"');
         expect(reportPanel).toContain("제출 당시 저장된 점수");
         expect(reportPanel).toContain("문항 분석은 시험 정보를 불러온 뒤 확인할 수 있습니다.");
     });

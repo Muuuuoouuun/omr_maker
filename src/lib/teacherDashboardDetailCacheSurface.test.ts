@@ -48,6 +48,15 @@ describe("teacher dashboard detailed attempt cache", () => {
         expect(loaderBlock).toContain("setDetailedAttempts(result.items)");
     });
 
+    it("does not replace a retained retry snapshot with the loading skeleton", () => {
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const loaderStart = dashboard.indexOf("const loadDetailedAttempts = useCallback");
+        const loaderEnd = dashboard.indexOf("useEffect(() =>", loaderStart);
+        const loaderBlock = dashboard.slice(loaderStart, loaderEnd);
+
+        expect(loaderBlock).toMatch(/if \(!detailedAttemptCacheRef\.current\) \{\s*setDetailedAttemptStatus\("loading"\);\s*\}/);
+    });
+
     it("offers an actionable retry for stale or partial detail rows and hides it for ready data", () => {
         const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
         const retryStart = dashboard.indexOf("const retryDetailedAttempts = useCallback");
@@ -57,11 +66,16 @@ describe("teacher dashboard detailed attempt cache", () => {
         const invalidationBlock = dashboard.slice(invalidationStart, retryStart);
 
         expect(retryStart).toBeGreaterThan(-1);
-        expect(retryBlock).toContain("invalidateDetailedAttempts()");
+        expect(retryBlock).toContain("beginDashboardDetailBackgroundRetry");
+        expect(retryBlock).toContain("snapshot: detailedAttemptCacheRef.current");
+        expect(retryBlock).not.toContain("setDetailedAttempts(null)");
         expect(invalidationBlock).toContain("detailedAttemptGenerationRef.current + 1");
         expect(invalidationBlock).toContain("detailedAttemptCacheRef.current = null");
         expect(invalidationBlock).toContain("setDetailedAttempts(null)");
         expect(invalidationBlock).toContain("setDetailedAttemptGeneration(nextGeneration)");
+        expect(dashboard).toContain("resolveDashboardDetailRetryFailure");
+        expect(dashboard).toContain('failure.kind === "cached"');
+        expect(dashboard).toContain("setDetailedAttemptWarning(failure.warning)");
         expect(dashboard).toContain('detailedAttemptSampleStatus !== "ready"');
         expect(dashboard).toContain("onClick={retryDetailedAttempts}");
         expect(dashboard).toContain("최신 데이터 다시 불러오기");

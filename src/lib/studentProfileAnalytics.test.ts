@@ -56,6 +56,38 @@ function attempt(partial: Partial<Attempt>): Attempt {
 }
 
 describe("student profile analytics", () => {
+    it("excludes completely ungraded attempts from score aggregates and visible history", () => {
+        const ungradedExam: Exam = {
+            id: "exam-ungraded",
+            title: "미채점 시험",
+            createdAt: "2026-06-16T00:00:00.000Z",
+            questions: [{ id: 1, number: 1 }],
+        };
+        const insight = buildStudentProfileInsight(student, [
+            attempt({
+                id: "gradable",
+                studentId: student.id,
+                answers: { 1: 2, 2: 4, 3: 0 },
+            }),
+            attempt({
+                id: "ungraded",
+                examId: ungradedExam.id,
+                examTitle: ungradedExam.title,
+                studentId: student.id,
+                finishedAt: "2026-06-16T10:30:00.000Z",
+                score: 0,
+                totalScore: 0,
+                answers: {},
+            }),
+        ], new Map([[exam.id, exam], [ungradedExam.id, ungradedExam]]));
+
+        expect(insight.attempts.map(item => item.id)).toEqual(["gradable"]);
+        expect(insight.averageScore).toBe(67);
+        expect(insight.latestScore).toBe(67);
+        expect(insight.bestScore).toBe(67);
+        expect(insight.baseAttemptCount).toBe(1);
+    });
+
     it("keeps bounded headline evidence from all candidates when recurring weaknesses rank below the display top six", () => {
         const exams = Array.from({ length: 4 }, (_, examIndex): Exam => ({
             id: `exam-${examIndex + 1}`,

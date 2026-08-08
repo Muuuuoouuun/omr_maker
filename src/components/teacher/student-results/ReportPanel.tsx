@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Download, Lock } from "lucide-react";
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
-import type { AttemptScoreSummary, WeaknessGroup } from "@/lib/premiumAnalytics";
+import { hasGradableAttemptScore, type AttemptScoreSummary, type WeaknessGroup } from "@/lib/premiumAnalytics";
 import type { StudentProfileInsight } from "@/lib/studentProfileAnalytics";
 import { buildStudentReportHeadline } from "@/lib/studentReportHeadline";
 import { formatKoreanDateTime } from "@/lib/pure";
@@ -86,8 +86,14 @@ export default function ReportPanel({
 }: ReportPanelProps) {
     const fallbackPercent = safeScorePercent(attempt.score, attempt.totalScore);
     const score = analytics?.score;
+    const hasGradableScore = hasGradableAttemptScore(score ?? {
+        totalScore: attempt.totalScore,
+        scorePercent: fallbackPercent,
+    });
     const scorePercent = score?.scorePercent ?? fallbackPercent;
-    const headline = !analytics
+    const headline = !hasGradableScore
+        ? "채점 가능한 문항이 없어 점수와 비교 지표를 표시하지 않습니다."
+        : !analytics
         ? `제출 당시 저장된 점수 ${scorePercent}%를 표시합니다. 문항 분석은 시험 정보를 불러온 뒤 확인할 수 있습니다.`
         : retakeScoreDelta
             ? retakeScoreDelta.delta > 0
@@ -151,8 +157,8 @@ export default function ReportPanel({
                     <section className={`bento-card ${styles.reportPreludeSection}`} aria-labelledby="report-score-title">
                         <h2 id="report-score-title" className={styles.reportSectionTitle}>점수와 답안 현황</h2>
                         <div className={styles.reportScoreLine}>
-                            <strong>{scorePercent}%</strong>
-                            <span>{score?.earnedScore ?? attempt.score} / {score?.totalScore ?? attempt.totalScore}점</span>
+                            <strong>{hasGradableScore ? `${scorePercent}%` : "미채점"}</strong>
+                            <span>{hasGradableScore ? `${score?.earnedScore ?? attempt.score} / ${score?.totalScore ?? attempt.totalScore}점` : "비교 불가"}</span>
                         </div>
                         {analytics ? (
                             <div className={styles.reportStatGrid}>

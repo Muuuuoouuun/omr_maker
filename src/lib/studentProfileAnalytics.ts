@@ -8,6 +8,7 @@ import {
     buildLearningRecommendations,
     buildQuestionResultTagStats,
     getAttemptQuestionResults,
+    hasGradableAttemptScore,
     summarizeAttemptBehavior,
     type LearningRecommendationSeverity,
     type QuestionResultTagStat,
@@ -235,11 +236,18 @@ export function buildStudentProfileInsight(
     const matchedAttempts = attempts
         .filter(attempt => attemptMatchesStudentProfile(attempt, student))
         .sort((a, b) => activityTime(b) - activityTime(a));
-    const baseMatchedAttempts = baseAttemptsOnly(matchedAttempts);
-    const retakeMatchedAttempts = retakeAttemptsOnly(matchedAttempts);
+    const resolvedScoreByAttempt = new Map(matchedAttempts.map(attempt => [
+        attempt,
+        resolveAttemptScore(attempt, examById.get(attempt.examId)),
+    ]));
+    const gradableMatchedAttempts = matchedAttempts.filter(attempt => (
+        hasGradableAttemptScore(resolvedScoreByAttempt.get(attempt)!)
+    ));
+    const baseMatchedAttempts = baseAttemptsOnly(gradableMatchedAttempts);
+    const retakeMatchedAttempts = retakeAttemptsOnly(gradableMatchedAttempts);
     const baseAttemptIds = new Set(baseMatchedAttempts.map(attempt => attempt.id));
 
-    const attemptInsights = matchedAttempts.map(attempt => {
+    const attemptInsights = gradableMatchedAttempts.map(attempt => {
         const exam = examById.get(attempt.examId);
         const results = exam ? getAttemptQuestionResults(exam, attempt) : [];
         const behavior = summarizeAttemptBehavior(attempt);
@@ -259,7 +267,7 @@ export function buildStudentProfileInsight(
             examId: attempt.examId,
             examTitle: attempt.examTitle || exam?.title || "시험",
             finishedAt: attempt.finishedAt,
-            scorePercent: resolveAttemptScore(attempt, exam).scorePercent,
+            scorePercent: resolvedScoreByAttempt.get(attempt)!.scorePercent,
             elapsedTimeSec: behavior.elapsedTimeSec,
             totalTrackedTimeSec: behavior.totalTrackedTimeSec,
             averageQuestionTimeSec: behavior.averageTimeSec,

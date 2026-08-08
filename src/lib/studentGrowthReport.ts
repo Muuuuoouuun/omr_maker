@@ -1,5 +1,6 @@
 import type { Attempt, Exam } from "@/types/omr";
 import { resolveAttemptScore } from "@/lib/attemptScores";
+import { hasGradableAttemptScore } from "@/lib/premiumAnalytics";
 import { computeRankPercentile } from "@/lib/scoreDistribution";
 
 export type GrowthDataStatus = "ready" | "partial" | "stale";
@@ -99,13 +100,50 @@ function buildScopedExamMap(exams: readonly Exam[], selectedOrganizationId: stri
         if (!examId || !stableKey(exam.title) || !organizationMatches) continue;
 
         const current = scopedExams.get(examId);
-        const isExactOrganizationMatch = selectedOrganization && examOrganization === selectedOrganization;
-        const currentIsLegacy = current && !stableKey(current.organizationId);
-        if (!current || (isExactOrganizationMatch && currentIsLegacy)) {
+        if (!current || isPreferredExamMetadata(exam, current, selectedOrganization)) {
             scopedExams.set(examId, exam);
         }
     }
     return scopedExams;
+}
+
+function examOrganizationRank(exam: Exam, selectedOrganization: string): number {
+    const organization = stableKey(exam.organizationId);
+    if (!selectedOrganization) return organization ? 0 : 1;
+    if (organization === selectedOrganization) return 2;
+    return organization ? 0 : 1;
+}
+
+function examRevision(exam: Exam): number {
+    return Number.isSafeInteger(exam.revision) && (exam.revision as number) >= 0
+        ? exam.revision as number
+        : -1;
+}
+
+function examUpdatedTime(exam: Exam): number {
+    const timestamp = Date.parse(exam.updatedAt || "");
+    return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function stableExamTieKey(exam: Exam): string {
+    return [
+        stableKey(exam.title),
+        stableKey(exam.createdAt),
+        stableKey(exam.classId),
+        stableKey(exam.createdByUserId),
+        JSON.stringify(exam.questions),
+    ].join("\u0000");
+}
+
+function isPreferredExamMetadata(candidate: Exam, current: Exam, selectedOrganization: string): boolean {
+    const organizationDifference = examOrganizationRank(candidate, selectedOrganization)
+        - examOrganizationRank(current, selectedOrganization);
+    if (organizationDifference !== 0) return organizationDifference > 0;
+    const revisionDifference = examRevision(candidate) - examRevision(current);
+    if (revisionDifference !== 0) return revisionDifference > 0;
+    const updatedDifference = examUpdatedTime(candidate) - examUpdatedTime(current);
+    if (updatedDifference !== 0) return updatedDifference > 0;
+    return stableExamTieKey(candidate).localeCompare(stableExamTieKey(current), "ko") < 0;
 }
 
 function participantKey(attempt: Attempt): string {
@@ -125,13 +163,11 @@ function isPreferredRepresentative(candidate: Attempt, current: Attempt): boolea
 
 function resolvedScorePercent(attempt: Attempt, exam?: Exam): number | null {
     const resolved = resolveAttemptScore(attempt, exam && exam.questions.length > 0 ? exam : undefined);
-    if (!Number.isFinite(resolved.scorePercent)) return null;
+    if (!hasGradableAttemptScore(resolved)) return null;
     if (
         resolved.source === "storedScore"
         && (!Number.isFinite(attempt.score) || !Number.isFinite(attempt.totalScore))
-    ) {
-        return null;
-    }
+    ) return null;
     return resolved.scorePercent;
 }
 
