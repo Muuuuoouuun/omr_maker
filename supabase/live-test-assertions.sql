@@ -5989,6 +5989,33 @@ reset role;
 do $drift$
 declare
     v_definition text;
+    v_mutated_definition text;
+    v_probe jsonb;
+begin
+    v_definition := pg_catalog.pg_get_functiondef(
+        'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+    );
+    v_mutated_definition := pg_catalog.replace(
+        v_definition,
+        'grant_row.expires_at > pg_catalog.clock_timestamp()',
+        '(grant_row.expires_at > pg_catalog.clock_timestamp() or true)'
+    );
+    if v_mutated_definition = v_definition then
+        raise exception 'operator provisioning effective expiry drift fixture did not mutate definition';
+    end if;
+    execute v_mutated_definition;
+    v_probe := public.omr_service_readiness_v1();
+    if coalesce((v_probe->>'operatorPilotProvisioningReady')::boolean, true) then
+        execute v_definition;
+        raise exception 'operator provisioning effective expiry OR-true drift passed readiness';
+    end if;
+    execute v_definition;
+end
+$drift$;
+
+do $drift$
+declare
+    v_definition text;
     v_probe jsonb;
 begin
     v_definition := pg_catalog.pg_get_functiondef(
@@ -6083,6 +6110,34 @@ begin
 end
 $$;
 
+do $$
+declare
+    v_probe jsonb;
+begin
+    alter table public.omr_pilot_plan_grants
+        rename constraint omr_pilot_plan_grants_expiry_check
+        to omr_pilot_plan_grants_expiry_check_real;
+    alter table public.omr_pilot_plan_grants
+        add constraint omr_pilot_plan_grants_expiry_check check (
+            (pg_catalog.isfinite(expires_at) and expires_at > created_at) or true
+        );
+    v_probe := public.omr_service_readiness_v1();
+    if coalesce((v_probe->>'operatorPilotProvisioningReady')::boolean, true) then
+        alter table public.omr_pilot_plan_grants
+            drop constraint omr_pilot_plan_grants_expiry_check;
+        alter table public.omr_pilot_plan_grants
+            rename constraint omr_pilot_plan_grants_expiry_check_real
+            to omr_pilot_plan_grants_expiry_check;
+        raise exception 'operator provisioning expiry constraint OR-true drift passed readiness';
+    end if;
+    alter table public.omr_pilot_plan_grants
+        drop constraint omr_pilot_plan_grants_expiry_check;
+    alter table public.omr_pilot_plan_grants
+        rename constraint omr_pilot_plan_grants_expiry_check_real
+        to omr_pilot_plan_grants_expiry_check;
+end
+$$;
+
 -- Operator provisioning is RPC-only for all browser roles and its digest
 -- ledger remains inaccessible even to service_role.
 do $$
@@ -6110,6 +6165,46 @@ begin
             raise exception 'pilot grant ledger exposed to %', v_role;
         end if;
     end loop;
+end
+$$;
+
+do $$
+declare
+    v_before jsonb;
+    v_after jsonb;
+    v_rejected boolean := false;
+begin
+    select pg_catalog.jsonb_build_object(
+        'organizations', (select pg_catalog.count(*) from public.omr_organizations),
+        'accounts', (select pg_catalog.count(*) from public.omr_teacher_accounts),
+        'members', (select pg_catalog.count(*) from public.omr_organization_members),
+        'profiles', (select pg_catalog.count(*) from public.omr_teacher_profiles),
+        'grants', (select pg_catalog.count(*) from public.omr_pilot_plan_grants),
+        'audits', (select pg_catalog.count(*) from public.omr_audit_logs)
+    ) into v_before;
+    begin
+        perform public.omr_provision_pilot_teacher_v1(
+            'Null Plan School', 'null-plan@example.test', 'Null Plan Teacher',
+            'pbkdf2-sha256:120000:12121212121212121212121212121212:abababababababababababababababababababababababababababababababab',
+            null, pg_catalog.clock_timestamp() + interval '1 day',
+            'operator:live', 'null_plan_probe',
+            'prov_null_plan_probe_0123456789abcdef0123456789abcdef'
+        );
+    exception when others then
+        if sqlerrm <> 'invalid_provisioning_request' then raise; end if;
+        v_rejected := true;
+    end;
+    select pg_catalog.jsonb_build_object(
+        'organizations', (select pg_catalog.count(*) from public.omr_organizations),
+        'accounts', (select pg_catalog.count(*) from public.omr_teacher_accounts),
+        'members', (select pg_catalog.count(*) from public.omr_organization_members),
+        'profiles', (select pg_catalog.count(*) from public.omr_teacher_profiles),
+        'grants', (select pg_catalog.count(*) from public.omr_pilot_plan_grants),
+        'audits', (select pg_catalog.count(*) from public.omr_audit_logs)
+    ) into v_after;
+    if not v_rejected or v_before is distinct from v_after then
+        raise exception 'operator provisioning null plan did not fail as invalid request';
+    end if;
 end
 $$;
 
@@ -6460,6 +6555,76 @@ begin
        or (select pg_catalog.count(*) from public.omr_teacher_accounts where email = 'concurrent-pilot@example.test') <> 1
        or (select pg_catalog.count(*) from public.omr_pilot_plan_grants where account_id = v_a->>'accountId') <> 1 then
         raise exception 'operator provisioning concurrent replay duplicated state';
+    end if;
+end
+$$;
+
+-- A logical timestamptz instant must fingerprint identically regardless of
+-- each caller session's TimeZone. A genuinely changed instant still conflicts.
+do $$
+declare
+    v_first jsonb;
+    v_replay jsonb;
+    v_error text;
+    v_before jsonb;
+    v_after jsonb;
+    v_expiry timestamptz := pg_catalog.clock_timestamp() + interval '1 day';
+    v_query text;
+begin
+    perform extensions.dblink_connect(
+        'pilot-timezone-utc',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_connect(
+        'pilot-timezone-seoul',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_exec('pilot-timezone-utc', 'set time zone ''UTC''');
+    perform extensions.dblink_exec('pilot-timezone-seoul', 'set time zone ''Asia/Seoul''');
+    v_query := 'select public.omr_provision_pilot_teacher_v1('
+        || quote_literal('Timezone Pilot School') || ','
+        || quote_literal('timezone-pilot@example.test') || ','
+        || quote_literal('Timezone Teacher') || ','
+        || quote_literal('pbkdf2-sha256:120000:77777777777777777777777777777777:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') || ','
+        || quote_literal('pro') || ',' || quote_literal(v_expiry) || '::timestamptz,'
+        || quote_literal('operator:live') || ',' || quote_literal('timezone_probe') || ','
+        || quote_literal('prov_timezone_probe_0123456789abcdef0123456789abcdef') || ')::text';
+    select result.recorded::jsonb into v_first
+      from extensions.dblink('pilot-timezone-utc', v_query) as result(recorded text);
+    select result.recorded::jsonb into v_replay
+      from extensions.dblink('pilot-timezone-seoul', v_query) as result(recorded text);
+    if v_first->>'replayed' <> 'false'
+       or v_replay->>'replayed' <> 'true'
+       or (v_first - 'replayed') is distinct from (v_replay - 'replayed') then
+        raise exception 'operator provisioning cross-timezone exact instant did not replay';
+    end if;
+    select pg_catalog.jsonb_build_object(
+        'account', (select pg_catalog.to_jsonb(account) from public.omr_teacher_accounts account where account.id = v_first->>'accountId'),
+        'organization', (select pg_catalog.to_jsonb(organization) from public.omr_organizations organization where organization.id = v_first->>'organizationId'),
+        'grant', (select pg_catalog.to_jsonb(grant_row) from public.omr_pilot_plan_grants grant_row where grant_row.id = v_first->>'grantId'),
+        'audits', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(audit) order by audit.id) from public.omr_audit_logs audit where audit.organization_id = v_first->>'organizationId')
+    ) into v_before;
+    v_query := pg_catalog.replace(
+        v_query,
+        quote_literal(v_expiry) || '::timestamptz',
+        quote_literal(v_expiry + interval '1 microsecond') || '::timestamptz'
+    );
+    select result.recorded::jsonb into v_replay
+      from extensions.dblink('pilot-timezone-seoul', v_query, false) as result(recorded text);
+    v_error := extensions.dblink_error_message('pilot-timezone-seoul');
+    select pg_catalog.jsonb_build_object(
+        'account', (select pg_catalog.to_jsonb(account) from public.omr_teacher_accounts account where account.id = v_first->>'accountId'),
+        'organization', (select pg_catalog.to_jsonb(organization) from public.omr_organizations organization where organization.id = v_first->>'organizationId'),
+        'grant', (select pg_catalog.to_jsonb(grant_row) from public.omr_pilot_plan_grants grant_row where grant_row.id = v_first->>'grantId'),
+        'audits', (select pg_catalog.jsonb_agg(pg_catalog.to_jsonb(audit) order by audit.id) from public.omr_audit_logs audit where audit.organization_id = v_first->>'organizationId')
+    ) into v_after;
+    perform extensions.dblink_disconnect('pilot-timezone-utc');
+    perform extensions.dblink_disconnect('pilot-timezone-seoul');
+    if coalesce(v_error, '') not like '%idempotency_conflict%'
+       or v_before is distinct from v_after then
+        raise exception 'operator provisioning cross-timezone changed instant did not conflict atomically';
     end if;
 end
 $$;

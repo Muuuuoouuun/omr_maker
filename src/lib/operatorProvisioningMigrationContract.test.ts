@@ -49,6 +49,7 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
         expect(migration).toContain("set lock_timeout = '3s'");
         expect(migration).toContain("v_actor !~ '^operator:[a-z0-9][a-z0-9._-]{0,63}$'");
         expect(migration).toContain("v_reason !~ '^[a-z][a-z0-9_]{0,63}$'");
+        expect(migration).toContain("p_plan is null");
         expect(migration).toMatch(/alter function public\.omr_provision_pilot_teacher_v1[\s\S]+owner to postgres/i);
         expect(migration).toMatch(/grant execute on function public\.omr_provision_pilot_teacher_v1[\s\S]+to service_role/i);
         expect(migration).not.toMatch(/grant execute[^;]+\bto\s+(anon|authenticated)\b/i);
@@ -60,8 +61,11 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
         expect(migration).toContain("on conflict (idempotency_key_hash) do nothing");
         for (const requestField of [
             "organizationName", "email", "displayName", "passwordHash",
-            "plan", "expiresAt", "actor", "reason",
+            "plan", "expiresAtEpochMicros", "actor", "reason",
         ]) expect(migration).toContain(`'${requestField}'`);
+        expect(migration).toContain("extract(epoch from p_expires_at) * 1000000");
+        expect(migration).toContain("p_expires_at at time zone 'UTC'");
+        expect(migration).toContain("'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'");
         expect(migration).toContain("raise exception 'idempotency_conflict'");
         expect(migration).toContain("'replayed', true");
         expect(migration).toContain("'replayed', false");
@@ -107,14 +111,12 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
             "omr_pilot_plan_grants_state_check",
             "omr_pilot_plan_grants_expiry_check",
             "omr_pilot_plan_grants_superseded_check",
-            "grant_row.state = ''active''",
-            "grant_row.superseded_at is null",
-            "grant_row.expires_at > pg_catalog.clock_timestamp()",
-            "'''plan'', ''free'''",
-            "v_existing_grant.request_hash is distinct from v_request_hash",
-            "pg_catalog.pg_advisory_xact_lock(20260808, pg_catalog.hashtext(v_email))",
-            "session_generation = account.session_generation + 1",
-            "insert into public.omr_audit_logs",
+            "extensions.digest(pg_catalog.pg_get_functiondef",
+            "3acb4bed7ceb5238c412bfa41ef8593de35d3e893d0dd321a384b4546b348711",
+            "fcd083ee1f40a923e03cc8fd7bfccbdaa70d74d34a2e8dc35e7439760b099b45",
+            "9e546425eaa75644fb8ee944062da143dad242f4424061910bee2fab4ea07670",
+            "a28a831abf38473c8a7d6989749d298b2de2c6d7629fb08925c146a5c57e0bc1",
+            "e05ecee3e626ee9d15f3143003f5fe0ea9b0a31ffabe9a395fbff7dac1d17fec",
         ]) expect(boundary).toContain(readinessProof);
         for (const evidence of [
             "operator provisioning exact replay mutated state",
@@ -131,6 +133,11 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
             "operator provisioning current-grant index drift passed readiness",
             "operator provisioning ledger constraint drift passed readiness",
             "operator provisioning mutation body drift passed readiness",
+            "operator provisioning effective expiry OR-true drift passed readiness",
+            "operator provisioning expiry constraint OR-true drift passed readiness",
+            "operator provisioning cross-timezone exact instant did not replay",
+            "operator provisioning cross-timezone changed instant did not conflict atomically",
+            "operator provisioning null plan did not fail as invalid request",
             "operator provisioning second membership was accepted",
             "operator provisioning second profile was accepted",
             "operator provisioning RPC exposed to anon",

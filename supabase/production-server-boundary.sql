@@ -1260,94 +1260,14 @@ begin
             'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure,
             'pg_proc'
         ) like 'expiry-safe-effective-workspace-plan-read:202608080006;%'
-        and position(
-            'v_existing_grant.request_hash is distinct from v_request_hash' in
-            pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'pg_catalog.pg_advisory_xact_lock(20260808, pg_catalog.hashtext(v_email))' in
-            pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'v_membership_count <> 1' in pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'v_profile_count <> 1' in pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'v_account.status is distinct from ''active''' in pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'session_generation = account.session_generation + 1' in
-            pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'update public.omr_teacher_account_tokens' in pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'set state = ''superseded''' in pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'insert into public.omr_pilot_plan_grants' in pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'set plan = ''free''' in pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'insert into public.omr_audit_logs' in pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'v_existing_grant.request_hash is distinct from v_request_hash' in
-            pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        ) < position(
-            'update public.omr_teacher_accounts' in pg_catalog.pg_get_functiondef(
-                'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-            )
-        )
-        and position(
-            'grant_row.state = ''active''' in pg_catalog.pg_get_functiondef(
-                'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'grant_row.superseded_at is null' in pg_catalog.pg_get_functiondef(
-                'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            'grant_row.expires_at > pg_catalog.clock_timestamp()' in pg_catalog.pg_get_functiondef(
-                'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and position(
-            '''plan'', ''free''' in pg_catalog.pg_get_functiondef(
-                'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
-            )
-        ) > 0
+        -- Exact PG17 catalog attestations prevent semantics-preserving token
+        -- spoofing such as `expires_at > clock_timestamp() OR true`.
+        and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
+            'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
+        ), 'sha256'), 'hex') = '3acb4bed7ceb5238c412bfa41ef8593de35d3e893d0dd321a384b4546b348711'
+        and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
+            'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
+        ), 'sha256'), 'hex') = 'fcd083ee1f40a923e03cc8fd7bfccbdaa70d74d34a2e8dc35e7439760b099b45'
         and exists (
             select 1 from pg_catalog.pg_index index_record
              where index_record.indexrelid = pg_catalog.to_regclass(
@@ -1355,14 +1275,9 @@ begin
                    )
                and index_record.indrelid = 'public.omr_pilot_plan_grants'::pg_catalog.regclass
                and index_record.indisvalid and index_record.indisready and index_record.indisunique
-               and index_record.indnkeyatts = 1
-               and pg_catalog.pg_get_indexdef(index_record.indexrelid, 1, true) = 'organization_id'
-               and position('state = ''active''::text' in pg_catalog.lower(pg_catalog.pg_get_expr(
-                   index_record.indpred, index_record.indrelid, true
-               ))) > 0
-               and position('superseded_at is null' in pg_catalog.lower(pg_catalog.pg_get_expr(
-                   index_record.indpred, index_record.indrelid, true
-               ))) > 0
+               and pg_catalog.encode(extensions.digest(
+                   pg_catalog.pg_get_indexdef(index_record.indexrelid), 'sha256'
+               ), 'hex') = '9e546425eaa75644fb8ee944062da143dad242f4424061910bee2fab4ea07670'
         )
         and exists (
             select 1 from pg_catalog.pg_index index_record
@@ -1371,61 +1286,17 @@ begin
                    )
                and index_record.indrelid = 'public.omr_pilot_plan_grants'::pg_catalog.regclass
                and index_record.indisvalid and index_record.indisready and index_record.indisunique
-               and index_record.indnkeyatts = 1 and index_record.indpred is null
-               and pg_catalog.pg_get_indexdef(index_record.indexrelid, 1, true)
-                   = 'idempotency_key_hash'
+               and pg_catalog.encode(extensions.digest(
+                   pg_catalog.pg_get_indexdef(index_record.indexrelid), 'sha256'
+               ), 'hex') = 'a28a831abf38473c8a7d6989749d298b2de2c6d7629fb08925c146a5c57e0bc1'
         )
         and (
             select pg_catalog.count(*) = 7
-               and pg_catalog.bool_and(
-                   case constraint_record.conname
-                       when 'omr_pilot_plan_grants_idempotency_hash_check' then
-                           position('idempotency_key_hash ~ ''^[a-f0-9]{64}$''::text' in
-                               pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_record.oid, true))) > 0
-                       when 'omr_pilot_plan_grants_request_hash_check' then
-                           position('request_hash ~ ''^[a-f0-9]{64}$''::text' in
-                               pg_catalog.lower(pg_catalog.pg_get_constraintdef(constraint_record.oid, true))) > 0
-                       when 'omr_pilot_plan_grants_plan_check' then
-                           position('plan = any' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                           and position('''pro''::text' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                           and position('''academy''::text' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                       when 'omr_pilot_plan_grants_state_check' then
-                           position('state = any' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                           and position('''active''::text' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                           and position('''superseded''::text' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                       when 'omr_pilot_plan_grants_expiry_check' then
-                           position('isfinite(expires_at)' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                           and position('expires_at > created_at' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                       when 'omr_pilot_plan_grants_superseded_check' then
-                           position('superseded_at is null' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                           and position('superseded_at >= created_at' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                       when 'omr_pilot_plan_grants_updated_check' then
-                           position('updated_at >= created_at' in pg_catalog.lower(
-                               pg_catalog.pg_get_constraintdef(constraint_record.oid, true)
-                           )) > 0
-                       else false
-                   end
-               )
+               and pg_catalog.encode(extensions.digest(pg_catalog.string_agg(
+                   constraint_record.conname || '='
+                       || pg_catalog.pg_get_constraintdef(constraint_record.oid, true),
+                   E'\n' order by constraint_record.conname
+               ), 'sha256'), 'hex') = 'e05ecee3e626ee9d15f3143003f5fe0ea9b0a31ffabe9a395fbff7dac1d17fec'
               from pg_catalog.pg_constraint constraint_record
              where constraint_record.conrelid = 'public.omr_pilot_plan_grants'::pg_catalog.regclass
                and constraint_record.conname in (

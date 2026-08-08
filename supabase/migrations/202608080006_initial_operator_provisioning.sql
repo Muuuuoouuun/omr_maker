@@ -99,7 +99,10 @@ begin
         'organizationId', v_grant.organization_id,
         'plan', v_grant.plan,
         'grantId', v_grant.id,
-        'expiresAt', v_grant.expires_at
+        'expiresAt', pg_catalog.to_char(
+            v_grant.expires_at at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        )
     );
 end;
 $$;
@@ -162,6 +165,7 @@ begin
        or v_display_name ~ '[[:cntrl:]]'
        or p_password_hash is null
        or p_password_hash !~ '^pbkdf2-sha256:120000:[a-f0-9]{32}:[a-f0-9]{64}$'
+       or p_plan is null
        or v_plan not in ('pro', 'academy')
        or p_expires_at is null
        or not pg_catalog.isfinite(p_expires_at)
@@ -189,7 +193,8 @@ begin
         'displayName', v_display_name,
         'passwordHash', p_password_hash,
         'plan', v_plan,
-        'expiresAt', p_expires_at,
+        'expiresAtEpochMicros',
+            (extract(epoch from p_expires_at) * 1000000)::bigint,
         'actor', v_actor,
         'reason', v_reason
     );
@@ -213,7 +218,10 @@ begin
             'accountId', v_existing_grant.account_id,
             'grantId', v_existing_grant.id,
             'plan', v_existing_grant.plan,
-            'expiresAt', v_existing_grant.expires_at,
+            'expiresAt', pg_catalog.to_char(
+                v_existing_grant.expires_at at time zone 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+            ),
             'replayed', true
         );
     end if;
@@ -383,7 +391,10 @@ begin
             'reason', v_reason,
             'beforePlan', v_before_plan,
             'afterPlan', v_plan,
-            'expiresAt', p_expires_at,
+            'expiresAt', pg_catalog.to_char(
+                p_expires_at at time zone 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+            ),
             'grantId', v_grant_id,
             'beforeSessionGeneration', v_before_generation,
             'afterSessionGeneration', v_after_generation
@@ -396,7 +407,10 @@ begin
         'accountId', v_account_id,
         'grantId', v_grant_id,
         'plan', v_plan,
-        'expiresAt', p_expires_at,
+        'expiresAt', pg_catalog.to_char(
+            p_expires_at at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        ),
         'replayed', false
     );
 end;
