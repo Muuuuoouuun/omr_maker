@@ -42,10 +42,10 @@ npm run ops:alert:verify -- --output /absolute/private/path/operational-alert-ev
 | 이름 | 필수 값과 경계 |
 | --- | --- |
 | `OMR_BUILD_SHA` | 배포와 일치하는 소문자 40자리 hex Git SHA |
-| `OMR_ALERT_SINK_URL` | 합성 이벤트를 받는 외부 비로컬 HTTPS endpoint |
-| `OMR_ALERT_RECEIPT_URL` | 동일 event ID의 sink/alert 수신 시각을 반환하는 외부 비로컬 HTTPS endpoint |
-| `OMR_ALERT_ACK_URL` | 동일 event ID의 acknowledgement 시각을 반환하는 외부 비로컬 HTTPS endpoint |
-| `OMR_ALERT_RESOLVE_URL` | 동일 event ID의 resolution 시각을 반환하는 외부 비로컬 HTTPS endpoint |
+| `OMR_ALERT_SINK_URL` | 합성 이벤트를 받는 최대 2048자 외부 비로컬 HTTPS endpoint |
+| `OMR_ALERT_RECEIPT_URL` | 동일 event ID의 sink/alert 수신 시각을 반환하는 최대 2048자 외부 비로컬 HTTPS endpoint |
+| `OMR_ALERT_ACK_URL` | 동일 event ID의 acknowledgement 시각을 반환하는 최대 2048자 외부 비로컬 HTTPS endpoint |
+| `OMR_ALERT_RESOLVE_URL` | 동일 event ID의 resolution 시각을 반환하는 최대 2048자 외부 비로컬 HTTPS endpoint |
 | `OMR_ALERT_SINK_TOKEN` | 공백 없는 32–512자 bearer credential |
 | `OMR_ALERT_RECEIPT_TOKEN` | 공백 없는 32–512자 bearer credential |
 | `OMR_ALERT_ACK_TOKEN` | 공백 없는 32–512자 bearer credential |

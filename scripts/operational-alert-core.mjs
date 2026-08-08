@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, lstat, writeFile } from "node:fs/promises";
+import { lstat, open, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, normalize } from "node:path";
 
 export const OPERATIONAL_ALERT_SCHEMA_VERSION = 1;
 export const OPERATIONAL_ALERT_MAX_RESPONSE_BYTES = 32 * 1024;
+export const OPERATIONAL_ALERT_MAX_ENDPOINT_URL_LENGTH = 2048;
 
 const EVENT_ID_PATTERN = /^evt_[a-f0-9]{32}$/;
 const BUILD_SHA_PATTERN = /^[a-f0-9]{40}$/;
@@ -21,7 +22,7 @@ const DEFAULT_DEPS = {
     sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
     generateEventId: () => `evt_${randomBytes(16).toString("hex")}`,
     timeoutSignal: (milliseconds) => AbortSignal.timeout(milliseconds),
-    fs: { chmod, lstat, writeFile },
+    fs: { lstat, open, unlink },
 };
 
 export class OperationalAlertError extends Error {
@@ -82,6 +83,9 @@ function isReservedHostname(hostname) {
 }
 
 function productionEndpoint(value) {
+    if (typeof value !== "string" || value.length > OPERATIONAL_ALERT_MAX_ENDPOINT_URL_LENGTH) {
+        fail("invalid_configuration");
+    }
     let url;
     try {
         url = new URL(value);
@@ -96,6 +100,7 @@ function productionEndpoint(value) {
         || url.username
         || url.password
         || url.hash
+        || url.href.length > OPERATIONAL_ALERT_MAX_ENDPOINT_URL_LENGTH
     ) fail("invalid_configuration");
     return url;
 }
@@ -269,13 +274,37 @@ function sha256(value) {
 }
 
 async function writeEvidence(outputPath, evidence, fs) {
+    let handle;
+    let created = false;
+    let closed = false;
     try {
-        await fs.writeFile(outputPath, `${JSON.stringify(evidence, null, 2)}\n`, { flag: "wx", mode: 0o600, encoding: "utf8" });
-        await fs.chmod(outputPath, 0o600);
+        handle = await fs.open(outputPath, "wx", 0o600);
+        created = true;
+        if (typeof handle.chmod !== "function" || typeof handle.writeFile !== "function") fail("unsafe_output");
+        await handle.chmod(0o600);
+        await handle.writeFile(`${JSON.stringify(evidence, null, 2)}\n`, { encoding: "utf8" });
+        if (typeof handle.sync === "function") await handle.sync();
+        if (typeof handle.close === "function") {
+            await handle.close();
+            closed = true;
+        }
         const written = await fs.lstat(outputPath);
         if (!written.isFile() || written.isSymbolicLink() || (written.mode & 0o777) !== 0o600) fail("unsafe_output");
-    } catch (error) {
-        if (error instanceof OperationalAlertError) throw error;
+    } catch {
+        if (handle && !closed && typeof handle.close === "function") {
+            try {
+                await handle.close();
+            } catch {
+                // Cleanup is best effort; the result remains unverified.
+            }
+        }
+        if (created) {
+            try {
+                await fs.unlink(outputPath);
+            } catch {
+                // Cleanup is best effort; never unlink when exclusive creation failed.
+            }
+        }
         fail("unsafe_output");
     }
 }
@@ -324,7 +353,9 @@ export async function runOperationalAlertExercise(input, overrides = {}) {
         );
         if ([202, 204, 404].includes(response.status)) {
             await boundedResponseText(response);
-            await deps.sleep(config.pollIntervalMs);
+            const remainingAfterResponseMs = config.deadlineMs - (deps.now().getTime() - receiptStartedMs);
+            if (remainingAfterResponseMs <= 0) fail("receipt_deadline");
+            await deps.sleep(Math.min(config.pollIntervalMs, remainingAfterResponseMs));
             continue;
         }
         if (response.status !== 200) fail("receipt_rejected");

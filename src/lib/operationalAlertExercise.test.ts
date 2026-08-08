@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, open, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,6 +39,7 @@ async function fixture(options: {
 } = {}) {
     const { output } = await secureOutput();
     let nowMs = Date.parse("2026-08-08T00:00:00.000Z");
+    const sleepCalls: number[] = [];
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const responses = options.responses ?? [
         new Response(null, { status: 202 }),
@@ -58,7 +59,10 @@ async function fixture(options: {
             return typeof response === "function" ? response() : response;
         },
         now: () => new Date(nowMs),
-        sleep: async (ms: number) => { nowMs += ms; },
+        sleep: async (ms: number) => {
+            sleepCalls.push(ms);
+            nowMs += ms;
+        },
         generateEventId: () => options.eventId ?? EVENT_ID,
     };
     const env = {
@@ -72,7 +76,7 @@ async function fixture(options: {
         OMR_ALERT_REQUEST_TIMEOUT_MS: "1000",
         ...TOKENS,
     };
-    return { output, calls, deps, env };
+    return { output, calls, deps, env, sleepCalls, currentTime: () => nowMs };
 }
 
 describe("provider-neutral operational alert exercise", () => {
@@ -260,6 +264,25 @@ describe("provider-neutral operational alert exercise", () => {
         expect(timeoutBounds).toEqual([1000, 1000, 750, 500, 250]);
     });
 
+    it("never sleeps or polls beyond a non-divisible receipt deadline", async () => {
+        const startedAt = Date.parse("2026-08-08T00:00:00.000Z");
+        const current = await fixture({ responses: [
+            new Response(null, { status: 202 }),
+            ...Array.from({ length: 3 }, () => new Response(null, { status: 404 })),
+        ] });
+        const env = {
+            ...current.env,
+            OMR_ALERT_POLL_INTERVAL_MS: "400",
+            OMR_ALERT_DEADLINE_MS: "1000",
+        };
+
+        await expect(runOperationalAlertExercise({ argv: ["--output", current.output], env }, current.deps)).rejects.toMatchObject({ code: "receipt_deadline" });
+
+        expect(current.calls).toHaveLength(4);
+        expect(current.sleepCalls).toEqual([400, 400, 200]);
+        expect(current.currentTime() - startedAt).toBe(1000);
+    });
+
     it.each([
         ["redirect", new Response(null, { status: 302, headers: { location: "https://other.example.test" } })],
         ["oversized response", new Response("x".repeat(32 * 1024 + 1), { status: 200 })],
@@ -317,6 +340,131 @@ describe("provider-neutral operational alert exercise", () => {
         }
     });
 
+    it("creates evidence exclusively at 0600 before writing, then syncs and closes", async () => {
+        const current = await fixture();
+        const lifecycle: string[] = [];
+        const deps = {
+            ...current.deps,
+            fs: {
+                lstat,
+                unlink,
+                open: async (path: string, flags: string, mode: number) => {
+                    lifecycle.push(`open:${flags}:${mode.toString(8)}`);
+                    const handle = await open(path, flags, mode);
+                    return {
+                        chmod: async (nextMode: number) => {
+                            lifecycle.push(`chmod:${nextMode.toString(8)}`);
+                            await handle.chmod(nextMode);
+                        },
+                        writeFile: async (data: string, options: object) => {
+                            lifecycle.push("write");
+                            await handle.writeFile(data, options);
+                        },
+                        sync: async () => {
+                            lifecycle.push("sync");
+                            await handle.sync();
+                        },
+                        close: async () => {
+                            lifecycle.push("close");
+                            await handle.close();
+                        },
+                    };
+                },
+            },
+        };
+
+        await expect(runOperationalAlertExercise({ argv: ["--output", current.output], env: current.env }, deps)).resolves.toMatchObject({ status: "verified" });
+        expect(lifecycle).toEqual(["open:wx:600", "chmod:600", "write", "sync", "close"]);
+        expect((await lstat(current.output)).mode & 0o777).toBe(0o600);
+    });
+
+    it.each(["chmod", "write", "sync", "close", "lstat", "mode"] as const)(
+        "removes its newly created file when %s finalization fails",
+        async (failure) => {
+            const current = await fixture();
+            let outputLstatCalls = 0;
+            let unlinkCalls = 0;
+            const deps = {
+                ...current.deps,
+                fs: {
+                    unlink: async (path: string) => {
+                        unlinkCalls += 1;
+                        await unlink(path);
+                    },
+                    lstat: async (path: string) => {
+                        if (path === current.output) {
+                            outputLstatCalls += 1;
+                            if (failure === "lstat" && outputLstatCalls > 1) throw new Error("injected-lstat-secret");
+                        }
+                        const stats = await lstat(path);
+                        if (failure === "mode" && path === current.output && outputLstatCalls > 1) {
+                            return new Proxy(stats, {
+                                get: (target, property, receiver) => property === "mode"
+                                    ? (target.mode & ~0o777) | 0o644
+                                    : Reflect.get(target, property, receiver),
+                            });
+                        }
+                        return stats;
+                    },
+                    open: async (path: string, flags: string, mode: number) => {
+                        const handle = await open(path, flags, mode);
+                        let closed = false;
+                        return {
+                            chmod: async (nextMode: number) => {
+                                if (failure === "chmod") throw new Error("injected-chmod-secret");
+                                await handle.chmod(nextMode);
+                            },
+                            writeFile: async (data: string, options: object) => {
+                                await handle.writeFile(data, options);
+                                if (failure === "write") throw new Error("injected-write-secret");
+                            },
+                            sync: async () => {
+                                await handle.sync();
+                                if (failure === "sync") throw new Error("injected-sync-secret");
+                            },
+                            close: async () => {
+                                if (!closed) {
+                                    await handle.close();
+                                    closed = true;
+                                }
+                                if (failure === "close") throw new Error("injected-close-secret");
+                            },
+                        };
+                    },
+                },
+            };
+
+            await expect(runOperationalAlertExercise({ argv: ["--output", current.output], env: current.env }, deps)).rejects.toMatchObject({
+                code: "unsafe_output",
+                message: "Synthetic alert exercise is unverified",
+            });
+            await expect(lstat(current.output)).rejects.toThrow();
+            expect(unlinkCalls).toBeGreaterThanOrEqual(1);
+        },
+    );
+
+    it("never unlinks a path that won the exclusive-create race", async () => {
+        const current = await fixture();
+        let unlinkCalls = 0;
+        const deps = {
+            ...current.deps,
+            fs: {
+                lstat,
+                unlink: async () => { unlinkCalls += 1; },
+                open: async () => {
+                    await writeFile(current.output, "pre-existing-winner", { flag: "wx", mode: 0o600 });
+                    const error = new Error("race") as NodeJS.ErrnoException;
+                    error.code = "EEXIST";
+                    throw error;
+                },
+            },
+        };
+
+        await expect(runOperationalAlertExercise({ argv: ["--output", current.output], env: current.env }, deps)).rejects.toMatchObject({ code: "unsafe_output" });
+        expect(await readFile(current.output, "utf8")).toBe("pre-existing-winner");
+        expect(unlinkCalls).toBe(0);
+    });
+
     it("fails missing credentials as unverified exit 1 without logging or serializing secrets", async () => {
         const { output, calls, deps, env } = await fixture();
         const secret = env.OMR_ALERT_SINK_TOKEN;
@@ -351,6 +499,19 @@ describe("provider-neutral operational alert exercise", () => {
         expect(() => parseOperationalAlertInput(["--output", output], { ...env, OMR_ALERT_REQUEST_TIMEOUT_MS: "10001" })).toThrow();
     });
 
+    it("accepts an otherwise valid 2048-character endpoint and rejects 2049 characters", async () => {
+        const { output, env } = await fixture();
+        const prefix = "https://sink.ops.vendor.com/";
+        const exact = `${prefix}${"a".repeat(2048 - prefix.length)}`;
+        const oversized = `${prefix}${"a".repeat(2049 - prefix.length)}`;
+        expect(exact).toHaveLength(2048);
+        expect(new URL(exact).href).toHaveLength(2048);
+        const parsed = parseOperationalAlertInput(["--output", output], { ...env, OMR_ALERT_SINK_URL: exact });
+        expect(parsed.endpoints.sink).toBeDefined();
+        expect(parsed.endpoints.sink?.href).toHaveLength(2048);
+        expect(() => parseOperationalAlertInput(["--output", output], { ...env, OMR_ALERT_SINK_URL: oversized })).toThrowError(/unverified/i);
+    });
+
     it("wires the exact npm command and release evidence freshness contract", async () => {
         const packageJson = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8"));
         const template = await readFile(join(process.cwd(), "docs/operations/release-evidence-template.md"), "utf8");
@@ -358,5 +519,6 @@ describe("provider-neutral operational alert exercise", () => {
         expect(template).toContain("npm run ops:alert:verify -- --output /absolute/private/path/operational-alert-evidence.json");
         expect(template).toContain("freshness 30일 이내");
         expect(template).toContain("외부 시스템 실행만 `verified` 가능");
+        expect(template).toContain("최대 2048자");
     });
 });
