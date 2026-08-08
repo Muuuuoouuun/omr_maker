@@ -1,5 +1,6 @@
 export interface ExamHeadlineInsightInput {
-    submissionCount: number;
+    performanceCount: number;
+    totalSubmissionCount?: number;
     hasGradableEvidence?: boolean;
     weakConcept?: string;
     weakConceptRate?: number;
@@ -41,8 +42,12 @@ function sanitizeRate(value: number | undefined): number | undefined {
 }
 
 export function buildExamHeadlineInsight(input: ExamHeadlineInsightInput): ExamHeadlineInsight {
-    const submissionCount = sanitizeCount(input.submissionCount);
-    const lowStudentCount = Math.min(sanitizeCount(input.lowStudentCount), submissionCount);
+    const performanceCount = sanitizeCount(input.performanceCount);
+    const totalSubmissionCount = Math.max(
+        performanceCount,
+        sanitizeCount(input.totalSubmissionCount ?? performanceCount),
+    );
+    const lowStudentCount = Math.min(sanitizeCount(input.lowStudentCount), performanceCount);
     const riskyQuestionCount = sanitizeCount(input.riskyQuestionCount);
     const weakConcept = input.weakConcept?.trim() || "";
     const weakConceptRate = sanitizeRate(input.weakConceptRate);
@@ -55,11 +60,13 @@ export function buildExamHeadlineInsight(input: ExamHeadlineInsightInput): ExamH
         };
     }
 
-    if (submissionCount < 5) {
+    if (performanceCount < 5) {
         return {
             tone: "observation",
             title: "경향을 확정하려면 표본이 더 필요합니다",
-            detail: `현재 ${submissionCount}명 제출 기준입니다.`,
+            detail: totalSubmissionCount === performanceCount
+                ? `현재 ${performanceCount}명 제출 기준입니다.`
+                : `전체 제출 ${totalSubmissionCount}건 중 채점 가능한 ${performanceCount}명 기준입니다.`,
         };
     }
 
@@ -98,6 +105,6 @@ export function buildExamHeadlineInsight(input: ExamHeadlineInsightInput): ExamH
     return {
         tone: "positive",
         title: "현재 시험에서는 뚜렷한 위험 신호가 없습니다",
-        detail: `${submissionCount}명 제출 기준입니다.`,
+        detail: `${performanceCount}명 제출 기준입니다.`,
     };
 }

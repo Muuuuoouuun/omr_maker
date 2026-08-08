@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import ExamAnalyticsReportOverview, {
     type ExamAnalyticsReportOverviewProps,
 } from "./ExamAnalyticsReportOverview";
-import ExamAnalyticsTab from "./ExamAnalyticsTab";
+import ExamAnalyticsTab, { QuestionCorrectRateTooltip } from "./ExamAnalyticsTab";
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 
 afterEach(() => {
@@ -158,6 +158,69 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(cells[4]).toHaveTextContent(/^-$|^근거 없음$/);
         expect(within(row).queryByText("0%")).not.toBeInTheDocument();
         expect(screen.getByText("문항별 상세 정답률 데이터: 1번 미채점.")).toBeInTheDocument();
+
+        const chart = screen.getByRole("img", { name: "문항별 상세 정답률" });
+        expect(chart.querySelector(".recharts-tooltip-wrapper")).not.toBeNull();
+    });
+
+    it("renders an active ungraded chart payload as a neutral tooltip", () => {
+        const { container } = render(
+            <QuestionCorrectRateTooltip
+                active
+                label={1}
+                payload={[{ value: null }]}
+            />,
+        );
+
+        expect(within(container).getByRole("status")).toHaveTextContent("1번 문항정답률: 미채점");
+        expect(within(container).queryByText("0%")).not.toBeInTheDocument();
+
+        const source = readFileSync(
+            path.join(process.cwd(), "src/components/dashboard/tabs/ExamAnalyticsTab.tsx"),
+            "utf8",
+        );
+        expect(source).toContain("filterNull={false}");
+        expect(source).toContain("content={<QuestionCorrectRateTooltip />}");
+    });
+
+    it("keeps premium class aggregates and ungraded student rows neutral", () => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        const mixedAttempts = attempts.map((attempt, index) => ({
+            ...attempt,
+            studentId: `student-${index + 1}`,
+            groupId: "class-a",
+            groupName: "A반",
+            score: index === 0 ? 10 : 0,
+            totalScore: index === 0 ? 10 : 0,
+            questionResults: attempt.questionResults?.map(result => index === 0 ? {
+                ...result,
+                score: 10,
+                earnedScore: 10,
+                selectedAnswer: 2,
+                status: "correct" as const,
+                isCorrect: true,
+            } : result),
+        }));
+        document.documentElement.dataset.motion = "off";
+        render(<ExamAnalyticsTab exams={[exam]} attempts={mixedAttempts} currentPlan="pro" />);
+
+        expect(screen.getByText("전체 제출 5건 중 채점 가능한 1명 기준입니다.")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("tab", { name: "학생·반" }));
+
+        const classScoreRegion = screen.getByRole("heading", { name: "반별 점수 비교" }).closest<HTMLElement>(".card");
+        expect(classScoreRegion).not.toBeNull();
+        expect(within(classScoreRegion!).getByText("최저 100% · 중앙값 100% · 평균 100% · 최고 100% · 1명"))
+            .toBeInTheDocument();
+
+        const matrixRow = screen.getByRole("row", { name: /A반.*제출 5건/ });
+        expect(matrixRow).toHaveTextContent("채점 1명");
+        expect(matrixRow).toHaveTextContent("100%");
+
+        const ungradedStudentRow = screen.getByRole("row", { name: /학생 2/ });
+        expect(ungradedStudentRow).toHaveTextContent("미채점");
+        expect(ungradedStudentRow).not.toHaveTextContent("0점");
+        expect(ungradedStudentRow).not.toHaveTextContent("(0%)");
+        expect(ungradedStudentRow).not.toHaveTextContent("정답률 0%");
     });
 
     it.each([
@@ -428,19 +491,13 @@ describe("exam overview wiring", () => {
         ]);
     });
 
-    it("accepts only finite scores with a positive stored or computed denominator", async () => {
-        const examAnalyticsModule = await import("./ExamAnalyticsTab");
-        const hasValidPerformanceScore = (
-            examAnalyticsModule as unknown as {
-                hasValidPerformanceScore?: (summary: { totalScore: number; scorePercent: number }) => boolean;
-            }
-        ).hasValidPerformanceScore;
+    it("uses the shared denominator policy for stored and computed scores", async () => {
+        const { hasGradableAttemptScore } = await import("@/lib/premiumAnalytics");
 
-        expect(hasValidPerformanceScore).toBeTypeOf("function");
-        expect(hasValidPerformanceScore?.({ totalScore: 10, scorePercent: 0 })).toBe(true);
-        expect(hasValidPerformanceScore?.({ totalScore: 0, scorePercent: 0 })).toBe(false);
-        expect(hasValidPerformanceScore?.({ totalScore: Number.NaN, scorePercent: 80 })).toBe(false);
-        expect(hasValidPerformanceScore?.({ totalScore: 10, scorePercent: Number.NaN })).toBe(false);
+        expect(hasGradableAttemptScore({ totalScore: 10, scorePercent: 0 })).toBe(true);
+        expect(hasGradableAttemptScore({ totalScore: 0, scorePercent: 0 })).toBe(false);
+        expect(hasGradableAttemptScore({ totalScore: Number.NaN, scorePercent: 80 })).toBe(false);
+        expect(hasGradableAttemptScore({ totalScore: 10, scorePercent: Number.NaN })).toBe(false);
     });
 
     it("keeps the true risky-question total while capping the overview evidence list", async () => {

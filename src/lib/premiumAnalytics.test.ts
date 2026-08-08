@@ -17,6 +17,7 @@ import {
     buildSimilarQuestionGroups,
     collectQuestionResults,
     getAttemptQuestionResults,
+    hasGradableAttemptScore,
     studentScopeKeyForAttempt,
     summarizeAttemptScore,
     summarizeAttemptBehavior,
@@ -94,6 +95,73 @@ const attempt: Attempt = {
 };
 
 describe("premium analytics", () => {
+    it("excludes denominator-free submissions from class score evidence", () => {
+        const ungradedExam: Exam = {
+            id: "exam-ungraded-class",
+            title: "미채점 반 분석",
+            createdAt: "2026-08-08T09:00:00.000Z",
+            questions: [{ id: 1, number: 1, score: 10, choices: 4 }],
+        };
+        const attempts: Attempt[] = Array.from({ length: 5 }, (_, index) => ({
+            id: `ungraded-class-${index + 1}`,
+            examId: ungradedExam.id,
+            examTitle: ungradedExam.title,
+            studentName: `학생 ${index + 1}`,
+            studentId: `student-${index + 1}`,
+            groupId: "class-a",
+            groupName: "A반",
+            startedAt: "2026-08-08T09:00:00.000Z",
+            finishedAt: "2026-08-08T09:10:00.000Z",
+            score: index === 0 ? 10 : 0,
+            totalScore: index === 0 ? 10 : 0,
+            answers: {},
+            status: "completed" as const,
+        }));
+
+        expect(hasGradableAttemptScore(summarizeAttemptScore(ungradedExam, attempts[0]))).toBe(true);
+        expect(hasGradableAttemptScore(summarizeAttemptScore(ungradedExam, attempts[1]))).toBe(false);
+        expect(buildClassExamScoreGroups(ungradedExam, attempts)).toEqual([{
+            groupKey: "class-a",
+            groupName: "A반",
+            regionName: undefined,
+            scores: [100],
+        }]);
+        expect(buildClassExamWeaknessMatrix(ungradedExam, attempts)[0]).toMatchObject({
+            attemptCount: 5,
+            performanceCount: 1,
+            averageScorePercent: 100,
+        });
+    });
+
+    it("keeps a fully ungraded class average explicitly unavailable", () => {
+        const ungradedExam: Exam = {
+            id: "exam-no-class-score",
+            title: "근거 없는 반 분석",
+            createdAt: "2026-08-08T09:00:00.000Z",
+            questions: [{ id: 1, number: 1, score: 10, choices: 4 }],
+        };
+        const ungradedAttempt: Attempt = {
+            id: "ungraded-only",
+            examId: ungradedExam.id,
+            examTitle: ungradedExam.title,
+            studentName: "미채점 학생",
+            groupId: "class-a",
+            groupName: "A반",
+            startedAt: "2026-08-08T09:00:00.000Z",
+            finishedAt: "2026-08-08T09:10:00.000Z",
+            score: 0,
+            totalScore: 0,
+            answers: {},
+            status: "completed",
+        };
+
+        expect(buildClassExamScoreGroups(ungradedExam, [ungradedAttempt])[0].scores).toEqual([]);
+        expect(buildClassExamWeaknessMatrix(ungradedExam, [ungradedAttempt])[0]).toMatchObject({
+            performanceCount: 0,
+            averageScorePercent: null,
+        });
+    });
+
     it("builds durable per-question result rows without cropped question images", () => {
         const rows = buildQuestionResults(exam, attempt);
 

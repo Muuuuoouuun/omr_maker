@@ -134,7 +134,8 @@ export interface ClassExamWeaknessMatrixRow {
     missingStudentNames: string[];
     /** Roster-based turnout. `null` when no roster is linked (denominator unknown). */
     participationRate: number | null;
-    averageScorePercent: number;
+    performanceCount: number;
+    averageScorePercent: number | null;
     wrongCount: number;
     totalCount: number;
     wrongRate: number;
@@ -874,6 +875,15 @@ export function summarizeAttemptScore(exam: Exam, attempt: Attempt): AttemptScor
     };
 }
 
+/** Whether a score summary has a real computed or legacy-stored denominator. */
+export function hasGradableAttemptScore(
+    summary: Pick<AttemptScoreSummary, "totalScore" | "scorePercent">,
+): boolean {
+    return Number.isFinite(summary.totalScore)
+        && summary.totalScore > 0
+        && Number.isFinite(summary.scorePercent);
+}
+
 export function collectQuestionResults(exam: Exam, attempts: Attempt[], scope: QuestionResultScope = {}): QuestionResult[] {
     return attempts
         .filter(attempt => attempt.examId === exam.id)
@@ -1187,7 +1197,10 @@ export function buildClassExamScoreGroups(
         groupKey: group.groupKey,
         groupName: group.groupName,
         regionName: group.regionName,
-        scores: group.attempts.map(attempt => summarizeAttemptScore(exam, attempt).scorePercent),
+        scores: group.attempts
+            .map(attempt => summarizeAttemptScore(exam, attempt))
+            .filter(hasGradableAttemptScore)
+            .map(summary => summary.scorePercent),
     }));
 }
 
@@ -1214,9 +1227,13 @@ export function buildClassExamWeaknessMatrix(
         const submittedRosterStudentCount = rosterStudentCount > 0
             ? submittedRosterStudents.length
             : studentKeys.size;
-        const averageScorePercent = group.attempts.length > 0
-            ? Math.round(group.attempts.reduce((sum, attempt) => sum + summarizeAttemptScore(exam, attempt).scorePercent, 0) / group.attempts.length)
-            : 0;
+        const performanceScores = group.attempts
+            .map(attempt => summarizeAttemptScore(exam, attempt))
+            .filter(hasGradableAttemptScore)
+            .map(summary => summary.scorePercent);
+        const averageScorePercent = performanceScores.length > 0
+            ? Math.round(performanceScores.reduce((sum, score) => sum + score, 0) / performanceScores.length)
+            : null;
         const questionStats = buildExamQuestionResultStats(exam, group.attempts)
             .filter(stat => stat.wrongCount > 0)
             .sort((a, b) => {
@@ -1248,6 +1265,7 @@ export function buildClassExamWeaknessMatrix(
             participationRate: rosterStudentCount > 0
                 ? roundPercent(submittedRosterStudentCount, rosterStudentCount)
                 : null,
+            performanceCount: performanceScores.length,
             averageScorePercent,
             wrongCount: wrongResults.length,
             totalCount: gradableResults.length,
@@ -1264,7 +1282,9 @@ export function buildClassExamWeaknessMatrix(
         const aParticipation = a.participationRate ?? 101;
         const bParticipation = b.participationRate ?? 101;
         if (aParticipation !== bParticipation) return aParticipation - bParticipation;
-        if (a.averageScorePercent !== b.averageScorePercent) return a.averageScorePercent - b.averageScorePercent;
+        const aAverage = a.averageScorePercent ?? Number.POSITIVE_INFINITY;
+        const bAverage = b.averageScorePercent ?? Number.POSITIVE_INFINITY;
+        if (aAverage !== bAverage) return aAverage - bAverage;
         if (b.attemptCount !== a.attemptCount) return b.attemptCount - a.attemptCount;
         return a.groupName.localeCompare(b.groupName, "ko");
     });

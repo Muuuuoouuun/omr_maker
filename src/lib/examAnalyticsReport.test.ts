@@ -30,7 +30,7 @@ describe("exam analytics sample completeness", () => {
 describe("exam analytics report headline", () => {
     it("does not fabricate an action when every question lacks gradable evidence", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 8,
+            performanceCount: 8,
             hasGradableEvidence: false,
             weakConcept: "시제",
             weakConceptRate: 0,
@@ -45,7 +45,8 @@ describe("exam analytics report headline", () => {
 
     it("asks for more evidence when fewer than five submissions exist", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 4,
+            performanceCount: 1,
+            totalSubmissionCount: 5,
             weakConcept: "시제",
             weakConceptRate: 25,
             lowStudentCount: 3,
@@ -53,13 +54,13 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "observation",
             title: "경향을 확정하려면 표본이 더 필요합니다",
-            detail: "현재 4명 제출 기준입니다.",
+            detail: "전체 제출 5건 중 채점 가능한 1명 기준입니다.",
         });
     });
 
     it("keeps zero submissions on the small-sample observation", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 0,
+            performanceCount: 0,
             weakConcept: "시제",
             lowStudentCount: 10,
             riskyQuestionCount: 2,
@@ -72,7 +73,7 @@ describe("exam analytics report headline", () => {
 
     it("prioritizes a weak-concept action over risky questions and low students from the five-submission boundary", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 5,
+            performanceCount: 5,
             weakConcept: "시제",
             weakConceptRate: 69,
             lowStudentCount: 2,
@@ -86,7 +87,7 @@ describe("exam analytics report headline", () => {
 
     it("prioritizes risky questions over low students when no weak-concept action qualifies", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 8,
+            performanceCount: 8,
             weakConcept: "시제",
             weakConceptRate: 70,
             lowStudentCount: 4,
@@ -100,7 +101,7 @@ describe("exam analytics report headline", () => {
 
     it("reports a positive headline when no risk signal qualifies", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 12,
+            performanceCount: 12,
             weakConcept: "시제",
             weakConceptRate: 85,
             lowStudentCount: 0,
@@ -114,7 +115,7 @@ describe("exam analytics report headline", () => {
 
     it("reports students needing support before the positive fallback", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 5,
+            performanceCount: 5,
             weakConcept: "시제",
             weakConceptRate: 75,
             lowStudentCount: 5,
@@ -128,7 +129,7 @@ describe("exam analytics report headline", () => {
 
     it("caps the low-student count at the sanitized submission count", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 5,
+            performanceCount: 5,
             lowStudentCount: 10,
             riskyQuestionCount: 0,
         })).toEqual({
@@ -140,7 +141,7 @@ describe("exam analytics report headline", () => {
 
     it("trims the weak concept before rendering the action headline", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 5,
+            performanceCount: 5,
             weakConcept: "  문맥 어휘  ",
             weakConceptRate: 45,
             lowStudentCount: 1,
@@ -150,7 +151,7 @@ describe("exam analytics report headline", () => {
 
     it("sanitizes invalid, negative, and decimal headline metrics", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 5.9,
+            performanceCount: 5.9,
             weakConcept: "시제",
             weakConceptRate: 12,
             lowStudentCount: -3.8,
@@ -162,7 +163,7 @@ describe("exam analytics report headline", () => {
         });
 
         expect(buildExamHeadlineInsight({
-            submissionCount: Number.NaN,
+            performanceCount: Number.NaN,
             lowStudentCount: Number.POSITIVE_INFINITY,
             riskyQuestionCount: Number.NaN,
         })).toEqual({
@@ -174,7 +175,7 @@ describe("exam analytics report headline", () => {
 
     it("does not trigger or render a weak-concept action when its rate is missing", () => {
         const insight = buildExamHeadlineInsight({
-            submissionCount: 9,
+            performanceCount: 9,
             weakConcept: "시제",
             lowStudentCount: 2,
             riskyQuestionCount: 1,
@@ -192,7 +193,7 @@ describe("exam analytics report headline", () => {
         "treats an unavailable weak-concept rate of %s as non-actionable",
         weakConceptRate => {
             expect(buildExamHeadlineInsight({
-                submissionCount: 9,
+                performanceCount: 9,
                 weakConcept: "시제",
                 weakConceptRate,
                 lowStudentCount: 2,
@@ -207,7 +208,7 @@ describe("exam analytics report headline", () => {
 
     it("rounds a valid rate to one decimal before rendering and comparing the action threshold", () => {
         expect(buildExamHeadlineInsight({
-            submissionCount: 9,
+            performanceCount: 9,
             weakConcept: "시제",
             weakConceptRate: 69.94,
             lowStudentCount: 2,
@@ -219,7 +220,7 @@ describe("exam analytics report headline", () => {
         });
 
         expect(buildExamHeadlineInsight({
-            submissionCount: 9,
+            performanceCount: 9,
             weakConcept: "시제",
             weakConceptRate: 69.95,
             lowStudentCount: 2,
@@ -233,7 +234,7 @@ describe("exam analytics report headline", () => {
 
     it("does not mutate the input", () => {
         const input = {
-            submissionCount: 7,
+            performanceCount: 7,
             weakConcept: "  시제  ",
             weakConceptRate: 40,
             lowStudentCount: -2,

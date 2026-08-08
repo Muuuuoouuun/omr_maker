@@ -40,6 +40,7 @@ import {
     collectQuestionResults,
     formatParticipationRateLabel,
     getAttemptQuestionResults,
+    hasGradableAttemptScore,
     studentScopeKeyForAttempt,
     summarizeAttemptScore,
     summarizeAttemptBehavior,
@@ -108,12 +109,6 @@ export function filterGradableQuestionEvidence<T extends { totalCount: number }>
     return items.filter(item => item.totalCount > 0);
 }
 
-export function hasValidPerformanceScore(summary: { totalScore: number; scorePercent: number }): boolean {
-    return Number.isFinite(summary.totalScore)
-        && summary.totalScore > 0
-        && Number.isFinite(summary.scorePercent);
-}
-
 export function buildQuestionCorrectRateChartData<T extends {
     index: number;
     totalCount: number;
@@ -127,6 +122,36 @@ export function buildQuestionCorrectRateChartData<T extends {
         correctRate: item.totalCount > 0 ? item.correctRate : null,
         correctRateLabel: item.totalCount > 0 ? `${item.correctRate}%` : "미채점",
     }));
+}
+
+export function QuestionCorrectRateTooltip({
+    active,
+    label,
+    payload,
+}: {
+    active?: boolean;
+    label?: string | number;
+    payload?: ReadonlyArray<{ value?: number | string | null }>;
+}) {
+    if (!active || !payload?.length) return null;
+    const value = payload[0]?.value;
+
+    return (
+        <div
+            role="status"
+            className="recharts-default-tooltip"
+            style={{
+                padding: "10px",
+                border: "1px solid var(--border)",
+                borderRadius: "8px",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
+                background: "var(--background)",
+            }}
+        >
+            <p>{label}번 문항</p>
+            <p>정답률: {value === null || value === undefined ? "미채점" : `${value}%`}</p>
+        </div>
+    );
 }
 
 const EXAM_ANALYTICS_SAMPLE_QUALIFIER_ID = "exam-analytics-sample-qualifier";
@@ -425,7 +450,7 @@ export default function ExamAnalyticsTab({
         // never zero-score performance evidence.
         const scores = examAttempts
             .map(attempt => summarizeAttemptScore(selectedExam, attempt))
-            .filter(hasValidPerformanceScore)
+            .filter(hasGradableAttemptScore)
             .map(summary => summary.scorePercent);
         const distribution = computeScoreDistribution(scores);
         const elapsedTimes = examAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
@@ -643,7 +668,7 @@ export default function ExamAnalyticsTab({
                 studentName: attempt.studentName,
                 totalScore: scoreSummary.earnedScore,
                 scorePercentage: scoreSummary.scorePercent,
-                hasPerformanceScore: hasValidPerformanceScore(scoreSummary),
+                hasPerformanceScore: hasGradableAttemptScore(scoreSummary),
                 labelScores,
                 attempt
             };
@@ -792,13 +817,14 @@ export default function ExamAnalyticsTab({
         })
         : null;
     const overviewHeadline = useMemo(() => buildExamHeadlineInsight({
-        submissionCount: examStats?.performanceCount ?? 0,
+        performanceCount: examStats?.performanceCount ?? 0,
+        totalSubmissionCount: examStats?.submissionCount ?? 0,
         weakConcept: teachingInsights?.weakConcept?.concept,
         weakConceptRate: teachingInsights?.weakConcept?.correctRate,
         hasGradableEvidence: gradableQuestionAnalytics.length > 0,
         lowStudentCount: teachingInsights?.lowStudents.length ?? 0,
         riskyQuestionCount: teachingInsights?.riskyQuestionCount ?? 0,
-    }), [examStats?.performanceCount, gradableQuestionAnalytics.length, teachingInsights]);
+    }), [examStats?.performanceCount, examStats?.submissionCount, gradableQuestionAnalytics.length, teachingInsights]);
     const overviewMetrics = useMemo<AnalyticsMetricItem[]>(() => examStats ? [
         { id: "mean", label: "평균", value: examStats.avgScore ?? "-", unit: examStats.avgScore === null ? undefined : "점", detail: examStats.standardDeviation === null ? "채점 가능한 점수 없음" : `표준편차 ${examStats.standardDeviation}`, animate: true },
         { id: "median", label: "중앙값", value: examStats.medianScore ?? "-", unit: examStats.medianScore === null ? undefined : "점", animate: true },
@@ -1030,7 +1056,7 @@ export default function ExamAnalyticsTab({
         if (analysisScope === "class") {
             const selected = classScopeOptions.find(group => group.key === activeClassKey);
             return selected
-                ? `${selected.label} · 제출 ${selected.attemptCount}건 · 평균 ${selected.averageScoreRate}% · 참여 ${formatParticipationRateLabel(selected.participationRate)}${selected.missingStudentCount > 0 ? ` · 미응시 ${selected.missingStudentCount}명` : ""}`
+                ? `${selected.label} · 제출 ${selected.attemptCount}건 · 평균 ${selected.averageScoreRate === null ? "미채점" : `${selected.averageScoreRate}%`} · 참여 ${formatParticipationRateLabel(selected.participationRate)}${selected.missingStudentCount > 0 ? ` · 미응시 ${selected.missingStudentCount}명` : ""}`
                 : "반 정보가 있는 제출이 없습니다.";
         }
 
@@ -2196,10 +2222,19 @@ export default function ExamAnalyticsTab({
                                                     <td style={{ padding: '0.85rem 0.9rem' }}>
                                                         <span style={{
                                                             fontWeight: 900,
-                                                            color: row.averageScorePercent < 60 ? 'var(--error)' : row.averageScorePercent < 80 ? 'var(--warning)' : 'var(--success)',
+                                                            color: row.averageScorePercent === null
+                                                                ? 'var(--muted)'
+                                                                : row.averageScorePercent < 60
+                                                                    ? 'var(--error)'
+                                                                    : row.averageScorePercent < 80
+                                                                        ? 'var(--warning)'
+                                                                        : 'var(--success)',
                                                         }}>
-                                                            {row.averageScorePercent}%
+                                                            {row.averageScorePercent === null ? '미채점' : `${row.averageScorePercent}%`}
                                                         </span>
+                                                        <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: '0.16rem' }}>
+                                                            채점 {row.performanceCount}명
+                                                        </div>
                                                     </td>
                                                     <td style={{ padding: '0.85rem 0.9rem' }}>
                                                         <div style={{ fontWeight: 900, color: pressureColor }}>{row.wrongRate}%</div>
@@ -2712,10 +2747,9 @@ export default function ExamAnalyticsTab({
                                     <XAxis dataKey="index" tickFormatter={(v) => `${v}번`} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
                                     <YAxis domain={[0, 100]} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
                                     <RechartsTooltip
+                                        filterNull={false}
                                         cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }}
-                                        contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', background: 'var(--background)' }}
-                                        formatter={(value) => [value === null || value === undefined ? '미채점' : `${value}%`, '정답률']}
-                                        labelFormatter={(label) => `${label}번 문항`}
+                                        content={<QuestionCorrectRateTooltip />}
                                     />
                                     <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} shape={<WaveBar />} />
                                 </BarChart>
@@ -2920,8 +2954,19 @@ export default function ExamAnalyticsTab({
                                             >
                                                 <td style={{ padding: '1rem', fontWeight: 600 }}>{student.studentName}</td>
                                                 <td style={{ padding: '1rem' }}>
-                                                    <div style={{ fontWeight: 800, color: student.scorePercentage >= 80 ? 'var(--success)' : (student.scorePercentage < 50 ? 'var(--error)' : 'var(--text)') }}>
-                                                        {Number(student.totalScore.toFixed(2))}점 <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>({student.scorePercentage}%)</span>
+                                                    <div style={{
+                                                        fontWeight: 800,
+                                                        color: !student.hasPerformanceScore
+                                                            ? 'var(--muted)'
+                                                            : student.scorePercentage >= 80
+                                                                ? 'var(--success)'
+                                                                : student.scorePercentage < 50
+                                                                    ? 'var(--error)'
+                                                                    : 'var(--text)',
+                                                    }}>
+                                                        {student.hasPerformanceScore ? (
+                                                            <>{Number(student.totalScore.toFixed(2))}점 <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>({student.scorePercentage}%)</span></>
+                                                        ) : '미채점'}
                                                     </div>
                                                 </td>
                                                 {/* Dynamic Label Columns */}
@@ -2930,8 +2975,14 @@ export default function ExamAnalyticsTab({
                                                     const rate = safeRatePercent(ls.earned, ls.total);
                                                     return (
                                                         <td key={label} style={{ padding: '1rem' }}>
-                                                            <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{ls.earned} / {ls.total}</div>
-                                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>정답률 {rate}%</div>
+                                                            {ls.total > 0 ? (
+                                                                <>
+                                                                    <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{ls.earned} / {ls.total}</div>
+                                                                    <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>정답률 {rate}%</div>
+                                                                </>
+                                                            ) : (
+                                                                <span style={{ color: 'var(--muted)', fontWeight: 700 }}>미채점</span>
+                                                            )}
                                                         </td>
                                                     );
                                                 })}
