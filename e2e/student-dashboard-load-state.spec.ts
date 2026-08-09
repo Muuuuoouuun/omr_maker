@@ -51,7 +51,7 @@ test("dashboard data failure is not presented as an empty successful dashboard a
     const retryButton = errorStatus.getByTestId("student-dashboard-retry");
     await retryButton.focus();
     await expect(retryButton).toBeFocused();
-    await expect(errorStatus.getByRole("link", { name: "학생 로그인" })).toHaveAttribute("href", "/?role=student");
+    await expect(errorStatus.getByRole("link", { name: "로그인 안내" })).toHaveAttribute("href", "/");
     await expect(errorStatus.getByRole("link", { name: "홈으로" })).toHaveAttribute("href", "/");
 
     await retryButton.click();
