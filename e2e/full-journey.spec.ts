@@ -920,7 +920,10 @@ test.describe("Teacher and student full journey", () => {
         const correctionCsvText = await readFile(correctionCsvPath!, "utf8");
         expect(correctionCsvText.charCodeAt(0)).toBe(0xfeff);
         const correctionRows = parseCsvRows(correctionCsvText);
-        expect(correctionRows[0]).toEqual(["문항 번호", "라벨(장르)", "배점", "학생 선택", "정답", "정오"]);
+        expect(correctionRows.slice(0, 2)).toEqual([
+            ["채점 근거", "제출 당시 저장 채점"],
+            ["문항 번호", "라벨(장르)", "배점", "학생 선택", "정답", "정오"],
+        ]);
         expect(correctionRows).toContainEqual(["1", "문법", "10", "2", "2", "O"]);
         expect(correctionRows).toContainEqual(["2", "독해", "10", "3", "3", "O"]);
         expect(correctionRows).toContainEqual(["3", "어휘", "10", "1", "4", "X"]);
