@@ -160,4 +160,11 @@ manifest `buildSha`와 scorer commit SHA가 정확히 같아야 하며, scorer�
 strict JSON parser source 세 파일은 그 commit의 tracked blob과 byte-for-byte 일치해야 합니다.
 staged·unstaged 변경이나 untracked 교체가 있으면 score를 만들지 않고 `unverified`로 종료합니다.
 
+CLI가 `go` score를 원자적으로 publish한 것만으로는 승인 증거가 아닙니다. score는
+`approvalStatus: requires_exact_path_validation`이며, exact requested canonical output path의 domain-separated
+SHA-256, 부모 directory dev/inode, manifest SHA-256, environment digest, build/scorer SHA에 결속됩니다.
+승인자는 exported downstream exact-path validator로 그 요청 경로에서 `O_NOFOLLOW` inode-bound open/read를
+수행하고 모든 결속과 GO 산술을 다시 확인해야 합니다. 다른 경로로 이동한 parseable score, 원래 요청 경로가
+사라진 score, 교체된 부모 directory의 score는 승인할 수 없으며 `invalid_published_score`로 fail-closed합니다.
+
 `verified` JSON에는 토큰, URL query, 학생 정보, row ID, Storage object path를 복사하지 않습니다.

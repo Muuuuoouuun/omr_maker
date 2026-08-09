@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
     chmod,
+    copyFile,
     link,
     lstat,
     mkdir,
@@ -737,16 +738,176 @@ describe("release quality scorer", () => {
         expect(outcome).toMatchObject({
             exitCode: 0,
             diagnostic: "verified: release_quality_go",
-            result: { status: "go", buildSha: BUILD_SHA, scorerSha: SCORER_SHA },
+            result: {
+                status: "go",
+                approvalStatus: "requires_exact_path_validation",
+                buildSha: BUILD_SHA,
+                scorerSha: SCORER_SHA,
+            },
         });
         const published = await lstat(fixture.outputPath);
+        const publishedParent = await lstat(fixture.temporary);
         expect(published.mode & 0o777).toBe(0o600);
-        expect(JSON.parse(await readFile(fixture.outputPath, "utf8"))).toMatchObject({
+        const publishedScore = JSON.parse(await readFile(fixture.outputPath, "utf8"));
+        expect(publishedScore).toMatchObject({
             status: "go",
+            approvalStatus: "requires_exact_path_validation",
             buildSha: BUILD_SHA,
             scorerSha: SCORER_SHA,
+            outputBinding: {
+                schemaVersion: 1,
+                validationRequired: "exact_path",
+                parentDev: String(publishedParent.dev),
+                parentIno: String(publishedParent.ino),
+                buildSha: BUILD_SHA,
+                scorerSha: SCORER_SHA,
+            },
         });
+        expect(publishedScore.outputBinding.outputPathSha256).toMatch(/^[a-f0-9]{64}$/);
+        expect(JSON.stringify(publishedScore)).not.toContain(fixture.outputPath);
         await expect(lstat(join(fixture.temporary, `.score.json.${"c".repeat(32)}.tmp`))).rejects.toThrow();
+    });
+
+    it("validates a GO score only as an inode-bound exact-path consumer", async () => {
+        const validator = Reflect.get(releaseScoreCli, "validatePublishedReleaseScore") as undefined | ((
+            outputPath: string,
+            expected: Record<string, string>,
+        ) => Promise<Record<string, unknown>>);
+        expect(validator).toBeTypeOf("function");
+        const fixture = await cliFixture();
+        const outcome = await runReleaseScoreCli({
+            argv: [`--manifest=${fixture.manifestPath}`, `--output=${fixture.outputPath}`],
+        }, {
+            now: () => NOW,
+            scorerSha: SCORER_SHA,
+            generateTempName: () => "3".repeat(32),
+        });
+        const expected = {
+            buildSha: outcome.result.buildSha,
+            environmentDigest: outcome.result.environmentDigest,
+            manifestSha256: outcome.result.manifestSha256,
+            scorerSha: outcome.result.scorerSha,
+        };
+
+        await expect(validator!(fixture.outputPath, expected)).resolves.toMatchObject({
+            status: "verified",
+            score: {
+                status: "go",
+                approvalStatus: "requires_exact_path_validation",
+                buildSha: BUILD_SHA,
+                scorerSha: SCORER_SHA,
+            },
+        });
+    });
+
+    it("rejects a parseable score moved away from its bound output path", async () => {
+        const validator = Reflect.get(releaseScoreCli, "validatePublishedReleaseScore") as (
+            outputPath: string,
+            expected: Record<string, string>,
+        ) => Promise<Record<string, unknown>>;
+        const fixture = await cliFixture();
+        const outcome = await runReleaseScoreCli({
+            argv: [`--manifest=${fixture.manifestPath}`, `--output=${fixture.outputPath}`],
+        }, {
+            now: () => NOW,
+            scorerSha: SCORER_SHA,
+            generateTempName: () => "4".repeat(32),
+        });
+        const expected = {
+            buildSha: outcome.result.buildSha,
+            environmentDigest: outcome.result.environmentDigest,
+            manifestSha256: outcome.result.manifestSha256,
+            scorerSha: outcome.result.scorerSha,
+        };
+        const movedParent = join(fixture.temporary, "moved-score-parent");
+        await mkdir(movedParent, { mode: 0o700 });
+        const movedPath = join(movedParent, "score.json");
+        await rename(fixture.outputPath, movedPath);
+
+        expect(JSON.parse(await readFile(movedPath, "utf8"))).toMatchObject({ status: "go" });
+        await expect(validator(movedPath, expected)).rejects.toMatchObject({ code: "invalid_published_score" });
+        await expect(validator(fixture.outputPath, expected)).rejects.toMatchObject({
+            code: "invalid_published_score",
+        });
+    });
+
+    it("rejects malformed and copied score files even when their filesystem modes are valid", async () => {
+        const validator = Reflect.get(releaseScoreCli, "validatePublishedReleaseScore") as (
+            outputPath: string,
+            expected: Record<string, string>,
+        ) => Promise<Record<string, unknown>>;
+        const fixture = await cliFixture();
+        const outcome = await runReleaseScoreCli({
+            argv: [`--manifest=${fixture.manifestPath}`, `--output=${fixture.outputPath}`],
+        }, {
+            now: () => NOW,
+            scorerSha: SCORER_SHA,
+            generateTempName: () => "5".repeat(32),
+        });
+        const expected = {
+            buildSha: outcome.result.buildSha,
+            environmentDigest: outcome.result.environmentDigest,
+            manifestSha256: outcome.result.manifestSha256,
+            scorerSha: outcome.result.scorerSha,
+        };
+        const copiedPath = join(fixture.temporary, "copied-score.json");
+        await copyFile(fixture.outputPath, copiedPath);
+        await chmod(copiedPath, 0o600);
+
+        expect(JSON.parse(await readFile(copiedPath, "utf8"))).toMatchObject({ status: "go" });
+        await expect(validator(copiedPath, expected)).rejects.toMatchObject({
+            code: "invalid_published_score",
+        });
+
+        await writeFile(fixture.outputPath, '{"status":"go"}\n', { mode: 0o600 });
+        await expect(validator(fixture.outputPath, expected)).rejects.toMatchObject({
+            code: "invalid_published_score",
+        });
+    });
+
+    it("fails closed when the exact score path is replaced during its inode-bound read", async () => {
+        const validator = Reflect.get(releaseScoreCli, "validatePublishedReleaseScore") as (
+            outputPath: string,
+            expected: Record<string, string>,
+            overrides?: Record<string, unknown>,
+        ) => Promise<Record<string, unknown>>;
+        const fixture = await cliFixture();
+        const outcome = await runReleaseScoreCli({
+            argv: [`--manifest=${fixture.manifestPath}`, `--output=${fixture.outputPath}`],
+        }, {
+            now: () => NOW,
+            scorerSha: SCORER_SHA,
+            generateTempName: () => "6".repeat(32),
+        });
+        const expected = {
+            buildSha: outcome.result.buildSha,
+            environmentDigest: outcome.result.environmentDigest,
+            manifestSha256: outcome.result.manifestSha256,
+            scorerSha: outcome.result.scorerSha,
+        };
+        const displacedPath = join(fixture.temporary, "displaced-score.json");
+        let replaced = false;
+
+        await expect(validator(fixture.outputPath, expected, {
+            fs: {
+                open: async (path: string, flags: number | string, mode?: number) => {
+                    const handle = await open(path, flags, mode);
+                    if (path !== fixture.outputPath) return handle;
+                    return {
+                        stat: () => handle.stat(),
+                        readFile: async () => {
+                            const bytes = await handle.readFile();
+                            await rename(fixture.outputPath, displacedPath);
+                            await writeFile(fixture.outputPath, bytes, { flag: "wx", mode: 0o600 });
+                            replaced = true;
+                            return bytes;
+                        },
+                        close: () => handle.close(),
+                    };
+                },
+            },
+        })).rejects.toMatchObject({ code: "invalid_published_score" });
+        expect(replaced).toBe(true);
     });
 
     it("publishes NO-GO evidence but returns exit 1", async () => {
@@ -942,6 +1103,25 @@ describe("release quality scorer", () => {
         },
     );
 
+    it.each([
+        ["assume-unchanged", "corePath", "scripts/release-quality-core.mjs"],
+        ["assume-unchanged", "cliPath", "scripts/score-release-quality.mjs"],
+        ["assume-unchanged", "strictJsonPath", "scripts/strict-json.mjs"],
+        ["skip-worktree", "corePath", "scripts/release-quality-core.mjs"],
+        ["skip-worktree", "cliPath", "scripts/score-release-quality.mjs"],
+        ["skip-worktree", "strictJsonPath", "scripts/strict-json.mjs"],
+    ] as const)(
+        "byte-compares %s-hidden scorer source %s against its HEAD blob",
+        async (flag, fixtureKey, sourcePath) => {
+            const resolver = Reflect.get(releaseScoreCli, "resolveVerifiedScorerSha") as (cwd: string) => string;
+            const fixture = await scorerGitFixture();
+            git(fixture.temporary, ["update-index", `--${flag}`, "--", sourcePath]);
+            await writeFile(fixture[fixtureKey], "export const changed = true;\n");
+
+            expect(() => resolver(fixture.temporary)).toThrow();
+        },
+    );
+
     it("fails closed on duplicate JSON keys without publishing or exposing content", async () => {
         const fixture = await cliFixture();
         const duplicateManifest = join(fixture.temporary, "duplicate.json");
@@ -975,5 +1155,7 @@ describe("release quality scorer", () => {
         expect(evidenceTemplate).toContain("hard gate `passed`가 atomic failure를 덮어쓸 수 없습니다");
         expect(evidenceTemplate).toContain("manifest `buildSha`와 scorer commit SHA가 정확히 같아야");
         expect(evidenceTemplate).toContain("strict JSON parser source");
+        expect(evidenceTemplate).toContain("exact requested canonical output path");
+        expect(evidenceTemplate).toContain("downstream exact-path validator");
     });
 });
