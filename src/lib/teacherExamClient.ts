@@ -12,6 +12,7 @@ import {
     deleteLocalExam,
 } from "@/lib/omrPersistence";
 import type { Exam } from "@/types/omr";
+import type { CanonicalCollectionMeta } from "@/lib/canonicalCollectionContract";
 
 export interface TeacherExamLoadResult {
     items: Exam[];
@@ -19,6 +20,7 @@ export interface TeacherExamLoadResult {
     remoteError?: string;
     remoteSynced?: boolean;
     pendingSyncCount?: number;
+    meta?: CanonicalCollectionMeta;
 }
 
 export interface TeacherExamMutationResult {
@@ -141,11 +143,17 @@ export async function setTeacherExamArchivedFromSummary(
 export async function loadTeacherExams(): Promise<TeacherExamLoadResult> {
     const result = await listTeacherCanonicalExams();
     if (result.status === "loaded") {
+        const meta = result.meta as unknown;
+        if (!validCollectionMeta(meta, result.exams.length)
+            || result.exams.some(exam => exam.organizationId !== meta.organizationId)) {
+            return invalidExamCollection();
+        }
         return {
             items: result.exams,
             remoteLoaded: true,
             remoteSynced: true,
             pendingSyncCount: 0,
+            meta,
         };
     }
     if (result.status === "local_only") return loadExams();
@@ -156,5 +164,31 @@ export async function loadTeacherExams(): Promise<TeacherExamLoadResult> {
         remoteError: result.status === "unauthorized"
             ? "Teacher server session is missing"
             : result.error || "Canonical exam gateway unavailable",
+    };
+}
+
+function validCollectionMeta(value: unknown, itemCount: number): value is CanonicalCollectionMeta {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const meta = value as Record<string, unknown>;
+    if (Object.keys(meta).sort().join(",") !== "loadedAt,organizationId,parsedCount,rawCount") return false;
+    const organizationId = typeof meta.organizationId === "string" ? meta.organizationId.trim() : "";
+    const loadedAt = typeof meta.loadedAt === "string" ? meta.loadedAt : "";
+    const timestamp = Date.parse(loadedAt);
+    return !!organizationId
+        && organizationId === meta.organizationId
+        && Number.isFinite(timestamp)
+        && new Date(timestamp).toISOString() === loadedAt
+        && Number.isSafeInteger(meta.rawCount)
+        && Number(meta.rawCount) >= 0
+        && meta.rawCount === meta.parsedCount
+        && meta.parsedCount === itemCount;
+}
+
+function invalidExamCollection(): TeacherExamLoadResult {
+    return {
+        items: [],
+        remoteLoaded: false,
+        remoteSynced: false,
+        remoteError: "Invalid canonical exam collection",
     };
 }

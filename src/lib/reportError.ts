@@ -49,6 +49,7 @@ const SAFE_CONTEXTS = new Set([
     "client-runtime-error",
     "teacher-exam-read",
     "teacher-exam-save",
+    "teacher-attempt-read",
     "teacher-roster-read",
     "teacher-roster-save",
     "hostile",

@@ -14,6 +14,10 @@ import {
 } from "@/lib/initialOperationsPolicy";
 import type { WorkspaceContext } from "@/lib/workspaceContext";
 import type { Exam } from "@/types/omr";
+import {
+    normalizeCanonicalUtcTimestamp,
+    type CanonicalCollectionMeta,
+} from "@/lib/canonicalCollectionContract";
 
 export interface TeacherExamWriteClient {
     rpc(name: string, params: Record<string, unknown>): Promise<{
@@ -50,7 +54,7 @@ export type TeacherExamLoadResult =
     | { status: "not_found" | "service_unavailable"; error?: string };
 
 export type TeacherExamListResult =
-    | { status: "loaded"; exams: Exam[] }
+    | { status: "loaded"; exams: Exam[]; meta: CanonicalCollectionMeta }
     | { status: "service_unavailable"; error?: string };
 
 export type TeacherExamDeleteResult =
@@ -59,6 +63,128 @@ export type TeacherExamDeleteResult =
 
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizedUtcTimestamp(value: unknown): string {
+    return normalizeCanonicalUtcTimestamp(value);
+}
+
+type ExamProjectionValidator = (value: unknown) => boolean;
+
+function isBoundedExamString(value: unknown, maxLength = 10_000): value is string {
+    return typeof value === "string" && value.length <= maxLength;
+}
+
+function isExactExamText(value: unknown): value is string {
+    return isBoundedExamString(value, 1_000) && !!value && value.trim() === value;
+}
+
+function optionalExamField(
+    record: Record<string, unknown>,
+    key: string,
+    validator: ExamProjectionValidator,
+): boolean {
+    return record[key] === undefined || record[key] === null || validator(record[key]);
+}
+
+function hasOnlyExamKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
+    const allowedKeys = new Set(allowed);
+    return Object.keys(record).every(key => allowedKeys.has(key));
+}
+
+function isExactExamTimestamp(value: unknown): boolean {
+    return typeof value === "string"
+        && value.trim() === value
+        && value.length <= 100
+        && Number.isFinite(Date.parse(value));
+}
+
+function isExamStoredDataRef(value: unknown): boolean {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const ref = value as Record<string, unknown>;
+    if (!hasOnlyExamKeys(ref, [
+        "store", "key", "organizationId", "kind", "examId", "attemptId", "name", "mimeType", "size", "updatedAt",
+    ])) return false;
+    if ((ref.store !== "indexeddb" && ref.store !== "remote") || !isExactExamText(ref.key)) return false;
+    if (!["organizationId", "examId", "attemptId", "name", "mimeType"].every(
+        key => optionalExamField(ref, key, isBoundedExamString),
+    )) return false;
+    return optionalExamField(ref, "kind", item => (
+        item === "problem_pdf" || item === "answer_key_pdf" || item === "attempt_handwriting"
+    ))
+        && optionalExamField(ref, "size", item => typeof item === "number" && Number.isFinite(item) && item >= 0)
+        && optionalExamField(ref, "updatedAt", isExactExamTimestamp);
+}
+
+function isExamAccessConfig(value: unknown): boolean {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const access = value as Record<string, unknown>;
+    if (!hasOnlyExamKeys(access, ["type", "groupIds", "pin"])) return false;
+    if (access.type !== "public" && access.type !== "group" && access.type !== "targeted") return false;
+    if (Object.hasOwn(access, "groupIds") && !(
+        Array.isArray(access.groupIds) && access.groupIds.every(isExactExamText)
+    )) return false;
+    return !Object.hasOwn(access, "pin") || isBoundedExamString(access.pin, 1_000);
+}
+
+function isCanonicalQuestionSummary(value: unknown): boolean {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const question = value as Record<string, unknown>;
+    if (!Object.keys(question).every(key => (
+        key === "id" || key === "number" || key === "label" || key === "score"
+        || key === "answer" || key === "choices" || key === "tags"
+    ))) return false;
+    if (!(Number.isSafeInteger(question.id) && Number(question.id) > 0
+        && Number.isSafeInteger(question.number) && Number(question.number) > 0)) return false;
+    if (Object.hasOwn(question, "score")
+        && (typeof question.score !== "number" || !Number.isFinite(question.score) || question.score < 0)) return false;
+    if (Object.hasOwn(question, "choices") && question.choices !== 4 && question.choices !== 5) return false;
+    if (Object.hasOwn(question, "answer") && (
+        !Number.isSafeInteger(question.answer)
+        || Number(question.answer) < 1
+        || Number(question.answer) > (question.choices === 4 ? 4 : 5)
+    )) return false;
+    if (Object.hasOwn(question, "label") && !isBoundedExamString(question.label, 1_000)) return false;
+    if (!Object.hasOwn(question, "tags")) return true;
+    if (!question.tags || typeof question.tags !== "object" || Array.isArray(question.tags)) return false;
+    const tags = question.tags as Record<string, unknown>;
+    if (!Object.keys(tags).every(key => (
+        key === "subject" || key === "unit" || key === "concept" || key === "skill"
+        || key === "difficulty" || key === "cognitiveLevel" || key === "source"
+        || key === "expectedTimeSec" || key === "mistakeTypes" || key === "prerequisites"
+    ))) return false;
+    const optionalStrings = ["subject", "unit", "concept", "skill", "source"];
+    if (optionalStrings.some(key => Object.hasOwn(tags, key) && !isBoundedExamString(tags[key], 1_000))) return false;
+    if (Object.hasOwn(tags, "expectedTimeSec")
+        && (typeof tags.expectedTimeSec !== "number" || !Number.isFinite(tags.expectedTimeSec) || tags.expectedTimeSec < 0)) return false;
+    if (Object.hasOwn(tags, "difficulty")
+        && !["easy", "medium", "hard", "killer"].includes(String(tags.difficulty))) return false;
+    if (Object.hasOwn(tags, "cognitiveLevel")
+        && !["recall", "understanding", "application", "reasoning"].includes(String(tags.cognitiveLevel))) return false;
+    return ["mistakeTypes", "prerequisites"].every(key => !Object.hasOwn(tags, key)
+        || (Array.isArray(tags[key]) && tags[key].every(item => isBoundedExamString(item, 1_000))));
+}
+
+function isCanonicalExamListRow(value: unknown, organizationId: string): value is Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const row = value as Record<string, unknown>;
+    return isExactExamText(row.id)
+        && isExactExamText(row.title)
+        && row.organization_id === organizationId
+        && !!normalizedUtcTimestamp(row.created_at)
+        && !!normalizedUtcTimestamp(row.updated_at)
+        && typeof row.archived === "boolean"
+        && Array.isArray(row.questions)
+        && row.questions.every(isCanonicalQuestionSummary)
+        && optionalExamField(row, "class_id", isExactExamText)
+        && optionalExamField(row, "created_by_user_id", isExactExamText)
+        && optionalExamField(row, "duration_min", item => (
+            typeof item === "number" && Number.isFinite(item) && item > 0
+        ))
+        && optionalExamField(row, "start_at", isExactExamTimestamp)
+        && optionalExamField(row, "end_at", isExactExamTimestamp)
+        && optionalExamField(row, "access_config", isExamAccessConfig)
+        && optionalExamField(row, "pdf_data_ref", isExamStoredDataRef);
 }
 
 function canonicalJson(value: unknown): string {
@@ -272,14 +398,44 @@ export async function listTeacherExamsWithGateway(
     if ((result.data?.length || 0) > INITIAL_OPERATIONS_LIMITS.teacherExams) {
         return { status: "service_unavailable", error: INITIAL_CAPACITY_EXCEEDED_ERROR };
     }
-    const exams = (result.data || []).flatMap(row => {
+    const rows = result.data || [];
+    const exams: Exam[] = [];
+    for (const row of rows) {
         try {
-            return [examFromSupabaseListRow(row)];
+            if (!isCanonicalExamListRow(row, context.organizationId)) {
+                return { status: "service_unavailable", error: "Invalid canonical exam collection" };
+            }
+            const record = row;
+            const rawOrganizationId = clean(record.organization_id);
+            const exam = examFromSupabaseListRow({
+                ...row,
+                created_at: normalizedUtcTimestamp(row.created_at),
+                updated_at: normalizedUtcTimestamp(row.updated_at),
+            });
+            if (
+                rawOrganizationId !== context.organizationId
+                || clean(exam.organizationId) !== context.organizationId
+            ) {
+                return { status: "service_unavailable", error: "Invalid canonical exam collection" };
+            }
+            exams.push(exam);
         } catch {
-            return [];
+            return { status: "service_unavailable", error: "Invalid canonical exam collection" };
         }
-    });
-    return { status: "loaded", exams };
+    }
+    if (exams.length !== rows.length) {
+        return { status: "service_unavailable", error: "Invalid canonical exam collection" };
+    }
+    return {
+        status: "loaded",
+        exams,
+        meta: {
+            organizationId: context.organizationId,
+            loadedAt: new Date().toISOString(),
+            rawCount: rows.length,
+            parsedCount: exams.length,
+        },
+    };
 }
 
 export async function deleteTeacherExamWithGateway(

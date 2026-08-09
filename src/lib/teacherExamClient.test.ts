@@ -47,6 +47,13 @@ const exam = {
     createdAt: "2026-08-04T00:00:00.000Z",
 };
 
+const collectionMeta = {
+    organizationId: "org-1",
+    loadedAt: "2026-08-09T01:02:03.000Z",
+    rawCount: 1,
+    parsedCount: 1,
+};
+
 beforeEach(() => {
     vi.clearAllMocks();
     persistenceMocks.readLocalExams.mockReturnValue([{ id: "prior-account" }]);
@@ -160,22 +167,58 @@ describe("teacher exam read fallback", () => {
     it("does not let a list projection mutate an existing full exam cache", async () => {
         const answerKeyPdfRef = { store: "remote", key: "answer-key", kind: "answer_key_pdf" };
         const localFull = { ...exam, answerKeyPdfRef, pdfData: "legacy-problem-pdf", answerKeyPdf: "legacy-answer-key" };
-        const summary = { ...exam, title: "Fresh summary" };
-        actionMocks.list.mockResolvedValue({ status: "loaded", exams: [summary] });
+        const summary = { ...exam, organizationId: "org-1", title: "Fresh summary" };
+        actionMocks.list.mockResolvedValue({ status: "loaded", exams: [summary], meta: collectionMeta });
         persistenceMocks.readLocalExams.mockReturnValue([localFull]);
 
-        await expect(loadTeacherExams()).resolves.toMatchObject({ items: [summary], remoteLoaded: true });
+        await expect(loadTeacherExams()).resolves.toMatchObject({
+            items: [summary],
+            remoteLoaded: true,
+            meta: collectionMeta,
+        });
         expect(persistenceMocks.saveLocalExams).not.toHaveBeenCalled();
         expect(persistenceMocks.readLocalExams).not.toHaveBeenCalled();
     });
 
     it("does not cache a fresh list projection as if it were full detail", async () => {
-        const summary = { ...exam, title: "Fresh summary" };
-        actionMocks.list.mockResolvedValue({ status: "loaded", exams: [summary] });
+        const summary = { ...exam, organizationId: "org-1", title: "Fresh summary" };
+        actionMocks.list.mockResolvedValue({ status: "loaded", exams: [summary], meta: collectionMeta });
         persistenceMocks.readLocalExams.mockReturnValue([]);
 
         await loadTeacherExams();
         expect(persistenceMocks.saveLocalExams).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["a noncanonical loadedAt", { ...collectionMeta, loadedAt: "2026-08-09T10:02:03+09:00" }],
+        ["a whitespace-padded loadedAt", { ...collectionMeta, loadedAt: ` ${collectionMeta.loadedAt} ` }],
+        ["a raw/parsed mismatch", { ...collectionMeta, rawCount: 2 }],
+        ["a parsed/item mismatch", { ...collectionMeta, parsedCount: 2, rawCount: 2 }],
+        ["an extra metadata key", { ...collectionMeta, provider: "supabase" }],
+    ])("rejects all exam rows when the canonical metadata has %s", async (_label, meta) => {
+        const summary = { ...exam, organizationId: "org-1" };
+        actionMocks.list.mockResolvedValue({ status: "loaded", exams: [summary], meta });
+
+        await expect(loadTeacherExams()).resolves.toMatchObject({
+            items: [],
+            remoteLoaded: false,
+            remoteSynced: false,
+            remoteError: "Invalid canonical exam collection",
+        });
+    });
+
+    it("rejects all exam rows when one row disagrees with the metadata organization", async () => {
+        actionMocks.list.mockResolvedValue({
+            status: "loaded",
+            exams: [{ ...exam, organizationId: "org-other" }],
+            meta: collectionMeta,
+        });
+
+        await expect(loadTeacherExams()).resolves.toMatchObject({
+            items: [],
+            remoteLoaded: false,
+            remoteError: "Invalid canonical exam collection",
+        });
     });
 });
 

@@ -3,15 +3,29 @@ import {
     nextRosterTombstones,
     readLocalRosterSnapshot,
     readRosterTombstones,
+    ROSTER_TOMBSTONE_STORAGE_KEY,
     writeLocalRosterSnapshot,
     writeRosterTombstones,
     type RosterLoadResult,
     type RosterPersistenceResult,
     type RosterSnapshot,
 } from "@/lib/rosterPersistence";
+import { ROSTER_STORAGE_KEYS } from "@/lib/rosterStorage";
+import type { CanonicalCollectionMeta } from "@/lib/canonicalCollectionContract";
 
 export const ROSTER_REVISION_STORAGE_KEY = "omr_roster_revision";
 export const ROSTER_REVISION_CONFLICT_ERROR = "roster_revision_conflict";
+
+export interface TeacherRosterRemoteCandidate {
+    snapshot: RosterSnapshot;
+    revision: number;
+    meta: CanonicalCollectionMeta;
+}
+
+export interface TeacherRosterSnapshotLoadResult extends RosterLoadResult {
+    candidate?: TeacherRosterRemoteCandidate;
+    meta?: CanonicalCollectionMeta;
+}
 
 function readRosterRevision(storage: Pick<Storage, "getItem">): number | null {
     const stored = storage.getItem(ROSTER_REVISION_STORAGE_KEY);
@@ -31,19 +45,30 @@ function writeRosterRevision(storage: Pick<Storage, "setItem">, revision: number
 
 export async function loadTeacherRosterSnapshot(
     storage: Pick<Storage, "getItem" | "setItem">,
-): Promise<RosterLoadResult> {
+): Promise<TeacherRosterSnapshotLoadResult> {
     const localSnapshot = readLocalRosterSnapshot(storage);
     const result = await loadTeacherCanonicalRoster();
     if (result.status === "loaded") {
-        writeLocalRosterSnapshot(storage, result.snapshot);
-        writeRosterTombstones(storage, { students: {}, groups: {} });
-        writeRosterRevision(storage, result.revision);
+        const meta = result.meta as unknown;
+        if (!validRosterCollectionMeta(meta)) {
+            return {
+                students: [],
+                groups: [],
+                invites: [],
+                remoteLoaded: false,
+                remoteSynced: false,
+                remoteError: "Invalid canonical roster collection",
+            };
+        }
+        const candidate = { snapshot: result.snapshot, revision: result.revision, meta };
         return {
             ...result.snapshot,
             remoteLoaded: true,
             remoteSynced: true,
             pendingSyncCount: 0,
             remoteRevision: result.revision,
+            meta,
+            candidate,
         };
     }
     if (result.status === "local_only") return { ...localSnapshot, remoteLoaded: false };
@@ -56,6 +81,60 @@ export async function loadTeacherRosterSnapshot(
             ? "Teacher server session is missing"
             : result.error || "Canonical roster gateway unavailable",
     };
+}
+
+export function persistTeacherRosterCandidate(
+    storage: Pick<Storage, "getItem" | "setItem" | "removeItem">,
+    candidate: TeacherRosterRemoteCandidate,
+): boolean {
+    if (!validRosterCollectionMeta(candidate.meta)
+        || !Number.isSafeInteger(candidate.revision)
+        || candidate.revision < 0) {
+        return false;
+    }
+    const affectedKeys = [
+        ROSTER_STORAGE_KEYS.students,
+        ROSTER_STORAGE_KEYS.groups,
+        ROSTER_STORAGE_KEYS.invites,
+        ROSTER_TOMBSTONE_STORAGE_KEY,
+        ROSTER_REVISION_STORAGE_KEY,
+    ];
+    let previous: Map<string, string | null>;
+    try {
+        previous = new Map(affectedKeys.map(key => [key, storage.getItem(key)]));
+    } catch {
+        return false;
+    }
+    const snapshotSaved = writeLocalRosterSnapshot(storage, candidate.snapshot);
+    const tombstonesSaved = writeRosterTombstones(storage, { students: {}, groups: {} });
+    const revisionSaved = writeRosterRevision(storage, candidate.revision);
+    if (snapshotSaved && tombstonesSaved && revisionSaved) return true;
+    for (const key of affectedKeys) {
+        try {
+            const value = previous.get(key);
+            if (value === null || value === undefined) storage.removeItem(key);
+            else storage.setItem(key, value);
+        } catch {
+            // Best-effort rollback is the only recovery localStorage exposes.
+        }
+    }
+    return false;
+}
+
+function validRosterCollectionMeta(value: unknown): value is CanonicalCollectionMeta {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const meta = value as Record<string, unknown>;
+    if (Object.keys(meta).sort().join(",") !== "loadedAt,organizationId,parsedCount,rawCount") return false;
+    const organizationId = typeof meta.organizationId === "string" ? meta.organizationId.trim() : "";
+    const loadedAt = typeof meta.loadedAt === "string" ? meta.loadedAt : "";
+    const timestamp = Date.parse(loadedAt);
+    return !!organizationId
+        && organizationId === meta.organizationId
+        && Number.isFinite(timestamp)
+        && new Date(timestamp).toISOString() === loadedAt
+        && Number.isSafeInteger(meta.rawCount)
+        && Number(meta.rawCount) >= 0
+        && meta.rawCount === meta.parsedCount;
 }
 
 export async function saveTeacherRosterSnapshot(

@@ -21,6 +21,7 @@ import {
     type TeacherAttemptMutationResult,
     type TeacherAttemptPage,
 } from "@/lib/teacherAttemptGateway";
+import type { CanonicalCollectionMeta } from "@/lib/canonicalCollectionContract";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import {
     resolveAuthorizedTeacherSessionCookie,
@@ -39,6 +40,7 @@ import {
     type TeacherAttemptExportPageResult,
     type TeacherAttemptReportingClient,
 } from "@/lib/teacherAttemptReportingGateway";
+import { reportServerError } from "@/lib/reportServerError";
 
 type TeacherAttemptActionContext = {
     client: TeacherAttemptGatewayClient;
@@ -72,28 +74,48 @@ async function actionContext(requireWrite = false): Promise<TeacherAttemptAction
 }
 
 export async function listTeacherCanonicalAttempts(examId?: string): Promise<
-    { status: "loaded"; attempts: Attempt[]; page: TeacherAttemptPage }
+    { status: "loaded"; attempts: Attempt[]; page: TeacherAttemptPage; meta: CanonicalCollectionMeta }
     | { status: "forbidden" | "local_only" | "unauthorized" | "service_unavailable"; error?: string }
 > {
     try {
         const gateway = await actionContext();
         if ("status" in gateway) return gateway;
-        return listTeacherAttemptsWithGateway(gateway.client, gateway.context, examId);
+        const result = await listTeacherAttemptsWithGateway(gateway.client, gateway.context, examId);
+        if (result.status === "service_unavailable") {
+            await reportServerError("teacher-attempt-read", {
+                status: result.status,
+                code: "service_unavailable",
+                diagnostic: result.error,
+            });
+            return { status: result.status, error: "응시 목록을 불러올 수 없습니다." };
+        }
+        return result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Attempt list failed" };
+        await reportServerError("teacher-attempt-read", error);
+        return { status: "service_unavailable", error: "응시 목록을 불러올 수 없습니다." };
     }
 }
 
 export async function listTeacherCanonicalAttemptSummaries(examId?: string): Promise<
-    { status: "loaded"; attempts: TeacherAttemptSummary[]; page: TeacherAttemptPage }
+    { status: "loaded"; attempts: TeacherAttemptSummary[]; page: TeacherAttemptPage; meta: CanonicalCollectionMeta }
     | { status: "forbidden" | "local_only" | "unauthorized" | "service_unavailable"; error?: string }
 > {
     try {
         const gateway = await actionContext();
         if ("status" in gateway) return gateway;
-        return listTeacherAttemptSummariesWithGateway(gateway.client, gateway.context, examId);
+        const result = await listTeacherAttemptSummariesWithGateway(gateway.client, gateway.context, examId);
+        if (result.status === "service_unavailable") {
+            await reportServerError("teacher-attempt-read", {
+                status: result.status,
+                code: "service_unavailable",
+                diagnostic: result.error,
+            });
+            return { status: result.status, error: "응시 목록을 불러올 수 없습니다." };
+        }
+        return result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Attempt summary list failed" };
+        await reportServerError("teacher-attempt-read", error);
+        return { status: "service_unavailable", error: "응시 목록을 불러올 수 없습니다." };
     }
 }
 
@@ -168,9 +190,19 @@ export async function loadTeacherCanonicalAttempt(attemptId: string): Promise<
     try {
         const gateway = await actionContext();
         if ("status" in gateway) return gateway;
-        return loadTeacherAttemptWithGateway(gateway.client, attemptId, gateway.context);
+        const result = await loadTeacherAttemptWithGateway(gateway.client, attemptId, gateway.context);
+        if (result.status === "service_unavailable") {
+            await reportServerError("teacher-attempt-read", {
+                status: result.status,
+                code: "service_unavailable",
+                diagnostic: result.error,
+            });
+            return { status: result.status, error: "응시 결과를 불러올 수 없습니다." };
+        }
+        return result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Attempt load failed" };
+        await reportServerError("teacher-attempt-read", error);
+        return { status: "service_unavailable", error: "응시 결과를 불러올 수 없습니다." };
     }
 }
 

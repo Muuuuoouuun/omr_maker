@@ -13,6 +13,7 @@ import {
     type TeacherExamGatewayClient,
     type TeacherExamSaveResult,
 } from "@/lib/teacherExamGateway";
+import type { CanonicalCollectionMeta } from "@/lib/canonicalCollectionContract";
 import {
     resolveAuthorizedTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
@@ -41,7 +42,7 @@ export type TeacherCanonicalExamLoadResult =
     | { status: "not_found" | "local_only" | "unauthorized" | "service_unavailable"; error?: string };
 
 export type TeacherCanonicalExamListResult =
-    | { status: "loaded"; exams: Exam[] }
+    | { status: "loaded"; exams: Exam[]; meta: CanonicalCollectionMeta }
     | { status: "local_only" | "unauthorized" | "service_unavailable"; error?: string };
 
 export type TeacherExamEntryInviteResult =
@@ -164,7 +165,11 @@ export async function loadTeacherCanonicalExam(examId: string): Promise<TeacherC
         if ("status" in gateway) return gateway;
         const result = await loadTeacherExamWithGateway(gateway.client, examId, gateway.context);
         if (result.status === "service_unavailable") {
-            await reportServerError("teacher-exam-read", { status: result.status, code: "service_unavailable" });
+            await reportServerError("teacher-exam-read", {
+                status: result.status,
+                code: "service_unavailable",
+                diagnostic: result.error,
+            });
             return { status: result.status, error: "시험을 불러올 수 없습니다." };
         }
         return result;
@@ -180,7 +185,11 @@ export async function listTeacherCanonicalExams(): Promise<TeacherCanonicalExamL
         if ("status" in gateway) return gateway;
         const result = await listTeacherExamsWithGateway(gateway.client, gateway.context);
         if (result.status === "loaded") return result;
-        await reportServerError("teacher-exam-read", { status: result.status, code: "service_unavailable" });
+        await reportServerError("teacher-exam-read", {
+            status: result.status,
+            code: "service_unavailable",
+            diagnostic: result.error,
+        });
         return { status: "service_unavailable", error: "시험 목록을 불러올 수 없습니다." };
     } catch (error) {
         await reportServerError("teacher-exam-read", error);

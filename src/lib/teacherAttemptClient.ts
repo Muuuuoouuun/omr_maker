@@ -18,6 +18,7 @@ import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { withBrowserStorageLock } from "@/lib/browserStorageLock";
 import type { Attempt } from "@/types/omr";
 import type { TeacherActiveAttemptSession } from "@/lib/teacherAttemptGateway";
+import type { CanonicalCollectionMeta } from "@/lib/canonicalCollectionContract";
 
 export type TeacherAttemptDetailLoadResult =
     | { status: "loaded"; attempt: Attempt; source: "server" | "local" }
@@ -38,6 +39,7 @@ export interface TeacherAttemptCollectionLoadResult {
         finishedAt: string;
         id: string;
     };
+    meta?: CanonicalCollectionMeta;
 }
 
 export type TeacherAttemptCollectionCompleteness = "ready" | "partial" | "stale" | "error";
@@ -134,6 +136,8 @@ export async function loadTeacherAttempt(attemptId: string): Promise<Attempt | n
 export async function loadTeacherAttempts(examId?: string): Promise<TeacherAttemptCollectionLoadResult> {
     const result = await listTeacherCanonicalAttempts(examId);
     if (result.status === "loaded") {
+        const meta = result.meta as unknown;
+        if (!validAttemptCollection(result.attempts, result.page, meta)) return invalidAttemptCollection();
         return {
             items: result.attempts,
             remoteLoaded: true,
@@ -143,6 +147,7 @@ export async function loadTeacherAttempts(examId?: string): Promise<TeacherAttem
             remoteHasMore: result.page?.hasMore === true,
             remoteItemCount: result.page?.itemCount ?? result.attempts.length,
             remoteNextCursor: result.page?.nextCursor,
+            meta,
         };
     }
     if (result.status === "local_only") {
@@ -163,6 +168,8 @@ export async function loadTeacherAttempts(examId?: string): Promise<TeacherAttem
 export async function loadTeacherAttemptSummaries(examId?: string): Promise<TeacherAttemptCollectionLoadResult> {
     const result = await listTeacherCanonicalAttemptSummaries(examId);
     if (result.status === "loaded") {
+        const meta = result.meta as unknown;
+        if (!validAttemptCollection(result.attempts, result.page, meta)) return invalidAttemptCollection();
         return {
             items: result.attempts,
             remoteLoaded: true,
@@ -172,6 +179,7 @@ export async function loadTeacherAttemptSummaries(examId?: string): Promise<Teac
             remoteHasMore: result.page?.hasMore === true,
             remoteItemCount: result.page?.itemCount ?? result.attempts.length,
             remoteNextCursor: result.page?.nextCursor,
+            meta,
         };
     }
     if (result.status === "local_only") {
@@ -186,6 +194,38 @@ export async function loadTeacherAttemptSummaries(examId?: string): Promise<Teac
         remoteError: result.status === "unauthorized"
             ? "Teacher server session is missing"
             : result.error || "Canonical attempt summary gateway unavailable",
+    };
+}
+
+function validAttemptCollection(
+    attempts: readonly Pick<Attempt, "organizationId">[],
+    page: { partial: boolean; hasMore: boolean; itemCount: number } | undefined,
+    value: unknown,
+): value is CanonicalCollectionMeta {
+    if (!page || page.partial || page.hasMore || page.itemCount !== attempts.length) return false;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const meta = value as Record<string, unknown>;
+    if (Object.keys(meta).sort().join(",") !== "loadedAt,organizationId,parsedCount,rawCount") return false;
+    const organizationId = typeof meta.organizationId === "string" ? meta.organizationId.trim() : "";
+    const loadedAt = typeof meta.loadedAt === "string" ? meta.loadedAt : "";
+    const timestamp = Date.parse(loadedAt);
+    return !!organizationId
+        && organizationId === meta.organizationId
+        && Number.isFinite(timestamp)
+        && new Date(timestamp).toISOString() === loadedAt
+        && Number.isSafeInteger(meta.rawCount)
+        && Number(meta.rawCount) >= 0
+        && meta.rawCount === meta.parsedCount
+        && meta.parsedCount === attempts.length
+        && attempts.every(attempt => attempt.organizationId === organizationId);
+}
+
+function invalidAttemptCollection(): TeacherAttemptCollectionLoadResult {
+    return {
+        items: [],
+        remoteLoaded: false,
+        remoteSynced: false,
+        remoteError: "Invalid canonical attempt collection",
     };
 }
 

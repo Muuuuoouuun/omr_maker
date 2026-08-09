@@ -61,6 +61,18 @@ describe("structured operational errors", () => {
         expect(JSON.stringify(event)).not.toMatch(/student@example\.com|dpl_456/);
     });
 
+    it("preserves the allowlisted teacher attempt read context", () => {
+        const event = buildOperationalErrorEvent(
+            "teacher-attempt-read",
+            new Error("provider-private-row token=do-not-expose"),
+            { now: new Date("2026-08-09T01:02:03.000Z") },
+        );
+
+        expect(event.context).toBe("teacher-attempt-read");
+        expect(JSON.stringify(event)).not.toContain("provider-private-row");
+        expect(JSON.stringify(event)).not.toContain("do-not-expose");
+    });
+
     it("emits exactly one JSON line", () => {
         const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
         reportError("route-error", { password: "private", code: "E_FAIL" }, { correlationId: "req_fixed" });

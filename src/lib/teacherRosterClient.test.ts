@@ -13,6 +13,7 @@ vi.mock("@/app/actions/teacherRoster", () => ({
 
 import {
     loadTeacherRosterSnapshot,
+    persistTeacherRosterCandidate,
     ROSTER_REVISION_CONFLICT_ERROR,
     saveTeacherRosterSnapshot,
 } from "./teacherRosterClient";
@@ -38,22 +39,126 @@ const snapshot: RosterSnapshot = {
     invites: [],
 };
 
+const collectionMeta = {
+    organizationId: "org-1",
+    loadedAt: "2026-08-09T01:02:03.000Z",
+    rawCount: 3,
+    parsedCount: 3,
+};
+
 beforeEach(() => {
     actions.load.mockReset();
     actions.save.mockReset();
 });
 
 describe("teacher roster client", () => {
-    it("caches a canonical server load locally", async () => {
+    it("returns a canonical remote candidate without persisting before caller authorization", async () => {
         const local = storage();
-        actions.load.mockResolvedValue({ status: "loaded", snapshot, revision: 7 });
-        await expect(loadTeacherRosterSnapshot(local)).resolves.toMatchObject({
+        const setItem = vi.fn(() => { throw new Error("write before identity fence"); });
+        local.setItem = setItem;
+        actions.load.mockResolvedValue({
+            status: "loaded",
+            snapshot,
+            revision: 7,
+            meta: collectionMeta,
+        });
+
+        const loaded = await loadTeacherRosterSnapshot(local);
+
+        expect(loaded).toMatchObject({
             ...snapshot,
             remoteLoaded: true,
             remoteSynced: true,
+            candidate: {
+                snapshot,
+                revision: 7,
+                meta: collectionMeta,
+            },
         });
+        expect(setItem).not.toHaveBeenCalled();
+    });
+
+    it("persists a remote roster candidate only through the explicit post-fence function", async () => {
+        const local = storage();
+        const candidate = { snapshot, revision: 7, meta: collectionMeta };
+
+        expect(persistTeacherRosterCandidate(local, candidate)).toBe(true);
+
         expect(JSON.parse(local.getItem("omr_students") || "[]")).toHaveLength(1);
         expect(local.getItem("omr_roster_revision")).toBe("7");
+    });
+
+    it.each([1, 2, 3, 4, 5])("rolls back every legacy roster key when candidate write %i fails", failAt => {
+        const local = storage();
+        const keys = [
+            "omr_students",
+            "omr_groups",
+            "omr_invites",
+            "omr_roster_tombstones",
+            "omr_roster_revision",
+        ];
+        const previous = new Map(keys.map((key, index) => [key, `previous-exact-bytes-${index}`]));
+        previous.forEach((value, key) => local.setItem(key, value));
+        const setItem = local.setItem.bind(local);
+        let writes = 0;
+        local.setItem = (key, value) => {
+            writes += 1;
+            if (writes === failAt) throw new Error(`candidate write ${failAt} failed`);
+            setItem(key, value);
+        };
+
+        expect(persistTeacherRosterCandidate(local, {
+            snapshot,
+            revision: 7,
+            meta: collectionMeta,
+        })).toBe(false);
+        expect(Object.fromEntries(keys.map(key => [key, local.getItem(key)]))).toEqual(
+            Object.fromEntries(previous),
+        );
+    });
+
+    it("removes newly-created legacy roster keys when a candidate write fails", () => {
+        const local = storage();
+        const keys = [
+            "omr_students",
+            "omr_groups",
+            "omr_invites",
+            "omr_roster_tombstones",
+            "omr_roster_revision",
+        ];
+        const setItem = local.setItem.bind(local);
+        let writes = 0;
+        local.setItem = (key, value) => {
+            writes += 1;
+            if (writes === 3) throw new Error("candidate write failed");
+            setItem(key, value);
+        };
+
+        expect(persistTeacherRosterCandidate(local, {
+            snapshot,
+            revision: 7,
+            meta: collectionMeta,
+        })).toBe(false);
+        expect(keys.map(key => local.getItem(key))).toEqual(keys.map(() => null));
+    });
+
+    it.each([
+        ["a noncanonical loadedAt", { ...collectionMeta, loadedAt: "2026-08-09T10:02:03+09:00" }],
+        ["a whitespace-padded loadedAt", { ...collectionMeta, loadedAt: ` ${collectionMeta.loadedAt} ` }],
+        ["a raw/parsed mismatch", { ...collectionMeta, rawCount: 4 }],
+        ["an extra metadata key", { ...collectionMeta, page: 1 }],
+    ])("returns no usable remote roster for %s", async (_label, meta) => {
+        const local = storage();
+        actions.load.mockResolvedValue({ status: "loaded", snapshot, revision: 7, meta });
+
+        await expect(loadTeacherRosterSnapshot(local)).resolves.toMatchObject({
+            students: [],
+            groups: [],
+            invites: [],
+            remoteLoaded: false,
+            remoteError: "Invalid canonical roster collection",
+        });
+        expect(local.getItem("omr_roster_revision")).toBeNull();
     });
 
     it("passes the last loaded revision and advances it only after a canonical save", async () => {

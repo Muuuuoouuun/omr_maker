@@ -299,6 +299,7 @@ describe("teacher canonical exam gateway", () => {
             created_at: exam.createdAt,
             updated_at: exam.createdAt,
             archived: false,
+            questions: exam.questions,
             revision: 1,
         };
         const second = { async maybeSingle() { return { data: row, error: null }; } };
@@ -323,6 +324,106 @@ describe("teacher canonical exam gateway", () => {
         expect(filters.filter(([column]) => column === "organization_id")).toHaveLength(2);
     });
 
+    it("returns exact successful collection metadata", async () => {
+        const postgresUtc = "2026-07-14T00:00:00+00:00";
+        const row = {
+            id: exam.id,
+            organization_id: context.organizationId,
+            title: exam.title,
+            created_at: postgresUtc,
+            updated_at: postgresUtc,
+            archived: false,
+            questions: exam.questions,
+        };
+        const query = {
+            eq() { return query; },
+            order() { return query; },
+            async limit() { return { data: [row], error: null }; },
+        };
+        const client = { from: () => ({ select: () => query }) } as unknown as TeacherExamGatewayClient;
+
+        const result = await listTeacherExamsWithGateway(client, context);
+
+        expect(result).toMatchObject({
+            status: "loaded",
+            exams: [{
+                id: exam.id,
+                organizationId: context.organizationId,
+                createdAt: exam.createdAt,
+                updatedAt: exam.createdAt,
+            }],
+            meta: {
+                organizationId: context.organizationId,
+                rawCount: 1,
+                parsedCount: 1,
+            },
+        });
+        if (result.status === "loaded") {
+            expect(Object.keys(result.meta).sort()).toEqual([
+                "loadedAt",
+                "organizationId",
+                "parsedCount",
+                "rawCount",
+            ]);
+            expect(new Date(result.meta.loadedAt).toISOString()).toBe(result.meta.loadedAt);
+        }
+    });
+
+    it.each([
+        ["a malformed row", { id: "", organization_id: context.organizationId }],
+        ["a wrong-organization row", { id: "exam-other", organization_id: "org-other" }],
+        ["a missing organization", { id: "exam-missing-org", organization_id: undefined }],
+        ["a whitespace-padded organization", { id: "exam-padded-org", organization_id: ` ${context.organizationId} ` }],
+        ["a blank title", { id: "exam-blank-title", title: "   " }],
+        ["malformed questions", { id: "exam-bad-questions", questions: { id: 1 } }],
+        ["a question with a malformed known score", {
+            id: "exam-bad-question-score",
+            questions: [{ ...exam.questions[0], score: "5" }],
+        }],
+        ["a question with an unsupported choice count", {
+            id: "exam-bad-question-choices",
+            questions: [{ ...exam.questions[0], choices: 3 }],
+        }],
+        ["a question with a fractional answer", {
+            id: "exam-bad-question-answer",
+            questions: [{ ...exam.questions[0], answer: 2.5 }],
+        }],
+        ["a question with malformed nested tags", {
+            id: "exam-bad-question-tags",
+            questions: [{ ...exam.questions[0], tags: { mistakeTypes: ["calculation", 7] } }],
+        }],
+        ["a nonboolean archived flag", { id: "exam-bad-archived", archived: "false" }],
+        ["a coerced duration", { id: "exam-bad-duration", duration_min: "50" }],
+        ["a malformed access config", { id: "exam-bad-access", access_config: { type: "private" } }],
+        ["a malformed PDF reference", {
+            id: "exam-bad-pdf-ref", pdf_data_ref: { store: "remote", key: "pdf", size: "123" },
+        }],
+        ["a noncanonical UTC timestamp", { id: "exam-offset", updated_at: "2026-07-14T09:00:00+09:00" }],
+        ["a whitespace-padded timestamp", { id: "exam-padded-time", updated_at: ` ${exam.createdAt} ` }],
+        ["a calendar-impossible timestamp", { id: "exam-impossible-time", updated_at: "2026-02-30T00:00:00.123456Z" }],
+    ])("rejects the entire exam collection when it contains %s", async (_label, invalidRow) => {
+        const validRow = {
+            id: exam.id,
+            organization_id: context.organizationId,
+            title: exam.title,
+            created_at: exam.createdAt,
+            updated_at: exam.createdAt,
+            archived: false,
+            questions: exam.questions,
+        };
+        const query = {
+            eq() { return query; },
+            order() { return query; },
+            async limit() { return { data: [validRow, { ...validRow, ...invalidRow }], error: null }; },
+        };
+        const client = { from: () => ({ select: () => query }) } as unknown as TeacherExamGatewayClient;
+
+        await expect(listTeacherExamsWithGateway(client, context)).resolves.toEqual({
+            status: "service_unavailable",
+            error: "Invalid canonical exam collection",
+        });
+    });
+
     it("applies the organization scope before the exact exam cap plus one", async () => {
         const calls: Array<[string, ...unknown[]]> = [];
         const row = {
@@ -333,6 +434,7 @@ describe("teacher canonical exam gateway", () => {
             created_at: exam.createdAt,
             updated_at: exam.createdAt,
             archived: false,
+            questions: exam.questions,
         };
         const query = {
             eq(column: string, value: string) {
@@ -368,6 +470,7 @@ describe("teacher canonical exam gateway", () => {
             created_at: exam.createdAt,
             updated_at: exam.createdAt,
             archived: false,
+            questions: exam.questions,
         }));
         const query = {
             eq() { return query; },

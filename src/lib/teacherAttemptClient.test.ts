@@ -84,6 +84,13 @@ const baseAttempt: Attempt = {
     },
 };
 
+const collectionMeta = {
+    organizationId: "org-1",
+    loadedAt: "2026-08-09T01:02:03.000Z",
+    rawCount: 1,
+    parsedCount: 1,
+};
+
 beforeEach(() => {
     vi.clearAllMocks();
     persistenceMocks.saveLocalAttempt.mockResolvedValue(true);
@@ -295,17 +302,23 @@ describe("teacher attempt read fallback", () => {
 
     it("loads common workspace rows through the lightweight summary action", async () => {
         const summary = { ...baseAttempt, detailLevel: "summary" as const, answers: {} };
-        actionMocks.summaries.mockResolvedValue({ status: "loaded", attempts: [summary] });
+        actionMocks.summaries.mockResolvedValue({
+            status: "loaded",
+            attempts: [summary],
+            page: { partial: false, hasMore: false, itemCount: 1 },
+            meta: collectionMeta,
+        });
 
         await expect(loadTeacherAttemptSummaries()).resolves.toMatchObject({
             items: [{ id: baseAttempt.id, detailLevel: "summary", answers: {} }],
             remoteLoaded: true,
+            meta: collectionMeta,
         });
         expect(actionMocks.summaries).toHaveBeenCalledTimes(1);
         expect(actionMocks.list).not.toHaveBeenCalled();
     });
 
-    it("propagates partial page metadata without turning usable recent rows into a transport failure", async () => {
+    it("rejects partial summary pages without exposing their rows", async () => {
         const summary = { ...baseAttempt, detailLevel: "summary" as const, answers: {} };
         actionMocks.summaries.mockResolvedValue({
             status: "loaded",
@@ -316,20 +329,18 @@ describe("teacher attempt read fallback", () => {
                 itemCount: 1,
                 nextCursor: { finishedAt: summary.finishedAt, id: summary.id },
             },
+            meta: collectionMeta,
         });
 
         await expect(loadTeacherAttemptSummaries()).resolves.toMatchObject({
-            items: [{ id: baseAttempt.id }],
-            remoteLoaded: true,
+            items: [],
+            remoteLoaded: false,
             remoteSynced: false,
-            remotePartial: true,
-            remoteHasMore: true,
-            remoteItemCount: 1,
-            remoteNextCursor: { finishedAt: summary.finishedAt, id: summary.id },
+            remoteError: "Invalid canonical attempt collection",
         });
     });
 
-    it("preserves partial page metadata on the detailed analytics loader", async () => {
+    it("rejects partial detailed-attempt pages without exposing their rows", async () => {
         actionMocks.list.mockResolvedValue({
             status: "loaded",
             attempts: [baseAttempt],
@@ -339,16 +350,14 @@ describe("teacher attempt read fallback", () => {
                 itemCount: 1,
                 nextCursor: { finishedAt: baseAttempt.finishedAt, id: baseAttempt.id },
             },
+            meta: collectionMeta,
         });
 
         await expect(loadTeacherAttempts()).resolves.toMatchObject({
-            items: [{ id: baseAttempt.id }],
-            remoteLoaded: true,
+            items: [],
+            remoteLoaded: false,
             remoteSynced: false,
-            remotePartial: true,
-            remoteHasMore: true,
-            remoteItemCount: 1,
-            remoteNextCursor: { finishedAt: baseAttempt.finishedAt, id: baseAttempt.id },
+            remoteError: "Invalid canonical attempt collection",
         });
     });
 
@@ -381,7 +390,12 @@ describe("teacher attempt read fallback", () => {
     it("does not let a workspace summary mutate full attempt caches", async () => {
         const full = { ...baseAttempt, subQuestionAnswers: baseAttempt.subQuestionAnswers };
         const summary = { ...baseAttempt, subQuestionAnswers: undefined, score: 5 };
-        actionMocks.list.mockResolvedValue({ status: "loaded", attempts: [summary] });
+        actionMocks.list.mockResolvedValue({
+            status: "loaded",
+            attempts: [summary],
+            page: { partial: false, hasMore: false, itemCount: 1 },
+            meta: collectionMeta,
+        });
         persistenceMocks.readLocalAttempts.mockReturnValue([full]);
 
         await expect(loadTeacherAttempts()).resolves.toMatchObject({ items: [summary], remoteLoaded: true });
@@ -392,7 +406,12 @@ describe("teacher attempt read fallback", () => {
     it("does not let an exam-scoped summary mutate full attempt caches", async () => {
         const full = { ...baseAttempt, subQuestionAnswers: baseAttempt.subQuestionAnswers };
         const summary = { ...baseAttempt, subQuestionAnswers: undefined, score: 5 };
-        actionMocks.list.mockResolvedValue({ status: "loaded", attempts: [summary] });
+        actionMocks.list.mockResolvedValue({
+            status: "loaded",
+            attempts: [summary],
+            page: { partial: false, hasMore: false, itemCount: 1 },
+            meta: collectionMeta,
+        });
         persistenceMocks.readLocalAttempts.mockReturnValue([full]);
 
         await loadTeacherAttempts("exam-1");
@@ -402,10 +421,52 @@ describe("teacher attempt read fallback", () => {
 
     it("does not cache a fresh attempt summary as full detail", async () => {
         const summary = { ...baseAttempt, subQuestionAnswers: undefined, score: 5 };
-        actionMocks.list.mockResolvedValue({ status: "loaded", attempts: [summary] });
+        actionMocks.list.mockResolvedValue({
+            status: "loaded",
+            attempts: [summary],
+            page: { partial: false, hasMore: false, itemCount: 1 },
+            meta: collectionMeta,
+        });
         persistenceMocks.readLocalAttempts.mockReturnValue([]);
 
         await loadTeacherAttempts();
         expect(persistenceMocks.saveLocalAttempts).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["a noncanonical loadedAt", { ...collectionMeta, loadedAt: "2026-08-09T10:02:03+09:00" }],
+        ["a whitespace-padded loadedAt", { ...collectionMeta, loadedAt: ` ${collectionMeta.loadedAt} ` }],
+        ["a raw/parsed mismatch", { ...collectionMeta, rawCount: 2 }],
+        ["a parsed/item mismatch", { ...collectionMeta, parsedCount: 2, rawCount: 2 }],
+        ["an extra metadata key", { ...collectionMeta, cursor: "provider-owned" }],
+    ])("rejects all attempt rows when canonical metadata has %s", async (_label, meta) => {
+        actionMocks.list.mockResolvedValue({
+            status: "loaded",
+            attempts: [baseAttempt],
+            page: { partial: false, hasMore: false, itemCount: 1 },
+            meta,
+        });
+
+        await expect(loadTeacherAttempts()).resolves.toMatchObject({
+            items: [],
+            remoteLoaded: false,
+            remoteSynced: false,
+            remoteError: "Invalid canonical attempt collection",
+        });
+    });
+
+    it("rejects all attempt rows when one organization differs from metadata", async () => {
+        actionMocks.summaries.mockResolvedValue({
+            status: "loaded",
+            attempts: [{ ...baseAttempt, organizationId: "org-other" }],
+            page: { partial: false, hasMore: false, itemCount: 1 },
+            meta: collectionMeta,
+        });
+
+        await expect(loadTeacherAttemptSummaries()).resolves.toMatchObject({
+            items: [],
+            remoteLoaded: false,
+            remoteError: "Invalid canonical attempt collection",
+        });
     });
 });

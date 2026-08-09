@@ -13,6 +13,7 @@ import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization"
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import type { RosterSnapshot } from "@/lib/rosterPersistence";
 import { reportServerError } from "@/lib/reportServerError";
+import type { CanonicalCollectionMeta } from "@/lib/canonicalCollectionContract";
 
 type ActionContext = {
     client: TeacherRosterGatewayClient;
@@ -35,7 +36,7 @@ async function actionContext(requireWrite = false): Promise<ActionContext> {
 }
 
 export async function loadTeacherCanonicalRoster(): Promise<
-    { status: "loaded"; snapshot: RosterSnapshot; revision: number }
+    { status: "loaded"; snapshot: RosterSnapshot; revision: number; meta: CanonicalCollectionMeta }
     | { status: "local_only" | "unauthorized" | "service_unavailable"; error?: string }
 > {
     try {
@@ -43,7 +44,11 @@ export async function loadTeacherCanonicalRoster(): Promise<
         if ("status" in gateway) return gateway;
         const result = await loadTeacherRosterWithGateway(gateway.client, gateway.context);
         if (result.status === "service_unavailable") {
-            await reportServerError("teacher-roster-read", { status: result.status, code: "service_unavailable" });
+            await reportServerError("teacher-roster-read", {
+                status: result.status,
+                code: "service_unavailable",
+                diagnostic: result.error,
+            });
             return { status: result.status, error: "학생 명단을 불러올 수 없습니다." };
         }
         return result;

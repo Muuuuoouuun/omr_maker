@@ -25,6 +25,11 @@ import {
 import type { WorkspaceContext } from "@/lib/workspaceContext";
 import type { Attempt, SubQuestionReviewStatus } from "@/types/omr";
 import type { TeacherAttemptSummary } from "@/lib/teacherAttemptSummary";
+import {
+    canonicalUtcTimestampMicrosecondKey,
+    normalizeCanonicalUtcTimestamp,
+    type CanonicalCollectionMeta,
+} from "@/lib/canonicalCollectionContract";
 
 interface AttemptQueryResult<T> {
     data: T | null;
@@ -36,8 +41,8 @@ interface AttemptSelectQuery extends PromiseLike<AttemptQueryResult<unknown[]>> 
     gt(column: string, value: string): AttemptSelectQuery;
     in(column: string, values: string[]): AttemptSelectQuery;
     order(column: string, options: { ascending: boolean }): AttemptSelectQuery;
+    or(filters: string): AttemptSelectQuery;
     limit(value: number): PromiseLike<AttemptQueryResult<unknown[]>>;
-    range?(from: number, to: number): PromiseLike<AttemptQueryResult<unknown[]>>;
     maybeSingle(): Promise<AttemptQueryResult<unknown>>;
 }
 
@@ -87,11 +92,11 @@ export type TeacherActiveAttemptSessionListResult =
     | { status: "forbidden" | "service_unavailable"; error?: string };
 
 export type TeacherAttemptListResult =
-    | { status: "loaded"; attempts: Attempt[]; page: TeacherAttemptPage }
+    | { status: "loaded"; attempts: Attempt[]; page: TeacherAttemptPage; meta: CanonicalCollectionMeta }
     | { status: "service_unavailable"; error?: string };
 
 export type TeacherAttemptSummaryListResult =
-    | { status: "loaded"; attempts: TeacherAttemptSummary[]; page: TeacherAttemptPage }
+    | { status: "loaded"; attempts: TeacherAttemptSummary[]; page: TeacherAttemptPage; meta: CanonicalCollectionMeta }
     | { status: "service_unavailable"; error?: string };
 
 export interface TeacherAttemptPage {
@@ -171,11 +176,329 @@ function safeNonNegativeInteger(value: unknown): number | null {
 }
 
 function safeIso(value: unknown): string {
-    const normalized = clean(value);
-    return normalized && Number.isFinite(Date.parse(normalized)) ? normalized : "";
+    return normalizeCanonicalUtcTimestamp(value);
 }
 
-function attemptPageCursor(value: unknown): TeacherAttemptPage["nextCursor"] | undefined {
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+type ProjectionValidator = (value: unknown) => boolean;
+
+function isBoundedString(value: unknown, maxLength = 10_000): value is string {
+    return typeof value === "string" && value.length <= maxLength;
+}
+
+function isExactProjectionText(value: unknown): value is string {
+    return isBoundedString(value, 1_000) && !!value && value.trim() === value;
+}
+
+function isFiniteNonNegative(value: unknown): value is number {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+    return Number.isSafeInteger(value) && Number(value) > 0;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+    return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function optionalProjectionField(
+    record: Record<string, unknown>,
+    key: string,
+    validator: ProjectionValidator,
+): boolean {
+    return record[key] === undefined || record[key] === null || validator(record[key]);
+}
+
+function hasOnlyProjectionKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
+    const allowedKeys = new Set(allowed);
+    return Object.keys(record).every(key => allowedKeys.has(key));
+}
+
+function isStringArray(value: unknown): boolean {
+    return Array.isArray(value) && value.every(item => isBoundedString(item, 1_000));
+}
+
+function isPositiveIntegerArray(value: unknown): boolean {
+    return Array.isArray(value) && value.every(isPositiveSafeInteger);
+}
+
+function isStoredDataRefProjection(value: unknown): boolean {
+    if (!isPlainRecord(value)) return false;
+    if (!hasOnlyProjectionKeys(value, [
+        "store", "key", "organizationId", "kind", "examId", "attemptId", "name", "mimeType", "size", "updatedAt",
+    ])) return false;
+    if ((value.store !== "indexeddb" && value.store !== "remote") || !isExactProjectionText(value.key)) return false;
+    const textFields = ["organizationId", "examId", "attemptId", "name", "mimeType"];
+    if (!textFields.every(key => optionalProjectionField(value, key, isBoundedString))) return false;
+    if (!optionalProjectionField(value, "kind", item => (
+        item === "problem_pdf" || item === "answer_key_pdf" || item === "attempt_handwriting"
+    ))) return false;
+    return optionalProjectionField(value, "size", isFiniteNonNegative)
+        && optionalProjectionField(value, "updatedAt", item => !!safeIso(item));
+}
+
+function isPdfLocationProjection(value: unknown, region: boolean): boolean {
+    if (!isPlainRecord(value)
+        || !hasOnlyProjectionKeys(value, region ? ["page", "x", "y", "width", "height"] : ["page", "x", "y"])
+        || !isPositiveSafeInteger(value.page)
+        || !isFiniteNonNegative(value.x)
+        || !isFiniteNonNegative(value.y)) return false;
+    return !region || (isFiniteNonNegative(value.width) && isFiniteNonNegative(value.height));
+}
+
+function isQuestionDrawingSummaryProjection(value: unknown): boolean {
+    return isPlainRecord(value)
+        && hasOnlyProjectionKeys(value, ["questionId", "questionNumber", "page", "strokeCount"])
+        && isPositiveSafeInteger(value.questionId)
+        && isPositiveSafeInteger(value.questionNumber)
+        && isPositiveSafeInteger(value.page)
+        && isNonNegativeSafeInteger(value.strokeCount);
+}
+
+function isQuestionResultProjection(value: unknown): boolean {
+    if (!isPlainRecord(value)
+        || !hasOnlyProjectionKeys(value, [
+            "schemaVersion", "attemptId", "examId", "examTitle", "organizationId", "classId", "assignmentId",
+            "studentProfileId", "studentName", "studentId", "groupId", "groupName", "regionId", "regionName",
+            "identityType", "questionId", "questionNumber", "canonicalQuestionId", "label", "score", "earnedScore",
+            "selectedAnswer", "correctAnswer", "status", "isCorrect", "isWrong", "isUnanswered", "subject", "unit",
+            "concept", "skill", "source", "difficulty", "cognitiveLevel", "mistakeTypes", "prerequisites",
+            "expectedTimeSec", "pdfPage", "pdfLocation", "pdfRegion", "passagePdfRegions", "timeSec", "visitCount",
+            "revisitCount", "answerChangeCount", "handwritingStrokeCount", "handwritingPage", "retakeSourceAttemptId",
+            "retakeMode", "answeredAt", "finishedAt",
+        ])
+        || value.schemaVersion !== 1
+        || !["attemptId", "examId", "examTitle", "studentName"].every(key => isExactProjectionText(value[key]))
+        || !isPositiveSafeInteger(value.questionId)
+        || !isPositiveSafeInteger(value.questionNumber)
+        || !isFiniteNonNegative(value.score)
+        || !isFiniteNonNegative(value.earnedScore)
+        || !["correct", "wrong", "unanswered", "ungraded"].includes(String(value.status))
+        || typeof value.isCorrect !== "boolean"
+        || typeof value.isWrong !== "boolean"
+        || typeof value.isUnanswered !== "boolean"
+        || !safeIso(value.finishedAt)) return false;
+    const optionalTexts = [
+        "organizationId", "classId", "assignmentId", "studentProfileId", "studentId", "groupId",
+        "groupName", "regionId", "regionName", "canonicalQuestionId", "label", "subject", "unit",
+        "concept", "skill", "source", "retakeSourceAttemptId",
+    ];
+    if (!optionalTexts.every(key => optionalProjectionField(value, key, isBoundedString))) return false;
+    if (!optionalProjectionField(value, "identityType", item => (
+        item === "guest" || item === "temporary" || item === "registered"
+    ))) return false;
+    if (!optionalProjectionField(value, "difficulty", item => (
+        item === "easy" || item === "medium" || item === "hard" || item === "killer"
+    ))) return false;
+    if (!optionalProjectionField(value, "cognitiveLevel", item => (
+        item === "recall" || item === "understanding" || item === "application" || item === "reasoning"
+    ))) return false;
+    if (!optionalProjectionField(value, "retakeMode", item => (
+        item === "wrong" || item === "similar" || item === "custom"
+    ))) return false;
+    if (!["selectedAnswer", "correctAnswer", "pdfPage", "handwritingPage"].every(
+        key => optionalProjectionField(value, key, isPositiveSafeInteger),
+    )) return false;
+    if (!["visitCount", "revisitCount", "answerChangeCount", "handwritingStrokeCount"].every(
+        key => optionalProjectionField(value, key, isNonNegativeSafeInteger),
+    )) return false;
+    if (!["expectedTimeSec", "timeSec"].every(
+        key => optionalProjectionField(value, key, isFiniteNonNegative),
+    )) return false;
+    return optionalProjectionField(value, "mistakeTypes", isStringArray)
+        && optionalProjectionField(value, "prerequisites", isStringArray)
+        && optionalProjectionField(value, "pdfLocation", item => isPdfLocationProjection(item, false))
+        && optionalProjectionField(value, "pdfRegion", item => isPdfLocationProjection(item, true))
+        && optionalProjectionField(value, "passagePdfRegions", item => (
+            Array.isArray(item) && item.every(region => isPdfLocationProjection(region, true))
+        ))
+        && optionalProjectionField(value, "answeredAt", item => !!safeIso(item));
+}
+
+function isQuestionTimingProjection(value: unknown): boolean {
+    if (!isPlainRecord(value)
+        || !hasOnlyProjectionKeys(value, [
+            "questionId", "questionNumber", "totalTimeSec", "visitCount", "revisitCount", "answerChangeCount",
+            "firstVisitedAt", "lastVisitedAt", "lastAnsweredAt",
+        ])
+        || !isPositiveSafeInteger(value.questionId)
+        || !isPositiveSafeInteger(value.questionNumber)
+        || !isFiniteNonNegative(value.totalTimeSec)
+        || !isNonNegativeSafeInteger(value.visitCount)
+        || !isNonNegativeSafeInteger(value.revisitCount)
+        || !isNonNegativeSafeInteger(value.answerChangeCount)) return false;
+    return ["firstVisitedAt", "lastVisitedAt", "lastAnsweredAt"].every(
+        key => optionalProjectionField(value, key, item => !!safeIso(item)),
+    );
+}
+
+function isFocusLossEventProjection(value: unknown): boolean {
+    return isPlainRecord(value)
+        && hasOnlyProjectionKeys(value, ["at", "questionId", "questionNumber", "count", "reason"])
+        && !!safeIso(value.at)
+        && isNonNegativeSafeInteger(value.count)
+        && (value.reason === "blur" || value.reason === "hidden")
+        && optionalProjectionField(value, "questionId", isPositiveSafeInteger)
+        && optionalProjectionField(value, "questionNumber", isPositiveSafeInteger);
+}
+
+function isStudentQuestionProjection(value: unknown): boolean {
+    if (!isPlainRecord(value)
+        || !Object.keys(value).every(key => (
+            key === "questionId" || key === "questionNumber" || key === "body"
+            || key === "createdAt" || key === "status" || key === "answer"
+        ))
+        || !isPositiveSafeInteger(value.questionId)
+        || !isPositiveSafeInteger(value.questionNumber)
+        || value.body !== ""
+        || !isBoundedString(value.createdAt)
+        || (value.status !== "queued" && value.status !== "answered")) return false;
+    return optionalProjectionField(value, "answer", answer => isPlainRecord(answer)
+        && Object.keys(answer).every(key => key === "body" || key === "createdAt")
+        && answer.body === ""
+        && isBoundedString(answer.createdAt));
+}
+
+function isAttemptHandwritingProjection(value: unknown): boolean {
+    if (!isPlainRecord(value)
+        || !hasOnlyProjectionKeys(value, ["schemaVersion", "status", "strokesRef", "plan", "summary", "questions"])
+        || value.schemaVersion !== 1
+        || !["none", "saved", "failed", "unavailable", "plan_required"].includes(String(value.status))
+        || !["free", "pro", "academy", "school"].includes(String(value.plan))
+        || !isPlainRecord(value.summary)
+        || !hasOnlyProjectionKeys(value.summary, ["pageCount", "strokeCount", "questionCount"])
+        || !["pageCount", "strokeCount", "questionCount"].every(
+            key => isNonNegativeSafeInteger((value.summary as Record<string, unknown>)[key]),
+        )
+        || !isPlainRecord(value.questions)) return false;
+    if (!optionalProjectionField(value, "strokesRef", isStoredDataRefProjection)) return false;
+    return Reflect.ownKeys(value.questions).every(key => typeof key === "string"
+        && /^[1-9]\d*$/.test(key)
+        && Number.isSafeInteger(Number(key))
+        && isQuestionDrawingSummaryProjection((value.questions as Record<string, unknown>)[key]));
+}
+
+function isRetakeProjection(value: unknown): boolean {
+    return isPlainRecord(value)
+        && hasOnlyProjectionKeys(value, ["sourceAttemptId", "questionIds", "mode", "labels", "concepts", "createdAt"])
+        && isExactProjectionText(value.sourceAttemptId)
+        && isPositiveIntegerArray(value.questionIds)
+        && (value.mode === "wrong" || value.mode === "similar" || value.mode === "custom")
+        && !!safeIso(value.createdAt)
+        && optionalProjectionField(value, "labels", isStringArray)
+        && optionalProjectionField(value, "concepts", isStringArray);
+}
+
+function isCanonicalAttemptOptionalProjection(value: Record<string, unknown>): boolean {
+    const optionalTexts = [
+        "class_id", "assignment_id", "student_profile_id", "student_id", "group_id", "group_name",
+        "region_id", "region_name", "retake_source_attempt_id", "merged_from_guest_id", "guest_id",
+    ];
+    if (!optionalTexts.every(key => optionalProjectionField(value, key, isExactProjectionText))) return false;
+    if (!optionalProjectionField(value, "identity_type", item => (
+        item === "guest" || item === "temporary" || item === "registered"
+    ))) return false;
+    if (!optionalProjectionField(value, "retake_mode", item => (
+        item === "wrong" || item === "similar" || item === "custom"
+    ))) return false;
+    if (!optionalProjectionField(value, "retake_question_ids", isPositiveIntegerArray)) return false;
+    const hasRetakeSource = value.retake_source_attempt_id !== undefined && value.retake_source_attempt_id !== null;
+    const hasRetakeMode = value.retake_mode !== undefined && value.retake_mode !== null;
+    if (hasRetakeSource !== hasRetakeMode) return false;
+    if (!optionalProjectionField(value, "merged_at", item => !!safeIso(item))) return false;
+    if (!optionalProjectionField(value, "score_percent", isFiniteNonNegative)) return false;
+    if (!["auto_submitted", "handwriting_archived"].every(
+        key => optionalProjectionField(value, key, item => typeof item === "boolean"),
+    )) return false;
+    if (!["tab_foci_lost_count", "handwriting_question_count", "drawing_page_count", "drawing_stroke_count"].every(
+        key => optionalProjectionField(value, key, isNonNegativeSafeInteger),
+    )) return false;
+    if (!optionalProjectionField(value, "handwriting_plan", item => (
+        item === "free" || item === "pro" || item === "academy" || item === "school"
+    ))) return false;
+    return optionalProjectionField(value, "question_results", item => (
+        Array.isArray(item) && item.every(isQuestionResultProjection)
+    ))
+        && optionalProjectionField(value, "question_timings", item => (
+            Array.isArray(item) && item.every(isQuestionTimingProjection)
+        ))
+        && optionalProjectionField(value, "focus_loss_events", item => (
+            Array.isArray(item) && item.every(isFocusLossEventProjection)
+        ))
+        && optionalProjectionField(value, "student_questions", item => (
+            Array.isArray(item) && item.every(isStudentQuestionProjection)
+        ))
+        && optionalProjectionField(value, "drawings_ref", isStoredDataRefProjection)
+        && optionalProjectionField(value, "handwriting_strokes_ref", isStoredDataRefProjection)
+        && optionalProjectionField(value, "handwriting", isAttemptHandwritingProjection)
+        && optionalProjectionField(value, "question_drawings", item => (
+            Array.isArray(item) && item.every(isQuestionDrawingSummaryProjection)
+        ))
+        && optionalProjectionField(value, "retake", isRetakeProjection);
+}
+
+function isCanonicalAnswers(value: unknown): value is Record<string, number> {
+    if (!isPlainRecord(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    return Reflect.ownKeys(value).every(key => {
+        if (typeof key !== "string" || !/^[1-9]\d*$/.test(key) || !Number.isSafeInteger(Number(key))) return false;
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        return !!descriptor
+            && descriptor.enumerable
+            && Object.hasOwn(descriptor, "value")
+            && typeof descriptor.value === "number"
+            && Number.isFinite(descriptor.value);
+    });
+}
+
+function isCanonicalAttemptListRow(
+    value: unknown,
+    organizationId: string,
+    requireAnswers: boolean,
+): value is Record<string, unknown> {
+    if (!isPlainRecord(value)) return false;
+    return value.organization_id === organizationId
+        && isExactProjectionText(value.id)
+        && isExactProjectionText(value.exam_id)
+        && isExactProjectionText(value.student_name)
+        && isExactProjectionText(value.exam_title)
+        && (value.status === "in_progress" || value.status === "completed")
+        && typeof value.score === "number"
+        && Number.isFinite(value.score)
+        && value.score >= 0
+        && typeof value.total_score === "number"
+        && Number.isFinite(value.total_score)
+        && value.total_score >= 0
+        && !!safeIso(value.started_at)
+        && !!safeIso(value.finished_at)
+        && (value.updated_at === undefined || !!safeIso(value.updated_at))
+        && isCanonicalAttemptOptionalProjection(value)
+        && (!requireAnswers || isCanonicalAnswers(value.answers));
+}
+
+function postgrestQuotedFilterValue(value: string): string {
+    return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+interface AttemptDatabaseCursor {
+    finishedAtMicroseconds: string;
+    id: string;
+}
+
+function attemptDatabaseCursor(value: unknown): AttemptDatabaseCursor | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const row = value as { id?: unknown; finished_at?: unknown };
+    const id = clean(row.id);
+    const finishedAtMicroseconds = canonicalUtcTimestampMicrosecondKey(row.finished_at);
+    return id && finishedAtMicroseconds ? { finishedAtMicroseconds, id } : undefined;
+}
+
+function attemptPublicCursor(value: unknown): TeacherAttemptPage["nextCursor"] | undefined {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     const row = value as { id?: unknown; finished_at?: unknown };
     const id = clean(row.id);
@@ -184,13 +507,11 @@ function attemptPageCursor(value: unknown): TeacherAttemptPage["nextCursor"] | u
 }
 
 function followsDescendingAttemptCursor(
-    previous: NonNullable<TeacherAttemptPage["nextCursor"]>,
-    current: NonNullable<TeacherAttemptPage["nextCursor"]>,
+    previous: AttemptDatabaseCursor,
+    current: AttemptDatabaseCursor,
 ): boolean {
-    const previousTime = Date.parse(previous.finishedAt);
-    const currentTime = Date.parse(current.finishedAt);
-    return currentTime < previousTime
-        || (currentTime === previousTime && current.id < previous.id);
+    return current.finishedAtMicroseconds < previous.finishedAtMicroseconds
+        || (current.finishedAtMicroseconds === previous.finishedAtMicroseconds && current.id < previous.id);
 }
 
 async function listRecentTeacherAttemptRows(
@@ -198,6 +519,7 @@ async function listRecentTeacherAttemptRows(
     context: WorkspaceContext,
     columns: string,
     examId?: string,
+    requireAnswers = false,
 ): Promise<
     | { status: "loaded"; rows: unknown[]; hasMore: boolean }
     | { status: "service_unavailable"; error?: string }
@@ -206,30 +528,38 @@ async function listRecentTeacherAttemptRows(
     const pageSize = INITIAL_OPERATIONS_LIMITS.listPageSize;
     const normalizedExamId = examId?.trim();
     const rows: unknown[] = [];
-    let previousCursor: NonNullable<TeacherAttemptPage["nextCursor"]> | undefined;
+    let previousCursor: AttemptDatabaseCursor | undefined;
 
     while (rows.length <= ceiling) {
         const requestSize = Math.min(pageSize, (ceiling + 1) - rows.length);
-        const from = rows.length;
         let query = client
             .from("omr_attempts")
             .select(columns)
             .eq("organization_id", context.organizationId);
         if (normalizedExamId) query = query.eq("exam_id", normalizedExamId);
+        if (previousCursor) {
+            const finishedAt = postgrestQuotedFilterValue(previousCursor.finishedAtMicroseconds);
+            const id = postgrestQuotedFilterValue(previousCursor.id);
+            query = query.or(`finished_at.lt.${finishedAt},and(finished_at.eq.${finishedAt},id.lt.${id})`);
+        }
         const ordered = query
             .order("finished_at", { ascending: false })
             .order("id", { ascending: false });
-        const result = ordered.range
-            ? await ordered.range(from, from + requestSize - 1)
-            : await ordered.limit(requestSize);
+        const result = await ordered.limit(requestSize);
         if (result.error) return { status: "service_unavailable", error: result.error.message };
         const page = result.data || [];
         if (page.length > requestSize) {
             return { status: "service_unavailable", error: "Invalid canonical attempt pagination" };
         }
         for (const row of page) {
-            const cursor = attemptPageCursor(row);
-            if (!cursor || (previousCursor && !followsDescendingAttemptCursor(previousCursor, cursor))) {
+            if (!isCanonicalAttemptListRow(row, clean(context.organizationId), requireAnswers)) {
+                return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
+            }
+            const cursor = attemptDatabaseCursor(row);
+            if (!cursor) {
+                return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
+            }
+            if (previousCursor && !followsDescendingAttemptCursor(previousCursor, cursor)) {
                 return { status: "service_unavailable", error: "Invalid canonical attempt pagination" };
             }
             previousCursor = cursor;
@@ -622,30 +952,50 @@ export async function listTeacherAttemptsWithGateway(
         context,
         SUPABASE_ATTEMPT_LIST_READ_COLUMNS,
         examId,
+        true,
     );
     if (result.status === "service_unavailable") return result;
     const { rows, hasMore } = result;
+    if (hasMore) {
+        return { status: "service_unavailable", error: "Incomplete canonical attempt collection" };
+    }
 
-    const attempts = rows.flatMap(row => {
+    const attempts: Attempt[] = [];
+    for (const row of rows) {
         try {
-            return [attemptFromSupabaseListRow(row)];
+            const record = row as Record<string, unknown>;
+            const attempt = attemptFromSupabaseListRow({
+                ...record,
+                started_at: safeIso(record.started_at),
+                finished_at: safeIso(record.finished_at),
+                ...(record.updated_at === undefined ? {} : { updated_at: safeIso(record.updated_at) }),
+            });
+            if (clean(attempt.organizationId) !== clean(context.organizationId)) {
+                return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
+            }
+            attempts.push(attempt);
         } catch {
-            return [];
+            return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
         }
-    });
-    attempts.sort((left, right) => {
-        const byFinishedAt = Date.parse(right.finishedAt) - Date.parse(left.finishedAt);
-        return byFinishedAt || left.id.localeCompare(right.id);
-    });
-    const nextCursor = attemptPageCursor(rows.at(-1));
+    }
+    if (attempts.length !== rows.length) {
+        return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
+    }
+    const nextCursor = attemptPublicCursor(rows.at(-1));
     return {
         status: "loaded",
         attempts,
         page: {
-            partial: hasMore,
-            hasMore,
+            partial: false,
+            hasMore: false,
             itemCount: attempts.length,
             ...(nextCursor ? { nextCursor } : {}),
+        },
+        meta: {
+            organizationId: clean(context.organizationId),
+            loadedAt: new Date().toISOString(),
+            rawCount: rows.length,
+            parsedCount: attempts.length,
         },
     };
 }
@@ -663,27 +1013,46 @@ export async function listTeacherAttemptSummariesWithGateway(
     );
     if (result.status === "service_unavailable") return result;
     const { rows, hasMore } = result;
+    if (hasMore) {
+        return { status: "service_unavailable", error: "Incomplete canonical attempt collection" };
+    }
 
-    const attempts = rows.flatMap(row => {
+    const attempts: TeacherAttemptSummary[] = [];
+    for (const row of rows) {
         try {
-            return [teacherAttemptSummaryFromSupabaseListRow(row)];
+            const record = row as Record<string, unknown>;
+            const attempt = teacherAttemptSummaryFromSupabaseListRow({
+                ...record,
+                started_at: safeIso(record.started_at),
+                finished_at: safeIso(record.finished_at),
+                ...(record.updated_at === undefined ? {} : { updated_at: safeIso(record.updated_at) }),
+            });
+            if (clean(attempt.organizationId) !== clean(context.organizationId)) {
+                return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
+            }
+            attempts.push(attempt);
         } catch {
-            return [];
+            return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
         }
-    });
-    attempts.sort((left, right) => {
-        const byFinishedAt = Date.parse(right.finishedAt) - Date.parse(left.finishedAt);
-        return byFinishedAt || left.id.localeCompare(right.id);
-    });
-    const nextCursor = attemptPageCursor(rows.at(-1));
+    }
+    if (attempts.length !== rows.length) {
+        return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
+    }
+    const nextCursor = attemptPublicCursor(rows.at(-1));
     return {
         status: "loaded",
         attempts,
         page: {
-            partial: hasMore,
-            hasMore,
+            partial: false,
+            hasMore: false,
             itemCount: attempts.length,
             ...(nextCursor ? { nextCursor } : {}),
+        },
+        meta: {
+            organizationId: clean(context.organizationId),
+            loadedAt: new Date().toISOString(),
+            rawCount: rows.length,
+            parsedCount: attempts.length,
         },
     };
 }
