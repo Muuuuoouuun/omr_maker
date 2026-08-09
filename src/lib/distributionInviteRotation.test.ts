@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
     confirmExistingGroupInviteRotation,
+    isGroupInviteShareUrl,
     normalizeDistributionShareResult,
+    resolveInviteRotationExamId,
 } from "@/lib/distributionInviteRotation";
 
 const metadata = {
@@ -74,5 +76,32 @@ describe("existing group invite rotation", () => {
             examId: metadata.examId,
             metadata,
         });
+    });
+
+    it("distinguishes a group bearer URL from a valid public URL", () => {
+        expect(isGroupInviteShareUrl("https://exam.example/solve/exam-1#invite=secret"))
+            .toBe(true);
+        expect(isGroupInviteShareUrl("https://exam.example/solve/exam-1"))
+            .toBe(false);
+    });
+
+    it("rejects a self-consistent exam-B rotate result while editing exam A", () => {
+        const examBMetadata = { ...metadata, examId: "exam-b" };
+
+        expect(resolveInviteRotationExamId({
+            shareUrl: "https://exam.example/solve/exam-b#invite=secret",
+            examId: "exam-b",
+            metadata: examBMetadata,
+        }, "exam-a")).toBeNull();
+        expect(resolveInviteRotationExamId({
+            shareUrl: "https://exam.example/solve/exam-a#invite=secret",
+            examId: "exam-a",
+            metadata: { ...metadata, examId: "exam-a" },
+        }, "exam-a")).toBe("exam-a");
+        expect(resolveInviteRotationExamId({
+            shareUrl: "https://exam.example/solve/exam-b#invite=secret",
+            examId: "exam-b",
+            metadata: examBMetadata,
+        })).toBe("exam-b");
     });
 });

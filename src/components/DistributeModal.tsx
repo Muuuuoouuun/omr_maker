@@ -16,7 +16,9 @@ import { toast } from '@/components/Toast';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import {
     confirmExistingGroupInviteRotation,
+    isGroupInviteShareUrl,
     normalizeDistributionShareResult,
+    resolveInviteRotationExamId,
     type DistributionShareResultLike,
 } from '@/lib/distributionInviteRotation';
 import type {
@@ -271,13 +273,15 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     }, [inviteClock, inviteMetadataLoad]);
 
     useEffect(() => {
-        if (inviteRawUrlState && inviteMetadataLoad.status === "not_found") {
-            onInviteRawUrlStateChange(null);
-            return;
+        const shouldDiscardGroupBearer = inviteMetadataLoad.status === "not_found"
+            || (inviteMetadataLoad.status === "found" && inviteCapability !== "copyable_here");
+        if (!shouldDiscardGroupBearer) return;
+        if (inviteRawUrlState) onInviteRawUrlStateChange(null);
+        if (isGroupInviteShareUrl(shareUrl)) {
+            setShareUrl(null);
+            setShareExpiresAt(null);
         }
-        if (!inviteRawUrlState || inviteMetadataLoad.status !== "found") return;
-        if (inviteCapability !== "copyable_here") onInviteRawUrlStateChange(null);
-    }, [inviteCapability, inviteMetadataLoad, inviteRawUrlState, onInviteRawUrlStateChange]);
+    }, [inviteCapability, inviteMetadataLoad, inviteRawUrlState, onInviteRawUrlStateChange, shareUrl]);
 
     const targetSummary = useMemo(() => summarizeDistributionTargets({
         selectedGroupIds: selectedGroups,
@@ -304,7 +308,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             || inviteMetadataLoad.status === "dependency_unavailable");
     const visibleShareUrl = accessType === "group"
         ? inviteCapability === "copyable_here" ? inviteRawUrlState?.url || null : null
-        : shareUrl;
+        : isGroupInviteShareUrl(shareUrl) ? null : shareUrl;
 
     if (!isOpen) return null;
 
@@ -460,14 +464,15 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 return;
             }
             if (accessType === "group") {
-                if (!shareResult.metadata || shareResult.metadata.examId !== (shareResult.examId || examId)) {
+                const boundExamId = resolveInviteRotationExamId(shareResult, examId);
+                if (!shareResult.metadata || !boundExamId) {
                     setFormError("새 링크는 발급됐지만 현재 배포 상태를 확인하지 못했습니다. 창을 닫고 다시 확인해주세요.");
                     onInviteRawUrlStateChange(null);
                     return;
                 }
                 const nextRawUrlState: ExamEntryInviteRawUrlState = {
                     url: shareResult.shareUrl,
-                    examId: shareResult.metadata.examId,
+                    examId: boundExamId,
                     generation: shareResult.metadata.generation,
                     issuedAt: shareResult.metadata.issuedAt,
                 };

@@ -63,6 +63,7 @@ async function seedInviteDraft(page: Page, examId: string, title: string) {
 
 async function restoreInviteDraft(page: Page, title: string, navigate = true) {
     if (navigate) await page.goto("/create");
+    await page.waitForLoadState("networkidle");
     const restoreDialog = page.getByRole("dialog", { name: "임시 초안 복원" });
     await expect(restoreDialog).toBeVisible();
     await restoreDialog.getByRole("button", { name: "복원" }).click();
@@ -117,20 +118,33 @@ async function expectInviteDirectory(
 
 test("group invite lifecycle stays honest across reopen, refresh, rotation, and exam scope", async ({ page, context }) => {
     test.setTimeout(60_000);
+    const browserErrors: string[] = [];
+    let phase = "setup";
+    page.on("pageerror", error => {
+        browserErrors.push(`${phase} pageerror: ${error.stack || error.message}`);
+    });
+    page.on("console", message => {
+        if (message.type() === "error") {
+            browserErrors.push(`${phase} console: ${message.text()}`);
+        }
+    });
+    context.on("page", openedPage => {
+        openedPage.on("pageerror", error => {
+            browserErrors.push(`${phase} pageerror: ${error.stack || error.message}`);
+        });
+        openedPage.on("console", message => {
+            if (message.type() === "error") {
+                browserErrors.push(`${phase} console: ${message.text()}`);
+            }
+        });
+    });
     await resetBrowserState(page, context);
+    await page.waitForLoadState("networkidle");
     await seedInviteRoster(page);
     await seedInviteDraft(page, EXAM_A, "초대 생명주기 A 시험");
     await loginAsTeacher(page, "/create");
     await restoreInviteDraft(page, "초대 생명주기 A 시험", false);
     await page.waitForLoadState("networkidle");
-    const pageErrors: string[] = [];
-    let phase = "setup";
-    page.on("pageerror", error => pageErrors.push(`${phase}: ${error.stack || error.message}`));
-    context.on("page", openedPage => {
-        if (openedPage !== page) {
-            openedPage.on("pageerror", error => pageErrors.push(`${phase}: ${error.stack || error.message}`));
-        }
-    });
 
     let modal = await openDistribution(page);
     await selectGroup(modal, "E2E A반");
@@ -201,5 +215,5 @@ test("group invite lifecycle stays honest across reopen, refresh, rotation, and 
     await expectInviteDirectory(crossExamPage, crossExamUrl.toString(), null);
     await expect(crossExamPage.getByLabel("반 선택").locator("option", { hasText: "E2E B반" })).toHaveCount(0);
     await crossExamPage.close();
-    expect(pageErrors).toEqual([]);
+    expect(browserErrors).toEqual([]);
 });

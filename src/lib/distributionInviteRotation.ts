@@ -14,6 +14,28 @@ export type DistributionShareResultLike = string | DistributionShareResult;
 export const EXISTING_GROUP_INVITE_ROTATION_CONFIRMATION =
     "새 링크를 발급하면 기존 링크와 QR은 즉시 무효화됩니다. 새 링크를 발급할까요?";
 
+export function isGroupInviteShareUrl(value: string | null | undefined): boolean {
+    if (typeof value !== "string") return false;
+    const fragment = value.split("#", 2)[1];
+    if (!fragment) return false;
+    return new URLSearchParams(fragment).has("invite");
+}
+
+export function resolveInviteRotationExamId(
+    result: DistributionShareResult,
+    currentExamId?: string,
+): string | null {
+    const metadataExamId = result.metadata?.examId.trim() || "";
+    const resultExamId = result.examId?.trim() || "";
+    const current = currentExamId?.trim() || "";
+    if (!metadataExamId) return null;
+    if (current) {
+        if (metadataExamId !== current || (resultExamId && resultExamId !== current)) return null;
+        return current;
+    }
+    return resultExamId && metadataExamId === resultExamId ? resultExamId : null;
+}
+
 export function normalizeDistributionShareResult(
     result: DistributionShareResultLike,
 ): DistributionShareResult {

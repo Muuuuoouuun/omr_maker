@@ -196,6 +196,22 @@ describe("distribution invite lifecycle surface", () => {
         );
     });
 
+    it("also discards the group-derived share URL before another access mode can expose it", () => {
+        const modal = source("src/components/DistributeModal.tsx");
+
+        expect(modal).toContain("isGroupInviteShareUrl");
+        expect(modal).toMatch(
+            /inviteCapability !== "copyable_here"[\s\S]{0,360}setShareUrl\(null\)/,
+        );
+    });
+
+    it("validates an existing exam independently from rotate result and metadata ids", () => {
+        const modal = source("src/components/DistributeModal.tsx");
+
+        expect(modal).toContain("resolveInviteRotationExamId");
+        expect(modal).toContain("shareResult, examId");
+    });
+
     it("keeps the one-time raw URL in React memory and guards late metadata responses by exam", () => {
         const createPage = source("src/app/create/page.tsx");
         const modal = source("src/components/DistributeModal.tsx");
@@ -234,5 +250,16 @@ describe("distribution invite lifecycle surface", () => {
 
         await expect(actions.getTeacherExamEntryInviteMetadata("exam-1"))
             .resolves.toEqual({ status: "dependency_unavailable" });
+    });
+
+    it("installs page and console error capture before the first E2E navigation", () => {
+        const e2e = source("e2e/exam-invite-lifecycle.spec.ts");
+        const reset = e2e.indexOf("await resetBrowserState(page, context)");
+
+        expect(e2e.indexOf('page.on("pageerror"')).toBeGreaterThan(-1);
+        expect(e2e.indexOf('page.on("pageerror"')).toBeLessThan(reset);
+        expect(e2e.indexOf('message.type() === "error"')).toBeGreaterThan(-1);
+        expect(e2e.indexOf('message.type() === "error"')).toBeLessThan(reset);
+        expect(e2e).toContain("expect(browserErrors).toEqual([])");
     });
 });

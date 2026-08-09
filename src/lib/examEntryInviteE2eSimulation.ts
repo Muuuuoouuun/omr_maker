@@ -265,15 +265,17 @@ export function createExamEntryInviteE2eSimulationClient(
 export function getExamEntryInviteE2eFixtureGroups(
     env: Env,
     organizationIdValue: unknown,
+    examIdValue: unknown,
     groupIdsValue: unknown,
 ): ExamEntryInviteE2eFixtureGroup[] {
     const fixtures = parseFixtures(env);
     const organizationId = clean(organizationIdValue).toLowerCase();
+    const examId = clean(examIdValue);
     if (!fixtures || !Array.isArray(groupIdsValue)) return [];
     const requested = new Set(groupIdsValue.map(clean).filter(Boolean));
     const groups = new Map<string, ExamEntryInviteE2eFixtureGroup>();
     for (const fixture of fixtures) {
-        if (fixture.organizationId !== organizationId) continue;
+        if (fixture.organizationId !== organizationId || fixture.examId !== examId) continue;
         for (const group of fixture.groups) {
             if (requested.has(group.id)) groups.set(group.id, group);
         }

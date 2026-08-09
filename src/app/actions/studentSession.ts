@@ -285,6 +285,7 @@ export async function loadStudentLoginDirectory(input: string | StudentExamInvit
             const groups = getExamEntryInviteE2eFixtureGroups(
                 process.env,
                 scope.organizationId,
+                input.examId,
                 scope.groupIds || [],
             );
             return groups.length > 0 ? { status: "ok", groups } : { status: "invalid_workspace" };

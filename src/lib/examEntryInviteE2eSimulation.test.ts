@@ -180,13 +180,41 @@ describe("exam entry invite E2E RPC simulation", () => {
         expect(simulation.getExamEntryInviteE2eFixtureGroups(
             enabledEnv(),
             "default",
+            "e2e-invite-exam-a",
             ["e2e-group-a", "injected-group"],
         )).toEqual([{ id: "e2e-group-a", name: "E2E A반", region: "서울" }]);
         expect(simulation.getExamEntryInviteE2eFixtureGroups(
             enabledEnv(),
             "other-org",
+            "e2e-invite-exam-a",
             ["e2e-group-a"],
         )).toEqual([]);
+    });
+
+    it("returns fixture groups for the exact exam when two exams reuse a group id", async () => {
+        const simulation = await simulationModule();
+        const sharedGroupEnv = enabledEnv({
+            OMR_E2E_EXAM_INVITE_FIXTURES: JSON.stringify([{
+                ...fixtures[0],
+                groups: [{ id: "e2e-group-shared", name: "A 전용반", region: "서울" }],
+            }, {
+                ...fixtures[1],
+                groups: [{ id: "e2e-group-shared", name: "B 전용반", region: "부산" }],
+            }]),
+        });
+
+        expect(simulation.getExamEntryInviteE2eFixtureGroups(
+            sharedGroupEnv,
+            "default",
+            "e2e-invite-exam-a",
+            ["e2e-group-shared"],
+        )).toEqual([{ id: "e2e-group-shared", name: "A 전용반", region: "서울" }]);
+        expect(simulation.getExamEntryInviteE2eFixtureGroups(
+            sharedGroupEnv,
+            "default",
+            "e2e-invite-exam-b",
+            ["e2e-group-shared"],
+        )).toEqual([{ id: "e2e-group-shared", name: "B 전용반", region: "부산" }]);
     });
 
     it("bounds independent fixture stores and evicts the oldest simulation state", async () => {
