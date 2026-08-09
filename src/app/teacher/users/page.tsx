@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState, useMemo, useEffect, useRef, useDeferredValue } from "react";
+import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import NextLink from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
@@ -123,8 +124,6 @@ import {
     groupOptionLabel,
     rosterGroupForStudentInput,
 } from "@/components/teacher/users/parts";
-import GroupsTab from "@/components/teacher/users/GroupsTab";
-import InvitesTab from "@/components/teacher/users/InvitesTab";
 import { ALL_REGION_KEY } from "@/components/teacher/users/parts";
 import type { StudentFormData, GroupFormData, SortKey, SortDirection, ConfirmAction } from "@/components/teacher/users/parts";
 import {
@@ -132,6 +131,9 @@ import {
     INITIAL_CAPACITY_REMEDIATION_KO,
 } from "@/lib/initialOperationsPolicy";
 import { resolveCanonicalLoad, type CanonicalLoadState } from "@/lib/canonicalLoadState";
+
+const GroupsTab = dynamic(() => import("@/components/teacher/users/GroupsTab"));
+const InvitesTab = dynamic(() => import("@/components/teacher/users/InvitesTab"));
 
 type TabType = "students" | "groups" | "invites";
 type RosterDataMode = "real" | "demo";
