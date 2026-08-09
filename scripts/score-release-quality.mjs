@@ -178,6 +178,12 @@ async function publishScore(outputPath, value, boundary, deps) {
     let outputLinked = false;
     let handleClosed = false;
     try {
+        directoryHandle = await deps.fs.open(boundary.parentPath, "r");
+        if (typeof directoryHandle.stat !== "function" || typeof directoryHandle.sync !== "function"
+            || typeof directoryHandle.close !== "function") fail("unsafe_output");
+        const directoryStats = await directoryHandle.stat();
+        if (!directoryStats.isDirectory() || directoryStats.dev !== boundary.dev
+            || directoryStats.ino !== boundary.ino || directoryStats.uid !== boundary.uid) fail("unsafe_output");
         handle = await deps.fs.open(temporaryPath, "wx", 0o600);
         tempPresent = true;
         if (typeof handle.chmod !== "function" || typeof handle.writeFile !== "function"
@@ -209,13 +215,21 @@ async function publishScore(outputPath, value, boundary, deps) {
             || published.uid !== boundary.uid || (published.mode & 0o777) !== 0o600) fail("unsafe_output");
         await deps.fs.unlink(temporaryPath);
         tempPresent = false;
-        directoryHandle = await deps.fs.open(boundary.parentPath, "r");
-        if (typeof directoryHandle.sync !== "function" || typeof directoryHandle.close !== "function") {
-            fail("unsafe_output");
-        }
         await directoryHandle.sync();
+        if (!await sameOutputBoundary(boundary, deps)) fail("unsafe_output");
+        const finalPublished = await deps.fs.lstat(outputPath);
+        if (!finalPublished.isFile() || finalPublished.isSymbolicLink()
+            || finalPublished.dev !== ownedStats.dev || finalPublished.ino !== ownedStats.ino
+            || finalPublished.size !== writtenStats.size || finalPublished.uid !== boundary.uid
+            || (finalPublished.mode & 0o777) !== 0o600) fail("unsafe_output");
         await directoryHandle.close();
         directoryHandle = undefined;
+        if (!await sameOutputBoundary(boundary, deps)) fail("unsafe_output");
+        const closedPublished = await deps.fs.lstat(outputPath);
+        if (!closedPublished.isFile() || closedPublished.isSymbolicLink()
+            || closedPublished.dev !== ownedStats.dev || closedPublished.ino !== ownedStats.ino
+            || closedPublished.size !== writtenStats.size || closedPublished.uid !== boundary.uid
+            || (closedPublished.mode & 0o777) !== 0o600) fail("unsafe_output");
     } catch (error) {
         if (tempPresent && !ownedStats && handle && typeof handle.stat === "function") {
             try { ownedStats = await handle.stat(); } catch { /* cleanup stays inode-bound */ }

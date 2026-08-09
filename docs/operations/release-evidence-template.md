@@ -124,6 +124,7 @@ file handle의 `writeFile`/`sync`/`stat`/`close`와 directory handle의 `sync`/`
 - release quality score SHA-256:
 - scorer SHA(40자리 Git SHA):
 - score build SHA와 배포 SHA 일치: 예 / 아니오
+- score `environmentDigest`와 승인 대상 app/database/environment/infra digest 일치: 예 / 아니오
 - 산술 결과(mean ≥9.3, minimum ≥8.7): 통과 / 실패
 - hard gate failures: 없음 / 목록
 - scorer 상태: `go` / `no_go` / `unverified`
@@ -146,5 +147,12 @@ minimum ≥8.7, hard gate 0개가 함께 통과한 경우뿐이며 exit 0입니�
 `unverified`는 manifest·artifact·출력 경계를 신뢰할 수 없어 score를 승인 증거로 만들 수 없는 상태이며
 exit 1입니다. missing, expired, wrong-SHA, skipped, unverified atomic evidence는 추정하지 않고 0점입니다.
 score에는 artifact 경로·본문·토큰·학생 정보·provider 원문을 기록하지 않습니다.
+
+manifest는 scorer가 내장한 100개 fixed atomic check ID·dimension·정수 tenths와 12개 hard gate
+매핑을 정확히 사용해야 합니다. 임의 check ID, 가중치, artifact 종류 또는 추가 필드는 허용하지 않습니다.
+각 fixed dimension artifact는 exact schema의 check/hard-gate 결과만 담고, descriptor와 본문의
+`buildSha`, `environmentDigest`, 생성 시각 및 상태가 모두 일치해야 합니다. source/browser 및 hosted
+증거의 유효 기간은 정확히 24시간, restore 증거는 정확히 30일입니다. hosted 증거는 앱·DB·환경·인프라
+구성을 대표하는 `environmentDigest`가 바뀌는 즉시 무효이며, 임의 `freshUntil` 연장은 허용하지 않습니다.
 
 `verified` JSON에는 토큰, URL query, 학생 정보, row ID, Storage object path를 복사하지 않습니다.
