@@ -22,6 +22,7 @@ test("dashboard data failure is not presented as an empty successful dashboard a
                 && window.location.pathname === "/student/dashboard"
                 && this === window.localStorage
                 && key === "omr_attempts"
+                && window.sessionStorage.getItem("omr_e2e_allow_attempt_reads") !== "1"
             ) {
                 failedOnce = true;
                 throw new Error("E2E forced local assignment read failure");
@@ -71,5 +72,29 @@ test("dashboard data failure is not presented as an empty successful dashboard a
     await expect(page.getByText("나의 원시험 평균", { exact: true })).toBeVisible();
     await expect(page.getByText("오늘은 예정된 시험이 없습니다", { exact: false })).toBeVisible();
     await expect(page.locator('[data-canonical-state="loaded_empty"]')).toBeVisible();
+
+    await page.evaluate(() => {
+        const now = new Date().toISOString();
+        window.localStorage.setItem("omr_student_dashboard_cache_stale_at_v1", now);
+        window.sessionStorage.setItem("omr_e2e_allow_attempt_reads", "1");
+        window.localStorage.setItem("omr_exam_read-only-open", JSON.stringify({
+            id: "read-only-open",
+            title: "저장된 응시 가능 시험",
+            createdAt: now,
+            startAt: new Date(Date.now() - 60_000).toISOString(),
+            endAt: new Date(Date.now() + 60_000).toISOString(),
+            accessConfig: { type: "public" },
+            questions: [{ id: 1, number: 1, answer: 1, choices: 5, score: 10 }],
+        }));
+    });
+    failCanonicalActions = true;
+    await page.reload();
+    const degraded = page.getByTestId("student-dashboard-degraded");
+    await expect(degraded).toContainText("읽기 전용");
+    const staleOpen = page.locator('[data-assignment-id="read-only-open"]');
+    await expect(staleOpen).toContainText("저장된 응시 가능 시험");
+    await expect(staleOpen.getByText("읽기 전용", { exact: true })).toBeVisible();
+    await expect(staleOpen.locator('a[href^="/solve/"]')).toHaveCount(0);
+    await expect(page.getByText("게스트 기록 저장하기", { exact: true })).toHaveCount(0);
     expect(injectedFailureCount).toBeGreaterThan(0);
 });

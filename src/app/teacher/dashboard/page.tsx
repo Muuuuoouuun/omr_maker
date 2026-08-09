@@ -302,11 +302,13 @@ function TeacherDashboard() {
     }, [attempts, dataMode]);
 
     useEffect(() => {
-        if (activeTab === "overview" || isMockupAccount) return;
+        const dashboardAllowsDetailedAnalysis = dashboardLoadState.state === "loaded_data"
+            || dashboardLoadState.state === "degraded_with_cache";
+        if (activeTab === "overview" || isMockupAccount || !dashboardAllowsDetailedAnalysis) return;
         void loadDetailedAttempts().catch(() => {
             toast.error("분석 데이터 로드 실패", "상세 제출 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.");
         });
-    }, [activeTab, detailedAttemptGeneration, isMockupAccount, loadDetailedAttempts]);
+    }, [activeTab, dashboardLoadState.state, detailedAttemptGeneration, isMockupAccount, loadDetailedAttempts]);
 
     const applyDashboardSnapshot = useCallback((snapshot: DashboardSnapshot) => {
         const loadedExams = [...snapshot.exams];
@@ -495,9 +497,9 @@ function TeacherDashboard() {
         if (!isAccountModeResolved) return;
         let cancelled = false;
 
-        // Render the last local snapshot synchronously on mount so the dashboard is
-        // useful without waiting for Supabase reconciliation. The existing loader
-        // then refreshes and replaces it with the merged source of truth.
+        // A local snapshot becomes renderable only when it carries the last
+        // successful canonical verification time. Unverified local rows must not
+        // leak analytics while the server request is still loading or has failed.
         if (isMockupAccount) {
             const snapshot: DashboardSnapshot = {
                 exams: [],
@@ -516,23 +518,25 @@ function TeacherDashboard() {
             const localRoster = readLocalRosterSnapshot(localStorage);
             const localExams = readLocalExams();
             const localAttempts = readLocalAttempts();
-            applyDashboardSnapshot({
+            const localSnapshot: DashboardSnapshot = {
                 exams: localExams,
                 attempts: localAttempts,
                 rosterStudents: localRoster.students,
                 rosterGroups: localRoster.groups,
-            });
+            };
             let cachedAt: string | null = null;
             try { cachedAt = localStorage.getItem(TEACHER_DASHBOARD_CACHE_STALE_AT_KEY); } catch { /* keep loading */ }
             if (cachedAt) {
-                setDashboardLoadState(resolveCanonicalLoad({
+                const cachedState = resolveCanonicalLoad({
                     remote: { ok: false },
                     cache: {
-                        data: { exams: localExams, attempts: localAttempts, rosterStudents: localRoster.students, rosterGroups: localRoster.groups },
+                        data: localSnapshot,
                         staleAt: cachedAt,
                     },
                     now: new Date().toISOString(),
-                }, isDashboardSnapshotEmpty));
+                }, isDashboardSnapshotEmpty);
+                setDashboardLoadState(cachedState);
+                if (cachedState.state === "degraded_with_cache") applyDashboardSnapshot(cachedState.data);
             }
         }
         const refreshTimer = window.setTimeout(() => {
@@ -632,6 +636,10 @@ function TeacherDashboard() {
     };
 
     const handleRepairAnalyticsData = async () => {
+        if (dashboardLoadState.state !== "loaded_data") {
+            toast.info("읽기 전용 분석", "최신 서버 데이터를 확인한 뒤 분석 캐시를 복구할 수 있습니다.");
+            return;
+        }
         if (questionResultRepairPlan.repairableCount === 0) {
             toast.info("복구할 문항 결과 없음", "현재 자동 복구 가능한 제출이 없습니다.");
             return;
@@ -828,11 +836,13 @@ function TeacherDashboard() {
     const isDashboardResolving = !isAccountModeResolved || dashboardLoadState.state === "loading";
     const isDashboardUnavailable = dashboardLoadState.state === "error_without_cache";
     const isDashboardDegraded = dashboardLoadState.state === "degraded_with_cache";
+    const dashboardAllowsAnalysis = dashboardLoadState.state === "loaded_data" || isDashboardDegraded;
+    const dashboardAllowsMutations = dashboardLoadState.state === "loaded_data" || dashboardLoadState.state === "loaded_empty";
     const isRealDashboardEmpty = dashboardLoadState.state === "loaded_empty"
         && !isMockupAccount
         && dataMode === "real"
         && isDashboardSnapshotEmpty(dashboardLoadState.data);
-    const dashboardHasRenderableData = dashboardLoadState.state === "loaded_data" || isDashboardDegraded;
+    const dashboardHasRenderableData = dashboardAllowsAnalysis;
 
     // Tab Navigation Component
     const renderTabs = () => isMockupAccount ? (
@@ -976,7 +986,7 @@ function TeacherDashboard() {
                                 <RefreshCw size={14} className={isRefreshingDashboardData ? "animate-spin" : undefined} />
                             </button>
                         </div>
-                        {analyticsDataHealth.kind !== "empty" && <div
+                        {dashboardAllowsAnalysis && analyticsDataHealth.kind !== "empty" && <div
                             aria-label="분석 데이터 상태"
                             title={analyticsDataHealth.issues[0]?.detail || analyticsDataHealth.detail}
                             style={{ minWidth: 0 }}
@@ -988,7 +998,7 @@ function TeacherDashboard() {
                                 tone={dataHealthPillTone}
                             />
                         </div>}
-                        {dashboardHasRenderableData && <Link href="/create" className="dashboard-create-action" style={{
+                        {dashboardAllowsMutations && <Link href="/create" className="dashboard-create-action" style={{
                                 padding: '0.55rem 1.1rem', background: 'var(--primary)',
                                 color: 'white', borderRadius: 'var(--radius-full)',
                                 fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem',
@@ -1006,7 +1016,7 @@ function TeacherDashboard() {
                         style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', padding: '1rem 1.1rem', marginBottom: '1.5rem', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 'var(--radius-lg)', background: 'rgba(245,158,11,0.08)', flexWrap: 'wrap' }}
                     >
                         <div>
-                            <strong>저장된 데이터를 표시 중</strong>
+                            <strong>저장된 데이터를 읽기 전용으로 표시 중</strong>
                             <p className="text-muted" style={{ marginTop: '0.25rem' }}>
                                 마지막 저장 {new Date(dashboardLoadState.staleAt).toLocaleString('ko-KR')} · 서버 연결을 확인해주세요.
                             </p>
@@ -1015,7 +1025,7 @@ function TeacherDashboard() {
                     </section>
                 )}
 
-                {dataMode === "demo" && (
+                {dashboardAllowsAnalysis && dataMode === "demo" && (
                     <div
                         role="status"
                         aria-label="데모 데이터 안내"
@@ -1046,7 +1056,7 @@ function TeacherDashboard() {
                     </div>
                 )}
 
-                {dataMode === "real" && analyticsDataHealth.kind !== "ready" && analyticsDataHealth.kind !== "empty" && (
+                {dashboardAllowsAnalysis && dataMode === "real" && analyticsDataHealth.kind !== "ready" && analyticsDataHealth.kind !== "empty" && (
                     <div
                         role="status"
                         aria-label="분석 데이터 상태"
@@ -1103,7 +1113,7 @@ function TeacherDashboard() {
                                     </span>
                                 </div>
                             ))}
-                            {questionResultRepairPlan.repairableCount > 0 && (
+                            {dashboardAllowsMutations && questionResultRepairPlan.repairableCount > 0 && (
                                 <>
                                     <button
                                         type="button"
@@ -1185,7 +1195,9 @@ function TeacherDashboard() {
                         marginBottom: '1rem',
                     }}
                 >
-                    {dashboardAnalysisActions.map(action => {
+                    {dashboardAnalysisActions
+                        .filter(action => dashboardAllowsMutations || (action.key !== "create" && action.key !== "repair"))
+                        .map(action => {
                         const actionTone = action.tone === "primary"
                             ? { border: 'rgba(99,102,241,0.24)', background: 'rgba(99,102,241,0.08)', color: 'var(--primary)' }
                             : action.tone === "warning"

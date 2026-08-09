@@ -84,7 +84,7 @@ describe("student assignment dashboard classification", () => {
         const classification = await subject();
         expect(classification.buildMissingCompletedReviewAssignments).toBeTypeOf("function");
         const rows = classification.buildMissingCompletedReviewAssignments?.(
-            new Set(["visible-exam"]),
+            new Set(["visible-exam", "missing-retake"]),
             [
                 attempt({ id: "older", examId: "archived-exam", examTitle: "보관된 시험", finishedAt: "2026-08-09T10:00:00.000Z" }),
                 attempt({ id: "latest", examId: "archived-exam", examTitle: "보관된 시험", finishedAt: "2026-08-09T11:00:00.000Z" }),
@@ -102,5 +102,51 @@ describe("student assignment dashboard classification", () => {
             reviewOnly: true,
             attemptId: "latest",
         }]);
+    });
+
+    it("synthesizes distinct review-only cards for omitted completed retakes without duplicating visible exams", async () => {
+        const classification = await subject();
+        const rows = classification.buildMissingCompletedReviewAssignments?.(
+            new Set(["visible-retake-exam"]),
+            [
+                attempt({
+                    id: "retake-attempt-1",
+                    examId: "omitted-retake-exam",
+                    examTitle: "정확한 재시험 제목 1",
+                    retakeSourceAttemptId: "base-attempt",
+                    finishedAt: "2026-08-09T10:30:00.000Z",
+                }),
+                attempt({
+                    id: "retake-attempt-2",
+                    examId: "omitted-retake-exam",
+                    examTitle: "정확한 재시험 제목 2",
+                    retakeSourceAttemptId: "base-attempt",
+                    finishedAt: "2026-08-09T11:30:00.000Z",
+                }),
+                attempt({
+                    id: "visible-retake-attempt",
+                    examId: "visible-retake-exam",
+                    examTitle: "이미 시험 행이 있는 재시험",
+                    retakeSourceAttemptId: "visible-base-attempt",
+                }),
+            ],
+        );
+
+        expect(rows).toEqual([
+            expect.objectContaining({
+                id: "retake-attempt-2",
+                title: "정확한 재시험 제목 2",
+                lifecycle: "closed",
+                reviewOnly: true,
+                attemptId: "retake-attempt-2",
+            }),
+            expect.objectContaining({
+                id: "retake-attempt-1",
+                title: "정확한 재시험 제목 1",
+                lifecycle: "closed",
+                reviewOnly: true,
+                attemptId: "retake-attempt-1",
+            }),
+        ]);
     });
 });

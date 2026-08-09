@@ -58,7 +58,36 @@ async function seedLifecycleDashboard(page: Page) {
             startedAt: instant(-120_000),
             finishedAt: instant(-90_000 + index),
             answers: { 1: 1 },
+            retakeSourceAttemptId: undefined as string | undefined,
+            retake: undefined as {
+                sourceAttemptId: string;
+                questionIds: number[];
+                mode: "wrong";
+                createdAt: string;
+            } | undefined,
         }));
+        completed.push({
+            id: "attempt-retake-omitted",
+            examId: "omitted-retake",
+            examTitle: "목록에서 제외된 정확한 재시험",
+            studentName: session.name,
+            studentId,
+            guestId: studentId,
+            identityType: "guest",
+            status: "completed",
+            score: 10,
+            totalScore: 10,
+            startedAt: instant(-80_000),
+            finishedAt: instant(-70_000),
+            answers: { 1: 1 },
+            retakeSourceAttemptId: "attempt-base-source",
+            retake: {
+                sourceAttemptId: "attempt-base-source",
+                questionIds: [1],
+                mode: "wrong",
+                createdAt: instant(-80_000),
+            },
+        });
         for (const item of exams) {
             window.localStorage.setItem(`omr_exam_${item.id}`, JSON.stringify(item));
         }
@@ -105,11 +134,16 @@ if (hostedMode) {
             .getByRole("link", { name: "계속 풀기" })).toBeVisible();
 
         const done = page.getByRole("heading", { name: "완료 기록" }).locator("..").locator("..");
-        await expect(done.getByRole("link", { name: "복습" })).toHaveCount(3);
+        await expect(done.getByRole("link", { name: "복습" })).toHaveCount(4);
         await expect(done.locator('a[href^="/solve/"]')).toHaveCount(0);
         const archivedReview = page.locator('[data-assignment-id="omitted-archived"]');
         await expect(archivedReview.getByText("복습 전용", { exact: true })).toBeVisible();
         await expect(archivedReview.getByRole("link", { name: "복습" })).toHaveAttribute("href", "/student/review/attempt-3");
         await expect(archivedReview.locator('a[href^="/solve/"]')).toHaveCount(0);
+        const retakeReview = page.locator('[data-assignment-id="attempt-retake-omitted"]');
+        await expect(retakeReview).toContainText("목록에서 제외된 정확한 재시험");
+        await expect(retakeReview.getByText("복습 전용", { exact: true })).toBeVisible();
+        await expect(retakeReview.getByRole("link", { name: "복습" })).toHaveAttribute("href", "/student/review/attempt-retake-omitted");
+        await expect(retakeReview.locator('a[href^="/solve/"]')).toHaveCount(0);
     });
 }

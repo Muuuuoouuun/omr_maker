@@ -524,6 +524,8 @@ export default function StudentDashboard() {
         );
     }
 
+    const dashboardReadOnly = dataState.state === "degraded_with_cache";
+
     return (
         <div className="layout-main">
             <header className="header student-dashboard-shell-header">
@@ -656,7 +658,7 @@ export default function StudentDashboard() {
                         role="status"
                         style={{ marginTop: "1.5rem", padding: "1rem 1.25rem", border: "1px solid rgba(245,158,11,0.35)", borderRadius: "var(--radius-lg)", background: "rgba(245,158,11,0.08)" }}
                     >
-                        <strong>저장된 데이터를 표시 중</strong>
+                        <strong>저장된 데이터를 읽기 전용으로 표시 중</strong>
                         <p className="text-muted" style={{ marginTop: "0.3rem" }}>
                             마지막 저장 {new Date(dataState.staleAt).toLocaleString("ko-KR")} · 서버 연결을 확인한 뒤 다시 시도해주세요.
                         </p>
@@ -691,10 +693,10 @@ export default function StudentDashboard() {
                         </button>
                     </section>
                 )}
-                {!user.isGuest && <StudentGuestRecoveryPanel />}
+                {!dashboardReadOnly && !user.isGuest && <StudentGuestRecoveryPanel />}
 
                 {/* Guest Banner */}
-                {user.isGuest && (
+                {!dashboardReadOnly && user.isGuest && (
                     <details className="student-guest-merge-disclosure">
                         <summary>
                             <span>
@@ -760,7 +762,7 @@ export default function StudentDashboard() {
                 <div className={`bento-grid student-dashboard-grid student-dashboard-task-flow${stats.completedCount === 0 ? " is-zero-completions" : ""}`}>
                     {/* Todo List (Main Focus) */}
                     <div className="col-span-2 row-span-2 student-dashboard-primary-task">
-                        <AssignmentBlock type="todo" exams={todoExams} />
+                        <AssignmentBlock type="todo" exams={todoExams} readOnly={dashboardReadOnly} />
                     </div>
 
                     {/* Stats */}
@@ -790,7 +792,7 @@ export default function StudentDashboard() {
 
                     {/* Completed List */}
                     <div className="col-span-2 student-dashboard-completed-task">
-                        <AssignmentBlock type="done" exams={doneExams} />
+                        <AssignmentBlock type="done" exams={doneExams} readOnly={dashboardReadOnly} />
                     </div>
                 </div>
                     </div>

@@ -340,7 +340,8 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             || inviteMetadataLoad.status === "loading"
             || inviteMetadataLoad.status === "forbidden"
             || inviteMetadataLoad.status === "dependency_unavailable");
-    const distributionRosterUnavailable = distributionRosterState.state === "error_without_cache";
+    const distributionRosterReadOnly = distributionRosterState.state !== "loaded_empty"
+        && distributionRosterState.state !== "loaded_data";
     const visibleShareUrl = accessType === "group"
         ? inviteCapability === "copyable_here" ? inviteRawUrlState?.url || null : null
         : isGroupInviteShareUrl(shareUrl) ? null : shareUrl;
@@ -361,8 +362,8 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
 
     const handleShareClick = async () => {
         setFormError("");
-        if (distributionRosterUnavailable) {
-            setFormError("서버 명단 상태를 확인할 수 없어 배포를 진행하지 않습니다. 다시 시도해주세요.");
+        if (distributionRosterReadOnly) {
+            setFormError("최신 서버 명단을 확인할 때까지 읽기 전용이며 배포를 진행하지 않습니다. 다시 시도해주세요.");
             return;
         }
         if (accessType === "group" && inviteLifecycleBlocksIssuance) {
@@ -548,6 +549,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
 
     const revokeGroupInvite = async () => {
         if (!examId || isInviteRevoking) return;
+        if (distributionRosterReadOnly) {
+            setFormError("최신 서버 명단을 확인한 뒤 링크를 해지할 수 있습니다.");
+            return;
+        }
         setFormError("");
         setIsInviteRevoking(true);
         try {
@@ -605,6 +610,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
 
     // Write the full roster snapshot through (preserving invites) and reflect it locally.
     const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[]) => {
+        if (distributionRosterReadOnly) {
+            setFormError("최신 서버 명단을 확인한 뒤 명단을 변경할 수 있습니다.");
+            return;
+        }
         const previousStudents = students;
         const previousGroups = groups;
         setStudents(nextStudents);
@@ -629,7 +638,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     };
 
     const handleCreateGroup = () => {
-        if (isRosterLoading || distributionRosterUnavailable) {
+        if (distributionRosterReadOnly) {
             setFormError("서버 명단을 불러온 뒤 반을 추가해주세요.");
             return;
         }
@@ -659,7 +668,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     };
 
     const handleAddStudent = (groupId: string) => {
-        if (isRosterLoading || distributionRosterUnavailable) {
+        if (distributionRosterReadOnly) {
             setFormError("서버 명단을 불러온 뒤 학생을 추가해주세요.");
             return;
         }
@@ -739,24 +748,34 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 </header>
 
                 <div className="distribute-dialog-body">
+                    {distributionRosterState.state === "loading" && (
+                        <div
+                            data-testid="canonical-distribution-roster-loading"
+                            role="status"
+                            aria-live="polite"
+                            style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid rgba(99,102,241,0.25)', background: 'rgba(99,102,241,0.08)', color: 'var(--muted)', fontSize: '0.82rem', fontWeight: 700 }}
+                        >
+                            서버 명단을 불러오는 중입니다. 확인이 끝날 때까지 배포와 명단 변경은 비활성화됩니다.
+                        </div>
+                    )}
+                    {distributionRosterState.state === "error_without_cache" && (
+                        <div data-testid="canonical-error-no-cache" role="alert" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                            <strong style={{ display: 'block', marginBottom: '0.25rem' }}>서버 명단을 불러오지 못했습니다.</strong>
+                            검증된 저장 명단이 없어 배포와 명단 변경을 비활성화했습니다.
+                            <button data-testid="canonical-distribution-roster-retry" type="button" className="btn btn-secondary" onClick={() => setRosterRetryGeneration(value => value + 1)} style={{ display: 'block', marginTop: '0.65rem' }}>
+                                다시 시도
+                            </button>
+                        </div>
+                    )}
+                    {distributionRosterState.state === "degraded_with_cache" && (
+                        <div data-testid="canonical-degraded-cache" role="status" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                            <strong style={{ display: 'block' }}>저장된 데이터를 읽기 전용으로 표시 중</strong>
+                            마지막 저장 {new Date(distributionRosterState.staleAt).toLocaleString('ko-KR')} · 서버 명단을 다시 확인해주세요.
+                            <button type="button" className="btn btn-secondary" onClick={() => setRosterRetryGeneration(value => value + 1)} style={{ display: 'block', marginTop: '0.65rem' }}>다시 시도</button>
+                        </div>
+                    )}
                     {!visibleShareUrl ? (
                         <>
-                            {distributionRosterState.state === "error_without_cache" && (
-                                <div data-testid="canonical-error-no-cache" role="alert" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', lineHeight: 1.5 }}>
-                                    <strong style={{ display: 'block', marginBottom: '0.25rem' }}>서버 명단을 불러오지 못했습니다.</strong>
-                                    검증된 저장 명단이 없어 배포와 명단 변경을 비활성화했습니다.
-                                    <button data-testid="canonical-distribution-roster-retry" type="button" className="btn btn-secondary" onClick={() => setRosterRetryGeneration(value => value + 1)} style={{ display: 'block', marginTop: '0.65rem' }}>
-                                        다시 시도
-                                    </button>
-                                </div>
-                            )}
-                            {distributionRosterState.state === "degraded_with_cache" && (
-                                <div data-testid="canonical-degraded-cache" role="status" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e', fontSize: '0.82rem', lineHeight: 1.5 }}>
-                                    <strong style={{ display: 'block' }}>저장된 데이터를 표시 중</strong>
-                                    마지막 저장 {new Date(distributionRosterState.staleAt).toLocaleString('ko-KR')} · 서버 명단을 다시 확인해주세요.
-                                    <button type="button" className="btn btn-secondary" onClick={() => setRosterRetryGeneration(value => value + 1)} style={{ display: 'block', marginTop: '0.65rem' }}>다시 시도</button>
-                                </div>
-                            )}
                             {accessType === "group" && inviteMetadataLoad.status === "loading" && (
                                 <div
                                     role="status"
@@ -819,7 +838,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                             type="button"
                                             className="btn btn-secondary"
                                             onClick={revokeGroupInvite}
-                                            disabled={isInviteRevoking}
+                                            disabled={isInviteRevoking || distributionRosterReadOnly}
                                             style={{ marginTop: '0.65rem' }}
                                         >
                                             {isInviteRevoking ? "해지 중..." : "링크 해지"}
@@ -888,15 +907,15 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>접근 권한 설정</label>
                                 <div className="distribute-access-options">
                                     <label className="distribute-access-option">
-                                        <input type="radio" name="access" checked={accessType === 'public'} onChange={() => setAccessType('public')} />
+                                        <input type="radio" name="access" checked={accessType === 'public'} disabled={distributionRosterReadOnly} onChange={() => setAccessType('public')} />
                                         전체 공개 (링크 공유)
                                     </label>
                                     <label className="distribute-access-option">
-                                        <input type="radio" name="access" checked={accessType === 'group'} onChange={() => setAccessType('group')} />
+                                        <input type="radio" name="access" checked={accessType === 'group'} disabled={distributionRosterReadOnly} onChange={() => setAccessType('group')} />
                                         특정 그룹만
                                     </label>
                                     <label className="distribute-access-option">
-                                        <input type="radio" name="access" checked={accessType === 'student'} onChange={() => setAccessType('student')} />
+                                        <input type="radio" name="access" checked={accessType === 'student'} disabled={distributionRosterReadOnly} onChange={() => setAccessType('student')} />
                                         개별 학생
                                     </label>
                                 </div>
@@ -914,6 +933,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                         inputMode="numeric"
                                         pattern="[0-9]{4,6}"
                                         maxLength={6}
+                                        disabled={distributionRosterReadOnly}
                                         placeholder="예: 1234 (4~6자리 숫자)"
                                         value={pin}
                                         onChange={(e) => setPin(normalizeExamPin(e.target.value))}
@@ -944,7 +964,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                         <button
                                             type="button"
                                             onClick={() => { setShowNewGroup(v => !v); setFormError(""); }}
-                                            disabled={isRosterLoading || distributionRosterUnavailable}
+                                            disabled={distributionRosterReadOnly}
                                             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', fontSize: '0.78rem', fontWeight: 700, borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--foreground)', cursor: 'pointer' }}
                                         >
                                             <Plus size={13} /> 새 반
@@ -967,7 +987,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                             <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                                                 <input
                                                     aria-label="새 반 이름"
-                                                    disabled={isRosterLoading || distributionRosterUnavailable}
+                                                    disabled={distributionRosterReadOnly}
                                                     value={newGroupName}
                                                     onChange={e => setNewGroupName(e.target.value)}
                                                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreateGroup(); } }}
@@ -977,7 +997,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                 />
                                                 <input
                                                     aria-label="새 반 지역"
-                                                    disabled={isRosterLoading || distributionRosterUnavailable}
+                                                    disabled={distributionRosterReadOnly}
                                                     value={newGroupRegion}
                                                     onChange={e => setNewGroupRegion(e.target.value)}
                                                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreateGroup(); } }}
@@ -987,7 +1007,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                             </div>
                                             <button
                                                 type="button"
-                                                disabled={isRosterLoading || distributionRosterUnavailable}
+                                                disabled={distributionRosterReadOnly}
                                                 onClick={handleCreateGroup}
                                                 className="btn btn-primary"
                                                 style={{ width: '100%', padding: '0.5rem', fontSize: '0.82rem' }}
@@ -999,7 +1019,9 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
 
                                     {groups.length === 0 && !showNewGroup ? (
                                         <div style={{ fontSize: '0.85rem', color: 'var(--muted)', lineHeight: 1.5, wordBreak: 'keep-all' }}>
-                                            아직 만든 반이 없습니다. <strong style={{ color: 'var(--foreground)' }}>새 반</strong> 버튼으로 이 화면에서 바로 반을 만들고 학생을 추가할 수 있습니다.
+                                            {distributionRosterReadOnly
+                                                ? "저장된 반이 없습니다. 최신 서버 명단을 다시 불러오세요."
+                                                : <><strong style={{ color: 'var(--foreground)' }}>새 반</strong> 버튼으로 이 화면에서 바로 반을 만들고 학생을 추가할 수 있습니다.</>}
                                         </div>
                                     ) : (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '220px', overflowY: 'auto' }}>
@@ -1014,6 +1036,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                                 <input
                                                                     type="checkbox"
                                                                     checked={isSelected}
+                                                                    disabled={distributionRosterReadOnly}
                                                                     onChange={() => toggleGroup(g.id)}
                                                                 />
                                                                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1023,7 +1046,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                             </label>
                                                             <button
                                                                 type="button"
-                                                                disabled={isRosterLoading || distributionRosterUnavailable}
+                                                                disabled={distributionRosterReadOnly}
                                                                 onClick={() => {
                                                                     setStudentFormGroupId(prev => prev === g.id ? null : g.id);
                                                                     setNewStudentName("");
@@ -1040,7 +1063,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                             <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.45rem', flexWrap: 'wrap' }}>
                                                                 <input
                                                                     aria-label="학생 이름"
-                                                                    disabled={isRosterLoading || distributionRosterUnavailable}
+                                                                    disabled={distributionRosterReadOnly}
                                                                     value={newStudentName}
                                                                     onChange={e => setNewStudentName(e.target.value)}
                                                                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddStudent(g.id); } }}
@@ -1050,7 +1073,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                                 <input
                                                                     aria-label="학생 이메일"
                                                                     type="email"
-                                                                    disabled={isRosterLoading || distributionRosterUnavailable}
+                                                                    disabled={distributionRosterReadOnly}
                                                                     value={newStudentEmail}
                                                                     onChange={e => setNewStudentEmail(e.target.value)}
                                                                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddStudent(g.id); } }}
@@ -1059,7 +1082,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                                 />
                                                                 <button
                                                                     type="button"
-                                                                    disabled={isRosterLoading || distributionRosterUnavailable}
+                                                                    disabled={distributionRosterReadOnly}
                                                                     onClick={() => handleAddStudent(g.id)}
                                                                     style={{ padding: '0.45rem 0.7rem', fontSize: '0.78rem', fontWeight: 700, borderRadius: '6px', border: 'none', background: 'var(--primary)', color: 'white', cursor: 'pointer', flexShrink: 0 }}
                                                                 >
@@ -1111,6 +1134,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                             배정 유형
                                             <select
                                                 aria-label="배정 유형"
+                                                disabled={distributionRosterReadOnly}
                                                 value={assignmentMode}
                                                 onChange={event => setAssignmentMode(
                                                     retakeAssignmentsEnabled && event.target.value === "retake" ? "retake" : "base"
@@ -1130,6 +1154,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                     <label htmlFor="individual-student-search" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.35rem' }}>학생 검색</label>
                                     <input
                                         id="individual-student-search"
+                                        disabled={distributionRosterReadOnly}
                                         value={studentSearch}
                                         onChange={event => setStudentSearch(event.target.value)}
                                         placeholder="이름, 반, 지역, 이메일"
@@ -1146,6 +1171,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                 <input
                                                     type="checkbox"
                                                     checked={selectedStudentIds.includes(student.id)}
+                                                    disabled={distributionRosterReadOnly}
                                                     onChange={() => setSelectedStudentIds(current => current.includes(student.id)
                                                         ? current.filter(id => id !== student.id)
                                                         : [...current, student.id])}
@@ -1171,7 +1197,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                 onClick={handleShareClick}
                                 className="btn btn-primary distribute-dialog-primary-action"
                                 style={{ width: '100%', padding: '0.8rem' }}
-                                disabled={distributionRosterUnavailable || isSaving || isAssignmentLoading || inviteLifecycleBlocksIssuance || (validationSummary ? !validationSummary.isPublishable : false)}
+                                disabled={distributionRosterReadOnly || isSaving || isAssignmentLoading || inviteLifecycleBlocksIssuance || (validationSummary ? !validationSummary.isPublishable : false)}
                             >
                                 {isSaving
                                     ? "생성 중..."
@@ -1225,7 +1251,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                     <button
                                         type="button"
                                         onClick={revokeGroupInvite}
-                                        disabled={isInviteRevoking}
+                                        disabled={isInviteRevoking || distributionRosterReadOnly}
                                         className="btn btn-secondary"
                                     >
                                         {isInviteRevoking ? "해지 중..." : "링크 해지"}

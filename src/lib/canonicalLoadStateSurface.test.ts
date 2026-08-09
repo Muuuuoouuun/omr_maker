@@ -7,6 +7,7 @@ const teacherDashboard = source("src/app/teacher/dashboard/page.tsx");
 const teacherUsers = source("src/app/teacher/users/page.tsx");
 const distributeModal = source("src/components/DistributeModal.tsx");
 const studentDashboard = source("src/app/student/dashboard/page.tsx");
+const groupsTab = source("src/components/teacher/users/GroupsTab.tsx");
 
 describe("canonical load-state surfaces", () => {
     it.each([
@@ -24,43 +25,62 @@ describe("canonical load-state surfaces", () => {
     it("keeps teacher dashboard failure distinct from successful empty onboarding", () => {
         expect(teacherDashboard).toContain('data-testid="canonical-error-no-cache"');
         expect(teacherDashboard).toContain('data-testid="canonical-degraded-cache"');
-        expect(teacherDashboard).toContain("저장된 데이터를 표시 중");
+        expect(teacherDashboard).toContain("저장된 데이터를 읽기 전용으로 표시 중");
         expect(teacherDashboard).toContain("마지막 저장");
         expect(teacherDashboard).toContain('dashboardLoadState.state === "loaded_empty"');
         expect(teacherDashboard).toContain("첫 시험 만들기");
         expect(teacherDashboard).toContain('data-testid="canonical-dashboard-retry"');
         expect(teacherDashboard).toMatch(/dashboardHasRenderableData\s*&&\s*!isMockupAccount[\s\S]*dashboard-analysis-actions/);
+        expect(teacherDashboard).toContain("dashboardAllowsMutations");
+        expect(teacherDashboard).toMatch(/dashboardAllowsAnalysis[\s\S]*analyticsDataHealth\.kind/);
+        expect(teacherDashboard).toMatch(/dashboardAllowsAnalysis[\s\S]*dashboard-analysis-actions/);
+        expect(teacherDashboard).toMatch(/cachedAt\)[\s\S]*applyDashboardSnapshot/);
     });
 
-    it("blocks roster mutations and onboarding only when canonical roster data is unavailable", () => {
+    it("keeps a degraded teacher roster read-only while retaining view and retry affordances", () => {
         expect(teacherUsers).toContain('"canonical-error-no-cache"');
         expect(teacherUsers).toContain('data-testid="canonical-degraded-cache"');
-        expect(teacherUsers).toContain("저장된 데이터를 표시 중");
+        expect(teacherUsers).toContain("저장된 데이터를 읽기 전용으로 표시 중");
         expect(teacherUsers).toContain("마지막 저장");
         expect(teacherUsers).toContain("첫 학생 추가");
         expect(teacherUsers).toContain('data-testid="canonical-roster-retry"');
         expect(teacherUsers).toContain("rosterMutationsDisabled");
+        expect(teacherUsers).toMatch(/rosterAllowsMutations\s*=\s*[^;]*loaded_empty[^;]*loaded_data/);
+        expect(teacherUsers).toContain("rosterMutationsDisabled = !rosterAllowsMutations");
+        expect(teacherUsers).toContain("readOnly={rosterMutationsDisabled}");
+        expect(teacherUsers).toContain("읽기 전용");
         expect(teacherUsers).toContain("응시 분석 데이터 미표시");
+        const studentViewControl = groupsTab.indexOf('aria-label={`${g.name} 학생 보기`}');
+        expect(studentViewControl).toBeGreaterThan(0);
+        const studentViewButton = groupsTab.lastIndexOf("<button", studentViewControl);
+        expect(groupsTab.slice(studentViewButton - 40, studentViewButton)).not.toContain("!readOnly");
     });
 
-    it("blocks all distribution while the target roster has no canonical or cached truth", () => {
+    it("blocks distribution and onboarding while the target roster is loading, unavailable, or degraded", () => {
         expect(distributeModal).toContain('data-testid="canonical-error-no-cache"');
         expect(distributeModal).toContain('data-testid="canonical-degraded-cache"');
         expect(distributeModal).toContain('data-testid="canonical-distribution-roster-retry"');
-        expect(distributeModal).toContain("distributionRosterUnavailable");
-        expect(distributeModal).toMatch(/disabled=\{[^}]*distributionRosterUnavailable/);
-        expect(distributeModal.match(/if \(isRosterLoading \|\| distributionRosterUnavailable\)/g)).toHaveLength(2);
+        expect(distributeModal).toContain("distributionRosterReadOnly");
+        expect(distributeModal).toMatch(/distributionRosterReadOnly\s*=\s*[^;]*loaded_empty[^;]*loaded_data/);
+        expect(distributeModal).toMatch(/disabled=\{[^}]*distributionRosterReadOnly/);
+        expect(distributeModal).toContain("읽기 전용");
         expect(distributeModal).toContain("inviteLifecycleBlocksIssuance");
+        expect(distributeModal).toMatch(/canonical-degraded-cache[\s\S]*!visibleShareUrl/);
+        expect(distributeModal).toContain("disabled={isInviteRevoking || distributionRosterReadOnly}");
     });
 
-    it("keeps student recovery links and canonical success content separated", () => {
+    it("keeps degraded student cache review-only without solve or onboarding actions", () => {
         expect(studentDashboard).toContain('data-testid="student-dashboard-error"');
         expect(studentDashboard).toContain('data-testid="student-dashboard-degraded"');
-        expect(studentDashboard).toContain("저장된 데이터를 표시 중");
+        expect(studentDashboard).toContain("저장된 데이터를 읽기 전용으로 표시 중");
         expect(studentDashboard).toContain("마지막 저장");
         expect(studentDashboard).toContain('dataState.state === "loaded_empty"');
         expect(studentDashboard).toContain('dataState.state === "loaded_data"');
         expect(studentDashboard).toContain('href="/"');
         expect(studentDashboard).toContain("로그인 안내");
+        expect(studentDashboard).toContain("dashboardReadOnly");
+        expect(studentDashboard).toContain('readOnly={dashboardReadOnly}');
+        expect(studentDashboard).toContain("읽기 전용");
+        expect(studentDashboard).toMatch(/!dashboardReadOnly\s*&&[^\n]*<StudentGuestRecoveryPanel/);
     });
 });

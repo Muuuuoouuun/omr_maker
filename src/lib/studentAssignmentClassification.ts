@@ -48,23 +48,24 @@ export function buildMissingCompletedReviewAssignments(
     visibleExamIds: ReadonlySet<string>,
     attempts: readonly StudentAttemptSummary[],
 ): ReviewOnlyCompletedAssignment[] {
-    const latestByExam = new Map<string, StudentAttemptSummary>();
+    const reviewAttempts = new Map<string, StudentAttemptSummary>();
     for (const attempt of attempts) {
-        if (attempt.status !== "completed" || attempt.retakeSourceAttemptId || visibleExamIds.has(attempt.examId)) continue;
-        const current = latestByExam.get(attempt.examId);
+        if (attempt.status !== "completed" || visibleExamIds.has(attempt.examId)) continue;
+        const identity = attempt.retakeSourceAttemptId ? `retake:${attempt.id}` : `base:${attempt.examId}`;
+        const current = reviewAttempts.get(identity);
         const currentTime = current ? Date.parse(current.finishedAt) : Number.NEGATIVE_INFINITY;
         const candidateTime = Date.parse(attempt.finishedAt);
         if (
             !current
             || (Number.isFinite(candidateTime) ? candidateTime : Number.NEGATIVE_INFINITY) > currentTime
             || (candidateTime === currentTime && attempt.id > current.id)
-        ) latestByExam.set(attempt.examId, attempt);
+        ) reviewAttempts.set(identity, attempt);
     }
 
-    return [...latestByExam.values()]
+    return [...reviewAttempts.values()]
         .sort((left, right) => right.finishedAt.localeCompare(left.finishedAt) || left.examId.localeCompare(right.examId))
         .map(attempt => ({
-            id: attempt.examId,
+            id: attempt.retakeSourceAttemptId ? attempt.id : attempt.examId,
             title: attempt.examTitle,
             createdAt: attempt.startedAt,
             lifecycle: "closed" as const,

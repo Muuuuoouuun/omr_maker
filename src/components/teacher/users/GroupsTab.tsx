@@ -16,6 +16,7 @@ interface GroupsTabProps {
     displayStudents: RosterStudent[];
     analyticsAvailable: boolean;
     isDemoRoster: boolean;
+    readOnly: boolean;
     advancedAnalyticsEnabled: boolean;
     handleOpenGroupProfile: (groupId: string) => void;
     handleAddStudentToGroup: (group: RosterGroup) => void;
@@ -33,6 +34,7 @@ export default function GroupsTab({
     displayStudents,
     analyticsAvailable,
     isDemoRoster,
+    readOnly,
     advancedAnalyticsEnabled,
     handleOpenGroupProfile,
     handleAddStudentToGroup,
@@ -54,7 +56,7 @@ export default function GroupsTab({
                     <h2 id="groups-empty-title">첫 반을 만들어 학생을 묶어보세요</h2>
                     <p>반별 시험 배정과 성취도 비교를 한곳에서 관리할 수 있습니다.</p>
                 </div>
-                <button
+                {!readOnly && <button
                     type="button"
                     className="btn btn-primary"
                     onClick={() => {
@@ -63,7 +65,7 @@ export default function GroupsTab({
                     }}
                 >
                     <FolderPlus size={16} /> 첫 반 만들기
-                </button>
+                </button>}
             </section>
         );
     }
@@ -165,7 +167,7 @@ export default function GroupsTab({
                                             <Search size={13} />
                                             학생 보기
                                         </button>
-                                        <button
+                                        {!readOnly && <button
                                             type="button"
                                             aria-label={`${g.name} 학생 추가`}
                                             onClick={() => handleAddStudentToGroup(g)}
@@ -187,7 +189,7 @@ export default function GroupsTab({
                                         >
                                             <UserPlus size={13} />
                                             학생 추가
-                                        </button>
+                                        </button>}
                                         {advancedAnalyticsEnabled ? (
                                             <button
                                                 type="button"
@@ -213,7 +215,7 @@ export default function GroupsTab({
                                                 <BarChart3 size={13} />
                                                 분석
                                             </button>
-                                        ) : (
+                                        ) : !readOnly ? (
                                             <NextLink
                                                 href="/teacher/billing"
                                                 aria-label={`${g.name} 반별 리포트 Pro 보기`}
@@ -236,8 +238,8 @@ export default function GroupsTab({
                                                 <Lock size={13} />
                                                 리포트 Pro
                                             </NextLink>
-                                        )}
-                                        <button
+                                        ) : null}
+                                        {!readOnly && <button
                                             type="button"
                                             aria-label={`${g.name} 삭제`}
                                             onClick={() => handleDeleteGroup(g)}
@@ -260,7 +262,7 @@ export default function GroupsTab({
                                         >
                                             <Trash2 size={13} />
                                             삭제
-                                        </button>
+                                        </button>}
                                     </div>
                                     <NextLink
                                         href={buildRegionScopedAnalyticsHref("student", g.region ? regionKeyFor(g.region) : undefined)}
@@ -283,7 +285,7 @@ export default function GroupsTab({
                                 </article>
                             );
                         })}
-                        <button
+                        {!readOnly && <button
                             onClick={() => {
                                 setEditingGroup(null);
                                 setShowGroupModal(true);
@@ -297,7 +299,7 @@ export default function GroupsTab({
                             }}>
                             <FolderPlus size={28} />
                             <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>새 반 만들기</span>
-                        </button>
+                        </button>}
                     </div>
     );
 }

@@ -320,6 +320,8 @@ function ManageUsersInner() {
     const [hydrated, setHydrated] = useState(false);
     const [rosterLoadState, setRosterLoadState] = useState<CanonicalLoadState<CanonicalRosterData>>({ state: "loading" });
     const [rosterRetryGeneration, setRosterRetryGeneration] = useState(0);
+    const rosterAllowsMutations = rosterLoadState.state === "loaded_empty" || rosterLoadState.state === "loaded_data";
+    const rosterMutationsDisabled = !rosterAllowsMutations;
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
     const advancedAnalyticsEnabled = hasPlanEntitlement(currentPlan, "advancedAnalytics");
     const retakeAssignmentsEnabled = hasPlanEntitlement(currentPlan, "retakeAssignments");
@@ -530,8 +532,26 @@ function ManageUsersInner() {
         if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
     }, []);
 
+    useEffect(() => {
+        if (!rosterMutationsDisabled) return;
+        setSelectedIds(new Set());
+        setPopoverId(null);
+        setShowStudentModal(false);
+        setShowGroupModal(false);
+        setShowInviteModal(false);
+        setShowMessageModal(false);
+        setConfirmAction(null);
+        setShowGroupMoveModal(false);
+        setCsvPreview(null);
+        setCredentialBatchExpectedStudents(null);
+    }, [rosterMutationsDisabled]);
+
     // Write-through helpers
     const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[], nextInvites: RosterInvite[]) => {
+        if (rosterMutationsDisabled) {
+            toast.info("읽기 전용 명단", "최신 서버 명단을 확인한 뒤 변경할 수 있습니다.");
+            return;
+        }
         const mutationVersion = ++rosterMutationVersionRef.current;
         const previousSnapshot = { students, groups, invites };
         setRosterDataMode("real");
@@ -576,7 +596,7 @@ function ManageUsersInner() {
     // applies optimistically and rolls back on the server's atomic plan denial.
     const authorizeRosterMutation = async (nextStudents: RosterStudent[]): Promise<boolean> => {
         void nextStudents;
-        return true;
+        return rosterAllowsMutations;
     };
 
     // Recompute group stats from current students
@@ -614,10 +634,9 @@ function ManageUsersInner() {
             .map(student => ({ studentId: student.id, name: student.name, group: student.group }));
     }, [credentialBatchExpectedStudents, displayStudents]);
     const hasStudentRosterData = displayStudents.length > 0;
-    const rosterMutationsDisabled = rosterLoadState.state === "loading" || rosterLoadState.state === "error_without_cache";
     // Keep the established controls while the client snapshot is hydrating, then
     // collapse to the single empty-state action set when the real roster is empty.
-    const showStudentListControls = !rosterMutationsDisabled && (!hydrated || hasStudentRosterData);
+    const showStudentListControls = !hydrated || hasStudentRosterData;
 
     const displayGroups = useMemo(() => (
         recomputeRosterGroupsFromStudents(displayStudents, rosterGroups)
@@ -791,6 +810,10 @@ function ManageUsersInner() {
 
     // Detail-panel button handlers
     const handleSendMessage = () => {
+        if (rosterMutationsDisabled) {
+            toast.info("읽기 전용 명단", "최신 서버 명단을 확인한 뒤 메시지를 준비할 수 있습니다.");
+            return;
+        }
         if (isDemoRoster) {
             toast.info("데모 명단은 전송하지 않음", "실제 학생을 추가하거나 CSV로 업로드한 뒤 카카오 메시지를 준비할 수 있습니다.");
             return;
@@ -1017,7 +1040,7 @@ function ManageUsersInner() {
 
     // ===== Bulk selection =====
     const toggleSelect = (id: string) => {
-        if (isDemoRoster) return;
+        if (isDemoRoster || rosterMutationsDisabled) return;
         setSelectedIds(prev => {
             const n = new Set(prev);
             if (n.has(id)) n.delete(id); else n.add(id);
@@ -1025,7 +1048,7 @@ function ManageUsersInner() {
         });
     };
     const toggleSelectAll = (visibleIds: string[]) => {
-        if (isDemoRoster) return;
+        if (isDemoRoster || rosterMutationsDisabled) return;
         setSelectedIds(prev => {
             const allSelected = visibleIds.every(id => prev.has(id));
             if (allSelected) {
@@ -1041,6 +1064,10 @@ function ManageUsersInner() {
     const clearSelection = () => setSelectedIds(new Set());
 
     const openStudentCredentialBatch = (studentIds: readonly string[]) => {
+        if (rosterMutationsDisabled) {
+            toast.info("읽기 전용 명단", "최신 서버 명단을 확인한 뒤 시작 코드를 발급할 수 있습니다.");
+            return;
+        }
         if (isDemoRoster) {
             toast.info("실제 학생에서만 코드 발급", "저장된 명단의 학생을 선택한 뒤 시작 코드를 발급할 수 있습니다.");
             return;
@@ -1322,6 +1349,10 @@ function ManageUsersInner() {
 
     // ===== CSV upload (T1/T5): parse → dry-run preview → confirm to commit =====
     const handleCsvFile = async (file: File) => {
+        if (rosterMutationsDisabled) {
+            toast.info("읽기 전용 명단", "최신 서버 명단을 확인한 뒤 CSV를 가져올 수 있습니다.");
+            return;
+        }
         try {
             // Read raw bytes so legacy Korean Excel exports (CP949/EUC-KR) don't become
             // mojibake — File.text() would force UTF-8.
@@ -1436,6 +1467,7 @@ function ManageUsersInner() {
                         ref={fileInputRef}
                         type="file"
                         accept=".csv"
+                        disabled={rosterMutationsDisabled}
                         style={{ display: 'none' }}
                         onChange={(e) => {
                             const f = e.target.files?.[0];
@@ -1443,7 +1475,7 @@ function ManageUsersInner() {
                             if (fileInputRef.current) fileInputRef.current.value = "";
                         }}
                     />
-                    {(tab !== "students" || showStudentListControls) && <div className="teacher-users-desktop-actions" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    {!rosterMutationsDisabled && (tab !== "students" || showStudentListControls) && <div className="teacher-users-desktop-actions" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                         <button
                             onClick={() => fileInputRef.current?.click()}
                             style={{
@@ -1486,7 +1518,7 @@ function ManageUsersInner() {
                         style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '1rem 1.1rem', marginBottom: '1.5rem', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 'var(--radius-lg)', background: 'rgba(245,158,11,0.08)', flexWrap: 'wrap' }}
                     >
                         <div>
-                            <strong>저장된 데이터를 표시 중</strong>
+                            <strong>저장된 데이터를 읽기 전용으로 표시 중</strong>
                             <p className="text-muted" style={{ marginTop: '0.25rem' }}>
                                 마지막 저장 {new Date(rosterLoadState.staleAt).toLocaleString('ko-KR')} · 서버 명단을 다시 확인해주세요.
                             </p>
@@ -1558,7 +1590,7 @@ function ManageUsersInner() {
                             <div><span>반</span><strong>{displayGroups.length}개</strong></div>
                         </section>
 
-                        <div className="teacher-users-mobile-page-actions mobile-action-row" role="group" aria-label="명단 작업">
+                        {!rosterMutationsDisabled && <div className="teacher-users-mobile-page-actions mobile-action-row" role="group" aria-label="명단 작업">
                             {tab === "groups" ? (
                                 <button
                                     type="button"
@@ -1583,7 +1615,7 @@ function ManageUsersInner() {
                             >
                                 <Upload size={16} /> CSV 업로드
                             </button>
-                        </div>
+                        </div>}
 
                         {attemptAnalyticsAvailable && <details className="teacher-users-analysis">
                             <summary>
@@ -1819,8 +1851,8 @@ function ManageUsersInner() {
                                                     ref={el => { if (el) el.indeterminate = filtered.some(s => selectedIds.has(s.id)) && !filtered.every(s => selectedIds.has(s.id)); }}
                                                     onChange={() => toggleSelectAll(filtered.map(s => s.id))}
                                                     onClick={e => e.stopPropagation()}
-                                                    disabled={isDemoRoster}
-                                                    style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
+                                                    disabled={isDemoRoster || rosterMutationsDisabled}
+                                                    style={{ cursor: isDemoRoster || rosterMutationsDisabled ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
                                                 />
                                             </th>
                                             <th style={{ padding: '0.85rem 0.5rem' }} aria-sort={sortAriaValue(sortState, "name")}>
@@ -1854,8 +1886,8 @@ function ManageUsersInner() {
                                                         aria-label={`${s.name} 선택`}
                                                         checked={selectedIds.has(s.id)}
                                                         onChange={() => toggleSelect(s.id)}
-                                                        disabled={isDemoRoster}
-                                                        style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
+                                                        disabled={isDemoRoster || rosterMutationsDisabled}
+                                                        style={{ cursor: isDemoRoster || rosterMutationsDisabled ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
                                                     />
                                                 </td>
                                                 <td style={{ padding: '0.85rem 0.5rem' }}>
@@ -1891,7 +1923,7 @@ function ManageUsersInner() {
                                                     data-teacher-user-popover-root
                                                     style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}
                                                 >
-                                                    {!isDemoRoster && (
+                                                    {!isDemoRoster && !rosterMutationsDisabled && (
                                                         <button
                                                             aria-label={`${s.name} 작업 메뉴 열기`}
                                                             onClick={(e) => {
@@ -1967,7 +1999,7 @@ function ManageUsersInner() {
                                                         aria-label={`${s.name} 선택`}
                                                         checked={selectedIds.has(s.id)}
                                                         onChange={() => toggleSelect(s.id)}
-                                                        disabled={isDemoRoster}
+                                                        disabled={isDemoRoster || rosterMutationsDisabled}
                                                     />
                                                 </label>
                                             </div>
@@ -2132,9 +2164,9 @@ function ManageUsersInner() {
                                     </div>
                                     <div style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.35rem' }}>아직 등록된 학생이 없습니다</div>
                                     <div style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>
-                                        학생을 추가하거나 CSV로 업로드해서 시작하세요.
+                                        {rosterMutationsDisabled ? "저장된 명단을 읽기 전용으로 확인 중입니다. 최신 서버 명단을 다시 불러오세요." : "학생을 추가하거나 CSV로 업로드해서 시작하세요."}
                                     </div>
-                                    <div style={{ display: 'inline-flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                                    {!rosterMutationsDisabled && <div style={{ display: 'inline-flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
                                         <button
                                             onClick={() => { setEditingStudent(null); setShowStudentModal(true); }}
                                             style={{
@@ -2154,7 +2186,7 @@ function ManageUsersInner() {
                                             }}>
                                             <Upload size={14} /> CSV 업로드
                                         </button>
-                                    </div>
+                                    </div>}
                                 </div>
                             )}
                             {hydrated && showStudentListControls && filtered.length === 0 && (
@@ -2250,7 +2282,7 @@ function ManageUsersInner() {
                                         시작 코드는 화면·클립보드·브라우저 저장소에 보관하지 않고 일회용 CSV로만 내려받습니다.
                                     </p>
                                 </div>
-                                <div data-testid="student-start-code-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
+                                {!rosterMutationsDisabled && <div data-testid="student-start-code-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.7rem' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
                                             <KeyRound size={13} />
@@ -2270,7 +2302,7 @@ function ManageUsersInner() {
                                     >
                                         <KeyRound size={14} /> {selectedCredentialIssued ? '새 코드 재발급' : '시작 코드 발급'}
                                     </button>
-                                </div>
+                                </div>}
                                 <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
                                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>최근 응시 이력</div>
                                     {selectedRecentAttempts.length === 0 ? (
@@ -2333,9 +2365,9 @@ function ManageUsersInner() {
                                     )}
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <button onClick={handleSendMessage} style={{ flex: '1 1 120px', minHeight: 44, padding: '0.7rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
+                                    {!rosterMutationsDisabled && <button onClick={handleSendMessage} style={{ flex: '1 1 120px', minHeight: 44, padding: '0.7rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
                                         <MessageCircle size={14} /> 메시지
-                                    </button>
+                                    </button>}
                                     {latestStableAttempt ? (
                                         <NextLink
                                             href={buildStudentResultHref(latestStableAttempt.id, "report")}
@@ -2361,7 +2393,7 @@ function ManageUsersInner() {
                                         <button onClick={handleOpenDetail} style={{ flex: '1 1 120px', minHeight: 44, padding: '0.7rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem' }}>
                                             상세 보기
                                         </button>
-                                    ) : (
+                                    ) : !rosterMutationsDisabled ? (
                                         <NextLink
                                             href="/teacher/billing"
                                             title="Pro 이상에서 학생 성장 리포트를 열 수 있습니다."
@@ -2384,7 +2416,7 @@ function ManageUsersInner() {
                                             <Lock size={14} />
                                             성장 리포트 Pro
                                         </NextLink>
-                                    )}
+                                    ) : null}
                                     {latestStableAttempt && studentGrowthReportsEnabled && (
                                         <button
                                             type="button"
@@ -2416,6 +2448,7 @@ function ManageUsersInner() {
                         displayStudents={displayStudents}
                         analyticsAvailable={attemptAnalyticsAvailable}
                         isDemoRoster={isDemoRoster}
+                        readOnly={rosterMutationsDisabled}
                         advancedAnalyticsEnabled={advancedAnalyticsEnabled}
                         handleOpenGroupProfile={handleOpenGroupProfile}
                         handleAddStudentToGroup={handleAddStudentToGroup}
@@ -2434,6 +2467,7 @@ function ManageUsersInner() {
                         copyFlash={copyFlash}
                         hydrated={hydrated}
                         rosterInvites={rosterInvites}
+                        readOnly={rosterMutationsDisabled}
                         handleCopyInvite={handleCopyInvite}
                         handleResendInvite={handleResendInvite}
                         handleCancelInvite={handleCancelInvite}
@@ -2443,7 +2477,7 @@ function ManageUsersInner() {
             </main>
 
             {/* Student Modal (add/edit) */}
-            {showStudentModal && (
+            {!rosterMutationsDisabled && showStudentModal && (
                 <StudentModal
                     groups={rosterGroups}
                     initial={editingStudent}
@@ -2463,7 +2497,7 @@ function ManageUsersInner() {
             )}
 
             {/* Group Modal */}
-            {showGroupModal && (
+            {!rosterMutationsDisabled && showGroupModal && (
                 <GroupModal
                     initial={editingGroup}
                     onClose={() => {
@@ -2490,7 +2524,7 @@ function ManageUsersInner() {
             )}
 
             {/* Invite Modal */}
-            {showInviteModal && (
+            {!rosterMutationsDisabled && showInviteModal && (
                 <InviteModal
                     onClose={() => setShowInviteModal(false)}
                     onSubmit={(email) => {
@@ -2500,7 +2534,7 @@ function ManageUsersInner() {
             )}
 
             {/* Message Modal */}
-            {showMessageModal && selected && (
+            {!rosterMutationsDisabled && showMessageModal && selected && (
                 <MessageModal
                     recipient={selected.name}
                     onClose={() => setShowMessageModal(false)}
@@ -2522,7 +2556,7 @@ function ManageUsersInner() {
             )}
 
             {/* Confirm Modal */}
-            {confirmAction && (
+            {!rosterMutationsDisabled && confirmAction && (
                 <ConfirmModal
                     action={confirmAction}
                     onClose={() => setConfirmAction(null)}
@@ -2531,7 +2565,7 @@ function ManageUsersInner() {
             )}
 
             {/* Group Move Modal (DEV-A / T4) */}
-            {showGroupMoveModal && (
+            {!rosterMutationsDisabled && showGroupMoveModal && (
                 <GroupMoveModal
                     groups={groups}
                     count={selectedIds.size}
@@ -2542,7 +2576,7 @@ function ManageUsersInner() {
             )}
 
             {/* CSV import preview (T1/T5): dry-run before committing */}
-            {csvPreview && (
+            {!rosterMutationsDisabled && csvPreview && (
                 <CsvImportPreviewModal
                     plan={csvPreview}
                     onClose={() => setCsvPreview(null)}
@@ -2550,7 +2584,7 @@ function ManageUsersInner() {
                 />
             )}
 
-            {credentialBatchExpectedStudents && (
+            {!rosterMutationsDisabled && credentialBatchExpectedStudents && (
                 <StudentCredentialBatchDialog
                     open
                     expectedStudents={credentialBatchExpectedStudents}

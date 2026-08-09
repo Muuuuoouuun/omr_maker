@@ -16,6 +16,7 @@ type AssignmentCard = (Exam | SolvableExam | StudentAssignmentPreview | ReviewOn
 interface AssignmentBlockProps {
   exams: AssignmentCard[];
   type: "todo" | "done";
+  readOnly?: boolean;
 }
 
 const KOREAN_ASSIGNMENT_TIME = new Intl.DateTimeFormat("ko-KR", {
@@ -100,7 +101,7 @@ function assignmentSolveHref(exam: AssignmentCard): string {
   return `/solve/${exam.id}?${query.toString()}`;
 }
 
-export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
+export default function AssignmentBlock({ exams, type, readOnly = false }: AssignmentBlockProps) {
   const isTodo = type === "todo";
 
   return (
@@ -201,6 +202,7 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
               key={("assignmentId" in exam && exam.assignmentId) || exam.id}
               data-testid="student-assignment-row"
               data-assignment-id={exam.id}
+              data-read-only={readOnly ? "true" : "false"}
               className={`student-assignment-row${isTodo ? " card-hover" : ""}`}
               style={{
                 padding: "1.1rem 1.25rem",
@@ -305,7 +307,15 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                 </div>
               </div>
 
-              {isTodo && availability.lifecycle === "open" ? (
+              {isTodo && readOnly ? (
+                <span
+                  className="btn btn-secondary student-assignment-action"
+                  aria-disabled="true"
+                  style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
+                >
+                  읽기 전용
+                </span>
+              ) : isTodo && availability.lifecycle === "open" ? (
                 <Link
                   href={assignmentSolveHref(exam)}
                   className="btn btn-primary student-assignment-action"

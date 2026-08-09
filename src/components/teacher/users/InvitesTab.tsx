@@ -12,6 +12,7 @@ interface InvitesTabProps {
     copyFlash: boolean;
     hydrated: boolean;
     rosterInvites: RosterInvite[];
+    readOnly: boolean;
     handleCopyInvite: () => void | Promise<void>;
     handleResendInvite: (id: string) => void;
     handleCancelInvite: (id: string) => void;
@@ -22,6 +23,7 @@ export default function InvitesTab({
     copyFlash,
     hydrated,
     rosterInvites,
+    readOnly,
     handleCopyInvite,
     handleResendInvite,
     handleCancelInvite,
@@ -45,14 +47,14 @@ export default function InvitesTab({
                             {copyFlash && (
                                 <span style={{ fontSize: '0.8rem', color: 'var(--success)', fontWeight: 700 }}>복사됨</span>
                             )}
-                            <button
+                            {!readOnly && <button
                                 type="button"
                                 className="teacher-invite-action"
                                 onClick={handleCopyInvite}
                                 style={{ padding: '0.5rem 1rem', background: 'var(--surface)', color: 'var(--primary)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.8rem' }}
                             >
                                 발급 안내
-                            </button>
+                            </button>}
                             <button
                                 type="button"
                                 className="teacher-invite-action"
@@ -89,7 +91,7 @@ export default function InvitesTab({
                                                 <StatusPill tone={m.tone} label={m.label} size="sm" />
                                             </td>
                                             <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
-                                                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                                                {!readOnly && <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
                                                     {inv.status !== "accepted" && (
                                                         <button
                                                             onClick={() => handleResendInvite(inv.id)}
@@ -104,7 +106,7 @@ export default function InvitesTab({
                                                     >
                                                         취소
                                                     </button>
-                                                </div>
+                                                </div>}
                                             </td>
                                         </tr>
                                     );
@@ -114,7 +116,9 @@ export default function InvitesTab({
                         </div>
                         {hydrated && rosterInvites.length === 0 && (
                             <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
-                                아직 저장된 초대 기록이 없습니다. 위의 <strong style={{ color: 'var(--primary)' }}>카카오 초대 기록</strong> 버튼으로 시작하세요.
+                                {readOnly
+                                    ? "저장된 초대 기록이 없습니다. 최신 서버 명단을 다시 불러오세요."
+                                    : <>아직 저장된 초대 기록이 없습니다. 위의 <strong style={{ color: 'var(--primary)' }}>카카오 초대 기록</strong> 버튼으로 시작하세요.</>}
                             </div>
                         )}
                     </div>
