@@ -22,7 +22,7 @@ const StudentAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/St
     ssr: false,
     loading: () => <AnalyticsTabSkeleton />,
 });
-// Only ever rendered for the ?showcase=1 demo account, but a static import made
+// Only ever rendered for the signed mockup account, but a static import made
 // it the one thing that still pulled recharts into every teacher's initial
 // dashboard bundle — cancelling out the two dynamic() calls above.
 const MockupOverview = dynamic(() => import("@/components/dashboard/MockupOverview"), {
@@ -133,11 +133,10 @@ function TeacherDashboard() {
     const initialTab = normalizeDashboardTab(searchParams.get('tab'));
     const initialExamId = searchParams.get('examId') || undefined;
     const [activeTab, setActiveTab] = useState<TabType>(initialTab);
-    const showcaseRequested = searchParams.get("showcase") === "1";
-    const [isMockupAccount, setIsMockupAccount] = useState(showcaseRequested);
-    const [isAccountModeResolved, setIsAccountModeResolved] = useState(showcaseRequested);
+    const [isMockupAccount, setIsMockupAccount] = useState(false);
+    const [isAccountModeResolved, setIsAccountModeResolved] = useState(false);
     useEffect(() => {
-        setIsMockupAccount(previous => previous || isMockupTeacherIdentity(readTeacherSession()));
+        setIsMockupAccount(isMockupTeacherIdentity(readTeacherSession()));
         setIsAccountModeResolved(true);
     }, []);
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(initialExamId);

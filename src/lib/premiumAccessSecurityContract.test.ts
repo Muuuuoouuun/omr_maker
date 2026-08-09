@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { MOCKUP_TEACHER_ID } from "./mockupAccount";
+import { MOCKUP_TEACHER_ID, MOCKUP_TEACHER_IDENTITY } from "./mockupAccount";
 import { createSignedTeacherSessionCookie } from "./teacherServerSession";
 import { TEACHER_SESSION_TTL_MS } from "./teacherSession";
 
@@ -49,6 +49,15 @@ function signTeacher(teacherId: string, issuedAt = Date.now()) {
     cookieState.value = createSignedTeacherSessionCookie(
         TOKEN,
         { teacherId },
+        { NODE_ENV: process.env.NODE_ENV, TEACHER_SESSION_SECRET: SESSION_SECRET },
+        issuedAt,
+    ) || undefined;
+}
+
+function signExactMockupTeacher(issuedAt = Date.now()) {
+    cookieState.value = createSignedTeacherSessionCookie(
+        TOKEN,
+        { ...MOCKUP_TEACHER_IDENTITY, sessionAuthority: "mockup" },
         { NODE_ENV: process.env.NODE_ENV, TEACHER_SESSION_SECRET: SESSION_SECRET },
         issuedAt,
     ) || undefined;
@@ -140,7 +149,7 @@ describe("premium access local fallback security contract", () => {
 
     it("shows Academy display entitlements only for the signed mockup teacher", async () => {
         configureUnhostedRuntime("test");
-        signTeacher(MOCKUP_TEACHER_ID);
+        signExactMockupTeacher();
 
         await expect(getServerPlanSnapshot()).resolves.toMatchObject({
             authenticated: true,
@@ -149,9 +158,15 @@ describe("premium access local fallback security contract", () => {
             plan: "academy",
         });
         await expect(authorizeExamCreation("mockup-mutation-stays-free")).resolves.toMatchObject({
-            ok: true,
-            access: { plan: "free" },
-            quota: { limit: 5 },
+            ok: false,
+            access: { authenticated: false, authoritative: false, plan: "free" },
         });
+    });
+
+    it("does not trust the showcase query parameter as mockup authority", () => {
+        const dashboardPage = readFileSync("src/app/teacher/dashboard/page.tsx", "utf8");
+
+        expect(dashboardPage).not.toContain("useState(showcaseRequested)");
+        expect(dashboardPage).toContain("isMockupTeacherIdentity(readTeacherSession())");
     });
 });

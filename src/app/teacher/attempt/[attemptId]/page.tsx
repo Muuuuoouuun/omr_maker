@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import type { Attempt, AttemptFeedback, Exam, FeedbackDownloadPolicy, PdfDrawings } from "@/types/omr";
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
@@ -69,9 +70,10 @@ import StudentResultTabs from "@/components/teacher/student-results/StudentResul
 import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";
 import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";
 import HandwritingPanel from "@/components/teacher/student-results/HandwritingPanel";
-import ReportPanel from "@/components/teacher/student-results/ReportPanel";
 import type { StudentGrowthReportState } from "@/components/teacher/student-results/StudentGrowthReport";
 import styles from "@/components/teacher/student-results/StudentResultHub.module.css";
+
+const ReportPanel = dynamic(() => import("@/components/teacher/student-results/ReportPanel"));
 
 type AttemptDetailLoadStatus = "loading" | "ready" | "not_found" | "error";
 type CumulativeLoadStatus = "idle" | "loading" | "ready" | "partial" | "stale" | "error";
@@ -557,12 +559,17 @@ export default function TeacherAttemptPage() {
         if (cumulativeStatus === "stale" && cumulativeError && (!selectedGrowthAttempt || !growthReportModel)) {
             return { status: "error", message: cumulativeError };
         }
+        if (growthReportModel && !growthReportModel.selectedAttemptIncluded) {
+            return {
+                status: "error",
+                message: "선택한 응시가 누적 기록에서 확인되지 않아 성장 리포트를 표시하지 않습니다.",
+            };
+        }
         if (
             cumulativeStatus === "partial"
             && (
                 !selectedGrowthAttempt
                 || !growthReportModel
-                || !growthReportModel.selectedAttemptIncluded
             )
         ) {
             return {

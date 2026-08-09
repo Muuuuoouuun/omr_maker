@@ -1,7 +1,12 @@
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { rosterGroupMatchesStudent } from "@/lib/rosterStorage";
-import { baseAttemptsOnly, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
+import {
+    baseAttemptsOnly,
+    completedAttemptsOnly,
+    resolveAttemptScore,
+    retakeAttemptsOnly,
+} from "@/lib/attemptScores";
 import {
     buildLearningRecommendations,
     getAttemptQuestionResults,
@@ -292,9 +297,10 @@ export function buildRegionalLearningScopes(params: {
 }): RegionalLearningScope[] {
     const regions = new Map<string, RegionAccumulator>();
     const examById = new Map(params.exams.map(exam => [exam.id, exam]));
+    const completedAttempts = completedAttemptsOnly(params.attempts);
     const scopedAttempts = params.options?.includeRetakes
-        ? params.attempts
-        : baseAttemptsOnly(params.attempts);
+        ? completedAttempts
+        : baseAttemptsOnly(completedAttempts);
 
     for (const group of params.groups) {
         const region = ensureRegion(regions, regionNameForGroup(group, params.students));
@@ -309,7 +315,7 @@ export function buildRegionalLearningScopes(params: {
         region.groupNames.add(student.group);
     }
 
-    for (const attempt of retakeAttemptsOnly(params.attempts)) {
+    for (const attempt of retakeAttemptsOnly(completedAttempts)) {
         const region = ensureRegion(regions, regionNameForAttempt(attempt, params.students, params.groups));
         region.retakeAttemptCount += 1;
     }
@@ -370,9 +376,10 @@ export function buildRegionalActionPlans(params: {
     const riskLimit = Math.max(1, options.riskLimit ?? 5);
     const examById = new Map(params.exams.map(exam => [exam.id, exam]));
     const scopes = buildRegionalLearningScopes(params);
+    const completedAttempts = completedAttemptsOnly(params.attempts);
     const scopedAttempts = options.includeRetakes
-        ? params.attempts
-        : baseAttemptsOnly(params.attempts);
+        ? completedAttempts
+        : baseAttemptsOnly(completedAttempts);
     const attemptsByRegion = new Map<string, Attempt[]>();
 
     for (const attempt of scopedAttempts) {

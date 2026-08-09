@@ -1,6 +1,11 @@
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
-import { baseAttemptsOnly, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
+import {
+    baseAttemptsOnly,
+    completedAttemptsOnly,
+    resolveAttemptScore,
+    retakeAttemptsOnly,
+} from "@/lib/attemptScores";
 import { resolveAwayCount } from "@/lib/examAwayTracker";
 import {
     attemptElapsedTimeSec,
@@ -233,7 +238,7 @@ export function buildStudentProfileInsight(
     const weaknessLimit = Math.max(1, options.weaknessLimit ?? 6);
     const weaknessKinds = options.weaknessKinds?.length ? options.weaknessKinds : DEFAULT_WEAKNESS_KINDS;
 
-    const matchedAttempts = attempts
+    const matchedAttempts = completedAttemptsOnly(attempts)
         .filter(attempt => attemptMatchesStudentProfile(attempt, student))
         .sort((a, b) => activityTime(b) - activityTime(a));
     const resolvedScoreByAttempt = new Map(matchedAttempts.map(attempt => [

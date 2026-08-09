@@ -56,6 +56,36 @@ function attempt(partial: Partial<Attempt>): Attempt {
 }
 
 describe("student profile analytics", () => {
+    it("keeps in-progress work out of submitted scores, history, and weakness evidence", () => {
+        const insight = buildStudentProfileInsight(student, [
+            attempt({
+                id: "submitted",
+                studentId: student.id,
+                score: 10,
+                totalScore: 15,
+                answers: { 1: 2, 2: 4, 3: 2 },
+            }),
+            attempt({
+                id: "draft",
+                studentId: student.id,
+                score: 15,
+                totalScore: 15,
+                answers: { 1: 2, 2: 4, 3: 1 },
+                status: "in_progress",
+                finishedAt: "2026-06-16T10:30:00.000Z",
+            }),
+        ], new Map([[exam.id, exam]]));
+
+        expect(insight.attempts.map(item => item.id)).toEqual(["submitted"]);
+        expect(insight).toMatchObject({
+            averageScore: 67,
+            latestScore: 67,
+            bestScore: 67,
+            baseAttemptCount: 1,
+        });
+        expect(insight.wrongQuestionCount).toBe(1);
+    });
+
     it("excludes completely ungraded attempts from score aggregates while preserving activity history", () => {
         const ungradedExam: Exam = {
             id: "exam-ungraded",

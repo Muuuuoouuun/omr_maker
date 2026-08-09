@@ -45,6 +45,10 @@ export function isRetakeAttempt(attempt: Attempt): boolean {
     return !!attempt.retake;
 }
 
+export function completedAttemptsOnly(attempts: Attempt[]): Attempt[] {
+    return attempts.filter(attempt => attempt.status === "completed");
+}
+
 export function baseAttemptsOnly(attempts: Attempt[]): Attempt[] {
     return attempts.filter(attempt => !isRetakeAttempt(attempt));
 }

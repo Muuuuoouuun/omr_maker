@@ -9,6 +9,7 @@ const homeBudget = CORE_ROUTE_PERFORMANCE_BUDGETS["/"];
 describe("route performance budget", () => {
     it("covers the heaviest teacher roster and student review routes", () => {
         expect(CORE_ROUTE_PERFORMANCE_BUDGETS).toHaveProperty("/teacher/users");
+        expect(CORE_ROUTE_PERFORMANCE_BUDGETS).toHaveProperty("/teacher/attempt/[attemptId]");
         expect(CORE_ROUTE_PERFORMANCE_BUDGETS).toHaveProperty("/student/review/[attemptId]");
     });
     it("accepts a complete core route whose raw and compressed bundles stay within budget", () => {

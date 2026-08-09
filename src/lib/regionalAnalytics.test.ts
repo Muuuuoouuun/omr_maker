@@ -69,6 +69,54 @@ function attempt(overrides: Partial<Attempt>): Attempt {
 }
 
 describe("regional analytics", () => {
+    it("excludes in-progress attempts from submitted performance and action evidence", () => {
+        const scopes = buildRegionalLearningScopes({
+            students,
+            groups,
+            attempts: [
+                attempt({
+                    id: "submitted",
+                    studentId: students[0].id,
+                    groupId: groups[0].id,
+                    groupName: groups[0].name,
+                    score: 60,
+                }),
+                attempt({
+                    id: "draft",
+                    studentId: students[0].id,
+                    groupId: groups[0].id,
+                    groupName: groups[0].name,
+                    score: 100,
+                    answers: { 1: 1, 2: 2 },
+                    status: "in_progress",
+                    finishedAt: "2026-06-15T10:00:00.000Z",
+                }),
+            ],
+            exams: [algebraExam],
+        });
+
+        expect(scopes.find(scope => scope.regionName === "서울")).toMatchObject({
+            attemptCount: 1,
+            averageScore: 0,
+        });
+
+        const plans = buildRegionalActionPlans({
+            students,
+            groups,
+            attempts: [attempt({
+                id: "draft-only",
+                studentId: students[0].id,
+                groupId: groups[0].id,
+                groupName: groups[0].name,
+                score: 100,
+                answers: { 1: 1, 2: 2 },
+                status: "in_progress",
+            })],
+            exams: [algebraExam],
+        });
+        expect(plans.every(plan => plan.attemptCount === 0 && plan.exams.length === 0)).toBe(true);
+    });
+
     it("keeps same-name students separated by region and class scope", () => {
         const scopes = buildRegionalLearningScopes({
             students,

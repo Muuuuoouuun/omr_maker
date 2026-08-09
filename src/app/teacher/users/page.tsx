@@ -32,7 +32,12 @@ import type { Attempt, Exam } from "@/types/omr";
 import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { readTeacherSession } from "@/lib/teacherSession";
-import { loadTeacherAttemptSummaries, loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import {
+    loadTeacherAttemptSummaries,
+    loadTeacherAttempts,
+    resolveTeacherAttemptCollectionCompleteness,
+    type TeacherAttemptCollectionLoadResult,
+} from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import {
     loadTeacherRosterSnapshot,
@@ -117,6 +122,10 @@ import {
 
 type TabType = "students" | "groups" | "invites";
 type RosterDataMode = "real" | "demo";
+
+function isCompleteTeacherAttemptCollection(result: TeacherAttemptCollectionLoadResult): boolean {
+    return resolveTeacherAttemptCollectionCompleteness(result) === "ready";
+}
 
 type PendingDeleteUndo = {
     id: number;
@@ -285,6 +294,7 @@ function ManageUsersInner() {
     const [invites, setInvites] = useState<RosterInvite[]>([]);
     const [rosterDataMode, setRosterDataMode] = useState<RosterDataMode>("real");
     const [allAttempts, setAllAttempts] = useState<Attempt[]>([]);
+    const [attemptAnalyticsStatus, setAttemptAnalyticsStatus] = useState<"loading" | "ready" | "unavailable">("loading");
     const [detailedAttempts, setDetailedAttempts] = useState<Attempt[] | null>(null);
     const detailedAttemptLoadRef = useRef<Promise<Attempt[] | null> | null>(null);
     const [exams, setExams] = useState<Exam[]>([]);
@@ -397,24 +407,46 @@ function ManageUsersInner() {
                 loadTeacherExams(),
             ]);
             if (cancelled) return;
-            setAllAttempts(attemptResult.items);
+            const isDemoSession = shouldUseDemoData(readTeacherSession());
+            const attemptAnalyticsComplete = isDemoSession || isCompleteTeacherAttemptCollection(attemptResult);
+            setAllAttempts(attemptAnalyticsComplete ? attemptResult.items : []);
+            setAttemptAnalyticsStatus(attemptAnalyticsComplete ? "ready" : "unavailable");
             setExams(examResult.items);
-            if ((attemptResult.remoteError || examResult.remoteError) && !shouldUseDemoData(readTeacherSession())) {
+            if (!attemptAnalyticsComplete && !attemptResult.remoteError) {
+                toast.error(
+                    "응시 분석 표본 불완전",
+                    "서버 응시 기록을 모두 불러오지 못해 평균·지역·학생 리포트를 표시하지 않습니다.",
+                );
+            }
+            if ((attemptResult.remoteError || examResult.remoteError) && !isDemoSession) {
                 if (
                     attemptResult.remoteError === INITIAL_CAPACITY_EXCEEDED_ERROR
                     || examResult.remoteError === INITIAL_CAPACITY_EXCEEDED_ERROR
                 ) {
                     toast.error("초기 운영 지원 범위 초과", INITIAL_CAPACITY_REMEDIATION_KO);
+                } else if (attemptResult.remoteError) {
+                    toast.info(
+                        "응시 분석을 일시 중단",
+                        "서버 응시 기록을 완전하게 확인할 수 없어 평균·지역·학생 리포트를 표시하지 않습니다.",
+                    );
                 } else {
                     toast.info(
-                        "로컬 응시 데이터 기준으로 표시 중",
-                        "서버 동기화가 일부 지연되어 학생 평균은 현재 기기 데이터로 계산했습니다."
+                        "시험 정보는 로컬 기준으로 표시 중",
+                        "서버 시험 정보 동기화가 지연되어 현재 기기 데이터를 우선 사용했습니다."
                     );
                 }
             }
         };
 
-        void loadRosterAnalytics();
+        void loadRosterAnalytics().catch(() => {
+            if (cancelled) return;
+            setAllAttempts([]);
+            setAttemptAnalyticsStatus("unavailable");
+            toast.error(
+                "응시 분석을 일시 중단",
+                "서버 응시 기록을 확인하지 못해 평균·지역·학생 리포트를 표시하지 않습니다.",
+            );
+        });
         return () => { cancelled = true; };
     }, []);
 
@@ -506,6 +538,7 @@ function ManageUsersInner() {
     ), [exams]);
 
     const isDemoRoster = rosterDataMode === "demo";
+    const attemptAnalyticsAvailable = isDemoRoster || attemptAnalyticsStatus === "ready";
     const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students;
     const rosterGroups = isDemoRoster ? MOCK_GROUPS : groups;
     const rosterInvites = isDemoRoster ? MOCK_INVITES : invites;
@@ -679,7 +712,16 @@ function ManageUsersInner() {
         if (detailedAttempts) return detailedAttempts;
         if (detailedAttemptLoadRef.current) return detailedAttemptLoadRef.current;
         const pending = loadTeacherAttempts().then(result => {
-            if (result.remoteError) throw new Error(result.remoteError);
+            if (result.remoteError) {
+                setAllAttempts([]);
+                setAttemptAnalyticsStatus("unavailable");
+                throw new Error(result.remoteError);
+            }
+            if (!isCompleteTeacherAttemptCollection(result)) {
+                setAllAttempts([]);
+                setAttemptAnalyticsStatus("unavailable");
+                throw new Error("서버 응시 기록을 모두 불러오지 못해 상세 분석을 중단했습니다.");
+            }
             setDetailedAttempts(result.items);
             return result.items;
         }).catch(error => {
@@ -1016,11 +1058,11 @@ function ManageUsersInner() {
                 s.email,
                 s.group,
                 rosterStudentRegionName(s, displayGroups),
-                s.avgScore,
-                s.examsTaken,
-                s.lastActive,
-                s.trend,
-                s.status,
+                attemptAnalyticsAvailable ? s.avgScore : "",
+                attemptAnalyticsAvailable ? s.examsTaken : "",
+                attemptAnalyticsAvailable ? s.lastActive : "",
+                attemptAnalyticsAvailable ? s.trend : "",
+                attemptAnalyticsAvailable ? s.status : "",
             ]),
         ]);
         const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
@@ -1374,11 +1416,38 @@ function ManageUsersInner() {
                     </div>
                 )}
 
+                {!isDemoRoster && attemptAnalyticsStatus === "unavailable" && (
+                    <div
+                        role="alert"
+                        aria-label="응시 분석 데이터 미표시"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '0.85rem',
+                            padding: '1rem 1.1rem',
+                            marginBottom: '1.5rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: '1px solid rgba(245,158,11,0.28)',
+                            background: 'rgba(245,158,11,0.09)',
+                        }}
+                    >
+                        <AlertTriangle size={19} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
+                        <div>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--warning)', marginBottom: '0.2rem' }}>
+                                응시 분석 데이터 미표시
+                            </div>
+                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55 }}>
+                                서버 응시 기록을 완전하게 확인할 수 없어 평균 점수·응시 수·최근 활동·지역 및 학생 리포트를 숨겼습니다.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
                 {(tab !== "students" || showStudentListControls) && (
                     <>
                         <section className="teacher-users-mobile-summary" aria-label="명단 핵심 지표">
                             <div><span>전체 학생</span><strong>{displayStudents.length}명</strong></div>
-                            <div><span>활동 중</span><strong>{displayStudents.filter(student => student.status === "active").length}명</strong></div>
+                            <div><span>활동 중</span><strong>{attemptAnalyticsAvailable ? `${displayStudents.filter(student => student.status === "active").length}명` : "—"}</strong></div>
                             <div><span>반</span><strong>{displayGroups.length}개</strong></div>
                         </section>
 
@@ -1409,7 +1478,7 @@ function ManageUsersInner() {
                             </button>
                         </div>
 
-                        <details className="teacher-users-analysis">
+                        {attemptAnalyticsAvailable && <details className="teacher-users-analysis">
                             <summary>
                                 <span>명단 분석</span>
                                 <small>학생 {displayStudents.length}명 · 반 {displayGroups.length}개 · 지역 {regionalScopes.length}곳</small>
@@ -1490,7 +1559,7 @@ function ManageUsersInner() {
                                     </div>
                                 )}
                             </div>
-                        </details>
+                        </details>}
                     </>
                 )}
 
@@ -1695,16 +1764,20 @@ function ManageUsersInner() {
                                                 <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{rosterStudentRegionName(s, displayGroups)}</td>
                                                 <td style={{ padding: '0.85rem 0.5rem' }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                                        <span style={{ fontSize: '0.95rem', fontWeight: 700, color: s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)' }}>{s.avgScore}</span>
-                                                        {s.trend === "up" && <TrendingUp size={14} color="var(--success)" />}
-                                                        {s.trend === "down" && <TrendingDown size={14} color="var(--error)" />}
+                                                        <span style={{ fontSize: '0.95rem', fontWeight: 700, color: attemptAnalyticsAvailable ? (s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)') : 'var(--muted)' }}>
+                                                            {attemptAnalyticsAvailable ? `${s.avgScore}` : "—"}
+                                                        </span>
+                                                        {attemptAnalyticsAvailable && s.trend === "up" && <TrendingUp size={14} color="var(--success)" />}
+                                                        {attemptAnalyticsAvailable && s.trend === "down" && <TrendingDown size={14} color="var(--error)" />}
                                                     </div>
                                                 </td>
-                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>{s.examsTaken}회</td>
+                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>
+                                                    {attemptAnalyticsAvailable ? `${s.examsTaken}회` : "—"}
+                                                </td>
                                                 <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
                                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                                                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.status === "active" ? 'var(--success)' : 'var(--muted)' }} />
-                                                        {s.lastActive}
+                                                        {attemptAnalyticsAvailable && <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.status === "active" ? 'var(--success)' : 'var(--muted)' }} />}
+                                                        {attemptAnalyticsAvailable ? s.lastActive : "—"}
                                                     </span>
                                                 </td>
                                                 <td
@@ -1762,7 +1835,9 @@ function ManageUsersInner() {
                             <div className="teacher-users-mobile-list" aria-label="학생 명단">
                                 {pagedStudents.map(s => {
                                     const regionName = rosterStudentRegionName(s, displayGroups);
-                                    const scoreTone = s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)';
+                                    const scoreTone = attemptAnalyticsAvailable
+                                        ? s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)'
+                                        : 'var(--muted)';
                                     return (
                                         <article
                                             key={s.id}
@@ -1796,23 +1871,23 @@ function ManageUsersInner() {
                                             </div>
 
                                             <div className="teacher-users-mobile-metrics">
-                                                <div aria-label={`평균 ${s.avgScore}점`}>
+                                                <div aria-label={attemptAnalyticsAvailable ? `평균 ${s.avgScore}점` : "평균 확인 불가"}>
                                                     <span>평균</span>
                                                     <strong style={{ color: scoreTone }}>
-                                                        {s.avgScore}점
-                                                        {s.trend === "up" && <TrendingUp size={13} aria-label="상승" />}
-                                                        {s.trend === "down" && <TrendingDown size={13} aria-label="하락" />}
+                                                        {attemptAnalyticsAvailable ? `${s.avgScore}점` : "—"}
+                                                        {attemptAnalyticsAvailable && s.trend === "up" && <TrendingUp size={13} aria-label="상승" />}
+                                                        {attemptAnalyticsAvailable && s.trend === "down" && <TrendingDown size={13} aria-label="하락" />}
                                                     </strong>
                                                 </div>
-                                                <div aria-label={`응시 ${s.examsTaken}회`}>
+                                                <div aria-label={attemptAnalyticsAvailable ? `응시 ${s.examsTaken}회` : "응시 수 확인 불가"}>
                                                     <span>응시</span>
-                                                    <strong>{s.examsTaken}회</strong>
+                                                    <strong>{attemptAnalyticsAvailable ? `${s.examsTaken}회` : "—"}</strong>
                                                 </div>
-                                                <div aria-label={`최근 활동 ${s.lastActive}`}>
+                                                <div aria-label={attemptAnalyticsAvailable ? `최근 활동 ${s.lastActive}` : "최근 활동 확인 불가"}>
                                                     <span>최근 활동</span>
                                                     <strong>
-                                                        <i className={s.status === "active" ? "is-active" : undefined} aria-hidden="true" />
-                                                        {s.lastActive}
+                                                        {attemptAnalyticsAvailable && <i className={s.status === "active" ? "is-active" : undefined} aria-hidden="true" />}
+                                                        {attemptAnalyticsAvailable ? s.lastActive : "—"}
                                                     </strong>
                                                 </div>
                                             </div>
@@ -2038,10 +2113,10 @@ function ManageUsersInner() {
                                     </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.6rem', marginBottom: '1.25rem' }}>
-                                    <MiniStat label="원시험 평균" value={`${selected.avgScore}점`} color="#4f46e5" />
-                                    <MiniStat label="원시험" value={`${selected.examsTaken}회`} color="#10b981" />
-                                    <MiniStat label="재시험" value={`${selectedProfile?.retakeAttemptCount ?? 0}회`} color="#0f766e" />
-                                    <MiniStat label="필기 보관" value={`${selectedHandwritingCount}건`} color="#8b5cf6" />
+                                    <MiniStat label="원시험 평균" value={attemptAnalyticsAvailable ? `${selected.avgScore}점` : "—"} color="#4f46e5" />
+                                    <MiniStat label="원시험" value={attemptAnalyticsAvailable ? `${selected.examsTaken}회` : "—"} color="#10b981" />
+                                    <MiniStat label="재시험" value={attemptAnalyticsAvailable ? `${selectedProfile?.retakeAttemptCount ?? 0}회` : "—"} color="#0f766e" />
+                                    <MiniStat label="필기 보관" value={attemptAnalyticsAvailable ? `${selectedHandwritingCount}건` : "—"} color="#8b5cf6" />
                                 </div>
                                 <div data-testid="student-login-guide-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.75rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
@@ -2232,6 +2307,7 @@ function ManageUsersInner() {
                     <GroupsTab
                         displayGroups={displayGroups}
                         displayStudents={displayStudents}
+                        analyticsAvailable={attemptAnalyticsAvailable}
                         isDemoRoster={isDemoRoster}
                         advancedAnalyticsEnabled={advancedAnalyticsEnabled}
                         handleOpenGroupProfile={handleOpenGroupProfile}

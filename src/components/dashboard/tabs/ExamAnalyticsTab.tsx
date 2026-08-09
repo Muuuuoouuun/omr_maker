@@ -46,6 +46,7 @@ import {
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
 import { computeGroupScoreSummary, computeScoreDistribution } from "@/lib/scoreDistribution";
+import { completedAttemptsOnly } from "@/lib/attemptScores";
 import type { LearningRecommendation } from "@/lib/premiumAnalytics";
 import { buildQuestionBankReadiness, type QuestionBankReadinessStatus } from "@/lib/questionBank";
 import {
@@ -437,7 +438,9 @@ export default function ExamAnalyticsTab({
     }, [exams, selectedExamId]);
 
     const selectedExam = useMemo(() => exams.find(e => e.id === selectedExamId), [exams, selectedExamId]);
-    const allSelectedExamAttempts = useMemo(() => attempts.filter(a => a.examId === selectedExamId), [attempts, selectedExamId]);
+    const allSelectedExamAttempts = useMemo(() => (
+        completedAttemptsOnly(attempts.filter(attempt => attempt.examId === selectedExamId))
+    ), [attempts, selectedExamId]);
     const baseExamAttempts = useMemo(() => allSelectedExamAttempts.filter(a => !a.retake), [allSelectedExamAttempts]);
     const regionScopeOptions = useMemo(() => (
         buildRegionalLearningScopes({
@@ -1035,22 +1038,31 @@ export default function ExamAnalyticsTab({
 
     const studentWeaknessByAttemptId = useMemo(() => {
         const map = new Map<string, LearningRecommendation>();
+        if (activeWorkspaceView !== "students" || !advancedAnalyticsEnabled) return map;
         if (!selectedExam || examAttempts.length === 0) return map;
 
+        const attemptsByStudentKey = new Map<string, typeof examAttempts>();
         for (const attempt of examAttempts) {
             if (!hasGradableAttemptScore(summarizeAttemptScore(selectedExam, attempt))) continue;
             const studentKey = studentScopeKeyForAttempt(attempt);
-            const topGroup = buildLearningRecommendations(selectedExam, examAttempts, {
+            const bucket = attemptsByStudentKey.get(studentKey) || [];
+            bucket.push(attempt);
+            attemptsByStudentKey.set(studentKey, bucket);
+        }
+
+        for (const [studentKey, studentAttempts] of attemptsByStudentKey) {
+            const topGroup = buildLearningRecommendations(selectedExam, studentAttempts, {
                 scope: "student",
                 studentKey,
                 kinds: ["concept"],
                 limit: 1,
             })[0];
-            if (topGroup) map.set(attempt.id, topGroup);
+            if (!topGroup) continue;
+            for (const attempt of studentAttempts) map.set(attempt.id, topGroup);
         }
 
         return map;
-    }, [selectedExam, examAttempts]);
+    }, [activeWorkspaceView, advancedAnalyticsEnabled, selectedExam, examAttempts]);
 
     const scopedWeaknessGroups = useMemo(() => {
         // Feeds the Pro-gated 분석 컷 전환 section only.

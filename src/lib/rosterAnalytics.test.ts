@@ -85,6 +85,20 @@ describe("roster analytics", () => {
         expect(performance.attempts.map(item => item.id)).toEqual(["retake", "base"]);
     });
 
+    it("does not publish unfinished attempts as roster performance or activity", () => {
+        const fallback = { ...student, avgScore: 0, examsTaken: 0, lastActive: "기록 없음" };
+        const performance = buildRosterStudentPerformance(fallback, [
+            attempt("draft", { 1: 1, 2: 2 }, "2026-06-15T10:00:00.000Z", { status: "in_progress" }),
+        ], new Map([[exam.id, exam]]), Date.parse("2026-06-15T12:00:00.000Z"));
+
+        expect(performance).toMatchObject({
+            avgScore: 0,
+            examsTaken: 0,
+            lastActive: "기록 없음",
+            attempts: [],
+        });
+    });
+
     it("keeps roster fallback values when no attempts exist", () => {
         const fallback = { ...student, avgScore: 82, examsTaken: 3, lastActive: "어제", status: "active" as const };
 

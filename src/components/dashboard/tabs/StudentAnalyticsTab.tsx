@@ -19,7 +19,7 @@ import {
     studentScopeKeyForAttempt,
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
-import { baseAttemptsOnly, buildAttemptScoreLookup, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
+import { baseAttemptsOnly, buildAttemptScoreLookup, completedAttemptsOnly, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { computeRankPercentile } from "@/lib/scoreDistribution";
 import {
     buildRegionalLearningScopes,
@@ -77,14 +77,15 @@ export default function StudentAnalyticsTab({
     currentPlan = "free",
 }: StudentAnalyticsTabProps) {
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
+    const analyticsAttempts = useMemo(() => completedAttemptsOnly(attempts), [attempts]);
     const regionScopeOptions = useMemo(() => (
         buildRegionalLearningScopes({
             students: rosterStudents,
             groups: rosterGroups,
-            attempts,
+            attempts: analyticsAttempts,
             exams,
         }).filter(scope => scope.attemptCount > 0)
-    ), [attempts, exams, rosterGroups, rosterStudents]);
+    ), [analyticsAttempts, exams, rosterGroups, rosterStudents]);
     const activeRegionKey = selectedRegionKey === ALL_REGION_KEY || regionScopeOptions.some(scope => scope.regionKey === selectedRegionKey)
         ? selectedRegionKey
         : ALL_REGION_KEY;
@@ -92,9 +93,9 @@ export default function StudentAnalyticsTab({
     const activeRegionLabel = activeRegionKey === ALL_REGION_KEY ? "전체 지역" : regionalScopeLabel(activeRegionScope);
     const scopedAttempts = useMemo(() => (
         activeRegionKey === ALL_REGION_KEY
-            ? attempts
-            : filterAttemptsByRegion(attempts, activeRegionKey, rosterStudents, rosterGroups)
-    ), [activeRegionKey, attempts, rosterGroups, rosterStudents]);
+            ? analyticsAttempts
+            : filterAttemptsByRegion(analyticsAttempts, activeRegionKey, rosterStudents, rosterGroups)
+    ), [activeRegionKey, analyticsAttempts, rosterGroups, rosterStudents]);
     const baseScopedAttempts = useMemo(() => baseAttemptsOnly(scopedAttempts), [scopedAttempts]);
     const retakeScopedAttempts = useMemo(() => retakeAttemptsOnly(scopedAttempts), [scopedAttempts]);
 

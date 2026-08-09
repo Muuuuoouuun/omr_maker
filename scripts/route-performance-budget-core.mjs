@@ -13,6 +13,7 @@ export const CORE_ROUTE_PERFORMANCE_BUDGETS = Object.freeze({
     "/teacher/dashboard": Object.freeze({ maximumUncompressedBytes: 930_000, maximumCompressedBytes: 285_000 }),
     "/teacher/live": Object.freeze({ maximumUncompressedBytes: 870_000, maximumCompressedBytes: 265_000 }),
     "/teacher/users": Object.freeze({ maximumUncompressedBytes: 1_010_000, maximumCompressedBytes: 310_000 }),
+    "/teacher/attempt/[attemptId]": Object.freeze({ maximumUncompressedBytes: 850_000, maximumCompressedBytes: 260_000 }),
     "/student/review/[attemptId]": Object.freeze({ maximumUncompressedBytes: 840_000, maximumCompressedBytes: 260_000 }),
 });
 

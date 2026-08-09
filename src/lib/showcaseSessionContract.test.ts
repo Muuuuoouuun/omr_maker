@@ -36,7 +36,11 @@ describe("production showcase session contract", () => {
         expect(notifications).toContain("notificationActionContext(true)");
         for (const name of readdirSync(resolve(process.cwd(), "src/app/actions"))) {
             if (!name.endsWith(".ts")) continue;
+            if (name === "premiumAccess.ts") continue;
             expect(source(`src/app/actions/${name}`), name).not.toContain("allowMockup: true");
         }
+        const premiumAccess = source("src/app/actions/premiumAccess.ts");
+        expect(premiumAccess).toMatch(/getServerPlanSnapshot[\s\S]*accessAndStore\(\{ allowMockup: true \}\)/);
+        expect(premiumAccess.match(/allowMockup: true/g)).toHaveLength(1);
     });
 });

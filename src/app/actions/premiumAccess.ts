@@ -33,14 +33,15 @@ export interface PremiumMutationGuardResult {
     error?: string;
 }
 
-async function signedTeacherSession() {
+async function signedTeacherSession(options: { allowMockup?: boolean } = {}) {
     return resolveAuthorizedTeacherSessionCookie(
         (await cookies()).get(TEACHER_SERVER_SESSION_COOKIE)?.value,
+        { allowMockup: options.allowMockup === true },
     );
 }
 
-async function accessAndStore() {
-    const session = await signedTeacherSession();
+async function accessAndStore(options: { allowMockup?: boolean } = {}) {
+    const session = await signedTeacherSession(options);
     let store = createServerPlanStoreFromEnv(process.env, session);
 
     // Local development must still support the complete teacher workflow when
@@ -68,7 +69,7 @@ function limitsFor(access: ServerPlanAccess): Record<PlanLimitMetric, number> {
 
 /** Authoritative server snapshot for client display. localStorage is never consulted. */
 export async function getServerPlanSnapshot(): Promise<ServerPlanSnapshot> {
-    const { access, store, session } = await accessAndStore();
+    const { access, store, session } = await accessAndStore({ allowMockup: true });
     const displayAccess = isMockupTeacherIdentity(session)
         ? { ...access, plan: "academy" as const }
         : access;

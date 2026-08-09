@@ -21,6 +21,49 @@ describe("dashboard loading performance surface", () => {
         expect(overviewTab).toContain('() => import("@/components/dashboard/TrendChart")');
     });
 
+    it("filters unfinished attempts before building submitted exam analytics", () => {
+        const examAnalyticsTab = readProjectFile("src/components/dashboard/tabs/ExamAnalyticsTab.tsx");
+        const studentAnalyticsTab = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
+
+        expect(examAnalyticsTab).toContain("completedAttemptsOnly(");
+        expect(examAnalyticsTab.indexOf("completedAttemptsOnly("))
+            .toBeLessThan(examAnalyticsTab.indexOf("buildRegionalLearningScopes({"));
+        expect(studentAnalyticsTab).toContain("completedAttemptsOnly(attempts)");
+        expect(studentAnalyticsTab.indexOf("completedAttemptsOnly(attempts)"))
+            .toBeLessThan(studentAnalyticsTab.indexOf("buildRegionalLearningScopes({"));
+    });
+
+    it("loads the dense attempt report only when its tab is opened", () => {
+        const attemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+
+        expect(attemptPage).not.toContain('import ReportPanel from "@/components/teacher/student-results/ReportPanel";');
+        expect(attemptPage).toContain('() => import("@/components/teacher/student-results/ReportPanel")');
+    });
+
+    it("builds per-student weakness only on the student workspace and once per student bucket", () => {
+        const examAnalyticsTab = readProjectFile("src/components/dashboard/tabs/ExamAnalyticsTab.tsx");
+        const weaknessBlock = examAnalyticsTab.slice(
+            examAnalyticsTab.indexOf("const studentWeaknessByAttemptId"),
+            examAnalyticsTab.indexOf("const scopedWeaknessGroups"),
+        );
+
+        expect(weaknessBlock).toContain('activeWorkspaceView !== "students"');
+        expect(weaknessBlock).toContain("attemptsByStudentKey");
+        expect(weaknessBlock.match(/buildLearningRecommendations/g)).toHaveLength(1);
+    });
+
+    it("fails closed instead of publishing partial roster analytics", () => {
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+
+        expect(usersPage).toContain("isCompleteTeacherAttemptCollection(");
+        expect(usersPage).toContain("setAllAttempts(attemptAnalyticsComplete ? attemptResult.items : [])");
+        expect(usersPage).toContain("if (!isCompleteTeacherAttemptCollection(result))");
+        expect(usersPage).toContain("응시 분석을 일시 중단");
+        expect(usersPage).toContain('attemptAnalyticsStatus === "ready"');
+        expect(usersPage).toContain("응시 분석 데이터 미표시");
+        expect(usersPage).toContain('attemptAnalyticsAvailable ? `${s.avgScore}` : "—"');
+    });
+
     it("renders useful loading shells and applies local data before remote refresh", () => {
         const dashboardPage = readProjectFile("src/app/teacher/dashboard/page.tsx");
         const loadingSkeleton = readProjectFile("src/components/dashboard/DashboardLoadingSkeleton.tsx");

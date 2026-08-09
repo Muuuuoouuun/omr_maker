@@ -14,6 +14,7 @@ import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 interface GroupsTabProps {
     displayGroups: RosterGroup[];
     displayStudents: RosterStudent[];
+    analyticsAvailable: boolean;
     isDemoRoster: boolean;
     advancedAnalyticsEnabled: boolean;
     handleOpenGroupProfile: (groupId: string) => void;
@@ -30,6 +31,7 @@ interface GroupsTabProps {
 export default function GroupsTab({
     displayGroups,
     displayStudents,
+    analyticsAvailable,
     isDemoRoster,
     advancedAnalyticsEnabled,
     handleOpenGroupProfile,
@@ -133,7 +135,7 @@ export default function GroupsTab({
 
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.6rem' }}>
                                         <MiniStat label="학생" value={`${g.count}명`} color={g.color} />
-                                        <MiniStat label="평균" value={`${g.avgScore}점`} color={g.color} />
+                                        <MiniStat label="평균" value={analyticsAvailable ? `${g.avgScore}점` : "—"} color={g.color} />
                                     </div>
 
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.5rem', marginTop: 'auto' }}>
@@ -191,6 +193,8 @@ export default function GroupsTab({
                                                 type="button"
                                                 aria-label={`${g.name} 분석 열기`}
                                                 onClick={() => handleOpenGroupProfile(g.id)}
+                                                disabled={!analyticsAvailable}
+                                                title={analyticsAvailable ? undefined : "응시 기록을 완전하게 불러온 뒤 분석할 수 있습니다."}
                                                 style={{
                                                     minHeight: 44,
                                                     padding: '0.55rem 0.65rem',
@@ -203,6 +207,7 @@ export default function GroupsTab({
                                                     alignItems: 'center',
                                                     justifyContent: 'center',
                                                     gap: '0.35rem',
+                                                    opacity: analyticsAvailable ? 1 : 0.55,
                                                 }}
                                             >
                                                 <BarChart3 size={13} />

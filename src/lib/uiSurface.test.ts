@@ -1252,8 +1252,9 @@ describe("service UI surface", () => {
     it("renders the report view through a dedicated report panel", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 
-        expect(teacherAttemptPage).toContain('import ReportPanel from "@/components/teacher/student-results/ReportPanel";');
+        expect(teacherAttemptPage).toContain('() => import("@/components/teacher/student-results/ReportPanel")');
         expect(teacherAttemptPage).toMatch(/activeView === ["']report["'][\s\S]*?<ReportPanel/);
+        expect(teacherAttemptPage).toContain("growthReportModel && !growthReportModel.selectedAttemptIncluded");
     });
 
     it("keeps the dense student report in the editorial context-to-history order", () => {
@@ -1449,10 +1450,12 @@ describe("service UI surface", () => {
         const labelIndex = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo");
         const stateBlock = teacherAttemptPage.slice(stateIndex, labelIndex);
         const partialIndex = stateBlock.indexOf('cumulativeStatus === "partial"');
+        const selectedGuardIndex = stateBlock.indexOf("growthReportModel && !growthReportModel.selectedAttemptIncluded");
         const unlinkedIndex = stateBlock.indexOf("if (!selectedGrowthAttempt)", partialIndex);
         const partialBlock = stateBlock.slice(partialIndex, unlinkedIndex);
 
-        expect(partialBlock).toContain("!growthReportModel.selectedAttemptIncluded");
+        expect(selectedGuardIndex).toBeGreaterThanOrEqual(0);
+        expect(selectedGuardIndex).toBeLessThan(partialIndex);
         expect(partialBlock).not.toContain("growthReportModel.rows.length === 0 && growthReportModel.omittedCount === 0");
     });
 
