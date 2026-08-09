@@ -1551,6 +1551,22 @@ export async function saveLocalAttempt(attempt: Attempt): Promise<boolean> {
     return saveLocalAttempts([attempt]);
 }
 
+/**
+ * Save one local attempt only while its owning view identity is still current.
+ * The predicate runs inside the attempt-index lock, immediately before the
+ * synchronous read/write transaction, so a caller that waited for the lock
+ * cannot publish a stale identity's repair.
+ */
+export async function saveLocalAttemptIfCurrent(
+    attempt: Attempt,
+    isCurrent: () => boolean,
+): Promise<boolean> {
+    return withBrowserStorageLock("attempt-index", () => {
+        if (!isCurrent()) return false;
+        return saveLocalAttemptsUnlocked([attempt]);
+    });
+}
+
 async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
     const config = getSupabaseConfig();
     if (!canUseCanonicalBrowserDataPlane({

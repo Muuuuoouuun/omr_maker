@@ -15,6 +15,7 @@ import {
     saveTeacherSessionSnapshot,
     saveTeacherSessionWithIdentity,
     TEACHER_SESSION_KEY,
+    TEACHER_SESSION_IDENTITY_CHANGED_EVENT,
     teacherSessionRemainingMs,
 } from "./teacherSession";
 import {
@@ -37,6 +38,57 @@ const VALID_TOKEN = "tkn_abc123_0123456789abcdef0123456789abcdef";
 const STALE_AT = "2026-08-09T11:59:00.000Z";
 
 describe("teacher session", () => {
+    it("synchronously emits same-document identity changes only after replacement and clear take effect", () => {
+        const storage = memoryStorage();
+        const browser = new EventTarget() as EventTarget & { localStorage?: unknown };
+        const observedSessions: Array<string | null> = [];
+        browser.addEventListener(TEACHER_SESSION_IDENTITY_CHANGED_EVENT, () => {
+            observedSessions.push(storage.getItem(TEACHER_SESSION_KEY));
+        });
+        vi.stubGlobal("window", browser);
+
+        try {
+            const first = createTeacherSession(VALID_TOKEN, 1_000, {
+                teacherId: "teacher_0123456789abcdef",
+                organizationId: "pilot_org_0123456789abcdef01234567",
+                accountSessionGeneration: 1,
+                sessionAuthority: "account",
+                organizationName: "First org",
+                memberRole: "owner",
+                plan: "pro",
+            });
+            const second = createTeacherSession(VALID_TOKEN, 2_000, {
+                teacherId: "teacher_fedcba9876543210",
+                organizationId: "pilot_org_fedcba9876543210fedcba98",
+                accountSessionGeneration: 2,
+                sessionAuthority: "account",
+                organizationName: "Second org",
+                memberRole: "owner",
+                plan: "pro",
+            });
+
+            expect(saveTeacherSessionSnapshot(first, storage, 2_500, null)).toBe(true);
+            expect(parseTeacherSession(observedSessions.at(-1), 2_500)).toMatchObject({
+                teacherId: first.teacherId,
+                organizationId: first.organizationId,
+                accountSessionGeneration: 1,
+            });
+
+            expect(saveTeacherSessionSnapshot(second, storage, 2_500, null)).toBe(true);
+            expect(parseTeacherSession(observedSessions.at(-1), 2_500)).toMatchObject({
+                teacherId: second.teacherId,
+                organizationId: second.organizationId,
+                accountSessionGeneration: 2,
+            });
+
+            clearTeacherSession(storage, null);
+            expect(observedSessions.at(-1)).toBeNull();
+            expect(observedSessions).toHaveLength(3);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
     it("allows only explicit write-capable organization roles to mutate canonical data", () => {
         expect(canTeacherRoleWrite("owner")).toBe(true);
         expect(canTeacherRoleWrite("admin")).toBe(true);

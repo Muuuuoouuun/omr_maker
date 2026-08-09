@@ -34,6 +34,7 @@ import {
     saveLocalExam,
     saveLocalExams,
     saveLocalAttempt,
+    saveLocalAttemptIfCurrent,
     saveLocalServerConfirmedAttempt,
     saveLocalAttempts,
     sortByNewestActivity,
@@ -41,6 +42,7 @@ import {
     stripHeavyAttemptPayload,
     syncLocalItems,
 } from "./omrPersistence";
+import { withBrowserStorageLock } from "./browserStorageLock";
 import { createTeacherSession } from "./teacherSession";
 import { stableWorkspaceHash, workspaceContextFromIdentity } from "./workspaceContext";
 
@@ -925,6 +927,29 @@ describe("Supabase persistence mapping", () => {
             "attempt-1",
         ]);
         expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
+    });
+
+    it("rechecks a repair identity after waiting for the attempt-index lock and performs no stale write", async () => {
+        const localStorage = createStorage();
+        const setItemSpy = vi.spyOn(localStorage, "setItem");
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        let releaseBlocker!: () => void;
+        const blocker = withBrowserStorageLock("attempt-index", () => new Promise<void>(resolve => {
+            releaseBlocker = resolve;
+        }));
+        await Promise.resolve();
+
+        let isCurrent = true;
+        const guardedWrite = saveLocalAttemptIfCurrent(attempt, () => isCurrent);
+        isCurrent = false;
+        releaseBlocker();
+
+        await expect(blocker).resolves.toBeUndefined();
+        await expect(guardedWrite).resolves.toBe(false);
+        expect(setItemSpy).not.toHaveBeenCalled();
+        expect(readLocalAttempts()).toEqual([]);
     });
 
     it("preserves a local-only writer forced between canonical read and write", async () => {

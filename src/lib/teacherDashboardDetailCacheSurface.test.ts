@@ -7,7 +7,7 @@ function readProjectFile(path: string): string {
 }
 
 describe("teacher dashboard detailed attempt cache", () => {
-    it("invalidates detailed attempts when the lightweight summary snapshot changes", () => {
+    it("invalidates detailed attempts when the fresh attempt snapshot changes", () => {
         const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
 
         expect(dashboard).toContain("buildAttemptSummarySignal");
@@ -23,6 +23,17 @@ describe("teacher dashboard detailed attempt cache", () => {
         expect(dashboard).toContain("requestedGeneration !== detailedAttemptGenerationRef.current");
         expect(dashboard).toContain("detailedAttemptGeneration");
         expect(dashboard).toMatch(/useEffect\(\(\) => \{[\s\S]*activeTab === "overview"[\s\S]*loadDetailedAttempts\(\)[\s\S]*detailedAttemptGeneration/);
+        expect(dashboard).toContain("sameTeacherLoadIdentity");
+        expect(dashboard).toContain("requestedLoadIdentity");
+        expect(dashboard).toContain("resetDetailedAttemptsForDashboardRequest");
+        expect(dashboard).toMatch(/detailedAttemptStatus === "idle"[\s\S]*return/);
+    });
+
+    it("clears visible and detailed state immediately when the complete teacher identity changes", () => {
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        expect(dashboard).toContain("beginTeacherDashboardIdentityLoad");
+        expect(dashboard).toContain("clearDashboardVisibleState");
+        expect(dashboard).toMatch(/identityChanged[\s\S]*clearDashboardVisibleState\(\)[\s\S]*invalidateDetailedAttempts\(\)/);
     });
 
     it("keeps the generation cache aligned after local analytics repair", () => {

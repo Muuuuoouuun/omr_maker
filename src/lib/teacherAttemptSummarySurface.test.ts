@@ -8,7 +8,6 @@ function readProjectFile(path: string): string {
 
 describe("teacher attempt summary surfaces", () => {
     it.each([
-        "src/app/teacher/dashboard/page.tsx",
         "src/app/teacher/live/page.tsx",
         "src/app/teacher/billing/page.tsx",
         "src/app/teacher/settings/page.tsx",
@@ -16,6 +15,23 @@ describe("teacher attempt summary surfaces", () => {
     ])("uses the lightweight loader for the common list in %s", path => {
         const source = readProjectFile(path);
         expect(source).toContain("loadTeacherAttemptSummaries");
+    });
+
+    it("keeps complete fresh dashboard attempts rich and delegates cache redaction to the canonical projection", () => {
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const cacheProjection = readProjectFile("src/lib/teacherDashboardCanonicalCache.ts");
+        const loadStart = dashboard.indexOf("const loadDashboardData = useCallback");
+        const loadEnd = dashboard.indexOf("// Initial dashboard load", loadStart);
+        const freshLoad = dashboard.slice(loadStart, loadEnd);
+        const projectionStart = cacheProjection.indexOf("export function toTeacherDashboardCacheProjection");
+        const projectionEnd = cacheProjection.indexOf("export function cacheFreshTeacherDashboardOptional", projectionStart);
+        const projection = cacheProjection.slice(projectionStart, projectionEnd);
+
+        expect(freshLoad).toContain("loadTeacherAttempts(),");
+        expect(freshLoad).not.toContain("loadTeacherAttemptSummaries()");
+        expect(freshLoad).toContain("applyDashboardSnapshot(nextState.data)");
+        expect(freshLoad).toContain("cacheFreshTeacherDashboardOptional(");
+        expect(projection).not.toMatch(/\b(?:questions|answers|drawings|studentQuestions|feedback)\s*:/);
     });
 
     it("keeps rich attempt lists explicit on detail, review, CSV, and analytics paths", () => {

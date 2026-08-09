@@ -7,6 +7,7 @@ import {
 
 export const TEACHER_SESSION_KEY = "omr_teacher_session";
 export const LEGACY_TEACHER_TOKEN_KEY = "omr_teacher_token";
+export const TEACHER_SESSION_IDENTITY_CHANGED_EVENT = "omr:teacher-session-identity-changed";
 
 export const TEACHER_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 export const TEACHER_SESSION_EXPIRING_SOON_MS = 30 * 60 * 1000;
@@ -138,6 +139,28 @@ function sameSessionCacheIdentity(left: TeacherSession | null, right: TeacherSes
         && leftIdentity.organizationId === rightIdentity.organizationId
         && leftIdentity.accountId === rightIdentity.accountId
         && leftIdentity.sessionGeneration === rightIdentity.sessionGeneration;
+}
+
+function sameSessionIdentity(left: TeacherSession | null, right: TeacherSession | null): boolean {
+    if (!left || !right) return left === right;
+    return left.organizationId === right.organizationId
+        && left.teacherId === right.teacherId
+        && left.accountSessionGeneration === right.accountSessionGeneration
+        && left.sessionAuthority === right.sessionAuthority;
+}
+
+function notifyTeacherSessionIdentityChanged(
+    previous: TeacherSession | null,
+    current: TeacherSession | null,
+): void {
+    if (sameSessionIdentity(previous, current)) return;
+    try {
+        if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
+        window.dispatchEvent(new Event(TEACHER_SESSION_IDENTITY_CHANGED_EVENT));
+    } catch {
+        // Session persistence remains authoritative when the browser event seam
+        // is unavailable or a host-provided event target throws.
+    }
 }
 
 function readStoredSessionForCacheCleanup(storage: TeacherSessionStorage): TeacherSession | null {
@@ -288,15 +311,17 @@ export function saveTeacherSession(
     cacheStorage?: CanonicalSurfaceCacheStorage | null,
 ): boolean {
     if (!storage || !isTeacherToken(token)) return false;
+    const previous = readStoredSessionForCacheCleanup(storage);
     try {
         const session = createTeacherSession(token, now);
-        const previous = readStoredSessionForCacheCleanup(storage);
         purgeReplacedSessionCache(previous, session, resolveCanonicalCacheStorage(cacheStorage));
         storage.setItem(TEACHER_SESSION_KEY, JSON.stringify(session));
         storage.setItem(LEGACY_TEACHER_TOKEN_KEY, token);
         return true;
     } catch {
         return false;
+    } finally {
+        notifyTeacherSessionIdentityChanged(previous, readStoredSessionForCacheCleanup(storage));
     }
 }
 
@@ -308,15 +333,17 @@ export function saveTeacherSessionWithIdentity(
     cacheStorage?: CanonicalSurfaceCacheStorage | null,
 ): boolean {
     if (!storage || !isTeacherToken(token)) return false;
+    const previous = readStoredSessionForCacheCleanup(storage);
     try {
         const session = createTeacherSession(token, now, identity);
-        const previous = readStoredSessionForCacheCleanup(storage);
         purgeReplacedSessionCache(previous, session, resolveCanonicalCacheStorage(cacheStorage));
         storage.setItem(TEACHER_SESSION_KEY, JSON.stringify(session));
         storage.setItem(LEGACY_TEACHER_TOKEN_KEY, token);
         return true;
     } catch {
         return false;
+    } finally {
+        notifyTeacherSessionIdentityChanged(previous, readStoredSessionForCacheCleanup(storage));
     }
 }
 
@@ -327,14 +354,16 @@ export function saveTeacherSessionSnapshot(
     cacheStorage?: CanonicalSurfaceCacheStorage | null,
 ): boolean {
     if (!storage || !isTeacherSessionActive(session, now)) return false;
+    const previous = readStoredSessionForCacheCleanup(storage);
     try {
-        const previous = readStoredSessionForCacheCleanup(storage);
         purgeReplacedSessionCache(previous, session, resolveCanonicalCacheStorage(cacheStorage));
         storage.setItem(TEACHER_SESSION_KEY, JSON.stringify(session));
         storage.setItem(LEGACY_TEACHER_TOKEN_KEY, session.token);
         return true;
     } catch {
         return false;
+    } finally {
+        notifyTeacherSessionIdentityChanged(previous, readStoredSessionForCacheCleanup(storage));
     }
 }
 
@@ -353,7 +382,14 @@ export function clearTeacherSession(
             }
         }
     }
-    purgeReplacedSessionCache(previous, null, resolvedCacheStorage);
+    try {
+        purgeReplacedSessionCache(previous, null, resolvedCacheStorage);
+    } finally {
+        notifyTeacherSessionIdentityChanged(
+            previous,
+            storage ? readStoredSessionForCacheCleanup(storage) : null,
+        );
+    }
 }
 
 export function teacherSessionRemainingMs(session: TeacherSession | null | undefined, now = Date.now()): number {

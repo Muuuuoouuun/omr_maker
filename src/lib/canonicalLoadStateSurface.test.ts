@@ -34,7 +34,9 @@ describe("canonical load-state surfaces", () => {
         expect(teacherDashboard).toContain("dashboardAllowsMutations");
         expect(teacherDashboard).toMatch(/dashboardAllowsAnalysis[\s\S]*analyticsDataHealth\.kind/);
         expect(teacherDashboard).toMatch(/dashboardAllowsAnalysis[\s\S]*dashboard-analysis-actions/);
-        expect(teacherDashboard).toMatch(/cachedAt\)[\s\S]*applyDashboardSnapshot/);
+        expect(teacherDashboard).toContain("readTeacherDashboardDegradedCache");
+        expect(teacherDashboard).toContain("cacheFreshTeacherDashboardOptional");
+        expect(teacherDashboard).not.toContain("TEACHER_DASHBOARD_CACHE_STALE_AT_KEY");
     });
 
     it("keeps a degraded teacher roster read-only while retaining view and retry affordances", () => {
