@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MOCKUP_TEACHER_IDENTITY } from "./mockupAccount";
 import {
     buildTeacherSessionDisplay,
@@ -17,6 +17,11 @@ import {
     TEACHER_SESSION_KEY,
     teacherSessionRemainingMs,
 } from "./teacherSession";
+import {
+    LEGACY_CANONICAL_SURFACE_MARKER_KEYS,
+    buildCanonicalSurfaceCacheKey,
+    type CanonicalSurfaceCacheIdentity,
+} from "./canonicalSurfaceCache";
 
 function memoryStorage(initial: Record<string, string> = {}) {
     const data = { ...initial };
@@ -29,6 +34,7 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 const VALID_TOKEN = "tkn_abc123_0123456789abcdef0123456789abcdef";
+const STALE_AT = "2026-08-09T11:59:00.000Z";
 
 describe("teacher session", () => {
     it("allows only explicit write-capable organization roles to mutate canonical data", () => {
@@ -48,6 +54,17 @@ describe("teacher session", () => {
             token: VALID_TOKEN,
         });
         expect(hasTeacherSession(storage, 1000)).toBe(true);
+    });
+
+    it("purges legacy global evidence markers when reading an existing valid session", () => {
+        const sessionStorage = memoryStorage();
+        const localStorage = memoryStorage({ unrelated: "keep" });
+        expect(saveTeacherSession(VALID_TOKEN, sessionStorage, 1000, null)).toBe(true);
+        for (const marker of LEGACY_CANONICAL_SURFACE_MARKER_KEYS) localStorage.setItem(marker, STALE_AT);
+
+        expect(readTeacherSession(sessionStorage, 1000, localStorage)).toMatchObject({ token: VALID_TOKEN });
+
+        expect(localStorage.data).toEqual({ unrelated: "keep" });
     });
 
     it("stores and displays teacher identity when provided", () => {
@@ -173,6 +190,183 @@ describe("teacher session", () => {
 
         clearTeacherSession(storage);
         expect(storage.data).toEqual({});
+    });
+
+    it("purges the previous exact cache identity and legacy markers on logout without clearing unrelated storage", () => {
+        const sessionStorage = memoryStorage();
+        const localStorage = memoryStorage({ unrelated: "keep" });
+        const identity = {
+            teacherId: "teacher_0123456789abcdef",
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "Alpha",
+            memberRole: "owner" as const,
+            plan: "pro" as const,
+            sessionAuthority: "account" as const,
+            accountSessionGeneration: 4,
+        };
+        expect(saveTeacherSessionWithIdentity(VALID_TOKEN, identity, sessionStorage, 1000, localStorage)).toBe(true);
+        const cacheIdentity: CanonicalSurfaceCacheIdentity = {
+            surface: "teacher_dashboard",
+            organizationId: identity.organizationId,
+            accountId: identity.teacherId,
+            sessionGeneration: identity.accountSessionGeneration,
+        };
+        localStorage.setItem(buildCanonicalSurfaceCacheKey(cacheIdentity), "cached-dashboard");
+        localStorage.setItem(buildCanonicalSurfaceCacheKey({ ...cacheIdentity, surface: "teacher_roster" }), "cached-roster");
+        for (const marker of LEGACY_CANONICAL_SURFACE_MARKER_KEYS) localStorage.setItem(marker, STALE_AT);
+
+        clearTeacherSession(sessionStorage, localStorage);
+
+        expect(sessionStorage.data).toEqual({});
+        expect(localStorage.data).toEqual({ unrelated: "keep" });
+    });
+
+    it("purges only the replaced identity caches while preserving the new and unrelated identities", () => {
+        const sessionStorage = memoryStorage();
+        const localStorage = memoryStorage({ unrelated: "keep" });
+        const previous = {
+            teacherId: "teacher_0123456789abcdef",
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "Alpha",
+            memberRole: "owner" as const,
+            plan: "pro" as const,
+            sessionAuthority: "account" as const,
+            accountSessionGeneration: 4,
+        };
+        const next = {
+            ...previous,
+            teacherId: "teacher_fedcba9876543210",
+            organizationId: "pilot_org_fedcba9876543210fedcba98",
+            organizationName: "Beta",
+            accountSessionGeneration: 5,
+        };
+        expect(saveTeacherSessionWithIdentity(VALID_TOKEN, previous, sessionStorage, 1000, localStorage)).toBe(true);
+        const cacheIdentity = (identity: typeof previous, surface: CanonicalSurfaceCacheIdentity["surface"]): CanonicalSurfaceCacheIdentity => ({
+            surface,
+            organizationId: identity.organizationId,
+            accountId: identity.teacherId,
+            sessionGeneration: identity.accountSessionGeneration,
+        });
+        for (const surface of ["teacher_dashboard", "teacher_roster"] as const) {
+            localStorage.setItem(buildCanonicalSurfaceCacheKey(cacheIdentity(previous, surface)), "old");
+            localStorage.setItem(buildCanonicalSurfaceCacheKey(cacheIdentity(next, surface)), "new");
+        }
+        for (const marker of LEGACY_CANONICAL_SURFACE_MARKER_KEYS) localStorage.setItem(marker, STALE_AT);
+
+        expect(saveTeacherSessionWithIdentity(VALID_TOKEN, next, sessionStorage, 2000, localStorage)).toBe(true);
+
+        for (const surface of ["teacher_dashboard", "teacher_roster"] as const) {
+            expect(localStorage.getItem(buildCanonicalSurfaceCacheKey(cacheIdentity(previous, surface)))).toBeNull();
+            expect(localStorage.getItem(buildCanonicalSurfaceCacheKey(cacheIdentity(next, surface)))).toBe("new");
+        }
+        expect(localStorage.data.unrelated).toBe("keep");
+        for (const marker of LEGACY_CANONICAL_SURFACE_MARKER_KEYS) expect(localStorage.getItem(marker)).toBeNull();
+    });
+
+    it("purges the previous identity before a partially failing replacement write", () => {
+        const stored = memoryStorage();
+        const localStorage = memoryStorage({ unrelated: "keep" });
+        const previous = {
+            teacherId: "teacher_0123456789abcdef",
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "Alpha",
+            memberRole: "owner" as const,
+            plan: "pro" as const,
+            sessionAuthority: "account" as const,
+            accountSessionGeneration: 4,
+        };
+        const next = {
+            ...previous,
+            teacherId: "teacher_fedcba9876543210",
+            organizationId: "pilot_org_fedcba9876543210fedcba98",
+            accountSessionGeneration: 5,
+        };
+        expect(saveTeacherSessionWithIdentity(VALID_TOKEN, previous, stored, 1000, localStorage)).toBe(true);
+        const oldIdentity = (surface: CanonicalSurfaceCacheIdentity["surface"]): CanonicalSurfaceCacheIdentity => ({
+            surface,
+            organizationId: previous.organizationId,
+            accountId: previous.teacherId,
+            sessionGeneration: previous.accountSessionGeneration,
+        });
+        for (const surface of ["teacher_dashboard", "teacher_roster"] as const) {
+            localStorage.setItem(buildCanonicalSurfaceCacheKey(oldIdentity(surface)), "old");
+        }
+        for (const marker of LEGACY_CANONICAL_SURFACE_MARKER_KEYS) localStorage.setItem(marker, STALE_AT);
+        let writes = 0;
+        const partialFailureStorage = {
+            getItem: stored.getItem,
+            removeItem: stored.removeItem,
+            setItem(key: string, value: string) {
+                writes += 1;
+                stored.setItem(key, value);
+                if (writes === 2) throw new Error("legacy token write failed");
+            },
+        };
+
+        expect(saveTeacherSessionWithIdentity(VALID_TOKEN, next, partialFailureStorage, 2000, localStorage)).toBe(false);
+
+        for (const surface of ["teacher_dashboard", "teacher_roster"] as const) {
+            expect(localStorage.getItem(buildCanonicalSurfaceCacheKey(oldIdentity(surface)))).toBeNull();
+        }
+        expect(localStorage.data).toEqual({ unrelated: "keep" });
+    });
+
+    it("resolves browser localStorage lazily and contains a throwing getter", () => {
+        const sessionStorage = memoryStorage();
+        const browser = Object.defineProperty({ sessionStorage }, "localStorage", {
+            get() { throw new Error("blocked localStorage"); },
+        });
+        vi.stubGlobal("window", browser);
+        try {
+            expect(() => saveTeacherSession(VALID_TOKEN, sessionStorage, 1000)).not.toThrow();
+            expect(() => readTeacherSession(sessionStorage, 1000)).not.toThrow();
+            expect(() => clearTeacherSession(sessionStorage)).not.toThrow();
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it("attempts both session key removals and cache cleanup when either removal throws", () => {
+        const identity = {
+            teacherId: "teacher_0123456789abcdef",
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "Alpha",
+            memberRole: "owner" as const,
+            plan: "pro" as const,
+            sessionAuthority: "account" as const,
+            accountSessionGeneration: 4,
+        };
+        for (const failingKey of [TEACHER_SESSION_KEY, LEGACY_TEACHER_TOKEN_KEY]) {
+            const stored = memoryStorage();
+            const localStorage = memoryStorage({ unrelated: "keep" });
+            expect(saveTeacherSessionWithIdentity(VALID_TOKEN, identity, stored, 1000, localStorage)).toBe(true);
+            const cacheIdentity = (surface: CanonicalSurfaceCacheIdentity["surface"]): CanonicalSurfaceCacheIdentity => ({
+                surface,
+                organizationId: identity.organizationId,
+                accountId: identity.teacherId,
+                sessionGeneration: identity.accountSessionGeneration,
+            });
+            for (const surface of ["teacher_dashboard", "teacher_roster"] as const) {
+                localStorage.setItem(buildCanonicalSurfaceCacheKey(cacheIdentity(surface)), "old");
+            }
+            const attempted: string[] = [];
+            const failingStorage = {
+                getItem: stored.getItem,
+                setItem: stored.setItem,
+                removeItem(key: string) {
+                    attempted.push(key);
+                    if (key === failingKey) throw new Error("blocked removal");
+                    stored.removeItem(key);
+                },
+            };
+
+            expect(() => clearTeacherSession(failingStorage, localStorage)).not.toThrow();
+
+            expect(attempted).toEqual([TEACHER_SESSION_KEY, LEGACY_TEACHER_TOKEN_KEY]);
+            expect(stored.getItem(failingKey)).not.toBeNull();
+            expect(stored.getItem(failingKey === TEACHER_SESSION_KEY ? LEGACY_TEACHER_TOKEN_KEY : TEACHER_SESSION_KEY)).toBeNull();
+            expect(localStorage.data).toEqual({ unrelated: "keep" });
+        }
     });
 
     it("reports remaining session time for settings surfaces", () => {

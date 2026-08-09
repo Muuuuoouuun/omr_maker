@@ -1,4 +1,9 @@
 import { isExactMockupTeacherIdentity } from "@/lib/mockupAccount";
+import {
+    purgeLegacyCanonicalSurfaceMarkers,
+    removeCanonicalSurfaceCachesForIdentity,
+    type CanonicalSurfaceCacheStorage,
+} from "@/lib/canonicalSurfaceCache";
 
 export const TEACHER_SESSION_KEY = "omr_teacher_session";
 export const LEGACY_TEACHER_TOKEN_KEY = "omr_teacher_token";
@@ -90,8 +95,70 @@ export interface TeacherSessionDisplay {
 }
 
 function getBrowserSessionStorage(): TeacherSessionStorage | null {
-    if (typeof window === "undefined") return null;
-    return window.sessionStorage;
+    try {
+        if (typeof window === "undefined") return null;
+        return window.sessionStorage;
+    } catch {
+        return null;
+    }
+}
+
+function getBrowserCanonicalCacheStorage(): CanonicalSurfaceCacheStorage | null {
+    try {
+        if (typeof window === "undefined") return null;
+        return window.localStorage;
+    } catch {
+        return null;
+    }
+}
+
+function resolveCanonicalCacheStorage(
+    storage: CanonicalSurfaceCacheStorage | null | undefined,
+): CanonicalSurfaceCacheStorage | null {
+    return storage === undefined ? getBrowserCanonicalCacheStorage() : storage;
+}
+
+function sessionCacheIdentity(session: TeacherSession | null | undefined) {
+    if (!session?.organizationId
+        || !session.teacherId
+        || !Number.isSafeInteger(session.accountSessionGeneration)
+        || (session.accountSessionGeneration || 0) < 1) return null;
+    return {
+        organizationId: session.organizationId,
+        accountId: session.teacherId,
+        sessionGeneration: session.accountSessionGeneration as number,
+    };
+}
+
+function sameSessionCacheIdentity(left: TeacherSession | null, right: TeacherSession | null): boolean {
+    const leftIdentity = sessionCacheIdentity(left);
+    const rightIdentity = sessionCacheIdentity(right);
+    return !!leftIdentity
+        && !!rightIdentity
+        && leftIdentity.organizationId === rightIdentity.organizationId
+        && leftIdentity.accountId === rightIdentity.accountId
+        && leftIdentity.sessionGeneration === rightIdentity.sessionGeneration;
+}
+
+function readStoredSessionForCacheCleanup(storage: TeacherSessionStorage): TeacherSession | null {
+    try {
+        return parseTeacherSession(storage.getItem(TEACHER_SESSION_KEY), Number.NEGATIVE_INFINITY);
+    } catch {
+        return null;
+    }
+}
+
+function purgeReplacedSessionCache(
+    previous: TeacherSession | null,
+    next: TeacherSession | null,
+    storage: CanonicalSurfaceCacheStorage | null,
+): void {
+    if (!storage) return;
+    purgeLegacyCanonicalSurfaceMarkers(storage);
+    const previousIdentity = sessionCacheIdentity(previous);
+    if (previousIdentity && !sameSessionCacheIdentity(previous, next)) {
+        removeCanonicalSurfaceCachesForIdentity(storage, previousIdentity);
+    }
 }
 
 export function isTeacherToken(token: unknown): token is string {
@@ -180,14 +247,22 @@ export function parseTeacherSession(raw: string | null | undefined, now = Date.n
     }
 }
 
-export function readTeacherSession(storage: TeacherSessionStorage | null = getBrowserSessionStorage(), now = Date.now()): TeacherSession | null {
+export function readTeacherSession(
+    storage: TeacherSessionStorage | null = getBrowserSessionStorage(),
+    now = Date.now(),
+    cacheStorage?: CanonicalSurfaceCacheStorage | null,
+): TeacherSession | null {
     if (!storage) return null;
+    const resolvedCacheStorage = resolveCanonicalCacheStorage(cacheStorage);
     try {
         const rawSession = storage.getItem(TEACHER_SESSION_KEY);
         if (rawSession) {
             const session = parseTeacherSession(rawSession, now);
-            if (session) return session;
-            clearTeacherSession(storage);
+            if (session) {
+                if (resolvedCacheStorage) purgeLegacyCanonicalSurfaceMarkers(resolvedCacheStorage);
+                return session;
+            }
+            clearTeacherSession(storage, resolvedCacheStorage);
             return null;
         }
 
@@ -195,6 +270,7 @@ export function readTeacherSession(storage: TeacherSessionStorage | null = getBr
         if (!isTeacherToken(legacyToken)) return null;
         const migratedSession = createTeacherSession(legacyToken, now);
         storage.setItem(TEACHER_SESSION_KEY, JSON.stringify(migratedSession));
+        if (resolvedCacheStorage) purgeLegacyCanonicalSurfaceMarkers(resolvedCacheStorage);
         return migratedSession;
     } catch {
         return null;
@@ -205,10 +281,17 @@ export function hasTeacherSession(storage: TeacherSessionStorage | null = getBro
     return !!readTeacherSession(storage, now);
 }
 
-export function saveTeacherSession(token: string, storage: TeacherSessionStorage | null = getBrowserSessionStorage(), now = Date.now()): boolean {
+export function saveTeacherSession(
+    token: string,
+    storage: TeacherSessionStorage | null = getBrowserSessionStorage(),
+    now = Date.now(),
+    cacheStorage?: CanonicalSurfaceCacheStorage | null,
+): boolean {
     if (!storage || !isTeacherToken(token)) return false;
     try {
         const session = createTeacherSession(token, now);
+        const previous = readStoredSessionForCacheCleanup(storage);
+        purgeReplacedSessionCache(previous, session, resolveCanonicalCacheStorage(cacheStorage));
         storage.setItem(TEACHER_SESSION_KEY, JSON.stringify(session));
         storage.setItem(LEGACY_TEACHER_TOKEN_KEY, token);
         return true;
@@ -222,10 +305,13 @@ export function saveTeacherSessionWithIdentity(
     identity: TeacherSessionIdentity | undefined,
     storage: TeacherSessionStorage | null = getBrowserSessionStorage(),
     now = Date.now(),
+    cacheStorage?: CanonicalSurfaceCacheStorage | null,
 ): boolean {
     if (!storage || !isTeacherToken(token)) return false;
     try {
         const session = createTeacherSession(token, now, identity);
+        const previous = readStoredSessionForCacheCleanup(storage);
+        purgeReplacedSessionCache(previous, session, resolveCanonicalCacheStorage(cacheStorage));
         storage.setItem(TEACHER_SESSION_KEY, JSON.stringify(session));
         storage.setItem(LEGACY_TEACHER_TOKEN_KEY, token);
         return true;
@@ -238,9 +324,12 @@ export function saveTeacherSessionSnapshot(
     session: TeacherSession | null | undefined,
     storage: TeacherSessionStorage | null = getBrowserSessionStorage(),
     now = Date.now(),
+    cacheStorage?: CanonicalSurfaceCacheStorage | null,
 ): boolean {
     if (!storage || !isTeacherSessionActive(session, now)) return false;
     try {
+        const previous = readStoredSessionForCacheCleanup(storage);
+        purgeReplacedSessionCache(previous, session, resolveCanonicalCacheStorage(cacheStorage));
         storage.setItem(TEACHER_SESSION_KEY, JSON.stringify(session));
         storage.setItem(LEGACY_TEACHER_TOKEN_KEY, session.token);
         return true;
@@ -249,14 +338,22 @@ export function saveTeacherSessionSnapshot(
     }
 }
 
-export function clearTeacherSession(storage: TeacherSessionStorage | null = getBrowserSessionStorage()): void {
-    if (!storage) return;
-    try {
-        storage.removeItem(TEACHER_SESSION_KEY);
-        storage.removeItem(LEGACY_TEACHER_TOKEN_KEY);
-    } catch {
-        // ignore storage failures
+export function clearTeacherSession(
+    storage: TeacherSessionStorage | null = getBrowserSessionStorage(),
+    cacheStorage?: CanonicalSurfaceCacheStorage | null,
+): void {
+    const resolvedCacheStorage = resolveCanonicalCacheStorage(cacheStorage);
+    const previous = storage ? readStoredSessionForCacheCleanup(storage) : null;
+    if (storage) {
+        for (const key of [TEACHER_SESSION_KEY, LEGACY_TEACHER_TOKEN_KEY]) {
+            try {
+                storage.removeItem(key);
+            } catch {
+                // Keep attempting the other exact session key.
+            }
+        }
     }
+    purgeReplacedSessionCache(previous, null, resolvedCacheStorage);
 }
 
 export function teacherSessionRemainingMs(session: TeacherSession | null | undefined, now = Date.now()): number {
