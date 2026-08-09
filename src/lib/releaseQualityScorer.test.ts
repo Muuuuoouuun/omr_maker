@@ -910,6 +910,52 @@ describe("release quality scorer", () => {
         expect(replaced).toBe(true);
     });
 
+    it("fails closed when the bound parent is replaced while the same score inode is read", async () => {
+        const validator = Reflect.get(releaseScoreCli, "validatePublishedReleaseScore") as (
+            outputPath: string,
+            expected: Record<string, string>,
+            overrides?: Record<string, unknown>,
+        ) => Promise<Record<string, unknown>>;
+        const fixture = await cliFixture();
+        const outcome = await runReleaseScoreCli({
+            argv: [`--manifest=${fixture.manifestPath}`, `--output=${fixture.outputPath}`],
+        }, {
+            now: () => NOW,
+            scorerSha: SCORER_SHA,
+            generateTempName: () => "7".repeat(32),
+        });
+        const expected = {
+            buildSha: outcome.result.buildSha,
+            environmentDigest: outcome.result.environmentDigest,
+            manifestSha256: outcome.result.manifestSha256,
+            scorerSha: outcome.result.scorerSha,
+        };
+        const movedParent = `${fixture.temporary}-moved`;
+        let replaced = false;
+
+        await expect(validator(fixture.outputPath, expected, {
+            fs: {
+                open: async (path: string, flags: number | string, mode?: number) => {
+                    const handle = await open(path, flags, mode);
+                    if (path !== fixture.outputPath) return handle;
+                    return {
+                        stat: () => handle.stat(),
+                        readFile: async () => {
+                            const bytes = await handle.readFile();
+                            await rename(fixture.temporary, movedParent);
+                            await mkdir(fixture.temporary, { mode: 0o700 });
+                            await rename(join(movedParent, "score.json"), fixture.outputPath);
+                            replaced = true;
+                            return bytes;
+                        },
+                        close: () => handle.close(),
+                    };
+                },
+            },
+        })).rejects.toMatchObject({ code: "invalid_published_score" });
+        expect(replaced).toBe(true);
+    });
+
     it("publishes NO-GO evidence but returns exit 1", async () => {
         const fixture = await cliFixture({ recovery_release: 85 });
 

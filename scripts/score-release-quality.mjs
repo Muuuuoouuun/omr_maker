@@ -346,10 +346,18 @@ export async function validatePublishedReleaseScore(outputPath, expectedIdentity
             || before.nlink !== 1) fail("invalid_published_score");
         const bytes = await handle.readFile();
         const after = await handle.stat();
+        const [finalParent, finalCanonicalParent] = await Promise.all([
+            deps.fs.lstat(parentPath),
+            deps.fs.realpath(parentPath),
+        ]);
         const finalPathStats = await deps.fs.lstat(canonicalPath);
         if (!(bytes instanceof Uint8Array) || bytes.byteLength !== before.size
             || after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size
             || after.mtimeMs !== before.mtimeMs || after.nlink !== 1
+            || !finalParent.isDirectory() || finalParent.isSymbolicLink()
+            || finalParent.dev !== parent.dev || finalParent.ino !== parent.ino
+            || finalParent.uid !== uid || (finalParent.mode & 0o777) !== 0o700
+            || finalCanonicalParent !== parentPath
             || !finalPathStats.isFile() || finalPathStats.isSymbolicLink()
             || finalPathStats.dev !== before.dev || finalPathStats.ino !== before.ino
             || finalPathStats.size !== before.size || finalPathStats.mtimeMs !== before.mtimeMs
