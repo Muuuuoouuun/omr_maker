@@ -46,6 +46,18 @@ function parseTimestamp(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isSafeWebUrl(value: unknown): value is string {
+    if (!isNonEmptyString(value)) return false;
+    try {
+        const parsed = new URL(value);
+        return (parsed.protocol === "http:" || parsed.protocol === "https:")
+            && parsed.username === ""
+            && parsed.password === "";
+    } catch {
+        return false;
+    }
+}
+
 function hasValidMetadataFields(metadata: Record<string, unknown>, now: number, expiresAt: number): boolean {
     const issuedAt = parseTimestamp(metadata.issuedAt);
     return isNonEmptyString(metadata.inviteId)
@@ -68,7 +80,7 @@ function hasMatchingRawUrl(
 ): rawUrl is ExamEntryInviteRawUrlState {
     if (!isRecord(rawUrl)) return false;
     const issuedAt = parseTimestamp(rawUrl.issuedAt);
-    return isNonEmptyString(rawUrl.url)
+    return isSafeWebUrl(rawUrl.url)
         && isNonEmptyString(rawUrl.examId)
         && isGeneration(rawUrl.generation)
         && issuedAt !== null

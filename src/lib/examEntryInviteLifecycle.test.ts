@@ -71,6 +71,33 @@ describe("exam entry invite capability", () => {
             .toBe("active_but_raw_unavailable");
     });
 
+    it.each(["not-a-url", "javascript:alert(1)"])(
+        "rejects a malformed or non-web raw URL: %s",
+        url => {
+            expect(resolveInviteCapability({
+                metadata: active,
+                rawUrl: { ...validCurrentUrl, url },
+                now: NOW,
+            })).toBe("active_but_raw_unavailable");
+        },
+    );
+
+    it("rejects a raw URL containing credentials", () => {
+        expect(resolveInviteCapability({
+            metadata: active,
+            rawUrl: { ...validCurrentUrl, url: "https://teacher:secret@omr.example/join/exam-1" },
+            now: NOW,
+        })).toBe("active_but_raw_unavailable");
+    });
+
+    it("allows an absolute localhost HTTP URL for local development", () => {
+        expect(resolveInviteCapability({
+            metadata: active,
+            rawUrl: { ...validCurrentUrl, url: "http://localhost:3003/join/exam-1" },
+            now: NOW,
+        })).toBe("copyable_here");
+    });
+
     it.each([
         ["zero metadata generation", { metadata: { ...active, generation: 0 }, rawUrl: validCurrentUrl, now: NOW }],
         ["fractional raw generation", { metadata: active, rawUrl: { ...validCurrentUrl, generation: 1.5 }, now: NOW }],
