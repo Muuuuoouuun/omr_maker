@@ -115,6 +115,7 @@ begin
        or readiness ->> 'teacherLiveSessionsReady' <> 'true'
        or readiness ->> 'teacherAccountLifecycleReady' <> 'true'
        or readiness ->> 'initialOperationsLoadControlReady' <> 'true'
+       or readiness ->> 'examEntryInvitesReady' <> 'true'
        or readiness ->> 'individualStudentAssignmentsReady' <> 'true'
        or readiness ->> 'teacherAttemptReportingReady' <> 'true'
        or readiness ->> 'operationalJobStatusReady' <> 'true'
@@ -318,6 +319,32 @@ begin
     end if;
 end
 $$;
+
+begin;
+revoke execute on function public.omr_get_exam_entry_invite_metadata_v1(text,text,text)
+    from service_role;
+do $exam_invite_readiness_drift$
+declare
+    v_readiness jsonb := public.omr_service_readiness_v1();
+begin
+    if v_readiness ->> 'examEntryInvitesReady' <> 'false'
+       or v_readiness ->> 'ready' <> 'false' then
+        raise exception 'exam invite readiness accepted a missing lifecycle RPC grant: %', v_readiness;
+    end if;
+end
+$exam_invite_readiness_drift$;
+rollback;
+
+do $exam_invite_readiness_recovered$
+declare
+    v_readiness jsonb := public.omr_service_readiness_v1();
+begin
+    if v_readiness ->> 'examEntryInvitesReady' <> 'true'
+       or v_readiness ->> 'ready' <> 'true' then
+        raise exception 'exam invite readiness did not recover after rollback: %', v_readiness;
+    end if;
+end
+$exam_invite_readiness_recovered$;
 
 insert into public.omr_organizations (id, name, plan, metadata)
 values ('teacher_task6ready', 'Task 6 Readiness', 'free', '{}'::jsonb)

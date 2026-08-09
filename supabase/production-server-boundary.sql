@@ -1193,10 +1193,18 @@ begin
         and not pg_catalog.has_table_privilege('anon', 'public.omr_exam_entry_invites', 'SELECT,INSERT,UPDATE,DELETE')
         and not pg_catalog.has_table_privilege('authenticated', 'public.omr_exam_entry_invites', 'SELECT,INSERT,UPDATE,DELETE')
         and not pg_catalog.has_table_privilege('service_role', 'public.omr_exam_entry_invites', 'SELECT,INSERT,UPDATE,DELETE')
+        and pg_catalog.to_regprocedure('public.omr_get_exam_entry_invite_metadata_v1(text,text,text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_revoke_exam_entry_invite_v1(text,text,text)') is not null
         and pg_catalog.has_function_privilege('service_role', 'public.omr_rotate_exam_entry_invite_v1(text,text,text,text,timestamptz)', 'EXECUTE')
         and pg_catalog.has_function_privilege('service_role', 'public.omr_resolve_exam_entry_invite_v1(text,text)', 'EXECUTE')
+        and pg_catalog.has_function_privilege('service_role', 'public.omr_get_exam_entry_invite_metadata_v1(text,text,text)', 'EXECUTE')
+        and pg_catalog.has_function_privilege('service_role', 'public.omr_revoke_exam_entry_invite_v1(text,text,text)', 'EXECUTE')
         and not pg_catalog.has_function_privilege('anon', 'public.omr_rotate_exam_entry_invite_v1(text,text,text,text,timestamptz)', 'EXECUTE')
         and not pg_catalog.has_function_privilege('authenticated', 'public.omr_resolve_exam_entry_invite_v1(text,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('anon', 'public.omr_get_exam_entry_invite_metadata_v1(text,text,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('authenticated', 'public.omr_get_exam_entry_invite_metadata_v1(text,text,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('anon', 'public.omr_revoke_exam_entry_invite_v1(text,text,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('authenticated', 'public.omr_revoke_exam_entry_invite_v1(text,text,text)', 'EXECUTE')
         and pg_catalog.obj_description(
             'public.omr_rotate_exam_entry_invite_v1(text,text,text,text,timestamptz)'::pg_catalog.regprocedure,
             'pg_proc'
@@ -1204,7 +1212,15 @@ begin
         and pg_catalog.obj_description(
             'public.omr_resolve_exam_entry_invite_v1(text,text)'::pg_catalog.regprocedure,
             'pg_proc'
-        ) = 'opaque-exam-entry-invite:202608060029';
+        ) = 'opaque-exam-entry-invite:202608060029'
+        and pg_catalog.obj_description(
+            pg_catalog.to_regprocedure('public.omr_get_exam_entry_invite_metadata_v1(text,text,text)'),
+            'pg_proc'
+        ) = 'metadata-only-exam-entry-invite-lifecycle:202608080011'
+        and pg_catalog.obj_description(
+            pg_catalog.to_regprocedure('public.omr_revoke_exam_entry_invite_v1(text,text,text)'),
+            'pg_proc'
+        ) = 'metadata-only-exam-entry-invite-lifecycle:202608080011';
 
     v_workspace_bootstrap_plan_safe :=
         pg_catalog.to_regprocedure('public.omr_bootstrap_workspace_organization_v1(text,text,jsonb,timestamptz)') is not null

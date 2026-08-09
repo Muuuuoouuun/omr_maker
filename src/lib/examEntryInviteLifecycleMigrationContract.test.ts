@@ -7,6 +7,22 @@ const migrationPath = join(
     "supabase/migrations/202608080011_exam_entry_invite_lifecycle.sql",
 );
 const live = readFileSync(join(process.cwd(), "supabase/live-test-assertions.sql"), "utf8");
+const productionBoundary = readFileSync(
+    join(process.cwd(), "supabase/production-server-boundary.sql"),
+    "utf8",
+);
+const productionRollback = readFileSync(
+    join(process.cwd(), "supabase/production-server-boundary-rollback.sql"),
+    "utf8",
+);
+const rollbackLive = readFileSync(
+    join(process.cwd(), "supabase/live-test-rollback-assertions.sql"),
+    "utf8",
+);
+const boundaryLive = readFileSync(
+    join(process.cwd(), "supabase/live-test-boundary-assertions.sql"),
+    "utf8",
+);
 
 function migrationSource(): string {
     return readFileSync(migrationPath, "utf8");
@@ -112,5 +128,71 @@ describe("exam entry invite lifecycle migration", () => {
         expect(live).toMatch(/second_revoke[\s\S]*idempotent/i);
         expect(live).toMatch(/has_function_privilege\('anon', 'public\.omr_get_exam_entry_invite_metadata_v1\(text,text,text\)'/i);
         expect(live).toMatch(/has_function_privilege\('authenticated', 'public\.omr_revoke_exam_entry_invite_v1\(text,text,text\)'/i);
+    });
+
+    it("preserves lifecycle RPC denial across both production rollback fences", () => {
+        for (const name of [
+            "omr_get_exam_entry_invite_metadata_v1",
+            "omr_revoke_exam_entry_invite_v1",
+        ]) {
+            expect(productionRollback.match(new RegExp(`'${name}'`, "g"))).toHaveLength(2);
+            for (const role of ["anon", "authenticated"]) {
+                expect(rollbackLive).toMatch(new RegExp(
+                    `pg_catalog\\.has_function_privilege\\(\\s*'${role}',\\s*'public\\.${name}\\(text,text,text\\)',\\s*'EXECUTE'`,
+                    "i",
+                ));
+            }
+            expect(rollbackLive).toMatch(new RegExp(
+                `not pg_catalog\\.has_function_privilege\\(\\s*'service_role',\\s*'public\\.${name}\\(text,text,text\\)',\\s*'EXECUTE'`,
+                "i",
+            ));
+        }
+        expect(productionRollback).toMatch(
+            /guarded_functions text\[\] := array\[[\s\S]*omr_get_exam_entry_invite_metadata_v1[\s\S]*omr_revoke_exam_entry_invite_v1[\s\S]*for guarded_function in select unnest\(guarded_functions\)/i,
+        );
+        expect(productionRollback).toMatch(
+            /foreach guarded_function in array array\[[\s\S]*omr_get_exam_entry_invite_metadata_v1[\s\S]*omr_revoke_exam_entry_invite_v1[\s\S]*revoke all on function public\.%I\(%s\) from public, anon, authenticated; grant execute/i,
+        );
+    });
+
+    it("makes lifecycle RPC existence, ACLs, and provenance part of invite readiness", () => {
+        const readinessStart = productionBoundary.indexOf("v_exam_entry_invites_ready :=");
+        const readinessEnd = productionBoundary.indexOf(
+            "v_workspace_bootstrap_plan_safe :=",
+            readinessStart,
+        );
+        expect(readinessStart).toBeGreaterThanOrEqual(0);
+        expect(readinessEnd).toBeGreaterThan(readinessStart);
+        const readiness = productionBoundary.slice(readinessStart, readinessEnd);
+
+        for (const name of [
+            "omr_get_exam_entry_invite_metadata_v1",
+            "omr_revoke_exam_entry_invite_v1",
+        ]) {
+            const signature = `public.${name}(text,text,text)`;
+            expect(readiness).toContain(`pg_catalog.to_regprocedure('${signature}') is not null`);
+            expect(readiness).toContain(
+                `pg_catalog.has_function_privilege('service_role', '${signature}', 'EXECUTE')`,
+            );
+            for (const role of ["anon", "authenticated"]) {
+                expect(readiness).toContain(
+                    `not pg_catalog.has_function_privilege('${role}', '${signature}', 'EXECUTE')`,
+                );
+            }
+            const escapedSignature = signature.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            expect(readiness).toMatch(new RegExp(
+                `obj_description\\(\\s*pg_catalog\\.to_regprocedure\\('${escapedSignature}'\\),\\s*'pg_proc'\\s*\\)[\\s\\S]*?metadata-only-exam-entry-invite-lifecycle:202608080011`,
+                "i",
+            ));
+            expect(readiness).not.toContain(`'${signature}'::pg_catalog.regprocedure`);
+        }
+
+        expect(boundaryLive).toContain("readiness ->> 'examEntryInvitesReady' <> 'true'");
+        expect(boundaryLive).toMatch(
+            /begin;[\s\S]*revoke execute on function public\.omr_get_exam_entry_invite_metadata_v1\(text,text,text\)[\s\S]*from service_role[\s\S]*examEntryInvitesReady[\s\S]*'false'[\s\S]*ready[\s\S]*'false'[\s\S]*rollback;/i,
+        );
+        expect(boundaryLive).toMatch(
+            /rollback;[\s\S]*examEntryInvitesReady[\s\S]*'true'[\s\S]*ready[\s\S]*'true'[\s\S]*recovered/i,
+        );
     });
 });
