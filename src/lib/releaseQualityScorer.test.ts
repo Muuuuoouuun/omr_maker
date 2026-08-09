@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
     chmod,
+    link,
     lstat,
     mkdir,
     mkdtemp,
@@ -26,13 +28,14 @@ import {
     RELEASE_HARD_GATES,
     scoreReleaseEvidence,
 } from "../../scripts/release-quality-core.mjs";
+import * as releaseScoreCli from "../../scripts/score-release-quality.mjs";
 import {
     parseReleaseScoreArgs,
     runReleaseScoreCli,
 } from "../../scripts/score-release-quality.mjs";
 
 const BUILD_SHA = "a".repeat(40);
-const SCORER_SHA = "b".repeat(40);
+const SCORER_SHA = BUILD_SHA;
 const ENVIRONMENT_DIGEST = "c".repeat(64);
 const NOW = new Date("2026-08-09T00:00:00.000Z");
 const ARBITRARY_BYTES = Buffer.from("bounded but semantically meaningless evidence\n", "utf8");
@@ -213,6 +216,35 @@ async function cliFixture(scores: Parameters<typeof manifest>[0] = {}) {
     return { temporary, artifactPaths, manifestPath, outputPath, input };
 }
 
+function git(cwd: string, args: string[]) {
+    return execFileSync("git", args, {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 5_000,
+        maxBuffer: 64 * 1024,
+    }).trim();
+}
+
+async function scorerGitFixture() {
+    const temporary = await realpath(await mkdtemp(join(tmpdir(), "omr-release-scorer-git-")));
+    const scripts = join(temporary, "scripts");
+    await mkdir(scripts);
+    await writeFile(join(scripts, "release-quality-core.mjs"), "export const core = true;\n", { flag: "wx" });
+    await writeFile(join(scripts, "score-release-quality.mjs"), "export const cli = true;\n", { flag: "wx" });
+    git(temporary, ["init", "--quiet"]);
+    git(temporary, ["config", "user.email", "release-test@example.invalid"]);
+    git(temporary, ["config", "user.name", "Release Test"]);
+    git(temporary, ["add", "--", "scripts/release-quality-core.mjs", "scripts/score-release-quality.mjs"]);
+    git(temporary, ["commit", "--quiet", "-m", "fixture"]);
+    return {
+        temporary,
+        corePath: join(scripts, "release-quality-core.mjs"),
+        cliPath: join(scripts, "score-release-quality.mjs"),
+        head: git(temporary, ["rev-parse", "HEAD"]),
+    };
+}
+
 describe("release quality scorer", () => {
     it("exports the exact ten release dimensions", () => {
         expect(RELEASE_DIMENSIONS).toEqual([
@@ -290,6 +322,15 @@ describe("release quality scorer", () => {
         expect(result.mean).toBe(9.25);
         expect(result.minimum).toBe(9.2);
         expect(result.status).toBe("no_go");
+    });
+
+    it("rejects a manifest build SHA that is not the scorer commit SHA", async () => {
+        const input = manifest();
+
+        await expect(scoreReleaseEvidence(input, {
+            ...scoringDependencies(input),
+            scorerSha: "d".repeat(40),
+        })).rejects.toMatchObject({ name: "ReleaseQualityError" });
     });
 
     it.each([
@@ -763,6 +804,7 @@ describe("release quality scorer", () => {
                         chmod: (nextMode: number) => handle.chmod(nextMode),
                         writeFile: (data: string, options: object) => handle.writeFile(data, options),
                         sync: () => handle.sync(),
+                        truncate: (length: number) => handle.truncate(length),
                         stat: async () => { throw new Error("injected-sensitive-stat-error"); },
                         close: () => handle.close(),
                     };
@@ -800,6 +842,81 @@ describe("release quality scorer", () => {
         await expect(lstat(fixture.outputPath)).rejects.toThrow();
     });
 
+    it("invalidates an output hard-link when link succeeds and then throws", async () => {
+        const fixture = await cliFixture();
+
+        await expect(runReleaseScoreCli({
+            argv: [`--manifest=${fixture.manifestPath}`, `--output=${fixture.outputPath}`],
+        }, {
+            now: () => NOW,
+            scorerSha: SCORER_SHA,
+            generateTempName: () => "1".repeat(32),
+            fs: {
+                link: async (source: string, target: string) => {
+                    await link(source, target);
+                    throw new Error("injected-post-link-failure");
+                },
+            },
+        })).rejects.toMatchObject({ code: "unsafe_output" });
+
+        await expect(lstat(fixture.outputPath)).rejects.toThrow();
+        expect((await readdir(fixture.temporary)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    });
+
+    it("invalidates a linked score inode when the published parent is renamed", async () => {
+        const fixture = await cliFixture();
+        const movedParent = `${fixture.temporary}-after-final-check`;
+        const movedOutput = join(movedParent, "score.json");
+        let publishedStats = 0;
+
+        await expect(runReleaseScoreCli({
+            argv: [`--manifest=${fixture.manifestPath}`, `--output=${fixture.outputPath}`],
+        }, {
+            now: () => NOW,
+            scorerSha: SCORER_SHA,
+            generateTempName: () => "2".repeat(32),
+            fs: {
+                lstat: async (path: string) => {
+                    const stats = await lstat(path);
+                    if (path === fixture.outputPath && stats.isFile()) {
+                        publishedStats += 1;
+                        if (publishedStats === 2) {
+                            await rename(fixture.temporary, movedParent);
+                            await mkdir(fixture.temporary, { mode: 0o700 });
+                        }
+                    }
+                    return stats;
+                },
+            },
+        })).rejects.toMatchObject({ code: "unsafe_output" });
+
+        expect(publishedStats).toBe(2);
+        const abandonedBytes = await readFile(movedOutput);
+        expect(abandonedBytes.byteLength).toBe(0);
+        expect(() => JSON.parse(abandonedBytes.toString("utf8"))).toThrow();
+    });
+
+    it("resolves scorer identity only from clean tracked HEAD source blobs", async () => {
+        const resolver = Reflect.get(releaseScoreCli, "resolveVerifiedScorerSha") as undefined | ((cwd: string) => string);
+        expect(resolver).toBeTypeOf("function");
+
+        const clean = await scorerGitFixture();
+        expect(resolver!(clean.temporary)).toBe(clean.head);
+
+        for (const state of ["unstaged", "staged", "untracked"] as const) {
+            const fixture = await scorerGitFixture();
+            if (state === "unstaged") {
+                await writeFile(fixture.corePath, "export const core = false;\n");
+            } else if (state === "staged") {
+                await writeFile(fixture.cliPath, "export const cli = false;\n");
+                git(fixture.temporary, ["add", "--", "scripts/score-release-quality.mjs"]);
+            } else {
+                git(fixture.temporary, ["rm", "--quiet", "--cached", "--", "scripts/release-quality-core.mjs"]);
+            }
+            expect(() => resolver!(fixture.temporary)).toThrow();
+        }
+    });
+
     it("fails closed on duplicate JSON keys without publishing or exposing content", async () => {
         const fixture = await cliFixture();
         const duplicateManifest = join(fixture.temporary, "duplicate.json");
@@ -831,5 +948,6 @@ describe("release quality scorer", () => {
         expect(evidenceTemplate).toContain("30일");
         expect(evidenceTemplate).toContain("environmentDigest");
         expect(evidenceTemplate).toContain("hard gate `passed`가 atomic failure를 덮어쓸 수 없습니다");
+        expect(evidenceTemplate).toContain("manifest `buildSha`와 scorer commit SHA가 정확히 같아야");
     });
 });

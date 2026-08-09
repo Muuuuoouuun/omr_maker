@@ -429,6 +429,7 @@ export async function scoreReleaseEvidence(input, overrides = {}) {
     if (manifest.generatedAtMs > now.getTime()) fail("invalid_clock");
     const scorerSha = overrides.scorerSha;
     if (typeof scorerSha !== "string" || !BUILD_SHA.test(scorerSha)) fail("invalid_scorer_sha");
+    if (scorerSha !== manifest.buildSha) fail("scorer_build_mismatch");
     const readArtifact = overrides.readArtifact ?? readBoundedArtifact;
     if (typeof readArtifact !== "function") fail();
 

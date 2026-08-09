@@ -12,17 +12,39 @@ const BUILD_SHA = /^[a-f0-9]{40}$/;
 const TEMP_NAME = /^[a-f0-9]{32}$/;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const SCORER_SOURCE_PATHS = Object.freeze([
+    "scripts/release-quality-core.mjs",
+    "scripts/score-release-quality.mjs",
+]);
+
+export function resolveVerifiedScorerSha(cwd, run = execFileSync) {
+    const options = {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5_000,
+        maxBuffer: 64 * 1024,
+    };
+    const tracked = run("git", ["ls-files", "--error-unmatch", "--", ...SCORER_SOURCE_PATHS], options)
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+    if (tracked.length !== SCORER_SOURCE_PATHS.length
+        || tracked.some((path, index) => path !== SCORER_SOURCE_PATHS[index])) {
+        throw new Error("scorer source is not exactly tracked");
+    }
+    run("git", ["diff", "--quiet", "HEAD", "--", ...SCORER_SOURCE_PATHS], options);
+    const sha = run("git", ["rev-parse", "--verify", "HEAD^{commit}"], options).trim();
+    if (!BUILD_SHA.test(sha)) throw new Error("invalid scorer commit");
+    return sha;
+}
 
 const DEFAULT_DEPENDENCIES = Object.freeze({
     fs: Object.freeze({ link, lstat, open, realpath, unlink }),
     currentUid: () => process.getuid?.(),
     generateTempName: () => randomBytes(16).toString("hex"),
     now: () => new Date(),
-    resolveScorerSha: (cwd) => execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-    }).trim(),
+    resolveScorerSha: resolveVerifiedScorerSha,
 });
 
 export class ReleaseScoreCliError extends Error {
@@ -175,7 +197,7 @@ async function publishScore(outputPath, value, boundary, deps) {
     let ownedStats;
     let writtenStats;
     let tempPresent = false;
-    let outputLinked = false;
+    let contentMayExist = false;
     let handleClosed = false;
     try {
         directoryHandle = await deps.fs.open(boundary.parentPath, "r");
@@ -188,7 +210,7 @@ async function publishScore(outputPath, value, boundary, deps) {
         tempPresent = true;
         if (typeof handle.chmod !== "function" || typeof handle.writeFile !== "function"
             || typeof handle.sync !== "function" || typeof handle.stat !== "function"
-            || typeof handle.close !== "function") fail("unsafe_output");
+            || typeof handle.truncate !== "function" || typeof handle.close !== "function") fail("unsafe_output");
         ownedStats = await deps.fs.lstat(temporaryPath);
         if (!ownedStats.isFile() || ownedStats.size !== 0 || ownedStats.uid !== boundary.uid
             || ownedStats.isSymbolicLink() || (ownedStats.mode & 0o777) !== 0o600) fail("unsafe_output");
@@ -197,18 +219,16 @@ async function publishScore(outputPath, value, boundary, deps) {
             || openedStats.size !== 0 || openedStats.uid !== boundary.uid
             || (openedStats.mode & 0o777) !== 0o600) fail("unsafe_output");
         await handle.chmod(0o600);
+        contentMayExist = true;
         await handle.writeFile(serialized, { encoding: "utf8" });
         await handle.sync();
         writtenStats = await handle.stat();
         if (!writtenStats.isFile() || writtenStats.dev !== ownedStats.dev || writtenStats.ino !== ownedStats.ino
             || writtenStats.uid !== boundary.uid || (writtenStats.mode & 0o777) !== 0o600
             || writtenStats.size !== Buffer.byteLength(serialized)) fail("unsafe_output");
-        await handle.close();
-        handleClosed = true;
         if (!await sameOutputBoundary(boundary, deps)) fail("unsafe_output");
         await assertAbsent(outputPath, deps.fs);
         await deps.fs.link(temporaryPath, outputPath);
-        outputLinked = true;
         const published = await deps.fs.lstat(outputPath);
         if (!published.isFile() || published.isSymbolicLink() || published.dev !== ownedStats.dev
             || published.ino !== ownedStats.ino || published.size !== writtenStats.size
@@ -230,17 +250,20 @@ async function publishScore(outputPath, value, boundary, deps) {
             || closedPublished.dev !== ownedStats.dev || closedPublished.ino !== ownedStats.ino
             || closedPublished.size !== writtenStats.size || closedPublished.uid !== boundary.uid
             || (closedPublished.mode & 0o777) !== 0o600) fail("unsafe_output");
+        await handle.close();
+        handleClosed = true;
     } catch (error) {
         if (tempPresent && !ownedStats && handle && typeof handle.stat === "function") {
             try { ownedStats = await handle.stat(); } catch { /* cleanup stays inode-bound */ }
         }
-        if (handle && !handleClosed && typeof handle.close === "function") {
-            try { await handle.close(); } catch { /* best effort */ }
+        if (contentMayExist && handle && !handleClosed
+            && typeof handle.truncate === "function" && typeof handle.sync === "function") {
+            try {
+                await handle.truncate(0);
+                await handle.sync();
+            } catch { /* best effort: inode-bound cleanup below still runs */ }
         }
-        if (directoryHandle && typeof directoryHandle.close === "function") {
-            try { await directoryHandle.close(); } catch { /* best effort */ }
-        }
-        if (outputLinked && ownedStats) {
+        if (ownedStats) {
             try {
                 const stats = await deps.fs.lstat(outputPath);
                 if (stats.dev === ownedStats.dev && stats.ino === ownedStats.ino) await deps.fs.unlink(outputPath);
@@ -251,6 +274,12 @@ async function publishScore(outputPath, value, boundary, deps) {
                 const stats = await deps.fs.lstat(temporaryPath);
                 if (stats.dev === ownedStats.dev && stats.ino === ownedStats.ino) await deps.fs.unlink(temporaryPath);
             } catch { /* best effort */ }
+        }
+        if (handle && !handleClosed && typeof handle.close === "function") {
+            try { await handle.close(); } catch { /* best effort */ }
+        }
+        if (directoryHandle && typeof directoryHandle.close === "function") {
+            try { await directoryHandle.close(); } catch { /* best effort */ }
         }
         if (error instanceof ReleaseScoreCliError) throw error;
         fail("unsafe_output");

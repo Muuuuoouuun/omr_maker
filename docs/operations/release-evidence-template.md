@@ -156,5 +156,8 @@ manifest는 scorer가 내장한 100개 fixed atomic check ID·dimension·정수 
 구성을 대표하는 `environmentDigest`가 바뀌는 즉시 무효이며, 임의 `freshUntil` 연장은 허용하지 않습니다.
 각 hard gate는 scorer의 immutable atomic predicate에 다시 연결되므로, artifact의 별도
 hard gate `passed`가 atomic failure를 덮어쓸 수 없습니다. 두 상태가 모순되면 항상 `no_go`입니다.
+manifest `buildSha`와 scorer commit SHA가 정확히 같아야 하며, scorer의 core/CLI source 두 파일은
+그 commit의 tracked blob과 byte-for-byte 일치해야 합니다. staged·unstaged 변경이나 untracked 교체가
+있으면 score를 만들지 않고 `unverified`로 종료합니다.
 
 `verified` JSON에는 토큰, URL query, 학생 정보, row ID, Storage object path를 복사하지 않습니다.
