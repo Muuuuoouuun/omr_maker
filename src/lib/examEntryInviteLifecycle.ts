@@ -58,7 +58,7 @@ function isSafeWebUrl(value: unknown): value is string {
     }
 }
 
-function hasValidMetadataFields(metadata: Record<string, unknown>, now: number, expiresAt: number): boolean {
+function hasValidMetadataFields(metadata: Record<string, unknown>, expiresAt: number): boolean {
     const issuedAt = parseTimestamp(metadata.issuedAt);
     return isNonEmptyString(metadata.inviteId)
         && isNonEmptyString(metadata.examId)
@@ -69,14 +69,12 @@ function hasValidMetadataFields(metadata: Record<string, unknown>, now: number, 
         && metadata.targetIds.every(isNonEmptyString)
         && isGeneration(metadata.generation)
         && issuedAt !== null
-        && issuedAt <= now
         && issuedAt < expiresAt;
 }
 
 function hasMatchingRawUrl(
     rawUrl: unknown,
     metadata: Record<string, unknown>,
-    now: number,
 ): rawUrl is ExamEntryInviteRawUrlState {
     if (!isRecord(rawUrl)) return false;
     const issuedAt = parseTimestamp(rawUrl.issuedAt);
@@ -84,7 +82,6 @@ function hasMatchingRawUrl(
         && isNonEmptyString(rawUrl.examId)
         && isGeneration(rawUrl.generation)
         && issuedAt !== null
-        && issuedAt <= now
         && rawUrl.examId === metadata.examId
         && rawUrl.generation === metadata.generation;
 }
@@ -100,9 +97,9 @@ export function resolveInviteCapability(
     const expiresAt = parseTimestamp(metadata.expiresAt);
     if (!Number.isFinite(input.now) || expiresAt === null || input.now >= expiresAt) return "expired";
 
-    if (!hasValidMetadataFields(metadata, input.now, expiresAt)) return "active_but_raw_unavailable";
+    if (!hasValidMetadataFields(metadata, expiresAt)) return "active_but_raw_unavailable";
 
-    return hasMatchingRawUrl(input.rawUrl, metadata, input.now)
+    return hasMatchingRawUrl(input.rawUrl, metadata)
         ? "copyable_here"
         : "active_but_raw_unavailable";
 }
