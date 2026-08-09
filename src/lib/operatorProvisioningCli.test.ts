@@ -280,6 +280,121 @@ describe("operator teacher provisioning CLI", () => {
         },
     );
 
+    it("does not repair the two-link temp of a live lock publisher", async () => {
+        const current = await fixture();
+        const lockPath = `${current.statePath}.lock`;
+        let releasePublisher!: () => void;
+        let publisherReached!: () => void;
+        const publisherPaused = new Promise<void>((resolve) => { publisherReached = resolve; });
+        const publisherRelease = new Promise<void>((resolve) => { releasePublisher = resolve; });
+        let paused = false;
+        const publisher = executeOperatorProvisioning(
+            { argv: [`--request=${current.requestPath}`], env: {} },
+            {
+                ...current.deps,
+                currentPid: () => 41_001,
+                checkpoint: async (phase: string) => {
+                    if (!paused && phase === "lock_final_linked") {
+                        paused = true;
+                        publisherReached();
+                        await publisherRelease;
+                    }
+                },
+            },
+        );
+        void publisher.catch(() => {});
+        await publisherPaused;
+        const tempName = (await readdir(current.stateDir)).find((name) => name.includes(".lock."));
+        expect(tempName).toBeDefined();
+        const tempPath = join(current.stateDir, tempName!);
+        expect((await lstat(lockPath)).nlink).toBe(2);
+        expect((await lstat(tempPath)).nlink).toBe(2);
+
+        const stderr: string[] = [];
+        const competitorExit = await runOperatorProvisioningCli({
+            argv: [`--request=${current.requestPath}`],
+            env: {},
+            deps: {
+                ...current.deps,
+                currentPid: () => 41_002,
+                isProcessAlive: (pid: number) => pid === 41_001,
+            },
+            stdout: () => {},
+            stderr: (line: string) => stderr.push(line),
+        });
+
+        let retainedError: unknown;
+        try {
+            expect(competitorExit).toBe(1);
+            expect(stderr).toEqual(["provision_failed: unsafe_state"]);
+            expect((await lstat(lockPath)).nlink).toBe(2);
+            expect((await lstat(tempPath)).nlink).toBe(2);
+        } catch (error) {
+            retainedError = error;
+        } finally {
+            releasePublisher();
+        }
+        const publisherOutcome = await publisher.then(
+            (value) => ({ value }),
+            (error) => ({ error }),
+        );
+        if (retainedError) throw retainedError;
+        expect(publisherOutcome).toHaveProperty("value.status", "provisioned");
+        expect((await receipt(current.statePath)).initialPassword).toBe(PASSWORD);
+        await expect(lstat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(lstat(tempPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("recovers an exact two-link lock publication left by a dead process", async () => {
+        const current = await fixture();
+        const lockPath = `${current.statePath}.lock`;
+        const tempPath = join(current.stateDir, `.pilot.state.json.lock.${"7".repeat(32)}.tmp`);
+        await writeFile(tempPath, `${JSON.stringify({
+            schemaVersion: 1,
+            pid: 41_003,
+            createdAt: "2026-08-08T00:00:00.000Z",
+            nonce: "8".repeat(32),
+        })}\n`, { mode: 0o600 });
+        await link(tempPath, lockPath);
+        expect((await lstat(lockPath)).nlink).toBe(2);
+
+        const outcome = await executeOperatorProvisioning(
+            { argv: [`--request=${current.requestPath}`], env: {} },
+            { ...current.deps, isProcessAlive: (pid: number) => pid !== 41_003 },
+        );
+
+        expect(outcome.status).toBe("provisioned");
+        await expect(lstat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(lstat(tempPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it.each([
+        ["finalized", "2026-02-30T00:00:00.000Z"],
+        ["finalized", "2026-08-08T00:00:00.001Z"],
+        ["orphan", "2026-02-30T00:00:00.000Z"],
+        ["orphan", "2026-08-08T00:00:00.001Z"],
+    ])("retains and rejects a %s dead lock with noncanonical or future createdAt %s", async (kind, createdAt) => {
+        const current = await fixture();
+        const lockPath = `${current.statePath}.lock`;
+        const rejectedPath = kind === "finalized"
+            ? lockPath
+            : join(current.stateDir, `.pilot.state.json.lock.${"b".repeat(32)}.tmp`);
+        const serialized = `${JSON.stringify({
+            schemaVersion: 1,
+            pid: 41_005,
+            createdAt,
+            nonce: "c".repeat(32),
+        })}\n`;
+        await writeFile(rejectedPath, serialized, { mode: 0o600 });
+
+        await expect(executeOperatorProvisioning(
+            { argv: [`--request=${current.requestPath}`], env: {} },
+            { ...current.deps, isProcessAlive: () => false },
+        )).rejects.toMatchObject({ code: "unsafe_state" });
+        expect(await readFile(rejectedPath, "utf8")).toBe(serialized);
+        expect(current.deps.provisionWithVerifier).not.toHaveBeenCalled();
+    });
+
     it.each(["lock", "parent"] as const)(
         "does not delete a foreign %s inode while cleaning a failed owned publication",
         async (replacement) => {

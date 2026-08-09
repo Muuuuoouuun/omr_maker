@@ -260,12 +260,12 @@ async function sameParent(boundary, deps) {
     }
 }
 
-function safeRegularStats(stats, boundary, maximumBytes, allowEmpty = false) {
+function safeRegularStats(stats, boundary, maximumBytes, allowEmpty = false, expectedLinks = 1) {
     return stats.isFile()
         && !stats.isSymbolicLink()
         && stats.uid === boundary.uid
         && (stats.mode & 0o777) === 0o600
-        && stats.nlink === 1
+        && stats.nlink === expectedLinks
         && stats.size <= maximumBytes
         && (allowEmpty || stats.size > 0);
 }
@@ -282,14 +282,19 @@ async function readAtMost(handle, maximumBytes) {
     return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, offset));
 }
 
-async function readSecureJson(filePath, deps, code, maximumBytes, knownBoundary) {
+async function readSecureJson(filePath, deps, code, maximumBytes, knownBoundary, expectedStats, expectedLinks = 1) {
     normalizedAbsolutePath(filePath, code);
     const boundary = knownBoundary ?? await safeParentBoundary(filePath, deps, code);
     if (!await sameParent(boundary, deps)) fail(code);
     let handle;
     try {
         const before = await deps.fs.lstat(filePath);
-        if (!safeRegularStats(before, boundary, maximumBytes)) fail(code);
+        if (!safeRegularStats(before, boundary, maximumBytes, false, expectedLinks)
+            || (expectedStats && (
+                before.dev !== expectedStats.dev
+                || before.ino !== expectedStats.ino
+                || before.size !== expectedStats.size
+            ))) fail(code);
         if (await deps.fs.realpath(filePath) !== filePath) fail(code);
         handle = await deps.fs.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
         if (
@@ -299,7 +304,7 @@ async function readSecureJson(filePath, deps, code, maximumBytes, knownBoundary)
         ) fail(code);
         const opened = await handle.stat();
         if (
-            !safeRegularStats(opened, boundary, maximumBytes)
+            !safeRegularStats(opened, boundary, maximumBytes, false, expectedLinks)
             || opened.dev !== before.dev
             || opened.ino !== before.ino
             || opened.size !== before.size
@@ -307,10 +312,11 @@ async function readSecureJson(filePath, deps, code, maximumBytes, knownBoundary)
         const serialized = await readAtMost(handle, maximumBytes);
         const after = await handle.stat();
         if (
-            !safeRegularStats(after, boundary, maximumBytes)
+            !safeRegularStats(after, boundary, maximumBytes, false, expectedLinks)
             || after.dev !== opened.dev
             || after.ino !== opened.ino
             || after.size !== opened.size
+            || after.mtimeMs !== opened.mtimeMs
             || Buffer.byteLength(serialized, "utf8") !== after.size
         ) fail(code);
         await handle.close();
@@ -334,7 +340,7 @@ async function pathState(path, deps) {
     }
 }
 
-async function repairInterruptedPublication(filePath, boundary, deps, code) {
+async function repairInterruptedPublication(filePath, boundary, deps, code, beforeRepair) {
     let published;
     try {
         published = await deps.fs.lstat(filePath);
@@ -376,6 +382,7 @@ async function repairInterruptedPublication(filePath, boundary, deps, code) {
     }
     if (candidates.length !== 1) fail(code);
     try {
+        if (beforeRepair) await beforeRepair(published);
         const current = await deps.fs.lstat(filePath);
         if (current.dev !== published.dev || current.ino !== published.ino || current.nlink !== 2) fail(code);
         await deps.fs.unlink(candidates[0].path);
@@ -505,23 +512,35 @@ async function safeUnlink(filePath, expectedStats, boundary, deps, code) {
     }
 }
 
-function validateLockValue(raw) {
+function validateLockValue(raw, now) {
     const value = exactObject(raw, ["createdAt", "nonce", "pid", "schemaVersion"], "unsafe_state");
+    const createdAt = Date.parse(value.createdAt);
     if (
         value.schemaVersion !== 1
         || !Number.isSafeInteger(value.pid)
         || value.pid < 1
         || !INPUT_TIMESTAMP_PATTERN.test(value.createdAt)
-        || !Number.isFinite(Date.parse(value.createdAt))
+        || !Number.isFinite(createdAt)
+        || new Date(createdAt).toISOString() !== value.createdAt
+        || !(now instanceof Date)
+        || !Number.isFinite(now.getTime())
+        || createdAt > now.getTime()
         || !/^[a-f0-9]{32}$/.test(value.nonce)
     ) fail("unsafe_state");
     return value;
 }
 
 async function recoverDeadLockFile(lockPath, boundary, deps) {
-    await repairInterruptedPublication(lockPath, boundary, deps, "unsafe_state");
+    const now = deps.now();
+    await repairInterruptedPublication(lockPath, boundary, deps, "unsafe_state", async (published) => {
+        const lockFile = await readSecureJson(
+            lockPath, deps, "unsafe_state", 1024, boundary, published, 2,
+        );
+        const value = validateLockValue(lockFile.value, now);
+        if (deps.isProcessAlive(value.pid)) fail("unsafe_state");
+    });
     const lockFile = await readSecureJson(lockPath, deps, "unsafe_state", 1024, boundary);
-    const value = validateLockValue(lockFile.value);
+    const value = validateLockValue(lockFile.value, now);
     if (deps.isProcessAlive(value.pid)) fail("unsafe_state");
     await safeUnlink(lockPath, lockFile.stats, boundary, deps, "unsafe_state");
 }
@@ -533,10 +552,11 @@ async function recoverOrphanLockTemps(lockPath, boundary, deps) {
     const candidates = names.filter(name => (
         name.startsWith(prefix) && /^[a-f0-9]{32}\.tmp$/.test(name.slice(prefix.length))
     ));
+    const now = deps.now();
     for (const name of candidates) {
         const path = `${boundary.parentPath}${sep}${name}`;
         const file = await readSecureJson(path, deps, "unsafe_state", 1024, boundary);
-        const value = validateLockValue(file.value);
+        const value = validateLockValue(file.value, now);
         if (deps.isProcessAlive(value.pid)) fail("unsafe_state");
         await safeUnlink(path, file.stats, boundary, deps, "unsafe_state");
     }
