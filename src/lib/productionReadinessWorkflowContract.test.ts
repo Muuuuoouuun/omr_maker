@@ -14,6 +14,13 @@ function hasDefaultBranchOnlyGate(candidate: string): boolean {
 }
 
 describe("production readiness workflow release identity", () => {
+    it("defaults the protected workflow to the exact current readiness contract", () => {
+        expect(workflow).toMatch(
+            /      expected_readiness_version:\n(?:        .+\n)*?        default: "202608080010"\n/,
+        );
+        expect(workflow).not.toContain('default: "202608080007"');
+    });
+
     it("passes the protected opaque provisioned teacher canary to the hosted verifier", () => {
         expect(workflow).toContain(
             "OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: ${{ secrets.OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID }}",
