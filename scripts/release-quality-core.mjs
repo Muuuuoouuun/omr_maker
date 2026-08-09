@@ -105,6 +105,8 @@ export const RELEASE_HARD_GATE_PREDICATES = Object.freeze(Object.fromEntries(Obj
         "recovery_release_object_hashes",
         "recovery_release_restore_boundary",
         "recovery_release_restore_browser",
+        "recovery_release_credential_revocation",
+        "recovery_release_release_seal",
     ],
     production_vulnerabilities: ["code_supply_chain_production_audit"],
     unexplained_skips: ["browser_determinism_skip_accounting"],

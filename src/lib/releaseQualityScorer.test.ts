@@ -257,7 +257,7 @@ describe("release quality scorer", () => {
         setAtomicStatusById(input, "browser_determinism_zero_order_dependence", "passed");
         setAtomicStatusById(input, "browser_determinism_credential_boundary", "failed");
         setAtomicStatusById(input, "recovery_release_object_hashes", "passed");
-        setAtomicStatusById(input, "recovery_release_credential_revocation", "failed");
+        setAtomicStatusById(input, "recovery_release_rollback_evidence", "failed");
 
         await expect(scoreReleaseEvidence(input, scoringDependencies(input))).resolves.toMatchObject({
             schemaVersion: 1,
@@ -324,6 +324,19 @@ describe("release quality scorer", () => {
         const result = await scoreReleaseEvidence(input, scoringDependencies(input));
 
         expect(result.hardGateFailures).toContain(gateId);
+        expect(result.status).toBe("no_go");
+    });
+
+    it.each([
+        "recovery_release_credential_revocation",
+        "recovery_release_release_seal",
+    ])("requires %s before the restore gate can pass", async (checkId) => {
+        const input = manifest();
+        setAtomicStatusById(input, checkId, "failed");
+
+        const result = await scoreReleaseEvidence(input, scoringDependencies(input));
+
+        expect(result.hardGateFailures).toContain("restore_rpo_rto");
         expect(result.status).toBe("no_go");
     });
 
