@@ -17,6 +17,7 @@ import {
     type TeacherLoadIdentity,
 } from "./teacherDashboardCanonicalCache";
 import { buildCanonicalSurfaceCacheKey, type CanonicalSurfaceCacheIdentity } from "./canonicalSurfaceCache";
+import * as teacherDashboardCanonicalCache from "./teacherDashboardCanonicalCache";
 
 function memoryStorage(initial: Record<string, string> = {}) {
     const data = { ...initial };
@@ -85,6 +86,112 @@ describe("teacher dashboard canonical cache", () => {
         new URL("../app/teacher/dashboard/page.tsx", import.meta.url),
         "utf8",
     );
+
+    it("invalidates live repair and detail continuations synchronously when capability changes", () => {
+        const runtime = teacherDashboardCanonicalCache as typeof teacherDashboardCanonicalCache & {
+            canContinueTeacherDashboardRepair?: (
+                captured: TeacherLoadIdentity,
+                live: { loadState: string; identity: TeacherLoadIdentity | null },
+            ) => boolean;
+            canContinueTeacherDashboardDetail?: (
+                captured: TeacherLoadIdentity,
+                live: { loadState: string; identity: TeacherLoadIdentity | null },
+            ) => boolean;
+        };
+        expect(runtime.canContinueTeacherDashboardRepair).toBeTypeOf("function");
+        expect(runtime.canContinueTeacherDashboardDetail).toBeTypeOf("function");
+        if (!runtime.canContinueTeacherDashboardRepair || !runtime.canContinueTeacherDashboardDetail) return;
+
+        const live = { loadState: "loaded_data", identity: { ...identity } };
+        expect(runtime.canContinueTeacherDashboardRepair(identity, live)).toBe(true);
+        expect(runtime.canContinueTeacherDashboardDetail(identity, live)).toBe(true);
+        live.loadState = "degraded_with_cache";
+        expect(runtime.canContinueTeacherDashboardRepair(identity, live)).toBe(false);
+        expect(runtime.canContinueTeacherDashboardDetail(identity, live)).toBe(false);
+        live.loadState = "loaded_data";
+        live.identity = { ...identity, requestGeneration: identity.requestGeneration + 1 };
+        expect(runtime.canContinueTeacherDashboardRepair(identity, live)).toBe(true);
+        expect(runtime.canContinueTeacherDashboardDetail(identity, live)).toBe(false);
+    });
+
+    it("releases a same-session repair spinner across unavailable and fresh recovery states", () => {
+        const runtime = teacherDashboardCanonicalCache as typeof teacherDashboardCanonicalCache & {
+            canReleaseTeacherDashboardRepair?: (
+                captured: TeacherLoadIdentity,
+                live: { loadState: string; identity: TeacherLoadIdentity | null },
+            ) => boolean;
+        };
+        expect(runtime.canReleaseTeacherDashboardRepair).toBeTypeOf("function");
+        if (!runtime.canReleaseTeacherDashboardRepair) return;
+
+        let isRepairing = true;
+        const live = {
+            loadState: "error_without_cache",
+            identity: { ...identity, requestGeneration: identity.requestGeneration + 1 },
+        };
+        if (runtime.canReleaseTeacherDashboardRepair(identity, live)) isRepairing = false;
+        live.loadState = "loaded_data";
+        live.identity = { ...identity, requestGeneration: identity.requestGeneration + 2 };
+        expect(isRepairing).toBe(false);
+        expect(runtime.canReleaseTeacherDashboardRepair(identity, live)).toBe(true);
+        expect(runtime.canReleaseTeacherDashboardRepair(identity, {
+            ...live,
+            identity: { ...live.identity, sessionGeneration: identity.sessionGeneration + 1 },
+        })).toBe(false);
+    });
+
+    it("prevents an invalidated repair A from resuming or releasing repair B after loaded-state recovery", () => {
+        type FenceState = { capabilityEpoch: number; nextToken: number; activeToken: number | null };
+        type Operation = { capabilityEpoch: number; token: number };
+        const runtime = teacherDashboardCanonicalCache as typeof teacherDashboardCanonicalCache & {
+            beginTeacherDashboardRepairOperation?: (state: FenceState) => { state: FenceState; operation: Operation };
+            invalidateTeacherDashboardRepairCapability?: (state: FenceState) => FenceState;
+            canContinueTeacherDashboardRepairOperation?: (operation: Operation, state: FenceState) => boolean;
+            canReleaseTeacherDashboardRepairOperation?: (operation: Operation, state: FenceState) => boolean;
+        };
+        expect(runtime.beginTeacherDashboardRepairOperation).toBeTypeOf("function");
+        expect(runtime.invalidateTeacherDashboardRepairCapability).toBeTypeOf("function");
+        expect(runtime.canContinueTeacherDashboardRepairOperation).toBeTypeOf("function");
+        expect(runtime.canReleaseTeacherDashboardRepairOperation).toBeTypeOf("function");
+        if (!runtime.beginTeacherDashboardRepairOperation
+            || !runtime.invalidateTeacherDashboardRepairCapability
+            || !runtime.canContinueTeacherDashboardRepairOperation
+            || !runtime.canReleaseTeacherDashboardRepairOperation) return;
+
+        let fence: FenceState = { capabilityEpoch: 0, nextToken: 0, activeToken: null };
+        const repairA = runtime.beginTeacherDashboardRepairOperation(fence);
+        fence = repairA.state;
+        expect(runtime.canContinueTeacherDashboardRepairOperation(repairA.operation, fence)).toBe(true);
+
+        fence = runtime.invalidateTeacherDashboardRepairCapability(fence);
+        expect(runtime.canContinueTeacherDashboardRepairOperation(repairA.operation, fence)).toBe(false);
+        const repairB = runtime.beginTeacherDashboardRepairOperation(fence);
+        fence = repairB.state;
+        expect(repairB.operation.token).toBeGreaterThan(repairA.operation.token);
+        expect(repairB.operation.capabilityEpoch).toBeGreaterThan(repairA.operation.capabilityEpoch);
+        expect(runtime.canContinueTeacherDashboardRepairOperation(repairB.operation, fence)).toBe(true);
+
+        let staleWrites = 0;
+        let staleStatePublications = 0;
+        let staleToasts = 0;
+        let isRepairing = true;
+        if (runtime.canContinueTeacherDashboardRepairOperation(repairA.operation, fence)) {
+            staleWrites += 1;
+            staleStatePublications += 1;
+            staleToasts += 1;
+        }
+        if (runtime.canReleaseTeacherDashboardRepairOperation(repairA.operation, fence)) {
+            staleStatePublications += 1;
+            isRepairing = false;
+        }
+        expect({ staleWrites, staleStatePublications, staleToasts, isRepairing }).toEqual({
+            staleWrites: 0,
+            staleStatePublications: 0,
+            staleToasts: 0,
+            isRepairing: true,
+        });
+        expect(runtime.canReleaseTeacherDashboardRepairOperation(repairB.operation, fence)).toBe(true);
+    });
 
     it("projects redacted summaries without mutating rich fresh records", () => {
         const richExam = exam();
@@ -353,9 +460,12 @@ describe("teacher dashboard canonical cache", () => {
         const repairSource = dashboardPageSource.slice(repairStart, repairEnd);
 
         expect(repairSource).toContain("const repairIdentity = teacherLoadIdentityRef.current");
+        expect(repairSource).toContain("const repairOwnerIsCurrent = () => canReleaseTeacherDashboardRepair(");
+        expect(repairSource).toContain("const repairIsCurrent = () => canContinueTeacherDashboardRepair(");
         expect(repairSource).toContain("saveLocalAttemptIfCurrent(");
-        expect(repairSource).toContain("() => isCurrentTeacherSessionIdentity(repairIdentity)");
-        expect(repairSource).toMatch(/await saveLocalAttemptIfCurrent[\s\S]*if \(!isCurrentTeacherSessionIdentity\(repairIdentity\)\) return;/);
+        expect(repairSource).toContain("() => repairIsCurrent()");
+        expect(repairSource).toMatch(/await saveLocalAttemptIfCurrent[\s\S]*if \(!repairIsCurrent\(\)\) return;/);
+        expect(repairSource).toMatch(/finally \{[\s\S]*if \(canReleaseTeacherDashboardRepairOperation\([\s\S]*repairOperation[\s\S]*teacherDashboardRepairOperationRef\.current[\s\S]*&& repairOwnerIsCurrent\(\)\)[\s\S]*setIsRepairingAnalyticsData\(false\)/);
     });
 
     it("seeds ready full attempts after fresh publication and rejects incomplete remote sources", () => {

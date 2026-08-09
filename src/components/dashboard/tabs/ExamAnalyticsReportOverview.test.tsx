@@ -1,18 +1,52 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ExamAnalyticsReportOverview, {
     type ExamAnalyticsReportOverviewProps,
 } from "./ExamAnalyticsReportOverview";
 import ExamAnalyticsTab, { QuestionCorrectRateTooltip } from "./ExamAnalyticsTab";
+import OverviewTab from "./OverviewTab";
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
+import type { TeacherDashboardDegradedData } from "@/lib/teacherDashboardCanonicalCache";
+
+const overviewTestMocks = vi.hoisted(() => ({
+    loadExportDataset: vi.fn(),
+    archiveExam: vi.fn(),
+    deleteExam: vi.fn(),
+    toastSuccess: vi.fn(),
+    toastError: vi.fn(),
+    toastInfo: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+    useRouter: () => ({ push: vi.fn() }),
+}));
+
+vi.mock("@/lib/teacherAttemptReportingClient", () => ({
+    loadTeacherAttemptExportDataset: overviewTestMocks.loadExportDataset,
+}));
+
+vi.mock("@/lib/teacherExamClient", () => ({
+    setTeacherExamArchivedFromSummary: overviewTestMocks.archiveExam,
+    deleteTeacherExamMutation: overviewTestMocks.deleteExam,
+}));
+
+vi.mock("@/components/Toast", () => ({
+    toast: {
+        success: overviewTestMocks.toastSuccess,
+        error: overviewTestMocks.toastError,
+        info: overviewTestMocks.toastInfo,
+    },
+}));
 
 afterEach(() => {
     cleanup();
+    vi.clearAllMocks();
     document.documentElement.removeAttribute("data-motion");
 });
 
@@ -127,6 +161,244 @@ function buildProps(
         ...overrides,
     };
 }
+
+function buildDegradedOverviewSnapshot(
+    status: "active" | "archived" = "archived",
+): TeacherDashboardDegradedData {
+    return {
+        kind: "teacher_dashboard_degraded",
+        staleAt: "2026-08-09T00:02:00.000Z",
+        exams: [{
+            kind: "degraded_exam_summary",
+            id: "cached-exam",
+            title: "저장된 운영 시험",
+            status,
+            createdAt: "2026-08-09T00:00:00.000Z",
+            updatedAt: "2026-08-09T00:01:00.000Z",
+            questionCount: 0,
+            attemptCount: 0,
+        }],
+        attempts: [],
+    };
+}
+
+describe("OverviewTab teacher data capability", () => {
+    it("renders degraded identity rows without constructing mutation, export, or detail callbacks", () => {
+        render(
+            <OverviewTab
+                capability="degraded_read_only"
+                snapshot={buildDegradedOverviewSnapshot()}
+            />,
+        );
+
+        const identityRegion = screen.getByRole("region", { name: "저장된 시험 식별 정보" });
+        expect(within(identityRegion).getByText("저장된 운영 시험", { exact: true })).toBeVisible();
+        expect(within(identityRegion).getByText("보관됨", { exact: true })).toBeVisible();
+        expect(screen.queryByRole("button", { name: /분석 보기/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /통계 CSV|CSV 다시 시도/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /시험 작업 메뉴/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /알람/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: /시험 제작|시험 분석/ })).not.toBeInTheDocument();
+    });
+
+    it("cancels an in-flight fresh export before detail load, download, or success publication after degradation", async () => {
+        const exam: Exam = {
+            id: "exam-live-export",
+            title: "전환 중 시험",
+            createdAt: "2026-08-09T00:00:00.000Z",
+            updatedAt: "2026-08-09T00:00:00.000Z",
+            questions: [],
+        };
+        const attempt: Attempt = {
+            id: "attempt-live-export",
+            examId: exam.id,
+            examTitle: exam.title,
+            studentName: "학생",
+            startedAt: "2026-08-09T00:00:00.000Z",
+            finishedAt: "2026-08-09T00:01:00.000Z",
+            score: 1,
+            totalScore: 1,
+            answers: {},
+            status: "completed",
+        };
+        let resolveDataset!: (value: { status: "local_only" }) => void;
+        overviewTestMocks.loadExportDataset.mockReturnValueOnce(new Promise(resolve => {
+            resolveDataset = resolve;
+        }));
+        const onLoadDetailedAttempts = vi.fn().mockResolvedValue([attempt]);
+        const createObjectURL = vi.fn(() => "blob:cancelled-export");
+        const originalCreateObjectURL = URL.createObjectURL;
+        URL.createObjectURL = createObjectURL;
+
+        try {
+            const view = render(
+                <OverviewTab
+                    capability="fresh_mutable"
+                    exams={[exam]}
+                    attempts={[attempt]}
+                    stats={{ totalStudents: 1, avgScore: 100, activeExams: 1 }}
+                    trendData={[]}
+                    onLoadDetailedAttempts={onLoadDetailedAttempts}
+                />,
+            );
+            fireEvent.click(screen.getByRole("button", { name: "통계 CSV" }));
+            expect(overviewTestMocks.loadExportDataset).toHaveBeenCalledOnce();
+
+            view.rerender(
+                <OverviewTab
+                    capability="degraded_read_only"
+                    snapshot={buildDegradedOverviewSnapshot("active")}
+                />,
+            );
+            await act(async () => { resolveDataset({ status: "local_only" }); });
+            await waitFor(() => expect(onLoadDetailedAttempts).not.toHaveBeenCalled());
+            expect(createObjectURL).not.toHaveBeenCalled();
+            expect(overviewTestMocks.toastSuccess).not.toHaveBeenCalled();
+            expect(overviewTestMocks.toastError).not.toHaveBeenCalled();
+        } finally {
+            URL.createObjectURL = originalCreateObjectURL;
+        }
+    });
+
+    it("completes a permitted fresh export and leaves generating state under StrictMode", async () => {
+        const exam: Exam = {
+            id: "exam-strict-export",
+            title: "StrictMode 내보내기",
+            createdAt: "2026-08-09T00:00:00.000Z",
+            updatedAt: "2026-08-09T00:00:00.000Z",
+            questions: [],
+        };
+        const attempt: Attempt = {
+            id: "attempt-strict-export",
+            examId: exam.id,
+            examTitle: exam.title,
+            studentName: "학생",
+            startedAt: "2026-08-09T00:00:00.000Z",
+            finishedAt: "2026-08-09T00:01:00.000Z",
+            score: 1,
+            totalScore: 1,
+            answers: {},
+            status: "completed",
+        };
+        overviewTestMocks.loadExportDataset.mockResolvedValueOnce({ status: "local_only" });
+        const onLoadDetailedAttempts = vi.fn().mockResolvedValue([attempt]);
+        const originalCreateObjectURL = URL.createObjectURL;
+        const originalRevokeObjectURL = URL.revokeObjectURL;
+        const createObjectURL = vi.fn(() => "blob:strict-export");
+        const revokeObjectURL = vi.fn();
+        const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+        URL.createObjectURL = createObjectURL;
+        URL.revokeObjectURL = revokeObjectURL;
+
+        try {
+            render(
+                <StrictMode>
+                    <OverviewTab
+                        capability="fresh_mutable"
+                        exams={[exam]}
+                        attempts={[attempt]}
+                        stats={{ totalStudents: 1, avgScore: 100, activeExams: 1 }}
+                        trendData={[]}
+                        onLoadDetailedAttempts={onLoadDetailedAttempts}
+                    />
+                </StrictMode>,
+            );
+
+            const exportButton = screen.getByRole("button", { name: "통계 CSV" });
+            fireEvent.click(exportButton);
+
+            await waitFor(() => expect(overviewTestMocks.toastSuccess).toHaveBeenCalledOnce());
+            expect(onLoadDetailedAttempts).toHaveBeenCalledOnce();
+            expect(createObjectURL).toHaveBeenCalledOnce();
+            expect(clickSpy).toHaveBeenCalledOnce();
+            await waitFor(() => expect(exportButton).toBeEnabled());
+            expect(screen.queryByText("생성 중…", { exact: true })).not.toBeInTheDocument();
+        } finally {
+            clickSpy.mockRestore();
+            URL.createObjectURL = originalCreateObjectURL;
+            URL.revokeObjectURL = originalRevokeObjectURL;
+        }
+    });
+
+    it("suppresses an archive completion after the fresh capability is replaced", async () => {
+        const exam: Exam = {
+            id: "exam-stale-archive",
+            title: "이전 교사 시험",
+            createdAt: "2026-08-09T00:00:00.000Z",
+            updatedAt: "2026-08-09T00:00:00.000Z",
+            questions: [],
+        };
+        let resolveArchive!: (value: { ok: true; exam: Exam }) => void;
+        overviewTestMocks.archiveExam.mockReturnValueOnce(new Promise(resolve => {
+            resolveArchive = resolve;
+        }));
+        const view = render(
+            <OverviewTab
+                capability="fresh_mutable"
+                exams={[exam]}
+                attempts={[]}
+                stats={{ totalStudents: 0, avgScore: 0, activeExams: 1 }}
+                trendData={[]}
+                onLoadDetailedAttempts={vi.fn().mockResolvedValue([])}
+            />,
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "시험 작업 메뉴" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "보관" }));
+        expect(overviewTestMocks.archiveExam).toHaveBeenCalledOnce();
+        view.rerender(
+            <OverviewTab
+                capability="degraded_read_only"
+                snapshot={buildDegradedOverviewSnapshot("active")}
+            />,
+        );
+
+        await act(async () => {
+            resolveArchive({ ok: true, exam: { ...exam, archived: true } });
+        });
+        expect(overviewTestMocks.toastSuccess).not.toHaveBeenCalled();
+        expect(overviewTestMocks.toastError).not.toHaveBeenCalled();
+        expect(screen.queryByText("이전 교사 시험", { exact: true })).not.toBeInTheDocument();
+    });
+
+    it("suppresses a delete completion after the fresh capability is replaced", async () => {
+        const exam: Exam = {
+            id: "exam-stale-delete",
+            title: "이전 교사 삭제 시험",
+            createdAt: "2026-08-09T00:00:00.000Z",
+            updatedAt: "2026-08-09T00:00:00.000Z",
+            questions: [],
+        };
+        let resolveDelete!: (value: { ok: true }) => void;
+        overviewTestMocks.deleteExam.mockReturnValueOnce(new Promise(resolve => {
+            resolveDelete = resolve;
+        }));
+        const view = render(
+            <OverviewTab
+                capability="fresh_mutable"
+                exams={[exam]}
+                attempts={[]}
+                stats={{ totalStudents: 0, avgScore: 0, activeExams: 1 }}
+                trendData={[]}
+                onLoadDetailedAttempts={vi.fn().mockResolvedValue([])}
+            />,
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "시험 작업 메뉴" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
+        fireEvent.click(within(screen.getByRole("dialog", { name: "시험 삭제 확인" }))
+            .getByRole("button", { name: "삭제" }));
+        expect(overviewTestMocks.deleteExam).toHaveBeenCalledOnce();
+        view.rerender(<OverviewTab capability="unavailable" />);
+
+        await act(async () => {
+            resolveDelete({ ok: true });
+        });
+        expect(overviewTestMocks.toastSuccess).not.toHaveBeenCalled();
+        expect(overviewTestMocks.toastError).not.toHaveBeenCalled();
+        expect(screen.queryByText("이전 교사 삭제 시험", { exact: true })).not.toBeInTheDocument();
+    });
+});
 
 describe("ExamAnalyticsReportOverview", () => {
     it("supports active-option keyboard navigation and selection in the exam combobox", () => {
@@ -674,9 +946,9 @@ describe("exam overview wiring", () => {
         );
 
         expect(source).toContain(
-            'dashboardHasRenderableData && !isMockupAccount && activeTab !== "overview" && activeTab !== "exam"',
+            'dashboardHasRenderableData && !isMockupAccount && teacherDataCapability === "fresh_mutable" && activeTab !== "overview" && activeTab !== "exam"',
         );
-        expect(source).toContain('.filter(action => dashboardAllowsMutations || (action.key !== "create" && action.key !== "repair"))');
+        expect(source).not.toContain('.filter(action => dashboardAllowsMutations || (action.key !== "create" && action.key !== "repair"))');
         expect(source).toContain("questionResultRepairPlan.repairableCount > 0");
     });
 

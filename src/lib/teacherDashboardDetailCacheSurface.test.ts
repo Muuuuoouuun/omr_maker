@@ -7,6 +7,61 @@ function readProjectFile(path: string): string {
 }
 
 describe("teacher dashboard detailed attempt cache", () => {
+    it("keeps degraded rendering outside the detailed-attempt callback graph", () => {
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const loaderStart = dashboard.indexOf("const loadDetailedAttempts = useCallback");
+        const loaderEnd = dashboard.indexOf("useEffect(() =>", loaderStart);
+        const loaderBlock = dashboard.slice(loaderStart, loaderEnd);
+        const degradedStart = dashboard.indexOf("!isMockupAccount && isDashboardDegraded && degradedDashboardData");
+        const freshStart = dashboard.indexOf("activeTab === 'overview' && !isMockupAccount && !isDashboardDegraded", degradedStart);
+        expect(degradedStart).toBeGreaterThan(-1);
+        expect(freshStart).toBeGreaterThan(degradedStart);
+        const degradedBranch = dashboard.slice(degradedStart, freshStart);
+
+        expect(loaderBlock).toMatch(/if \(dashboardLiveOperationRef\.current\.loadState !== "loaded_data"\) return \[\];[\s\S]*loadTeacherAttempts\(\)/);
+        expect(degradedBranch).not.toContain("onLoadDetailedAttempts");
+        expect(degradedBranch).not.toContain("onNavigateToExamAnalytics");
+        expect(degradedBranch).not.toContain("onNavigateToStudentAnalytics");
+        expect(dashboard).toMatch(/isDashboardDegraded[\s\S]*data-testid="canonical-degraded-cache"[\s\S]*마지막 저장[\s\S]*다시 시도/);
+    });
+
+    it("uses a synchronously updated live load-state fence for detail and repair continuations", () => {
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const loaderStart = dashboard.indexOf("const loadDetailedAttempts = useCallback");
+        const loaderEnd = dashboard.indexOf("useEffect(() =>", loaderStart);
+        const loaderBlock = dashboard.slice(loaderStart, loaderEnd);
+        const repairStart = dashboard.indexOf("const handleRepairAnalyticsData");
+        const repairEnd = dashboard.indexOf("const syncTone", repairStart);
+        const repairBlock = dashboard.slice(repairStart, repairEnd);
+
+        expect(dashboard).toContain("dashboardLiveOperationRef");
+        expect(dashboard).toMatch(/const setDashboardLoadState = useCallback[\s\S]*dashboardLiveOperationRef\.current =/);
+        expect(loaderBlock).toMatch(/const detailIsCurrent = \(\) => canContinueTeacherDashboardDetail\([\s\S]*dashboardLiveOperationRef\.current/);
+        expect(loaderBlock).toMatch(/await activeLoad\.promise;[\s\S]*if \(!detailIsCurrent\(\)\) return \[\]/);
+        expect(repairBlock).toMatch(/const repairIsCurrent = \(\) => canContinueTeacherDashboardRepair\([\s\S]*dashboardLiveOperationRef\.current/);
+        expect(repairBlock).toMatch(/await saveLocalAttemptIfCurrent[\s\S]*if \(!repairIsCurrent\(\)\) return/);
+        expect(repairBlock).toContain("() => repairIsCurrent()");
+    });
+
+    it("wires repair continuations and cleanup to an exact token plus permanent capability epoch", () => {
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const loadStateStart = dashboard.indexOf("const setDashboardLoadState = useCallback");
+        const loadStateEnd = dashboard.indexOf("const [degradedDashboardData", loadStateStart);
+        const loadStateBlock = dashboard.slice(loadStateStart, loadStateEnd);
+        const repairStart = dashboard.indexOf("const handleRepairAnalyticsData");
+        const repairEnd = dashboard.indexOf("const syncTone", repairStart);
+        const repairBlock = dashboard.slice(repairStart, repairEnd);
+
+        expect(dashboard).toContain("teacherDashboardRepairOperationRef");
+        expect(loadStateBlock).toContain('dashboardLiveOperationRef.current.loadState === "loaded_data"');
+        expect(loadStateBlock).toContain('next.state !== "loaded_data"');
+        expect(loadStateBlock).toContain("invalidateTeacherDashboardRepairCapability(");
+        expect(repairBlock).toContain("beginTeacherDashboardRepairOperation(");
+        expect(repairBlock).toContain("canContinueTeacherDashboardRepairOperation(");
+        expect(repairBlock).toContain("canReleaseTeacherDashboardRepairOperation(");
+        expect(repairBlock).toMatch(/finally \{[\s\S]*canReleaseTeacherDashboardRepairOperation\([\s\S]*repairOperation[\s\S]*teacherDashboardRepairOperationRef\.current/);
+    });
+
     it("invalidates detailed attempts when the fresh attempt snapshot changes", () => {
         const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
 

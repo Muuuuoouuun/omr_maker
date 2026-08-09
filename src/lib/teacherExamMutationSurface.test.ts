@@ -5,6 +5,43 @@ import { describe, expect, it } from "vitest";
 const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
 describe("teacher exam mutation surface", () => {
+    it("makes the overview mutation surface an explicit fresh-only capability", () => {
+        const overview = source("src/components/dashboard/tabs/OverviewTab.tsx");
+        const dashboard = source("src/app/teacher/dashboard/page.tsx");
+
+        expect(overview).toContain('export type TeacherDataCapability = "fresh_mutable" | "degraded_read_only" | "unavailable"');
+        expect(overview).toContain("type OverviewTabProps = FreshOverviewTabProps | DegradedOverviewTabProps | UnavailableOverviewTabProps");
+        expect(overview).toMatch(/interface DegradedOverviewTabProps[\s\S]*capability: "degraded_read_only"[\s\S]*snapshot: TeacherDashboardDegradedData/);
+        expect(overview).toMatch(/const handleExamAction[\s\S]*if \(capability !== "fresh_mutable"\) return;[\s\S]*const target = exams\.find/);
+        expect(overview).toMatch(/const confirmDeleteExam[\s\S]*if \(capability !== "fresh_mutable"\) return;[\s\S]*if \(!deleteTarget\) return/);
+        expect(overview).toMatch(/const handleExportStatsCsv[\s\S]*if \(capability !== "fresh_mutable"\) return;[\s\S]*setIsExportingStats\(true\)/);
+        expect(overview).toMatch(/useLayoutEffect\(\(\) => \{[\s\S]*isMountedRef\.current = true;[\s\S]*return \(\) => \{[\s\S]*isMountedRef\.current = false/);
+        expect(overview).toMatch(/await setTeacherExamArchivedFromSummary[\s\S]*if \(!mutationIsCurrent\(\)\) return;[\s\S]*toast\.success/);
+        expect(overview).toMatch(/await deleteTeacherExamMutation[\s\S]*if \(!mutationIsCurrent\(\)\) return;[\s\S]*toast\.success/);
+        const capabilityBoundary = overview.slice(
+            overview.indexOf("export default function OverviewTab"),
+            overview.indexOf("function FreshOverviewTab"),
+        );
+        expect(capabilityBoundary).toContain('props.capability === "degraded_read_only"');
+        expect(capabilityBoundary).not.toContain("handleExamAction");
+        expect(capabilityBoundary).not.toContain("handleExportStatsCsv");
+        expect(capabilityBoundary).not.toContain("onLoadDetailedAttempts");
+
+        expect(dashboard).toContain("const teacherDataCapability: TeacherDataCapability");
+        expect(dashboard).toContain('capability="degraded_read_only"');
+        expect(dashboard).toContain('capability="fresh_mutable"');
+        const degradedStart = dashboard.indexOf("!isMockupAccount && isDashboardDegraded && degradedDashboardData");
+        const freshStart = dashboard.indexOf("activeTab === 'overview' && !isMockupAccount && !isDashboardDegraded", degradedStart);
+        expect(degradedStart).toBeGreaterThan(-1);
+        expect(freshStart).toBeGreaterThan(degradedStart);
+        const degradedBranch = dashboard.slice(degradedStart, freshStart);
+        expect(degradedBranch).toContain("<OverviewTab");
+        expect(degradedBranch).toContain("snapshot={degradedDashboardData}");
+        expect(degradedBranch).not.toContain("handleNavigateToExamAnalytics");
+        expect(degradedBranch).not.toContain("handleNavigateToStudentAnalytics");
+        expect(degradedBranch).not.toContain("loadDetailedAttempts");
+    });
+
     it("routes overview mutations through teacher server clients", () => {
         const overview = source("src/components/dashboard/tabs/OverviewTab.tsx");
         expect(overview).not.toContain("duplicateTeacherExamFromSummary");

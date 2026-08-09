@@ -1,7 +1,146 @@
 import { expect, test } from "@playwright/test";
 import { loginAsTeacher, resetBrowserState } from "./helpers";
 
-test("teacher canonical screens keep hosted read failure distinct from empty and recover", async ({ page, context }) => {
+test("teacher dashboard keeps a scoped degraded snapshot strictly read only", async ({ page, context }) => {
+    test.setTimeout(45_000);
+    let failCanonicalActions = false;
+    let injectedFailureCount = 0;
+    let learnCanonicalReadActions = true;
+    let observeMutationOrDetailActionRequests = false;
+    let canonicalRefreshInProgress = false;
+    let mutationOrDetailActionRequestCount = 0;
+    const canonicalReadActionIds = new Set<string>();
+    await page.route("**/*", async route => {
+        const request = route.request();
+        const actionId = request.headers()["next-action"];
+        if (request.method() === "POST" && actionId) {
+            if (learnCanonicalReadActions) canonicalReadActionIds.add(actionId);
+            const isExpectedCanonicalRefresh = canonicalRefreshInProgress && canonicalReadActionIds.has(actionId);
+            if (observeMutationOrDetailActionRequests && !isExpectedCanonicalRefresh) {
+                mutationOrDetailActionRequestCount += 1;
+            }
+        }
+        if (failCanonicalActions && request.method() === "POST" && actionId) {
+            const response = await route.fetch();
+            const body = await response.text();
+            const failedBody = body.replaceAll('"local_only"', '"service_unavailable"');
+            if (failedBody !== body || body.includes('"service_unavailable"')) injectedFailureCount += 1;
+            await route.fulfill({ response, body: failedBody });
+            return;
+        }
+        await route.continue();
+    });
+
+    await resetBrowserState(page, context);
+    await loginAsTeacher(page, "/teacher/dashboard");
+    await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+    failCanonicalActions = true;
+
+    await page.evaluate(() => {
+        const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+        if (!rawSession) throw new Error("teacher session missing");
+        const session = JSON.parse(rawSession) as Record<string, unknown>;
+        session.teacherId = "admin";
+        session.organizationId = "default";
+        session.accountSessionGeneration = 1;
+        session.sessionAuthority = "legacy_account";
+        window.sessionStorage.setItem("omr_teacher_session", JSON.stringify(session));
+        for (const key of Object.keys(window.localStorage)) {
+            if (key.startsWith("omr:canonical-surface-cache:v1:teacher_dashboard:")) {
+                window.localStorage.removeItem(key);
+            }
+        }
+        window.localStorage.removeItem("omr_attempts");
+        for (const key of Object.keys(window.localStorage)) {
+            if (key.startsWith("omr_exam_")) window.localStorage.removeItem(key);
+        }
+        const now = new Date().toISOString();
+        window.localStorage.setItem("omr_exam_unverified-local", JSON.stringify({
+            id: "unverified-local",
+            title: "검증되지 않은 로컬 시험",
+            createdAt: now,
+            questions: [],
+            accessConfig: { type: "public" },
+        }));
+        window.dispatchEvent(new Event("omr:teacher-session-identity-changed"));
+    });
+
+    const dashboardError = page.getByTestId("canonical-error-no-cache");
+    await expect(dashboardError).toBeVisible();
+    await expect(dashboardError).toContainText("서버 데이터를 불러오지 못했습니다");
+    await expect(page.getByText("첫 시험 만들기", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "시험 출제하기" })).toHaveCount(0);
+    await expect(page.getByText("검증되지 않은 로컬 시험", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("분석 데이터 상태")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /문항 결과 자동 복구/ })).toHaveCount(0);
+
+    await page.evaluate(() => {
+        const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+        if (!rawSession) throw new Error("teacher session missing");
+        const session = JSON.parse(rawSession) as {
+            organizationId?: string;
+            teacherId?: string;
+            accountSessionGeneration?: number;
+        };
+        if (!session.organizationId || !session.teacherId || !Number.isSafeInteger(session.accountSessionGeneration)) {
+            throw new Error("canonical teacher identity missing");
+        }
+        const now = new Date().toISOString();
+        const key = [
+            "omr:canonical-surface-cache:v1:teacher_dashboard",
+            encodeURIComponent(session.organizationId),
+            encodeURIComponent(session.teacherId),
+            String(session.accountSessionGeneration),
+        ].join(":");
+        window.localStorage.setItem(key, JSON.stringify({
+            schemaVersion: 1,
+            surface: "teacher_dashboard",
+            organizationId: session.organizationId,
+            accountId: session.teacherId,
+            sessionGeneration: session.accountSessionGeneration,
+            staleAt: now,
+            data: {
+                exams: [{
+                    id: "cached-dashboard",
+                    title: "저장된 운영 시험",
+                    status: "active",
+                    createdAt: now,
+                    updatedAt: now,
+                    questionCount: 0,
+                    attemptCount: 0,
+                }],
+                attempts: [],
+            },
+        }));
+    });
+    failCanonicalActions = true;
+    learnCanonicalReadActions = false;
+    observeMutationOrDetailActionRequests = true;
+    canonicalRefreshInProgress = true;
+    await dashboardError.getByTestId("canonical-dashboard-retry").click();
+    const dashboardDegraded = page.getByTestId("canonical-degraded-cache");
+    await expect(dashboardDegraded).toContainText("읽기 전용");
+    await expect(dashboardDegraded).toContainText("마지막 저장");
+    await expect(dashboardDegraded.getByRole("button", { name: "다시 시도" })).toBeVisible();
+    canonicalRefreshInProgress = false;
+    await expect(page.getByText("저장된 운영 시험", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "저장된 시험 식별 정보" })).toBeVisible();
+    await expect(page.getByText("첫 시험 만들기", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "시험 출제하기" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "시험 분석" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "학생 성취도" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /분석 보기/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /통계 CSV|CSV 다시 시도/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /시험 작업 메뉴/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /문항 결과 자동 복구/ })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /시험 제작|시험 상세 보기/ })).toHaveCount(0);
+    await page.waitForTimeout(350);
+    observeMutationOrDetailActionRequests = false;
+    expect(mutationOrDetailActionRequestCount).toBe(0);
+    expect(injectedFailureCount).toBeGreaterThan(0);
+});
+
+test("teacher roster and distribution preserve failure, recovery, and degraded capabilities", async ({ page, context }) => {
     test.setTimeout(45_000);
     let failCanonicalActions = false;
     let delayCanonicalActions = false;
@@ -24,80 +163,19 @@ test("teacher canonical screens keep hosted read failure distinct from empty and
 
     await resetBrowserState(page, context);
     await loginAsTeacher(page, "/teacher/dashboard");
-
-    await page.evaluate(() => {
-        window.localStorage.removeItem("omr_teacher_dashboard_cache_stale_at_v1");
-        window.localStorage.removeItem("omr_attempts");
-        for (const key of Object.keys(window.localStorage)) {
-            if (key.startsWith("omr_exam_")) window.localStorage.removeItem(key);
-        }
-        const now = new Date().toISOString();
-        window.localStorage.setItem("omr_exam_unverified-local", JSON.stringify({
-            id: "unverified-local",
-            title: "검증되지 않은 로컬 시험",
-            createdAt: now,
-            questions: [],
-            accessConfig: { type: "public" },
-        }));
-    });
-    failCanonicalActions = true;
-    await page.reload();
-
-    const dashboardError = page.getByTestId("canonical-error-no-cache");
-    await expect(dashboardError).toBeVisible();
-    await expect(dashboardError).toContainText("서버 데이터를 불러오지 못했습니다");
-    await expect(page.getByText("첫 시험 만들기", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "시험 출제하기" })).toHaveCount(0);
-    await expect(page.getByText("검증되지 않은 로컬 시험", { exact: true })).toHaveCount(0);
-    await expect(page.getByLabel("분석 데이터 상태")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /문항 결과 자동 복구/ })).toHaveCount(0);
-
-    failCanonicalActions = false;
-    await dashboardError.getByTestId("canonical-dashboard-retry").click();
-    await expect(dashboardError).toBeHidden();
-    await expect(page.getByText("첫 시험 만들기", { exact: true })).toBeVisible();
-
-    await page.evaluate(() => {
-        const now = new Date().toISOString();
-        window.localStorage.setItem("omr_teacher_dashboard_cache_stale_at_v1", now);
-        window.localStorage.setItem("omr_exam_cached-dashboard", JSON.stringify({
-            id: "cached-dashboard",
-            title: "저장된 운영 시험",
-            organizationId: "default",
-            createdByUserId: "admin",
-            createdAt: now,
-            updatedAt: now,
-            durationMin: 30,
-            questions: [],
-            accessConfig: { type: "public" },
-        }));
-    });
-    failCanonicalActions = true;
-    await page.reload();
-    const dashboardDegraded = page.getByTestId("canonical-degraded-cache");
-    await expect(dashboardDegraded).toContainText("읽기 전용");
-    await expect(dashboardDegraded).toContainText("마지막 저장");
-    await expect(page.getByRole("button", { name: "저장된 운영 시험 분석 보기" })).toBeVisible();
-    await expect(page.getByText("첫 시험 만들기", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "시험 출제하기" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /문항 결과 자동 복구/ })).toHaveCount(0);
-
     await page.evaluate(() => {
         window.localStorage.removeItem("omr_teacher_roster_cache_stale_at_v1");
         window.localStorage.removeItem("omr_students");
         window.localStorage.removeItem("omr_groups");
         window.localStorage.removeItem("omr_invites");
     });
+    failCanonicalActions = true;
     await page.goto("/teacher/users");
+
     const rosterError = page.getByTestId("canonical-error-no-cache");
     await expect(rosterError).toBeVisible();
     await expect(page.getByRole("button", { name: /학생 추가/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "CSV 업로드" })).toHaveCount(0);
-
-    failCanonicalActions = false;
-    await rosterError.getByTestId("canonical-roster-retry").click();
-    await expect(rosterError).toBeHidden();
-    await expect(page.getByRole("button", { name: "첫 학생 추가" })).toBeVisible();
 
     await page.evaluate(() => {
         const now = new Date().toISOString();
@@ -126,7 +204,7 @@ test("teacher canonical screens keep hosted read failure distinct from empty and
         window.localStorage.setItem("omr_invites", "[]");
     });
     failCanonicalActions = true;
-    await page.reload();
+    await rosterError.getByTestId("canonical-roster-retry").click();
     const rosterDegraded = page.getByTestId("canonical-degraded-cache");
     await expect(rosterDegraded).toContainText("읽기 전용");
     await expect(page.getByText("저장된 학생", { exact: true }).first()).toBeVisible();
@@ -134,11 +212,21 @@ test("teacher canonical screens keep hosted read failure distinct from empty and
     await expect(page.getByRole("button", { name: "CSV 업로드" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /작업 메뉴 열기/ })).toHaveCount(0);
 
+    failCanonicalActions = false;
+    await rosterDegraded.getByRole("button", { name: "다시 시도" }).click();
+    await expect(rosterDegraded).toBeHidden();
+    await expect(page.getByText("저장된 학생", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /학생 추가/ }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "CSV 업로드" })).toBeVisible();
+
     await page.goto("/create");
     const title = page.getByLabel("시험 제목");
     if (!await title.isVisible()) await page.getByRole("tab", { name: /^설정/ }).click();
     await title.fill("배포 명단 실패 검증 시험");
     await page.getByLabel("빠른 정답 입력").fill("1".repeat(20));
+    await page.evaluate(() => {
+        window.localStorage.setItem("omr_teacher_roster_cache_stale_at_v1", new Date().toISOString());
+    });
     delayCanonicalActions = true;
     failCanonicalActions = true;
     await page.locator(".create-primary-actions:visible")

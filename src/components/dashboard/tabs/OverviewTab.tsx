@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
@@ -27,13 +27,17 @@ import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { loadTeacherAttemptExportDataset } from "@/lib/teacherAttemptReportingClient";
 import { buildTeacherAttemptReportingProjection } from "@/lib/teacherAttemptReportingProjection";
 import { INITIAL_OPERATIONS_LIMITS } from "@/lib/initialOperationsPolicy";
+import type { TeacherDashboardDegradedData } from "@/lib/teacherDashboardCanonicalCache";
 
 const TrendChart = dynamic(
     () => import("@/components/dashboard/TrendChart"),
     { loading: () => <TrendChartSkeleton height={160} /> },
 );
 
-interface OverviewTabProps {
+export type TeacherDataCapability = "fresh_mutable" | "degraded_read_only" | "unavailable";
+
+interface FreshOverviewTabProps {
+    capability: "fresh_mutable";
     exams: Exam[];
     attempts: Attempt[];
     stats: {
@@ -51,6 +55,17 @@ interface OverviewTabProps {
     onNavigateToStudentAnalytics?: () => void;
     onLoadDetailedAttempts: () => Promise<Attempt[]>;
 }
+
+interface DegradedOverviewTabProps {
+    capability: "degraded_read_only";
+    snapshot: TeacherDashboardDegradedData;
+}
+
+interface UnavailableOverviewTabProps {
+    capability: "unavailable";
+}
+
+type OverviewTabProps = FreshOverviewTabProps | DegradedOverviewTabProps | UnavailableOverviewTabProps;
 
 function DeleteExamConfirmDialog({
     exam,
@@ -120,8 +135,44 @@ function DeleteExamConfirmDialog({
     );
 }
 
-export default function OverviewTab({ exams: examsProp, attempts, stats, trendData, trendLabels, rosterStudents = [], rosterGroups = [], individualAssignmentTargetCounts = new Map(), individualAssignmentModes = new Map(), onNavigateToExamAnalytics, onNavigateToStudentAnalytics, onLoadDetailedAttempts }: OverviewTabProps) {
+export default function OverviewTab(props: OverviewTabProps) {
+    if (props.capability === "unavailable") return null;
+    if (props.capability === "degraded_read_only") {
+        return (
+            <section
+                className="bento-card"
+                role="region"
+                aria-label="저장된 시험 식별 정보"
+                style={{ padding: "1rem" }}
+            >
+                <h2 style={{ fontSize: "1rem", fontWeight: 900, marginBottom: "0.75rem" }}>
+                    저장된 시험 식별 정보
+                </h2>
+                <div style={{ display: "grid", gap: "0.5rem" }}>
+                    {props.snapshot.exams.map(exam => (
+                        <div
+                            key={exam.id}
+                            data-exam-id={exam.id}
+                            style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}
+                        >
+                            <span>{exam.title}</span>
+                            <span style={{ color: "var(--muted)" }}>
+                                {exam.status === "archived" ? "보관됨" : `진행 중 · ${exam.attemptCount}건`}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            </section>
+        );
+    }
+    return <FreshOverviewTab {...props} />;
+}
+
+function FreshOverviewTab({ capability, exams: examsProp, attempts, stats, trendData, trendLabels, rosterStudents = [], rosterGroups = [], individualAssignmentTargetCounts = new Map(), individualAssignmentModes = new Map(), onNavigateToExamAnalytics, onNavigateToStudentAnalytics, onLoadDetailedAttempts }: FreshOverviewTabProps) {
     const router = useRouter();
+    const isMountedRef = useRef(true);
+    const operationEpochRef = useRef(0);
+    const exportOperationRef = useRef(0);
     const [activeTab, setActiveTab] = useState<'ongoing' | 'completed'>('ongoing');
     // Local copy so action handlers (archive/delete) can update the table
     // without requiring the parent page to reload from localStorage.
@@ -136,8 +187,20 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
     // Sync when parent reloads data (initial mount / navigation).
     useEffect(() => { setExams(examsProp); }, [examsProp]);
+    useLayoutEffect(() => {
+        const mountedMutationIds = mutationExamIdsRef.current;
+        isMountedRef.current = true;
+        operationEpochRef.current += 1;
+        return () => {
+            isMountedRef.current = false;
+            operationEpochRef.current += 1;
+            exportOperationRef.current += 1;
+            mountedMutationIds.clear();
+        };
+    }, []);
 
     const handleExamAction = async (kind: ExamActionKind, examId: string) => {
+        if (capability !== "fresh_mutable") return;
         const target = exams.find(e => e.id === examId);
         if (!target) return;
 
@@ -148,21 +211,30 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
         if (kind === 'archive') {
             if (mutationExamIdsRef.current.has(examId)) return;
+            const mutationEpoch = operationEpochRef.current;
+            const mutationIsCurrent = () => isMountedRef.current
+                && operationEpochRef.current === mutationEpoch;
             const desiredArchived = !target.archived;
             mutationExamIdsRef.current.add(examId);
             setMutationExamIds(new Set(mutationExamIdsRef.current));
             try {
                 const result = await setTeacherExamArchivedFromSummary(target, desiredArchived);
+                if (!mutationIsCurrent()) return;
                 if (!result.ok) throw new Error(result.error);
                 const updated = result.exam;
                 if (!updated) throw new Error("변경된 시험 정보를 확인하지 못했습니다.");
+                if (!mutationIsCurrent()) return;
                 setExams(prev => prev.map(e => e.id === examId ? updated : e));
+                if (!mutationIsCurrent()) return;
                 toast.success(updated.archived ? '시험 보관됨' : '보관 해제됨', target.title);
             } catch (error) {
+                if (!mutationIsCurrent()) return;
                 toast.error('보관 처리 실패', error instanceof Error ? error.message : '시험 서버에 저장하지 못했습니다.');
             } finally {
                 mutationExamIdsRef.current.delete(examId);
-                setMutationExamIds(new Set(mutationExamIdsRef.current));
+                if (mutationIsCurrent()) {
+                    setMutationExamIds(new Set(mutationExamIdsRef.current));
+                }
             }
             return;
         }
@@ -174,22 +246,32 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     };
 
     const confirmDeleteExam = async () => {
+        if (capability !== "fresh_mutable") return;
         if (!deleteTarget) return;
         const target = deleteTarget;
         if (mutationExamIdsRef.current.has(target.id)) return;
+        const mutationEpoch = operationEpochRef.current;
+        const mutationIsCurrent = () => isMountedRef.current
+            && operationEpochRef.current === mutationEpoch;
         mutationExamIdsRef.current.add(target.id);
         setMutationExamIds(new Set(mutationExamIdsRef.current));
         setDeleteTarget(null);
         try {
             const result = await deleteTeacherExamMutation(target.id);
+            if (!mutationIsCurrent()) return;
             if (!result.ok) throw new Error(result.error);
+            if (!mutationIsCurrent()) return;
             setExams(prev => prev.filter(e => e.id !== target.id));
+            if (!mutationIsCurrent()) return;
             toast.success('시험 삭제됨', target.title);
         } catch (error) {
+            if (!mutationIsCurrent()) return;
             toast.error('삭제 실패', error instanceof Error ? error.message : '시험 서버에서 삭제하지 못했습니다.');
         } finally {
             mutationExamIdsRef.current.delete(target.id);
-            setMutationExamIds(new Set(mutationExamIdsRef.current));
+            if (mutationIsCurrent()) {
+                setMutationExamIds(new Set(mutationExamIdsRef.current));
+            }
         }
     };
 
@@ -281,6 +363,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     const displayExams = activeTab === 'ongoing' ? examSummaryGroups.ongoing : examSummaryGroups.completed;
 
     const handleSendAlarm = (examTitle: string) => {
+        if (capability !== "fresh_mutable") return;
         toast.info(
             '카카오 알림 연동 전',
             `${examTitle} 미응시 학생 확인만 지원합니다. 실제 카카오 발송 채널이 연결되면 이 버튼에서 발송합니다.`
@@ -288,6 +371,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     };
 
     const handleSendAllAlarms = () => {
+        if (capability !== "fresh_mutable") return;
         toast.info(
             '카카오 알림 연동 전',
             '진행 중인 시험의 미응시 학생 확인만 지원합니다. 실제 카카오 발송 채널이 연결되면 일괄 발송합니다.'
@@ -295,11 +379,19 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     };
 
     const handleExportStatsCsv = async () => {
+        if (capability !== "fresh_mutable") return;
         if (isExportingStats) return;
+        const operation = exportOperationRef.current + 1;
+        exportOperationRef.current = operation;
+        const operationEpoch = operationEpochRef.current;
+        const operationIsCurrent = () => isMountedRef.current
+            && operationEpochRef.current === operationEpoch
+            && exportOperationRef.current === operation;
         setIsExportingStats(true);
         setExportStatsError(null);
         try {
             const reportingDataset = await loadTeacherAttemptExportDataset();
+            if (!operationIsCurrent()) return;
             if (reportingDataset.status !== "loaded" && reportingDataset.status !== "local_only") {
                 throw new Error(reportingDataset.status === "capacity_exceeded"
                     ? "초기 운영 내보내기 한도(5,000건)를 초과했습니다. 시험별로 나눠 내보내주세요."
@@ -338,10 +430,12 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         // that optional CSV section only when the exact aggregate proves the rich
         // list is complete; otherwise omit it rather than labeling partial math as
         // organization-wide statistics.
-        const detailedAttempts = completedAttemptCount
-            <= INITIAL_OPERATIONS_LIMITS.teacherAttempts
-            ? await onLoadDetailedAttempts()
-            : [];
+        let detailedAttempts: Attempt[] = [];
+        if (completedAttemptCount <= INITIAL_OPERATIONS_LIMITS.teacherAttempts) {
+            if (!operationIsCurrent()) return;
+            detailedAttempts = await onLoadDetailedAttempts();
+        }
+        if (!operationIsCurrent()) return;
         const hasCompleteRichCoverage = detailedAttempts.filter(attempt => attempt.status === "completed").length
             === completedAttemptCount;
         const baseAttemptsByExam = hasCompleteRichCoverage
@@ -374,9 +468,11 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             if (shouldChunk && (i + 1) % EXAMS_PER_CHUNK === 0 && i + 1 < exams.length) {
                 // Intentional yield to the main thread so "생성 중…" paints and the tab stays responsive.
                 await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+                if (!operationIsCurrent()) return;
             }
         }
 
+        if (!operationIsCurrent()) return;
         const csv = buildDashboardStatsCsv({
             stats: exportMetrics,
             trendData: exportMetrics.trendData,
@@ -390,16 +486,23 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         link.href = url;
         link.download = `dashboard-stats-${new Date().toISOString().slice(0, 10)}.csv`;
         document.body.appendChild(link);
+        if (!operationIsCurrent()) {
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            return;
+        }
         link.click();
         document.body.removeChild(link);
         window.setTimeout(() => URL.revokeObjectURL(url), 0);
+        if (!operationIsCurrent()) return;
         toast.success("통계 CSV 생성됨", "대시보드 요약과 시험별 통계를 내보냈습니다.");
         } catch (error) {
+            if (!operationIsCurrent()) return;
             const message = error instanceof Error ? error.message : "상세 제출 데이터를 불러오지 못했습니다.";
             setExportStatsError(message);
             toast.error("통계 CSV 생성 실패", `${message} 네트워크를 확인한 뒤 다시 시도해주세요.`);
         } finally {
-            setIsExportingStats(false);
+            if (operationIsCurrent()) setIsExportingStats(false);
         }
     };
 

@@ -21,6 +21,29 @@ export interface TeacherLoadIdentity extends TeacherSessionIdentity {
     requestGeneration: number;
 }
 
+export type TeacherDashboardLiveLoadState =
+    | "loading"
+    | "loaded_empty"
+    | "loaded_data"
+    | "degraded_with_cache"
+    | "error_without_cache";
+
+export interface TeacherDashboardLiveOperationState {
+    loadState: TeacherDashboardLiveLoadState;
+    identity: TeacherLoadIdentity | null;
+}
+
+export interface TeacherDashboardRepairOperationState {
+    capabilityEpoch: number;
+    nextToken: number;
+    activeToken: number | null;
+}
+
+export interface TeacherDashboardRepairOperation {
+    capabilityEpoch: number;
+    token: number;
+}
+
 export interface TeacherDashboardRemoteCollection {
     remoteLoaded?: boolean;
     remoteSynced?: boolean;
@@ -182,6 +205,63 @@ export function sameTeacherSessionIdentity(
     return left.organizationId === right.organizationId
         && left.accountId === right.accountId
         && left.sessionGeneration === right.sessionGeneration;
+}
+
+export function canContinueTeacherDashboardRepair(
+    captured: TeacherSessionIdentity,
+    live: TeacherDashboardLiveOperationState,
+): boolean {
+    return live.loadState === "loaded_data"
+        && !!live.identity
+        && sameTeacherSessionIdentity(captured, live.identity);
+}
+
+export function canReleaseTeacherDashboardRepair(
+    captured: TeacherSessionIdentity,
+    live: TeacherDashboardLiveOperationState,
+): boolean {
+    return !!live.identity
+        && sameTeacherSessionIdentity(captured, live.identity);
+}
+
+export function beginTeacherDashboardRepairOperation(
+    state: TeacherDashboardRepairOperationState,
+): { state: TeacherDashboardRepairOperationState; operation: TeacherDashboardRepairOperation } {
+    const token = state.nextToken + 1;
+    return {
+        state: { ...state, nextToken: token, activeToken: token },
+        operation: { capabilityEpoch: state.capabilityEpoch, token },
+    };
+}
+
+export function invalidateTeacherDashboardRepairCapability(
+    state: TeacherDashboardRepairOperationState,
+): TeacherDashboardRepairOperationState {
+    return { ...state, capabilityEpoch: state.capabilityEpoch + 1 };
+}
+
+export function canContinueTeacherDashboardRepairOperation(
+    operation: TeacherDashboardRepairOperation,
+    state: TeacherDashboardRepairOperationState,
+): boolean {
+    return state.activeToken === operation.token
+        && state.capabilityEpoch === operation.capabilityEpoch;
+}
+
+export function canReleaseTeacherDashboardRepairOperation(
+    operation: TeacherDashboardRepairOperation,
+    state: TeacherDashboardRepairOperationState,
+): boolean {
+    return state.activeToken === operation.token;
+}
+
+export function canContinueTeacherDashboardDetail(
+    captured: TeacherLoadIdentity,
+    live: TeacherDashboardLiveOperationState,
+): boolean {
+    return live.loadState === "loaded_data"
+        && !!live.identity
+        && sameTeacherLoadIdentity(captured, live.identity);
 }
 
 export function isTeacherDashboardRemoteCollectionReady(
