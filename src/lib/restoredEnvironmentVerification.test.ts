@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -59,6 +59,8 @@ function env() {
     return {
         OMR_DEPLOYMENT_TIER: "staging",
         OMR_RESTORE_TARGET_SUPABASE_URL: `https://${TARGET_REF}.supabase.co`,
+        OMR_RESTORE_TARGET_APP_URL: "https://restore-staging.example.test",
+        OMR_RESTORE_EXPECTED_BUILD: BUILD,
         OMR_PRODUCTION_SUPABASE_URL: `https://${SOURCE_REF}.supabase.co`,
         OMR_RESTORE_TARGET_SERVICE_ROLE_KEY: SERVICE_KEY,
         OMR_RESTORE_TARGET_DB_HOST: `db.${TARGET_REF}.supabase.co`,
@@ -67,6 +69,31 @@ function env() {
         OMR_RESTORE_TARGET_DB_NAME: "postgres",
         OMR_RESTORE_TARGET_DB_PASSWORD: "restore-db-password",
         OMR_POSTGRES_BIN: "/opt/postgresql-17/bin",
+    };
+}
+
+function boundaryResult(config: ReturnType<typeof resolveRestoredEnvironmentConfig>, overrides = {}) {
+    return {
+        status: "passed",
+        buildSha: BUILD,
+        environmentDigest: config.environmentDigest,
+        targetDigest: config.targetDigest,
+        verifiedAt: "2026-08-07T00:40:00.000Z",
+        artifactSha256: "a".repeat(64),
+        ...overrides,
+    };
+}
+
+function smokeResult(config: ReturnType<typeof resolveRestoredEnvironmentConfig>, overrides = {}) {
+    return {
+        status: "passed",
+        buildSha: BUILD,
+        environmentDigest: config.environmentDigest,
+        targetDigest: config.targetDigest,
+        verifiedAt: "2026-08-07T00:40:00.000Z",
+        artifactSha256: "b".repeat(64),
+        disposableCredentialsRevoked: true,
+        ...overrides,
     };
 }
 
@@ -82,6 +109,13 @@ function argv(backupDir: string, output: string) {
     ];
 }
 
+function resolveConfig(input: Parameters<typeof resolveRestoredEnvironmentConfig>[0], verifyCheckout = () => ({
+    buildSha: BUILD,
+    sourceSha256: "9".repeat(64),
+})) {
+    return resolveRestoredEnvironmentConfig({ ...input, verifyCheckout });
+}
+
 describe("restored staging environment verification", () => {
     it("requires PostgreSQL 17 restore verification tools", () => {
         expect(assertPostgres17Version("psql (PostgreSQL) 17.5")).toBe(17);
@@ -91,7 +125,7 @@ describe("restored staging environment verification", () => {
 
     it("fails closed without staging credentials and emits unverified from the CLI", () => {
         const { backupDir } = backupFixture();
-        expect(() => resolveRestoredEnvironmentConfig({
+        expect(() => resolveConfig({
             argv: argv(backupDir, join(backupDir, "evidence.json")),
             env: {},
             cwd: process.cwd(),
@@ -110,7 +144,7 @@ describe("restored staging environment verification", () => {
     it("validates the manifest, artifact hashes, source-target isolation, staging target, RPO and RTO", () => {
         const { backupDir } = backupFixture();
         const output = join(mkdtempSync(join(tmpdir(), "omr-restore-evidence-")), "evidence.json");
-        const config = resolveRestoredEnvironmentConfig({
+        const config = resolveConfig({
             argv: argv(backupDir, output),
             env: env(),
             cwd: process.cwd(),
@@ -120,15 +154,18 @@ describe("restored staging environment verification", () => {
         expect(config).toMatchObject({
             environment: "staging",
             targetProjectRef: TARGET_REF,
-            targetProjectRefHash: hashProjectRef(TARGET_REF),
+            buildSha: BUILD,
             rpoMinutes: 60,
             rtoMinutes: 45,
             outputPath: output,
         });
+        expect(config.environmentDigest).toMatch(/^[a-f0-9]{64}$/);
+        expect(config.targetDigest).toMatch(/^[a-f0-9]{64}$/);
+        expect(config.verifierSourceSha256).toBe("9".repeat(64));
         expect(JSON.stringify(config)).not.toContain(SERVICE_KEY);
 
         writeFileSync(join(backupDir, "database", "data.sql"), "tampered\n");
-        expect(() => resolveRestoredEnvironmentConfig({
+        expect(() => resolveConfig({
             argv: argv(backupDir, output),
             env: env(),
             cwd: process.cwd(),
@@ -136,11 +173,30 @@ describe("restored staging environment verification", () => {
         })).toThrow(/artifact|hash|size/i);
     });
 
+    it("rejects a verifier checkout or source set that is not the exact restored build", () => {
+        const { backupDir } = backupFixture();
+        const input = {
+            argv: argv(backupDir, join(mkdtempSync(join(tmpdir(), "omr-restore-identity-")), "evidence.json")),
+            env: env(),
+            cwd: process.cwd(),
+            now: new Date("2026-08-07T00:40:00.000Z"),
+        };
+
+        expect(() => resolveConfig(input, () => ({
+            buildSha: "e".repeat(40),
+            sourceSha256: "9".repeat(64),
+        }))).toThrow(/checkout|build|source/i);
+        expect(() => resolveConfig(input, () => ({
+            buildSha: BUILD,
+            sourceSha256: "not-a-digest",
+        }))).toThrow(/checkout|build|source/i);
+    });
+
     it("rejects a symlinked completion marker", () => {
         const { backupDir } = backupFixture();
         rmSync(join(backupDir, ".COMPLETE"));
         symlinkSync(join(backupDir, "manifest.json"), join(backupDir, ".COMPLETE"));
-        expect(() => resolveRestoredEnvironmentConfig({
+        expect(() => resolveConfig({
             argv: argv(backupDir, join(backupDir, "evidence.json")),
             env: env(),
             cwd: process.cwd(),
@@ -160,7 +216,7 @@ describe("restored staging environment verification", () => {
             OMR_RESTORE_TARGET_SUPABASE_URL: targetUrl,
             OMR_PRODUCTION_SUPABASE_URL: `https://${TARGET_REF}.supabase.co`,
         };
-        expect(() => resolveRestoredEnvironmentConfig({
+        expect(() => resolveConfig({
             argv: argv(backupDir, join(backupDir, "evidence.json")).map(item => item.startsWith("--confirm-target")
                 ? `--confirm-target-project-ref=${confirmedRef}` : item),
             env: unsafeEnv,
@@ -172,7 +228,7 @@ describe("restored staging environment verification", () => {
     it("compares exact database counts and downloaded storage body hashes before writing evidence", async () => {
         const { backupDir, manifest } = backupFixture();
         const output = join(mkdtempSync(join(tmpdir(), "omr-restore-run-")), "evidence.json");
-        const config = resolveRestoredEnvironmentConfig({
+        const config = resolveConfig({
             argv: argv(backupDir, output),
             env: env(),
             cwd: process.cwd(),
@@ -182,35 +238,68 @@ describe("restored staging environment verification", () => {
             now: () => new Date("2026-08-07T00:40:00.000Z"),
             collectTableCounts: async () => manifest.database.tableCounts,
             collectStorageObjects: async () => manifest.storage.objects,
+            runBoundaryContract: async () => boundaryResult(config),
+            runBrowserSmoke: async () => smokeResult(config),
         });
 
         expect(result).toMatchObject({
             status: "verified",
             environment: "staging",
-            targetProjectRefHash: hashProjectRef(TARGET_REF),
+            buildSha: BUILD,
+            environmentDigest: config.environmentDigest,
+            targetDigest: config.targetDigest,
+            verifierSourceSha256: "9".repeat(64),
             databaseTableCount: 42,
             storageObjectCount: 1,
             rpoMinutes: 60,
             rtoMinutes: 45,
+            boundaryContract: "passed",
+            boundaryArtifactSha256: "a".repeat(64),
+            browserSmoke: "passed",
+            browserSmokeArtifactSha256: "b".repeat(64),
+            disposableCredentialsRevoked: true,
+            completeMarker: ".RESTORE_COMPLETE",
         });
         expect(JSON.parse(readFileSync(output, "utf8"))).toEqual(result);
+        expect(statSync(join(output.slice(0, output.lastIndexOf("/")), ".RESTORE_COMPLETE")).mode & 0o777).toBe(0o600);
+        expect(existsSync(join(output.slice(0, output.lastIndexOf("/")), ".INCOMPLETE"))).toBe(false);
+        expect(JSON.stringify(result)).not.toContain(TARGET_REF);
+        expect(JSON.stringify(result)).not.toContain("restore-staging.example.test");
 
-        await expect(runRestoredEnvironmentVerification(config, {
+        const countMismatchOutput = join(mkdtempSync(join(tmpdir(), "omr-restore-count-mismatch-")), "evidence.json");
+        const countMismatchConfig = resolveConfig({
+            argv: argv(backupDir, countMismatchOutput),
+            env: env(),
+            cwd: process.cwd(),
+            now: new Date("2026-08-07T00:40:00.000Z"),
+        });
+        await expect(runRestoredEnvironmentVerification(countMismatchConfig, {
             now: () => new Date("2026-08-07T00:40:00.000Z"),
             collectTableCounts: async () => ({ ...manifest.database.tableCounts, omr_exams: 1 }),
             collectStorageObjects: async () => manifest.storage.objects,
+            runBoundaryContract: async () => boundaryResult(countMismatchConfig),
+            runBrowserSmoke: async () => smokeResult(countMismatchConfig),
         })).rejects.toThrow(/inventory|mismatch/i);
-        await expect(runRestoredEnvironmentVerification(config, {
+        const hashMismatchOutput = join(mkdtempSync(join(tmpdir(), "omr-restore-hash-mismatch-")), "evidence.json");
+        const hashMismatchConfig = resolveConfig({
+            argv: argv(backupDir, hashMismatchOutput),
+            env: env(),
+            cwd: process.cwd(),
+            now: new Date("2026-08-07T00:40:00.000Z"),
+        });
+        await expect(runRestoredEnvironmentVerification(hashMismatchConfig, {
             now: () => new Date("2026-08-07T00:40:00.000Z"),
             collectTableCounts: async () => manifest.database.tableCounts,
             collectStorageObjects: async () => [{ ...manifest.storage.objects[0], sha256: "e".repeat(64) }],
+            runBoundaryContract: async () => boundaryResult(hashMismatchConfig),
+            runBrowserSmoke: async () => smokeResult(hashMismatchConfig),
         })).rejects.toThrow(/inventory|mismatch/i);
     });
 
     it("rechecks the RTO after inventory collection completes", async () => {
         const { backupDir, manifest } = backupFixture();
         const output = join(mkdtempSync(join(tmpdir(), "omr-restore-rto-")), "evidence.json");
-        const config = resolveRestoredEnvironmentConfig({
+        const config = resolveConfig({
             argv: argv(backupDir, output),
             env: env(),
             cwd: process.cwd(),
@@ -224,6 +313,134 @@ describe("restored staging environment verification", () => {
             now: () => times.shift()!,
             collectTableCounts: async () => manifest.database.tableCounts,
             collectStorageObjects: async () => manifest.storage.objects,
+            runBoundaryContract: async () => boundaryResult(config),
+            runBrowserSmoke: async () => smokeResult(config),
         })).rejects.toThrow(/RTO/i);
+    });
+
+    it.each([
+        ["boundary", (config: ReturnType<typeof resolveRestoredEnvironmentConfig>) => ({
+            runBoundaryContract: async () => boundaryResult(config, { buildSha: "e".repeat(40) }),
+            runBrowserSmoke: async () => smokeResult(config),
+        })],
+        ["browser", (config: ReturnType<typeof resolveRestoredEnvironmentConfig>) => ({
+            runBoundaryContract: async () => boundaryResult(config),
+            runBrowserSmoke: async () => smokeResult(config, { targetDigest: "f".repeat(64) }),
+        })],
+        ["revocation", (config: ReturnType<typeof resolveRestoredEnvironmentConfig>) => ({
+            runBoundaryContract: async () => boundaryResult(config),
+            runBrowserSmoke: async () => smokeResult(config, { disposableCredentialsRevoked: false }),
+        })],
+    ])("keeps INCOMPLETE and publishes no completion marker when %s is unverified", async (_label, runners) => {
+        const { backupDir, manifest } = backupFixture();
+        const outputDir = mkdtempSync(join(tmpdir(), "omr-restore-gate-"));
+        const output = join(outputDir, "evidence.json");
+        const config = resolveConfig({
+            argv: argv(backupDir, output),
+            env: env(),
+            cwd: process.cwd(),
+            now: new Date("2026-08-07T00:40:00.000Z"),
+        });
+
+        await expect(runRestoredEnvironmentVerification(config, {
+            now: () => new Date("2026-08-07T00:40:00.000Z"),
+            collectTableCounts: async () => manifest.database.tableCounts,
+            collectStorageObjects: async () => manifest.storage.objects,
+            ...runners(config),
+        })).rejects.toThrow(/not verified|unverified/i);
+        expect(existsSync(join(outputDir, ".INCOMPLETE"))).toBe(true);
+        expect(statSync(join(outputDir, ".INCOMPLETE")).mode & 0o777).toBe(0o600);
+        expect(existsSync(join(outputDir, ".RESTORE_COMPLETE"))).toBe(false);
+        expect(existsSync(output)).toBe(false);
+    });
+
+    it("fails closed when atomic completion publication fails after every qualification gate", async () => {
+        const { backupDir, manifest } = backupFixture();
+        const outputDir = mkdtempSync(join(tmpdir(), "omr-restore-publication-"));
+        const output = join(outputDir, "evidence.json");
+        const config = resolveConfig({
+            argv: argv(backupDir, output),
+            env: env(),
+            cwd: process.cwd(),
+            now: new Date("2026-08-07T00:40:00.000Z"),
+        });
+
+        await expect(runRestoredEnvironmentVerification(config, {
+            now: () => new Date("2026-08-07T00:40:00.000Z"),
+            collectTableCounts: async () => manifest.database.tableCounts,
+            collectStorageObjects: async () => manifest.storage.objects,
+            runBoundaryContract: async () => boundaryResult(config),
+            runBrowserSmoke: async () => smokeResult(config),
+            publishCompletion: async () => { throw new Error("raw fs publication failure"); },
+        })).rejects.toThrow(/publication|not verified/i);
+        expect(existsSync(join(outputDir, ".INCOMPLETE"))).toBe(true);
+        expect(statSync(join(outputDir, ".INCOMPLETE")).mode & 0o777).toBe(0o600);
+        expect(existsSync(join(outputDir, ".RESTORE_COMPLETE"))).toBe(false);
+        expect(existsSync(output)).toBe(false);
+    });
+
+    it("rejects output-parent replacement and invalidates the moved owned evidence inode", async () => {
+        const { backupDir, manifest } = backupFixture();
+        const outputDir = mkdtempSync(join(tmpdir(), "omr-restore-parent-race-"));
+        const movedDir = `${outputDir}-moved`;
+        const output = join(outputDir, "evidence.json");
+        const config = resolveConfig({
+            argv: argv(backupDir, output),
+            env: env(),
+            cwd: process.cwd(),
+            now: new Date("2026-08-07T00:40:00.000Z"),
+        });
+
+        await expect(runRestoredEnvironmentVerification(config, {
+            now: () => new Date("2026-08-07T00:40:00.000Z"),
+            collectTableCounts: async () => manifest.database.tableCounts,
+            collectStorageObjects: async () => manifest.storage.objects,
+            runBoundaryContract: async () => boundaryResult(config),
+            runBrowserSmoke: async () => smokeResult(config),
+            publishCompletion: async () => {
+                renameSync(outputDir, movedDir);
+                mkdirSync(outputDir, { mode: 0o700 });
+            },
+        })).rejects.toThrow(/publication|output|verified/i);
+        expect(existsSync(join(outputDir, ".RESTORE_COMPLETE"))).toBe(false);
+        expect(existsSync(join(movedDir, ".RESTORE_COMPLETE"))).toBe(false);
+        expect(existsSync(join(movedDir, ".INCOMPLETE"))).toBe(true);
+        const movedEvidence = readFileSync(join(movedDir, "evidence.json"), "utf8");
+        expect(() => JSON.parse(movedEvidence)).toThrow();
+    });
+
+    it("rejects a symlinked completion publication without truncating the foreign target", async () => {
+        const { backupDir, manifest } = backupFixture();
+        const outputDir = mkdtempSync(join(tmpdir(), "omr-restore-marker-symlink-"));
+        const output = join(outputDir, "evidence.json");
+        const foreignMarker = join(mkdtempSync(join(tmpdir(), "omr-restore-foreign-marker-")), "marker.json");
+        const config = resolveConfig({
+            argv: argv(backupDir, output),
+            env: env(),
+            cwd: process.cwd(),
+            now: new Date("2026-08-07T00:40:00.000Z"),
+        });
+        let foreignBody = "";
+
+        await expect(runRestoredEnvironmentVerification(config, {
+            now: () => new Date("2026-08-07T00:40:00.000Z"),
+            collectTableCounts: async () => manifest.database.tableCounts,
+            collectStorageObjects: async () => manifest.storage.objects,
+            runBoundaryContract: async () => boundaryResult(config),
+            runBrowserSmoke: async () => smokeResult(config),
+            publishCompletion: async ({ incompleteMarkerPath, completeMarkerPath, marker }: {
+                incompleteMarkerPath: string;
+                completeMarkerPath: string;
+                marker: object;
+            }) => {
+                rmSync(incompleteMarkerPath);
+                foreignBody = `${JSON.stringify(marker)}\n`;
+                writeFileSync(foreignMarker, foreignBody, { mode: 0o600 });
+                symlinkSync(foreignMarker, completeMarkerPath);
+            },
+        })).rejects.toThrow(/publication|verified/i);
+        expect(readFileSync(foreignMarker, "utf8")).toBe(foreignBody);
+        expect(existsSync(join(outputDir, ".RESTORE_COMPLETE"))).toBe(false);
+        expect(existsSync(join(outputDir, ".INCOMPLETE"))).toBe(true);
     });
 });
