@@ -67,17 +67,18 @@ describe("dashboard loading performance surface", () => {
     it("renders useful loading shells and applies local data before remote refresh", () => {
         const dashboardPage = readProjectFile("src/app/teacher/dashboard/page.tsx");
         const loadingSkeleton = readProjectFile("src/components/dashboard/DashboardLoadingSkeleton.tsx");
-        const mountEffect = dashboardPage.slice(
-            dashboardPage.indexOf("useEffect(() => {", dashboardPage.indexOf("const loadDashboardData")),
+        const localFirstLoad = dashboardPage.slice(
+            dashboardPage.indexOf("const loadDashboardData"),
+            dashboardPage.indexOf("const loadDetailedAttempts", dashboardPage.indexOf("const loadDashboardData")),
         );
 
         expect(dashboardPage).toContain("fallback={<DashboardPageSkeleton />}");
         expect(dashboardPage).toContain("loading: () => <AnalyticsTabSkeleton />");
         expect(loadingSkeleton).toContain('aria-label="대시보드를 불러오는 중"');
         expect(loadingSkeleton).toContain('aria-label="분석 화면을 불러오는 중"');
-        expect(mountEffect.indexOf("readLocalExams()")).toBeGreaterThanOrEqual(0);
-        expect(mountEffect.indexOf("readLocalAttempts()")).toBeGreaterThanOrEqual(0);
-        expect(mountEffect.indexOf("readLocalRosterSnapshot(localStorage)")).toBeGreaterThanOrEqual(0);
-        expect(mountEffect.indexOf("readLocalExams()")).toBeLessThan(mountEffect.indexOf("void loadDashboardData"));
+        expect(localFirstLoad.indexOf("readLocalExams()")).toBeGreaterThanOrEqual(0);
+        expect(localFirstLoad.indexOf("readLocalAttempts()")).toBeGreaterThanOrEqual(0);
+        expect(localFirstLoad.indexOf("readLocalRosterSnapshot(localStorage)")).toBeGreaterThanOrEqual(0);
+        expect(localFirstLoad.indexOf("readLocalExams()")).toBeLessThan(localFirstLoad.indexOf("await Promise.all"));
     });
 });

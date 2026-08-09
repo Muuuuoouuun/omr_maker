@@ -37,6 +37,36 @@ function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
+export async function resolveLegacyStudentAttemptSessionScopeWithGateway(
+    client: StudentAttemptSessionRpcClient,
+    input: { sessionId: string; organizationId: string; ownerStudentId: string },
+): Promise<
+    | { status: "resolved"; examId: string }
+    | { status: "targeted" | "not_found" | "invalid" | "service_unavailable" }
+> {
+    const sessionId = clean(input.sessionId);
+    const organizationId = clean(input.organizationId);
+    const ownerStudentId = clean(input.ownerStudentId);
+    if (!sessionId || sessionId.length > 256 || !organizationId || organizationId.length > 256
+        || !ownerStudentId || ownerStudentId.length > 256) return { status: "invalid" };
+    const result = await client.rpc("omr_resolve_legacy_attempt_session_scope_v1", {
+        p_session_id: sessionId,
+        p_organization_id: organizationId,
+        p_owner_student_id: ownerStudentId,
+    });
+    if (result.error || !result.data || typeof result.data !== "object" || Array.isArray(result.data)) {
+        return { status: "service_unavailable" };
+    }
+    const row = result.data as Record<string, unknown>;
+    if (row.status === "targeted" && Object.keys(row).length === 1) return { status: "targeted" };
+    if (row.status === "not_found" && Object.keys(row).length === 1) return { status: "not_found" };
+    const examId = clean(row.examId);
+    return row.status === "resolved" && examId && examId.length <= 256
+        && Object.keys(row).every(key => key === "status" || key === "examId")
+        ? { status: "resolved", examId }
+        : { status: "service_unavailable" };
+}
+
 const MAX_SESSION_ITEMS = 500;
 const MAX_SUBMISSION_BYTES = 1_048_576;
 
@@ -68,6 +98,9 @@ function validOpenInput(input: OpenStudentAttemptSessionGatewayInput): boolean {
     const boundedStrings = [input.sessionId, input.organizationId, input.examId, input.ownerStudentId,
         input.submissionId, input.attemptId, input.newLeaseTokenHash];
     return boundedStrings.every(value => clean(value).length > 0 && clean(value).length <= 256)
+        && (clean(input.assignmentId)
+            ? Number.isSafeInteger(input.assignmentRevision) && Number(input.assignmentRevision) > 0
+            : input.assignmentRevision === undefined)
         && clean(input.studentName).length > 0 && clean(input.studentName).length <= 300
         && validQuestionIds(input.examQuestionIds)
         && (!input.retake || (
@@ -109,6 +142,7 @@ export interface OpenStudentAttemptSessionGatewayInput {
     organizationId: string;
     examId: string;
     assignmentId?: string;
+    assignmentRevision?: number;
     ownerStudentId: string;
     studentName: string;
     identityType: IdentityType;
@@ -133,11 +167,12 @@ export async function openStudentAttemptSessionWithGateway(
     | Exclude<StudentAttemptSessionMutationResult, { status: "active" }>
 > {
     if (!validOpenInput(input)) return { status: "invalid" };
-    const result = await client.rpc("omr_open_attempt_session_v2", {
+    const result = await client.rpc("omr_open_attempt_session_v3", {
         p_session_id: input.sessionId,
         p_organization_id: input.organizationId,
         p_exam_id: input.examId,
         p_assignment_id: input.assignmentId || "",
+        p_assignment_revision: input.assignmentRevision || null,
         p_owner_student_id: input.ownerStudentId,
         p_student_name: input.studentName,
         p_identity_type: input.identityType,
@@ -181,7 +216,10 @@ export async function openStudentAttemptSessionWithGateway(
 export interface CheckpointStudentAttemptSessionGatewayInput {
     sessionId: string;
     organizationId: string;
+    examId: string;
     ownerStudentId: string;
+    assignmentId?: string;
+    assignmentRevision?: number;
     expectedRevision: number;
     expectedLeaseEpoch: number;
     leaseTokenHash: string;
@@ -189,6 +227,14 @@ export interface CheckpointStudentAttemptSessionGatewayInput {
     subQuestionAnswers: SubQuestionAnswers;
     progressPayload: Record<string, unknown>;
     finalCheckpoint?: boolean;
+}
+
+function validAssignmentGeneration(input: { assignmentId?: string; assignmentRevision?: number }): boolean {
+    const assignmentId = clean(input.assignmentId);
+    const revision = Number(input.assignmentRevision);
+    return assignmentId
+        ? Number.isSafeInteger(revision) && revision > 0
+        : input.assignmentRevision === undefined;
 }
 
 export async function checkpointStudentAttemptSessionWithGateway(
@@ -206,11 +252,16 @@ export async function checkpointStudentAttemptSessionWithGateway(
         || jsonSize(input.answers) > 65_536
         || jsonSize(input.subQuestionAnswers) > 524_288
         || !progressPayload
+        || !validAssignmentGeneration(input)
+        || !clean(input.examId)
     ) return { status: "invalid" };
-    const result = await client.rpc("omr_checkpoint_attempt_session_v1", {
+    const result = await client.rpc("omr_checkpoint_attempt_session_v2", {
         p_session_id: input.sessionId,
         p_organization_id: input.organizationId,
+        p_exam_id: input.examId,
         p_owner_student_id: input.ownerStudentId,
+        p_assignment_id: input.assignmentId || "",
+        p_assignment_revision: input.assignmentRevision || null,
         p_expected_revision: input.expectedRevision,
         p_expected_lease_epoch: input.expectedLeaseEpoch,
         p_lease_token_hash: input.leaseTokenHash,
@@ -226,18 +277,22 @@ export async function checkpointStudentAttemptSessionWithGateway(
 export async function takeoverStudentAttemptSessionWithGateway(
     client: StudentAttemptSessionRpcClient,
     input: Pick<CheckpointStudentAttemptSessionGatewayInput,
-        "sessionId" | "organizationId" | "ownerStudentId" | "expectedRevision" | "expectedLeaseEpoch"
+        "sessionId" | "organizationId" | "examId" | "ownerStudentId" | "assignmentId" | "assignmentRevision" | "expectedRevision" | "expectedLeaseEpoch"
     > & { newLeaseTokenHash: string },
 ): Promise<StudentAttemptSessionMutationResult> {
     if (
         !validCas(input.expectedRevision)
         || !validCas(input.expectedLeaseEpoch)
         || !validLeaseTokenHash(input.newLeaseTokenHash)
+        || !validAssignmentGeneration(input)
     ) return { status: "invalid" };
-    const result = await client.rpc("omr_takeover_attempt_session_v1", {
+    const result = await client.rpc("omr_takeover_attempt_session_v2", {
         p_session_id: input.sessionId,
         p_organization_id: input.organizationId,
+        p_exam_id: input.examId,
         p_owner_student_id: input.ownerStudentId,
+        p_assignment_id: input.assignmentId || "",
+        p_assignment_revision: input.assignmentRevision || null,
         p_expected_revision: input.expectedRevision,
         p_expected_lease_epoch: input.expectedLeaseEpoch,
         p_new_lease_token_hash: input.newLeaseTokenHash,
@@ -258,16 +313,19 @@ export interface StudentAttemptSessionHeartbeat {
 export async function heartbeatStudentAttemptSessionWithGateway(
     client: StudentAttemptSessionRpcClient,
     input: Pick<CheckpointStudentAttemptSessionGatewayInput,
-        "sessionId" | "organizationId" | "ownerStudentId" | "expectedLeaseEpoch" | "leaseTokenHash"
+        "sessionId" | "organizationId" | "examId" | "ownerStudentId" | "assignmentId" | "assignmentRevision" | "expectedLeaseEpoch" | "leaseTokenHash"
     >,
 ): Promise<StudentAttemptSessionHeartbeat> {
-    if (!validCas(input.expectedLeaseEpoch) || !validLeaseTokenHash(input.leaseTokenHash)) {
+    if (!validCas(input.expectedLeaseEpoch) || !validLeaseTokenHash(input.leaseTokenHash) || !validAssignmentGeneration(input)) {
         return { status: "invalid" };
     }
-    const result = await client.rpc("omr_heartbeat_attempt_session_v1", {
+    const result = await client.rpc("omr_heartbeat_attempt_session_v2", {
         p_session_id: input.sessionId,
         p_organization_id: input.organizationId,
+        p_exam_id: input.examId,
         p_owner_student_id: input.ownerStudentId,
+        p_assignment_id: input.assignmentId || "",
+        p_assignment_revision: input.assignmentRevision || null,
         p_expected_lease_epoch: input.expectedLeaseEpoch,
         p_lease_token_hash: input.leaseTokenHash,
         p_lease_seconds: STUDENT_ATTEMPT_LEASE_SECONDS,
@@ -298,10 +356,11 @@ export interface PreparedStudentAttemptSession {
     answers: Record<number, number>;
     subQuestionAnswers: SubQuestionAnswers;
     allowedQuestionIds: number[];
-    gradingSnapshot: Exam;
-    submissionId: string;
-    attemptId: string;
+    gradingSnapshot?: Exam;
+    submissionId?: string;
+    attemptId?: string;
     assignmentId?: string;
+    assignmentRevision?: number;
     retake?: Pick<RetakeMetadata, "sourceAttemptId" | "mode">;
     progressPayload: Record<string, unknown>;
     submittedAttemptId?: string;
@@ -310,18 +369,22 @@ export interface PreparedStudentAttemptSession {
 export async function prepareStudentAttemptSessionSubmitWithGateway(
     client: StudentAttemptSessionRpcClient,
     input: Pick<CheckpointStudentAttemptSessionGatewayInput,
-        "sessionId" | "organizationId" | "ownerStudentId" | "expectedRevision" | "expectedLeaseEpoch" | "leaseTokenHash"
+        "sessionId" | "organizationId" | "examId" | "ownerStudentId" | "assignmentId" | "assignmentRevision" | "expectedRevision" | "expectedLeaseEpoch" | "leaseTokenHash"
     >,
 ): Promise<{ status: "prepared"; session: PreparedStudentAttemptSession } | { status: StudentAttemptSessionErrorStatus }> {
     if (
         !validCas(input.expectedRevision)
         || !validCas(input.expectedLeaseEpoch)
         || !validLeaseTokenHash(input.leaseTokenHash)
+        || !validAssignmentGeneration(input)
     ) return { status: "invalid" };
-    const result = await client.rpc("omr_prepare_attempt_session_submit_v1", {
+    const result = await client.rpc("omr_prepare_attempt_session_submit_v2", {
         p_session_id: input.sessionId,
         p_organization_id: input.organizationId,
+        p_exam_id: input.examId,
         p_owner_student_id: input.ownerStudentId,
+        p_assignment_id: input.assignmentId || "",
+        p_assignment_revision: input.assignmentRevision || null,
         p_expected_revision: input.expectedRevision,
         p_expected_lease_epoch: input.expectedLeaseEpoch,
         p_lease_token_hash: input.leaseTokenHash,
@@ -332,21 +395,32 @@ export async function prepareStudentAttemptSessionSubmitWithGateway(
     const record = row as Record<string, unknown>;
     const base = studentAttemptSessionStateFromRpc(record);
     if (base?.status === "expired") return { status: "expired" };
+    if (base?.status === "submitted") {
+        return base.submittedAttemptId
+            ? { status: "prepared", session: { ...base, status: "submitted", progressPayload: {} } }
+            : { status: "service_unavailable" };
+    }
     const gradingSnapshot = record.grading_snapshot;
     const submissionId = clean(record.submission_id);
     const attemptId = clean(record.attempt_id);
-    if (!base || !gradingSnapshot || typeof gradingSnapshot !== "object" || !submissionId || !attemptId) {
+    const assignmentId = clean(record.assignment_id);
+    const assignmentRevision = Number(record.assignment_revision);
+    const validAssignmentRevision = Number.isSafeInteger(assignmentRevision) && assignmentRevision > 0;
+    if (
+        !base || !gradingSnapshot || typeof gradingSnapshot !== "object" || !submissionId || !attemptId
+        || Boolean(assignmentId) !== validAssignmentRevision
+    ) {
         return { status: "service_unavailable" };
     }
     return {
         status: "prepared",
         session: {
             ...base,
-            status: base.status === "submitted" ? "submitted" : "in_progress",
+            status: "in_progress",
             gradingSnapshot: gradingSnapshot as Exam,
             submissionId,
             attemptId,
-            ...(clean(record.assignment_id) ? { assignmentId: clean(record.assignment_id) } : {}),
+            ...(assignmentId ? { assignmentId, assignmentRevision } : {}),
             ...(clean(record.retake_source_attempt_id) && clean(record.retake_mode)
                 ? {
                     retake: {
@@ -365,13 +439,14 @@ export async function prepareStudentAttemptSessionSubmitWithGateway(
 export async function commitStudentAttemptSessionSubmitWithGateway(
     client: StudentAttemptSessionRpcClient,
     input: Pick<CheckpointStudentAttemptSessionGatewayInput,
-        "sessionId" | "organizationId" | "ownerStudentId" | "expectedRevision" | "expectedLeaseEpoch" | "leaseTokenHash"
+        "sessionId" | "organizationId" | "examId" | "ownerStudentId" | "assignmentId" | "assignmentRevision" | "expectedRevision" | "expectedLeaseEpoch" | "leaseTokenHash"
     > & { attempt: Attempt },
 ): Promise<{ status: "submitted"; attempt: Attempt } | { status: StudentAttemptSessionErrorStatus }> {
     if (
         !validCas(input.expectedRevision)
         || !validCas(input.expectedLeaseEpoch)
         || !validLeaseTokenHash(input.leaseTokenHash)
+        || !validAssignmentGeneration(input)
     ) return { status: "invalid" };
     const attemptRow = attemptToSupabaseRow(input.attempt);
     const questionResults = questionResultRowsForAttempt(input.attempt);
@@ -380,10 +455,13 @@ export async function commitStudentAttemptSessionSubmitWithGateway(
         || jsonSize(attemptRow) > MAX_SUBMISSION_BYTES
         || jsonSize(questionResults) > MAX_SUBMISSION_BYTES
     ) return { status: "invalid" };
-    const result = await client.rpc("omr_commit_attempt_session_submit_v1", {
+    const result = await client.rpc("omr_commit_attempt_session_submit_v2", {
         p_session_id: input.sessionId,
         p_organization_id: input.organizationId,
+        p_exam_id: input.examId,
         p_owner_student_id: input.ownerStudentId,
+        p_assignment_id: input.assignmentId || "",
+        p_assignment_revision: input.assignmentRevision || null,
         p_expected_revision: input.expectedRevision,
         p_expected_lease_epoch: input.expectedLeaseEpoch,
         p_lease_token_hash: input.leaseTokenHash,

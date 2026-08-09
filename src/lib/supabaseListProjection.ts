@@ -96,6 +96,7 @@ export function studentAttemptSummaryFromSupabaseListRow(value: unknown): Studen
         id,
         examId,
         ...withOptionalString(row.assignment_id, "assignmentId"),
+        ...withOptionalNumber(row.assignment_revision, "assignmentRevision"),
         examTitle,
         status: row.status === "in_progress" ? "in_progress" : "completed",
         score: finiteNumber(row.score),

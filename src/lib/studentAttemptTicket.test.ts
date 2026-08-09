@@ -43,7 +43,7 @@ describe("student attempt ticket", () => {
         }, env, 1_000, ticketId);
 
         expect(parseStudentAttemptTicket(ticket, env, 1_000)).toEqual({
-            schemaVersion: 1,
+            schemaVersion: 2,
             audience: "omr-attempt",
             ticketId,
             examId: "exam-1",
@@ -100,6 +100,38 @@ describe("student attempt ticket", () => {
         expect(createStudentAttemptTicket({ ...base, retakeSourceAttemptId: "source-1" }, env)).toBeNull();
         expect(createStudentAttemptTicket({ ...base, retakeMode: "wrong" }, env)).toBeNull();
         expect(parseStudentAttemptTicket("x".repeat(32_769), env)).toBeNull();
+    });
+
+    it("binds targeted tickets to an exact assignment revision and rejects legacy assignment-only claims", () => {
+        const base = {
+            examId: "exam-1",
+            organizationId: "org-1",
+            studentId: "student-1",
+            studentName: "학생",
+            identityType: "registered" as const,
+            allowedQuestionIds: [1],
+            assignmentId: "assignment-reused",
+        };
+        expect(createStudentAttemptTicket(base, env, 1_000, ticketId)).toBeNull();
+        const ticket = createStudentAttemptTicket({ ...base, assignmentRevision: 8 }, env, 1_000, ticketId);
+        expect(parseStudentAttemptTicket(ticket, env, 1_000)).toMatchObject({
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+        });
+        expect(parseStudentAttemptTicket(resignClaims({
+            schemaVersion: 1,
+            audience: "omr-attempt",
+            ticketId,
+            examId: "exam-1",
+            organizationId: "org-1",
+            assignmentId: "assignment-reused",
+            studentId: "student-1",
+            studentName: "학생",
+            identityType: "registered",
+            allowedQuestionIds: [1],
+            issuedAt: 1_000,
+            expiresAt: 1_000 + STUDENT_ATTEMPT_TICKET_TTL_MS,
+        }), env, 1_000)).toBeNull();
     });
 
     it.each([

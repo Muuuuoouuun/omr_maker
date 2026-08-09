@@ -498,6 +498,20 @@ grant execute on function public.omr_release_plan_usage_v2(text,text,bigint,text
 revoke all on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) from public, anon, authenticated;
 grant execute on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) to service_role;
 
+-- Assignment-generation vNext remains server-only across boundary rollback.
+revoke all on function public.omr_list_student_assignments_v2(text,text,text,text,text) from public, anon, authenticated;
+revoke all on function public.omr_resolve_student_assignment_v2(text,text,text,text,text,text,bigint,text) from public, anon, authenticated;
+revoke all on function public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer) from public, anon, authenticated;
+revoke all on function public.omr_checkpoint_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb,jsonb,integer,boolean) from public, anon, authenticated;
+revoke all on function public.omr_heartbeat_attempt_session_v2(text,text,text,text,text,bigint,bigint,text,integer) from public, anon, authenticated;
+revoke all on function public.omr_takeover_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,integer) from public, anon, authenticated;
+revoke all on function public.omr_prepare_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text) from public, anon, authenticated;
+revoke all on function public.omr_commit_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb) from public, anon, authenticated;
+revoke all on function public.omr_list_active_attempt_sessions_v2(text,text,text,text,integer) from public, anon, authenticated;
+revoke all on function public.omr_resolve_legacy_attempt_session_scope_v1(text,text,text) from public, anon, authenticated;
+revoke all on function public.omr_prepare_teacher_force_finish_sessions_compact_v2(text,text[],text,text) from public, anon, authenticated;
+revoke all on function public.omr_force_finish_attempt_sessions_compact_v2(text,text[],timestamptz,text,text,text,jsonb) from public, anon, authenticated;
+
 commit;
 
 -- ---------------------------------------------------------------------------

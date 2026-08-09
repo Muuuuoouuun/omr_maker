@@ -5,12 +5,14 @@ import {
     heartbeatStudentAttemptSessionWithGateway,
     openStudentAttemptSessionWithGateway,
     prepareStudentAttemptSessionSubmitWithGateway,
+    resolveLegacyStudentAttemptSessionScopeWithGateway,
     takeoverStudentAttemptSessionWithGateway,
 } from "./studentAttemptSessionGateway.server";
 import type { Attempt } from "@/types/omr";
 
 const rpcState = {
     session_id: "session-1",
+    exam_id: "exam-1",
     status: "in_progress",
     revision: 1,
     lease_epoch: 1,
@@ -25,6 +27,34 @@ const rpcState = {
 };
 
 describe("student attempt session gateway", () => {
+    it("recovers only an exact-owner assignment-null legacy session scope", async () => {
+        const rpc = vi.fn(async () => ({
+            data: { status: "resolved", examId: "exam-1" },
+            error: null,
+        }));
+        await expect(resolveLegacyStudentAttemptSessionScopeWithGateway({ rpc }, {
+            sessionId: "session-1",
+            organizationId: "org-1",
+            ownerStudentId: "student-1",
+        })).resolves.toEqual({ status: "resolved", examId: "exam-1" });
+        expect(rpc).toHaveBeenCalledWith("omr_resolve_legacy_attempt_session_scope_v1", {
+            p_session_id: "session-1",
+            p_organization_id: "org-1",
+            p_owner_student_id: "student-1",
+        });
+    });
+
+    it.each([
+        [{ status: "resolved", examId: "exam-1", assignmentId: "secret" }],
+        [{ status: "resolved", examId: "" }],
+        [{ status: "targeted", examId: "exam-secret" }],
+    ])("fails closed for noncanonical legacy recovery payload %j", async data => {
+        const rpc = vi.fn(async () => ({ data, error: null }));
+        await expect(resolveLegacyStudentAttemptSessionScopeWithGateway({ rpc }, {
+            sessionId: "session-1", organizationId: "org-1", ownerStudentId: "student-1",
+        })).resolves.toEqual({ status: "service_unavailable" });
+    });
+
     it("opens with hashes only and reports an active lease held by another device", async () => {
         const rpc = vi.fn(async () => ({ data: [{ ...rpcState, lease_acquired: false }], error: null }));
         const result = await openStudentAttemptSessionWithGateway({ rpc }, {
@@ -49,11 +79,42 @@ describe("student attempt session gateway", () => {
         });
 
         expect(result).toMatchObject({ status: "lease_conflict", session: { sessionId: "session-1" } });
-        expect(rpc).toHaveBeenCalledWith("omr_open_attempt_session_v2", expect.objectContaining({
+        expect(rpc).toHaveBeenCalledWith("omr_open_attempt_session_v3", expect.objectContaining({
             p_new_lease_token_hash: "new-hash",
             p_current_lease_token_hash: "current-hash",
         }));
         expect(JSON.stringify(rpc.mock.calls[0])).not.toContain("lease-secret");
+    });
+
+    it("opens a targeted session only through the exact assignment generation RPC", async () => {
+        const rpc = vi.fn(async () => ({
+            data: [{ ...rpcState, assignment_id: "assignment-reused", assignment_revision: 8, lease_acquired: true }],
+            error: null,
+        }));
+        const result = await openStudentAttemptSessionWithGateway({ rpc }, {
+            sessionId: "session-new",
+            organizationId: "org-1",
+            examId: "exam-1",
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+            ownerStudentId: "student-1",
+            studentName: "학생",
+            identityType: "registered",
+            submissionId: "submission-1",
+            attemptId: "attempt-1",
+            examQuestionIds: [1, 2],
+            gradingSnapshot: {
+                id: "exam-1", title: "시험", createdAt: "2026-08-06T00:00:00.000Z", questions: [],
+            },
+            durationSeconds: 1800,
+            newLeaseTokenHash: "new-hash",
+        });
+
+        expect(result).toMatchObject({ status: "active", session: { assignmentRevision: 8 } });
+        expect(rpc).toHaveBeenCalledWith("omr_open_attempt_session_v3", expect.objectContaining({
+            p_assignment_id: "assignment-reused",
+            p_assignment_revision: 8,
+        }));
     });
 
     it("maps checkpoint CAS conflicts to a stable public status", async () => {
@@ -61,6 +122,7 @@ describe("student attempt session gateway", () => {
         await expect(checkpointStudentAttemptSessionWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: 1,
             expectedLeaseEpoch: 1,
@@ -82,6 +144,7 @@ describe("student attempt session gateway", () => {
         const result = await checkpointStudentAttemptSessionWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: 1,
             expectedLeaseEpoch: 1,
@@ -96,7 +159,7 @@ describe("student attempt session gateway", () => {
         });
 
         expect(result.status).toBe("active");
-        expect(rpc).toHaveBeenCalledWith("omr_checkpoint_attempt_session_v1", expect.objectContaining({
+        expect(rpc).toHaveBeenCalledWith("omr_checkpoint_attempt_session_v2", expect.objectContaining({
             p_progress_payload: {
                 currentQuestionId: 1,
                 handwritingCheckpoint: {
@@ -121,6 +184,7 @@ describe("student attempt session gateway", () => {
         const result = await checkpointStudentAttemptSessionWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: 1,
             expectedLeaseEpoch: 1,
@@ -153,6 +217,7 @@ describe("student attempt session gateway", () => {
         const result = await checkpointStudentAttemptSessionWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: cas.expectedRevision as number,
             expectedLeaseEpoch: cas.expectedLeaseEpoch as number,
@@ -174,6 +239,7 @@ describe("student attempt session gateway", () => {
         const result = await takeoverStudentAttemptSessionWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: 1,
             expectedLeaseEpoch: 1,
@@ -193,6 +259,7 @@ describe("student attempt session gateway", () => {
         await expect(heartbeatStudentAttemptSessionWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedLeaseEpoch: invalid.expectedLeaseEpoch as number,
             leaseTokenHash: invalid.leaseTokenHash,
@@ -214,6 +281,7 @@ describe("student attempt session gateway", () => {
         await expect(takeoverStudentAttemptSessionWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: invalid.expectedRevision as number,
             expectedLeaseEpoch: invalid.expectedLeaseEpoch as number,
@@ -264,6 +332,7 @@ describe("student attempt session gateway", () => {
         await commitStudentAttemptSessionSubmitWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: 2,
             expectedLeaseEpoch: 1,
@@ -271,7 +340,7 @@ describe("student attempt session gateway", () => {
             attempt,
         });
 
-        expect(rpc).toHaveBeenCalledWith("omr_commit_attempt_session_submit_v1", expect.objectContaining({
+        expect(rpc).toHaveBeenCalledWith("omr_commit_attempt_session_submit_v2", expect.objectContaining({
             p_attempt: expect.objectContaining({
                 id: "attempt-1",
                 organization_id: "org-1",
@@ -300,6 +369,7 @@ describe("student attempt session gateway", () => {
         await expect(prepareStudentAttemptSessionSubmitWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: 1,
             expectedLeaseEpoch: 1,
@@ -321,6 +391,7 @@ describe("student attempt session gateway", () => {
         await expect(prepareStudentAttemptSessionSubmitWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: invalid.expectedRevision as number,
             expectedLeaseEpoch: invalid.expectedLeaseEpoch as number,
@@ -343,6 +414,7 @@ describe("student attempt session gateway", () => {
         await expect(commitStudentAttemptSessionSubmitWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: invalid.expectedRevision as number,
             expectedLeaseEpoch: invalid.expectedLeaseEpoch as number,
@@ -358,6 +430,7 @@ describe("student attempt session gateway", () => {
         await expect(commitStudentAttemptSessionSubmitWithGateway({ rpc }, {
             sessionId: "session-1",
             organizationId: "org-1",
+            examId: "exam-1",
             ownerStudentId: "student-1",
             expectedRevision: 1,
             expectedLeaseEpoch: 1,

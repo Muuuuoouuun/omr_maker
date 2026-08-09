@@ -56,18 +56,18 @@ export interface InitialOperationsLoadClient {
 }
 
 export const INITIAL_OPERATIONS_PRODUCTION_WORKLOAD_PATHS = Object.freeze({
-    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v2"]),
-    checkpoint: Object.freeze(["rpc:omr_checkpoint_attempt_session_v1"]),
-    heartbeat: Object.freeze(["rpc:omr_heartbeat_attempt_session_v1"]),
-    "teacher-live-read": Object.freeze(["rpc:omr_list_active_attempt_sessions_v1"]),
+    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v3"]),
+    checkpoint: Object.freeze(["rpc:omr_checkpoint_attempt_session_v2"]),
+    heartbeat: Object.freeze(["rpc:omr_heartbeat_attempt_session_v2"]),
+    "teacher-live-read": Object.freeze(["rpc:omr_list_active_attempt_sessions_v2"]),
     "teacher-upload-read": Object.freeze(["table:omr_remote_assets"]),
     "student-submit": Object.freeze([
-        "rpc:omr_prepare_attempt_session_submit_v1",
-        "rpc:omr_commit_attempt_session_submit_v1",
+        "rpc:omr_prepare_attempt_session_submit_v2",
+        "rpc:omr_commit_attempt_session_submit_v2",
     ]),
     "student-submit-replay": Object.freeze([
-        "rpc:omr_prepare_attempt_session_submit_v1",
-        "rpc:omr_commit_attempt_session_submit_v1",
+        "rpc:omr_prepare_attempt_session_submit_v2",
+        "rpc:omr_commit_attempt_session_submit_v2",
     ]),
     "teacher-max-pdf-upload-prepare": Object.freeze(["rpc:omr_prepare_teacher_asset_upload_v2"]),
     "teacher-max-pdf-upload-finalize": Object.freeze([
@@ -75,6 +75,21 @@ export const INITIAL_OPERATIONS_PRODUCTION_WORKLOAD_PATHS = Object.freeze({
         "rpc:omr_finalize_teacher_asset_upload_v2",
     ]),
 });
+
+export const INITIAL_OPERATIONS_ASSIGNMENT_GENERATION_REQUIRED_RPCS = Object.freeze([
+    "omr_list_student_assignments_v2",
+    "omr_resolve_student_assignment_v2",
+    "omr_open_attempt_session_v3",
+    "omr_checkpoint_attempt_session_v2",
+    "omr_heartbeat_attempt_session_v2",
+    "omr_takeover_attempt_session_v2",
+    "omr_prepare_attempt_session_submit_v2",
+    "omr_commit_attempt_session_submit_v2",
+    "omr_list_active_attempt_sessions_v2",
+    "omr_resolve_legacy_attempt_session_scope_v1",
+    "omr_prepare_teacher_force_finish_sessions_compact_v2",
+    "omr_force_finish_attempt_sessions_compact_v2",
+]);
 
 interface InitialOperationsTeacherIdentity {
     organizationId: string;
@@ -333,6 +348,7 @@ export function createInitialOperationsLoadGateway(
             const checkpoint = await checkpointStudentAttemptSessionWithGateway(client, {
                 sessionId: session.sessionId,
                 organizationId: fixture.organizationId,
+                examId: fixture.examId,
                 ownerStudentId: context.actorId,
                 expectedRevision,
                 expectedLeaseEpoch,
@@ -351,6 +367,7 @@ export function createInitialOperationsLoadGateway(
             const heartbeat = await heartbeatStudentAttemptSessionWithGateway(client, {
                 sessionId: session.sessionId,
                 organizationId: fixture.organizationId,
+                examId: fixture.examId,
                 ownerStudentId: context.actorId,
                 expectedLeaseEpoch: Number(input.expectedLeaseEpoch ?? 1),
                 leaseTokenHash: leaseTokenHash(session.leaseToken, session.leaseSecret),
@@ -394,6 +411,7 @@ export function createInitialOperationsLoadGateway(
             const prepared = await prepareStudentAttemptSessionSubmitWithGateway(client, {
                 sessionId: session.sessionId,
                 organizationId: fixture.organizationId,
+                examId: fixture.examId,
                 ownerStudentId: context.actorId,
                 expectedRevision: Number(input.expectedRevision),
                 expectedLeaseEpoch: Number(input.expectedLeaseEpoch),
@@ -401,6 +419,9 @@ export function createInitialOperationsLoadGateway(
             });
             if (prepared.status !== "prepared") return { status: "service_unavailable" };
             const preparedSession = prepared.session;
+            if (!preparedSession.submissionId || !preparedSession.attemptId || !preparedSession.gradingSnapshot) {
+                return { status: "service_unavailable" };
+            }
             const finishedAt = preparedSession.serverNow;
             const attempt = buildServerAttempt({
                 examId: fixture.examId,
@@ -415,6 +436,7 @@ export function createInitialOperationsLoadGateway(
             const committed = await commitStudentAttemptSessionSubmitWithGateway(client, {
                 sessionId: session.sessionId,
                 organizationId: fixture.organizationId,
+                examId: fixture.examId,
                 ownerStudentId: context.actorId,
                 expectedRevision: preparedSession.revision,
                 expectedLeaseEpoch: preparedSession.leaseEpoch,

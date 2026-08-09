@@ -5,6 +5,7 @@ import { toast } from "@/components/Toast";
 import { askAttemptQuestion, submitAttempt } from "@/app/actions/studentExam";
 import {
     checkpointDurableStudentAttemptSession,
+    resolveLegacyDurableStudentAttemptSessionScope,
     submitDurableStudentAttemptSession,
 } from "@/app/actions/studentAttemptSession";
 import {
@@ -73,16 +74,29 @@ export default function SyncFlusher() {
                 : Promise.resolve({ status: "empty" as const, sentCount: 0 as const });
             const secureSubmissionRecovery = maintainSecureSubmissionOutbox()
                 .then(async maintenance => {
+                    const replay = session?.studentId
+                        ? await secureSubmissionOwnerFingerprint(session.studentId).then(ownerFingerprint => (
+                            replaySecureSubmissionsForOwner(ownerFingerprint, {
+                                resolveLegacyScope: resolveLegacyDurableStudentAttemptSessionScope,
+                                checkpoint: checkpointDurableStudentAttemptSession,
+                                submit: submitDurableStudentAttemptSession,
+                            })
+                        ))
+                        : { status: "empty" as const, submitted: [] };
                     const notices = await readSecureSubmissionRecoveryNotices();
                     for (const notice of notices) {
                         if (displayedRecoveryNoticeIds.has(notice.id)) continue;
                         displayedRecoveryNoticeIds.add(notice.id);
                         const title = notice.kind === "expired"
                             ? "제출 재시도 기한 만료"
-                            : "제출 재시도 정보 손상";
+                            : notice.kind === "legacy_recovery_required"
+                                ? "이전 제출 복구 필요"
+                                : "제출 재시도 정보 손상";
                         const detail = notice.kind === "expired"
                             ? "보관 기한이 지난 제출 답안은 자동 전송할 수 없습니다. 제출 여부를 선생님에게 문의해주세요."
-                            : "안전하게 읽을 수 없는 제출 재시도 정보를 정리했습니다. 제출 여부를 선생님에게 문의해주세요.";
+                            : notice.kind === "legacy_recovery_required"
+                                ? "이전 버전에서 저장한 답안을 자동 전송하지 않았습니다. 답안은 보관 중이며 제출 여부를 선생님에게 문의해주세요."
+                                : "안전하게 읽을 수 없는 제출 재시도 정보를 정리했습니다. 제출 여부를 선생님에게 문의해주세요.";
                         toast.action("error", title, detail, {
                             actionLabel: "확인",
                             durationMs: 60_000,
@@ -92,12 +106,6 @@ export default function SyncFlusher() {
                             },
                         });
                     }
-                    if (!session?.studentId) return { maintenance, replay: { status: "empty" as const, submitted: [] } };
-                    const ownerFingerprint = await secureSubmissionOwnerFingerprint(session.studentId);
-                    const replay = await replaySecureSubmissionsForOwner(ownerFingerprint, {
-                        checkpoint: checkpointDurableStudentAttemptSession,
-                        submit: submitDurableStudentAttemptSession,
-                    });
                     return { maintenance, replay };
                 });
             const handwritingRecoveryMaintenance = maintainHandwritingUploadRecovery(window.localStorage, {

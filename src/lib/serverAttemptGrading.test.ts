@@ -20,7 +20,7 @@ const exam: Exam = {
 };
 
 const ticket: StudentAttemptTicketClaims = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     audience: "omr-attempt",
     ticketId: "ticket-1",
     examId: "exam-1",

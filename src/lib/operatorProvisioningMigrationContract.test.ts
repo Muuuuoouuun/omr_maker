@@ -106,7 +106,7 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
             expect(source).toContain("omr_provision_pilot_teacher_v1");
             expect(source).toContain("omr_read_effective_workspace_plan_v1");
         }
-        expect(boundary).toContain("'version', '202608080010'");
+        expect(boundary).toContain("'version', '202608090001'");
         expect(boundary).toContain("'operatorPilotProvisioningReady'");
         for (const readinessProof of [
             "omr_pilot_plan_grants_one_current_org_idx",

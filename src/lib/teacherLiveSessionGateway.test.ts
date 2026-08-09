@@ -37,6 +37,7 @@ describe("teacher durable live session gateway", () => {
                         exam_id: "exam-a",
                         class_id: "class-a",
                         assignment_id: "assignment-a",
+                        assignment_revision: 8,
                         owner_student_id: "student-a",
                         student_profile_id: "student-a",
                         student_name: "학생 A",
@@ -75,6 +76,7 @@ describe("teacher durable live session gateway", () => {
                 examId: "exam-a",
                 classId: "class-a",
                 assignmentId: "assignment-a",
+                assignmentRevision: 8,
                 ownerStudentId: "student-a",
                 studentProfileId: "student-a",
                 studentName: "학생 A",
@@ -91,7 +93,7 @@ describe("teacher durable live session gateway", () => {
         expect(JSON.stringify(result)).not.toContain("grading_snapshot");
         expect(JSON.stringify(result)).not.toContain('"answers"');
         expect(calls).toEqual([{
-            name: "omr_list_active_attempt_sessions_v1",
+            name: "omr_list_active_attempt_sessions_v2",
             args: {
                 p_organization_id: "org-a",
                 p_exam_id: "exam-a",
@@ -107,12 +109,14 @@ describe("teacher durable live session gateway", () => {
         const client = {
             async rpc(name: string, args: Record<string, unknown>) {
                 calls.push({ name, args });
-                if (name === "omr_prepare_teacher_force_finish_sessions_compact_v1") {
+                if (name === "omr_prepare_teacher_force_finish_sessions_compact_v2") {
                     return {
                         data: [{
                             session_id: "session-a",
                             organization_id: "org-a",
                             revision: 7,
+                            assignment_id: "assignment-a",
+                            assignment_revision: 8,
                             grading_fingerprint: "f".repeat(64),
                             status: "in_progress",
                         }],
@@ -127,6 +131,7 @@ describe("teacher durable live session gateway", () => {
                         organizationId: "org-a",
                         classId: "class-a",
                         assignmentId: "assignment-a",
+                        assignmentRevision: 8,
                         studentProfileId: "student-a",
                         studentId: "student-a",
                         studentName: "학생 A",
@@ -160,8 +165,8 @@ describe("teacher durable live session gateway", () => {
         }, teacherContext)).resolves.toMatchObject({ status: "saved", attempts: [{ id: "attempt-ticket-a" }] });
 
         expect(calls.map(call => call.name)).toEqual([
-            "omr_prepare_teacher_force_finish_sessions_compact_v1",
-            "omr_force_finish_attempt_sessions_compact_v1",
+            "omr_prepare_teacher_force_finish_sessions_compact_v2",
+            "omr_force_finish_attempt_sessions_compact_v2",
         ]);
         expect(calls[0].args).toMatchObject({
             p_organization_id: "org-a",
@@ -223,6 +228,6 @@ describe("teacher durable live session gateway", () => {
             sessionIds: ["session-a"],
             finishedAt: "2026-08-07T00:10:00.000Z",
         }, teacherContext)).resolves.toEqual({ status: "not_found" });
-        expect(calls).toEqual(["omr_prepare_teacher_force_finish_sessions_compact_v1"]);
+        expect(calls).toEqual(["omr_prepare_teacher_force_finish_sessions_compact_v2"]);
     });
 });

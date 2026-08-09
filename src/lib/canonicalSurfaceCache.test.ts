@@ -269,7 +269,7 @@ describe("canonical surface cache", () => {
         for (const normalized of [title, emojiTitle, name, escaped]) {
             expect(normalized.truncated).toBe(true);
             expect(normalized.value.endsWith("…")).toBe(true);
-            expect(normalized.value).not.toContain("�");
+            expect(normalized.value).not.toContain("\uFFFD");
         }
         for (const normalized of [emojiTitle, name]) {
             const beforeEllipsis = normalized.value.slice(0, -1);

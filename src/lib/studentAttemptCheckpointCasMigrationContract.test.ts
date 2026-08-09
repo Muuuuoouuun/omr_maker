@@ -22,7 +22,7 @@ describe("attempt checkpoint null CAS hardening migration", () => {
     });
 
     it("pins deployment readiness and live PostgreSQL assertions to the hardening", () => {
-        expect(boundary).toContain("'version', '202608080010'");
+        expect(boundary).toContain("'version', '202608090001'");
         expect(boundary).toContain("'attemptCheckpointNullCasReady'");
         expect(boundary).toContain(
             "attempt-checkpoint-null-cas:202608060016;secure-submission-outbox-replay:202608060028",

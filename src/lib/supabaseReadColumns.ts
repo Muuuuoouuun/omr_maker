@@ -52,6 +52,7 @@ export const SUPABASE_STUDENT_ATTEMPT_SUMMARY_READ_COLUMNS = [
     "id",
     "exam_id",
     "assignment_id",
+    "assignment_revision",
     "status",
     "score",
     "total_score",

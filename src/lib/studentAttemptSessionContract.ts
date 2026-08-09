@@ -9,6 +9,7 @@ export type StudentAttemptSessionStatus = "in_progress" | "submitted" | "expired
 
 export interface StudentAttemptSessionState {
     sessionId: string;
+    examId: string;
     status: StudentAttemptSessionStatus;
     revision: number;
     leaseEpoch: number;
@@ -20,6 +21,8 @@ export interface StudentAttemptSessionState {
     progressPayload: Record<string, unknown>;
     allowedQuestionIds: number[];
     submittedAttemptId?: string;
+    assignmentId?: string;
+    assignmentRevision?: number;
 }
 
 function clean(value: unknown): string {
@@ -102,6 +105,7 @@ export function studentAttemptSessionStateFromRpc(value: unknown): StudentAttemp
     if (!candidate || typeof candidate !== "object") return null;
     const row = candidate as Record<string, unknown>;
     const sessionId = clean(row.session_id);
+    const examId = clean(row.exam_id);
     const status = row.status === "in_progress" || row.status === "submitted" || row.status === "expired"
         ? row.status
         : null;
@@ -113,12 +117,17 @@ export function studentAttemptSessionStateFromRpc(value: unknown): StudentAttemp
     const allowedQuestionIds = Array.isArray(row.allowed_question_ids)
         ? [...new Set(row.allowed_question_ids.map(Number).filter(id => Number.isInteger(id) && id > 0))]
         : [];
-    if (!sessionId || !status || !revision || !leaseEpoch || !startedAt || !deadlineAt || !serverNow || allowedQuestionIds.length === 0 || allowedQuestionIds.length > 500) {
+    const assignmentId = clean(row.assignment_id);
+    const assignmentRevision = safePositiveInteger(row.assignment_revision);
+    if (!sessionId || !examId || !status || !revision || !leaseEpoch || !startedAt || !deadlineAt || !serverNow
+        || allowedQuestionIds.length === 0 || allowedQuestionIds.length > 500
+        || Boolean(assignmentId) !== Boolean(assignmentRevision)) {
         return null;
     }
     const allowedQuestionIdSet = new Set(allowedQuestionIds);
     return {
         sessionId,
+        examId,
         status,
         revision,
         leaseEpoch,
@@ -129,6 +138,9 @@ export function studentAttemptSessionStateFromRpc(value: unknown): StudentAttemp
         subQuestionAnswers: safeSubQuestionAnswers(row.sub_question_answers, allowedQuestionIdSet),
         progressPayload: safeProgressPayload(row.progress_payload),
         allowedQuestionIds,
+        ...(assignmentId && assignmentRevision
+            ? { assignmentId, assignmentRevision }
+            : {}),
         ...(clean(row.submitted_attempt_id) ? { submittedAttemptId: clean(row.submitted_attempt_id) } : {}),
     };
 }

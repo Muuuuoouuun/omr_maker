@@ -225,6 +225,8 @@ export interface QuestionResult {
     classId?: string;
     /** Optional assignment scope for future gradebook flows. */
     assignmentId?: string;
+    /** Immutable targeted-assignment generation paired with assignmentId. */
+    assignmentRevision?: number;
     /** Canonical roster/student profile id. Falls back to studentId when absent. */
     studentProfileId?: string;
     studentName: string;
@@ -345,6 +347,8 @@ export interface Attempt {
     classId?: string;
     /** Optional assignment scope for future gradebook flows. */
     assignmentId?: string;
+    /** Immutable targeted-assignment generation paired with assignmentId. */
+    assignmentRevision?: number;
     /** Canonical roster/student profile id. Falls back to studentId when absent. */
     studentProfileId?: string;
     studentName: string; // "Student" for anonymous

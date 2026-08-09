@@ -68,7 +68,10 @@ describe("student assignment capacity action boundary", () => {
         mocks.fetchExamRowsByOrganization.mockResolvedValue([]);
         mocks.fetchStudentExamRowsByOrganization.mockResolvedValue([]);
         mocks.listStudentAssignmentsRpc.mockImplementation(async () => ({
-            data: await mocks.fetchStudentExamRowsByOrganization(),
+            data: {
+                serverNow: "2026-07-14T00:00:00.000Z",
+                assignments: await mocks.fetchStudentExamRowsByOrganization(),
+            },
             error: null,
         }));
         vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -136,6 +139,7 @@ describe("student assignment capacity action boundary", () => {
         const result = await listMyAssignments();
         expect(result).toEqual({
             status: "ok",
+            serverNow: expect.any(String),
             attempts: [{
                 id: "attempt-1",
                 examId: "exam-1",
@@ -158,7 +162,7 @@ describe("student assignment capacity action boundary", () => {
                 access: { type: "public", entryCheck: "required" },
             }],
         });
-        expect(mocks.listStudentAssignmentsRpc).toHaveBeenCalledWith("omr_list_student_assignments_v1", expect.objectContaining({
+        expect(mocks.listStudentAssignmentsRpc).toHaveBeenCalledWith("omr_list_student_assignments_v2", expect.objectContaining({
             p_organization_id: "org-1",
             p_owner_student_id: "student-1",
         }));

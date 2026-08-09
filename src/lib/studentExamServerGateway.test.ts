@@ -81,11 +81,11 @@ async function openAllowedExam(client: StudentExamGatewayClient) {
 describe("student exam server gateway", () => {
     it("requires an authorized opaque assignment for targeted exams and binds it into the ticket", async () => {
         const targetedExam = { ...exam, accessConfig: { type: "targeted" as const } };
-        const resolver = vi.fn(async (name: string) => name === "omr_resolve_student_assignment_v1"
+        const resolver = vi.fn(async (name: string) => name === "omr_resolve_student_assignment_v2"
             ? {
                 data: {
                     status: "authorized", assignmentId: "assignment-1", examId: exam.id,
-                    mode: "base", questionIds: [],
+                    assignmentRevision: 8, mode: "base", questionIds: [],
                 },
                 error: null,
             }
@@ -111,22 +111,22 @@ describe("student exam server gateway", () => {
             examId: exam.id, student,
         }, env, 1_000, verified)).resolves.toEqual({ status: "group_denied" });
         await expect(openStudentExamWithGateway(targetedClient, {
-            examId: exam.id, assignmentId: "assignment-1", student,
+            examId: exam.id, assignmentId: "assignment-1", assignmentRevision: 8, student,
         }, env, 1_000, {
             organizationId: "org-1", studentId: "guest:guest-1", studentName: "게스트",
             identityType: "guest", guestId: "guest-1",
         })).resolves.toEqual({ status: "login_required" });
 
         const opened = await openStudentExamWithGateway(targetedClient, {
-            examId: exam.id, assignmentId: "assignment-1", student,
+            examId: exam.id, assignmentId: "assignment-1", assignmentRevision: 8, student,
         }, env, 1_000, verified);
         expect(opened.status).toBe("allowed");
         if (opened.status !== "allowed") return;
         expect(parseStudentAttemptTicket(opened.ticket, env, 1_000)).toMatchObject({
-            assignmentId: "assignment-1", studentId: "student-1", examId: exam.id,
+            assignmentId: "assignment-1", assignmentRevision: 8, studentId: "student-1", examId: exam.id,
         });
-        expect(resolver).toHaveBeenCalledWith("omr_resolve_student_assignment_v1", expect.objectContaining({
-            p_assignment_id: "assignment-1", p_owner_student_id: "student-1",
+        expect(resolver).toHaveBeenCalledWith("omr_resolve_student_assignment_v2", expect.objectContaining({
+            p_assignment_id: "assignment-1", p_assignment_revision: 8, p_owner_student_id: "student-1",
         }));
     });
 

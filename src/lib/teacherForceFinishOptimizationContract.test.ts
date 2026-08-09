@@ -36,7 +36,7 @@ describe("teacher force-finish batch optimization", () => {
             resolve(process.cwd(), "supabase/production-server-boundary.sql"),
             "utf8",
         ).toLowerCase();
-        expect(boundary).toContain("'version', '202608080010'");
+        expect(boundary).toContain("'version', '202608090001'");
         expect(boundary).toContain("teacher-live-session-force-finish-prepare:202608060023");
         expect(boundary).toContain("teacher-live-session-force-finish:202608060023");
         expect(boundary).toContain(

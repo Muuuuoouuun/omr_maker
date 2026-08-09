@@ -202,7 +202,8 @@ describe("persistence integration", () => {
         const dashboard = readProjectFile("src/app/student/dashboard/page.tsx");
 
         expect(action).toContain("listStudentAssignmentsWithGateway(ctx.admin, ctx.identity)");
-        expect(gateway).toContain('rpc("omr_list_student_assignments_v1"');
+        expect(gateway).toContain('rpc("omr_list_student_assignments_v2"');
+        expect(gateway).toContain("assignment_revision");
         expect(gateway).toContain("satisfies StudentAssignmentPreview");
         expect(gateway).toContain("retake_question_ids");
         expect(gateway).not.toContain("correctAnswer");

@@ -18,13 +18,14 @@ import {
     checkpointDurableStudentAttemptSession,
     heartbeatDurableStudentAttemptSession,
     openDurableStudentAttemptSession,
+    resolveLegacyDurableStudentAttemptSessionScope,
     submitDurableStudentAttemptSession,
     takeoverDurableStudentAttemptSession,
 } from "@/app/actions/studentAttemptSession";
 import { uploadStudentAttemptHandwriting } from "@/app/actions/remoteAssets";
 import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
 import { saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
-import { attemptBelongsToSession, getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, STUDENT_SESSION_CHANGED_EVENT, type StudentSession } from "@/utils/storage";
+import { attemptBelongsToSession, getOrCreateGuestId, getSession, getStudentSessionGeneration, getStudentSharedIdentityEpoch, guestLoginIdFor, saveSession, STORAGE_KEYS, STUDENT_SESSION_CHANGED_EVENT, STUDENT_SESSION_KEY, STUDENT_SHARED_IDENTITY_EPOCH_KEY, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
@@ -51,6 +52,12 @@ import {
 import { readRosterGroups } from "@/lib/rosterStorage";
 import { recallSolvePdf, rememberSolvePdf } from "@/lib/solvePdfCache";
 import { clientExamFromStudentExamPreview, clientExamFromStudentSolveExam } from "@/lib/studentExamContract";
+import {
+    buildLegacyStudentDraftRecoveryExport,
+    isCurrentLegacyStudentDraftRecovery,
+    migrateLegacyStudentDraftStorage,
+    studentAssignmentDraftStorageKey,
+} from "@/lib/studentAssignmentClassification";
 import {
     localResultCacheFromServerReceipt,
     persistSubmissionReceipt,
@@ -135,6 +142,7 @@ const AUTOSAVE_INTERVAL_MS = 3000;
 const OMR_PANEL_STORAGE_PREFIX = "omr_solve_panel";
 
 interface SolveDraft {
+    scopeBinding: string;
     answers: Record<number, number>;
     subQuestionAnswers?: SubQuestionAnswers;
     /** Legacy inline drawings. New drafts store large handwriting payloads in IndexedDB. */
@@ -1142,11 +1150,21 @@ export default function SolvePage() {
     const [entryError, setEntryError] = useState("");
     const [linkClassCode, setLinkClassCode] = useState("");
     const [currentSolvePath, setCurrentSolvePath] = useState("");
+    const [assignmentId, setAssignmentId] = useState("");
+    const [assignmentRevision, setAssignmentRevision] = useState<number>();
 
     // Timer + autosave State
     const [startedAt, setStartedAt] = useState(() => new Date().toISOString());
     const [timeRemaining, setTimeRemaining] = useState<number | null>(null); // seconds
     const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+    const [legacyDraftRecoveryExport, setLegacyDraftRecoveryExport] = useState<{
+        fileName: string;
+        json: string;
+        ownerStudentId: string;
+        sessionGeneration: string;
+        sharedIdentityEpoch: string;
+        examId: string;
+    } | null>(null);
     const [hasResumed, setHasResumed] = useState(false);
     const [pinVerified, setPinVerified] = useState(false);
     const [pinInput, setPinInput] = useState("");
@@ -1218,6 +1236,7 @@ export default function SolvePage() {
                 current.session.sessionId,
                 ownerFingerprint,
                 {
+                    resolveLegacyScope: resolveLegacyDurableStudentAttemptSessionScope,
                     checkpoint: checkpointDurableStudentAttemptSession,
                     submit: submitDurableStudentAttemptSession,
                 },
@@ -1469,7 +1488,14 @@ export default function SolvePage() {
 
     const draftOwnerKey = user?.studentId || user?.guestId || persistId;
     const draftRetakeSegment = buildRetakeDraftSegment(retakeConfig);
-    const DRAFT_KEY = id && draftOwnerKey ? `omr_draft_${id}_${draftOwnerKey}_${draftRetakeSegment}` : "";
+    const DRAFT_KEY = id && draftOwnerKey
+        ? studentAssignmentDraftStorageKey(
+            id,
+            draftOwnerKey,
+            { assignmentId: assignmentId || undefined, assignmentRevision },
+            draftRetakeSegment,
+        ) || ""
+        : "";
     const LEGACY_DRAFT_KEY = id ? `omr_draft_${id}` : "";
     const OMR_PANEL_KEY = id && draftOwnerKey ? `${OMR_PANEL_STORAGE_PREFIX}_${id}_${draftOwnerKey}_${draftRetakeSegment}` : "";
 
@@ -1489,6 +1515,7 @@ export default function SolvePage() {
         const savedAt = new Date().toISOString();
         const draftDrawings = compactDrawings(draftSnapshot.drawings || {});
         const lightweightDraft: SolveDraft = {
+            scopeBinding: DRAFT_KEY,
             answers: draftSnapshot.answers,
             subQuestionAnswers: draftSnapshot.subQuestionAnswers,
             drawingsRef: draftSnapshot.drawingsRef,
@@ -1516,7 +1543,7 @@ export default function SolvePage() {
                 // Capture the state reference BEFORE the await: strokes landing
                 // mid-write must still read as dirty on the next tick.
                 const persistedFrom = rawDrawingsRef.current;
-                drawingsRef = await saveJsonRecord(`draft:${id}:${draftOwnerKey}:drawings`, draftDrawings);
+                drawingsRef = await saveJsonRecord(`draft:${encodeURIComponent(DRAFT_KEY)}:drawings`, draftDrawings);
                 if (!drawingsRef) throw new Error("Failed to save draft drawings");
                 lastPersistedDrawingsRef.current = persistedFrom;
             }
@@ -1543,7 +1570,7 @@ export default function SolvePage() {
             }
             return true;
         }
-    }, [DRAFT_KEY, draftOwnerKey, id, solveAllowed]);
+    }, [DRAFT_KEY, solveAllowed]);
 
     useEffect(() => {
         if (typeof window === "undefined" || !OMR_PANEL_KEY) {
@@ -1569,7 +1596,14 @@ export default function SolvePage() {
      * until the PIN passes, so PIN-gated exams fully initialize on PIN success).
      */
     const applyLoadedExam = useCallback(
-        async (parsed: Exam & Partial<Pick<SolvableExam, "premiumCapabilities">>, source: ExamSource, session: StudentSession | null, pinAlreadyVerified = false) => {
+        async (
+            parsed: Exam & Partial<Pick<SolvableExam, "premiumCapabilities">>,
+            source: ExamSource,
+            session: StudentSession | null,
+            pinAlreadyVerified = false,
+            loadedAssignmentId = "",
+            loadedAssignmentRevision?: number,
+        ) => {
             try {
                 // Server payloads carry an organization-plan capability. Local
                 // fallback has no trusted plan source and therefore stays Free.
@@ -1642,13 +1676,63 @@ export default function SolvePage() {
                 try {
                     const ownerKey = session?.studentId || session?.guestId || persistId;
                     const draftSegment = buildRetakeDraftSegment(nextRetakeConfig);
-                    const scopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}_${draftSegment}` : "";
+                    const scopedDraftKey = ownerKey ? studentAssignmentDraftStorageKey(
+                        id,
+                        ownerKey,
+                        { assignmentId: loadedAssignmentId || undefined, assignmentRevision: loadedAssignmentRevision },
+                        draftSegment,
+                    ) || "" : "";
+                    const legacySegmentedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}_${draftSegment}` : "";
                     const legacyScopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}` : "";
-                    const draftStr = (scopedDraftKey ? localStorage.getItem(scopedDraftKey) : null)
-                        || (!nextRetakeConfig && legacyScopedDraftKey ? localStorage.getItem(legacyScopedDraftKey) : null)
-                        || (!nextRetakeConfig ? localStorage.getItem(`omr_draft_${id}`) : null);
+                    setLegacyDraftRecoveryExport(null);
+                    const recoverySessionGeneration = getStudentSessionGeneration();
+                    const recoverySharedIdentityEpoch = getStudentSharedIdentityEpoch();
+                    const legacyRecovery = legacySegmentedDraftKey
+                        ? buildLegacyStudentDraftRecoveryExport(localStorage, {
+                            legacySegmentedKey: legacySegmentedDraftKey,
+                            examId: id,
+                        })
+                        : { status: "none" as const };
+                    const canOfferLegacyRecovery = legacyRecovery.status === "available"
+                        && !!session?.studentId
+                        && !!recoverySessionGeneration
+                        && !!recoverySharedIdentityEpoch;
+                    if (canOfferLegacyRecovery) {
+                        setLegacyDraftRecoveryExport({
+                            fileName: legacyRecovery.fileName,
+                            json: legacyRecovery.json,
+                            ownerStudentId: session.studentId,
+                            sessionGeneration: recoverySessionGeneration,
+                            sharedIdentityEpoch: recoverySharedIdentityEpoch,
+                            examId: id,
+                        });
+                    }
+                    const migratedLegacy = scopedDraftKey && legacySegmentedDraftKey
+                        ? migrateLegacyStudentDraftStorage(localStorage, {
+                            canonicalKey: scopedDraftKey,
+                            legacySegmentedKey: legacySegmentedDraftKey,
+                        })
+                        : { status: "none" as const };
+                    if (migratedLegacy.status === "recovery_required") {
+                        toast.info(
+                            "이전 임시저장 복구 필요",
+                            canOfferLegacyRecovery
+                                ? "배정 범위를 확인할 수 없어 자동 복원하지 않았습니다. 원본은 보관되며 검증된 복구 파일을 직접 내려받을 수 있습니다."
+                                : legacyRecovery.status === "invalid"
+                                    ? "배정 범위를 확인할 수 없어 자동 복원하지 않았습니다. 원본은 보관했지만 안전한 내보내기 형식으로 확인할 수 없습니다."
+                                    : "배정 범위를 확인할 수 없어 자동 복원하지 않았습니다. 현재 학생 로그인 범위를 확인할 수 없어 내보내기를 비활성화했습니다.",
+                        );
+                    }
+                    const draftStr = migratedLegacy.value
+                        || (migratedLegacy.status !== "recovery_required" && !loadedAssignmentId && !nextRetakeConfig && legacyScopedDraftKey
+                            ? localStorage.getItem(legacyScopedDraftKey) : null)
+                        || (migratedLegacy.status !== "recovery_required" && !loadedAssignmentId && !nextRetakeConfig
+                            ? localStorage.getItem(`omr_draft_${id}`) : null);
                     if (draftStr) {
                         const draft = JSON.parse(draftStr) as Partial<SolveDraft>;
+                        if (loadedAssignmentId && draft.scopeBinding !== scopedDraftKey) {
+                            throw new Error("targeted draft assignment generation mismatch");
+                        }
                         const restoredAnswers = draft.answers && typeof draft.answers === "object" ? draft.answers : {};
                         const restoredSubQuestionAnswers = draft.subQuestionAnswers && typeof draft.subQuestionAnswers === "object"
                             ? draft.subQuestionAnswers
@@ -1696,6 +1780,7 @@ export default function SolvePage() {
                             setStartedAt(restoredStartedAt);
                         }
                         latestDraftRef.current = {
+                            scopeBinding: scopedDraftKey,
                             answers: restoredAnswers,
                             subQuestionAnswers: restoredSubQuestionAnswers,
                             drawings: recovery.drawings || {},
@@ -1739,6 +1824,7 @@ export default function SolvePage() {
 
     useEffect(() => {
         const syncStudentSession = () => {
+            setLegacyDraftRecoveryExport(null);
             const next = getSession();
             if (!next && durableResumeKeyRef.current) {
                 clearDurableAttemptResumeCredential(window.sessionStorage, durableResumeKeyRef.current);
@@ -1746,17 +1832,36 @@ export default function SolvePage() {
             }
             setUser(next);
         };
+        const syncStudentStorage = (event: StorageEvent) => {
+            if (
+                event.key !== STUDENT_SESSION_KEY
+                && event.key !== STORAGE_KEYS.STUDENT_SESSION_BACKUP
+                && event.key !== STUDENT_SHARED_IDENTITY_EPOCH_KEY
+            ) return;
+            syncStudentSession();
+        };
         window.addEventListener(STUDENT_SESSION_CHANGED_EVENT, syncStudentSession);
-        return () => window.removeEventListener(STUDENT_SESSION_CHANGED_EVENT, syncStudentSession);
+        window.addEventListener("storage", syncStudentStorage);
+        return () => {
+            window.removeEventListener(STUDENT_SESSION_CHANGED_EVENT, syncStudentSession);
+            window.removeEventListener("storage", syncStudentStorage);
+        };
     }, []);
 
     useEffect(() => {
+        setLegacyDraftRecoveryExport(null);
         const currentSession = getSession();
         if (currentSession) setUser(currentSession);
         const currentSearch = typeof window !== "undefined" ? window.location.search : "";
         const currentPath = typeof window !== "undefined" ? `${window.location.pathname}${currentSearch}` : "";
         const currentParams = new URLSearchParams(currentSearch);
         const linkAssignmentId = currentParams.get("assignment")?.trim() || "";
+        const rawAssignmentRevision = Number(currentParams.get("assignmentRevision"));
+        const linkAssignmentRevision = Number.isSafeInteger(rawAssignmentRevision) && rawAssignmentRevision > 0
+            ? rawAssignmentRevision
+            : undefined;
+        setAssignmentId(linkAssignmentId);
+        setAssignmentRevision(linkAssignmentRevision);
         const capturedInviteToken = captureExamEntryInviteFragment({
             examId: id,
             hash: window.location.hash,
@@ -1791,6 +1896,11 @@ export default function SolvePage() {
 
         const hydrateExam = async () => {
             if (!id) return;
+            if (linkAssignmentId && !linkAssignmentRevision) {
+                setSolveStatus("error");
+                setLoadError({ title: "배정 정보를 확인할 수 없습니다", body: "선생님에게 새 시험 링크를 요청해주세요." });
+                return;
+            }
             setLoadError(null);
             setSolveStatus("loading");
 
@@ -1831,7 +1941,13 @@ export default function SolvePage() {
             }
 
             const res = await loadExamForSolvingClient(id, undefined, {
-                server: (examId, pin) => loadExamForSolving(examId, pin, linkInviteToken, linkAssignmentId),
+                server: (examId, pin) => loadExamForSolving(
+                    examId,
+                    pin,
+                    linkInviteToken,
+                    linkAssignmentId,
+                    linkAssignmentRevision,
+                ),
                 readLocalExam,
                 evaluateLocalAccess: (exam) => {
                     const requiresPin = examRequiresPin(exam);
@@ -1850,7 +1966,14 @@ export default function SolvePage() {
                             : !!res.exam.accessConfig.pin
                     ));
                 }
-                await applyLoadedExam(res.exam as Exam, res.source, session);
+                await applyLoadedExam(
+                    res.exam as Exam,
+                    res.source,
+                    session,
+                    false,
+                    linkAssignmentId,
+                    linkAssignmentRevision,
+                );
                 return;
             }
 
@@ -1872,7 +1995,14 @@ export default function SolvePage() {
                     setSecureRemoteMode(true);
                     setSecureRequiresPin(remotePreview.exam.access.requiresPin);
                     setSecureAttemptTicket("");
-                    await applyLoadedExam(previewExam as Exam, "server", session);
+                    await applyLoadedExam(
+                        previewExam as Exam,
+                        "server",
+                        session,
+                        false,
+                        linkAssignmentId,
+                        linkAssignmentRevision,
+                    );
                     setPinVerified(!remotePreview.exam.access.requiresPin);
                     return;
                 }
@@ -1938,6 +2068,7 @@ export default function SolvePage() {
         rawDrawingsRef.current = drawings;
         if (!submissionIdRef.current) submissionIdRef.current = createSubmissionId();
         latestDraftRef.current = {
+            scopeBinding: DRAFT_KEY,
             answers: studentAnswers,
             subQuestionAnswers,
             drawings: compactDrawings(drawings),
@@ -1947,7 +2078,7 @@ export default function SolvePage() {
             submissionId: submissionIdRef.current,
             savedAt: new Date().toISOString(),
         };
-    }, [studentAnswers, subQuestionAnswers, drawings, timeRemaining, startedAt]);
+    }, [DRAFT_KEY, studentAnswers, subQuestionAnswers, drawings, timeRemaining, startedAt]);
 
     // The database revision is the cross-device source of truth. Only changed
     // answer snapshots are checkpointed; heartbeat renewals do not increment it.
@@ -1958,7 +2089,8 @@ export default function SolvePage() {
                 attemptTicket: secureAttemptTicket,
                 pin: pinRef.current || undefined,
                 currentLeaseToken,
-                requestedAssignmentId: new URLSearchParams(window.location.search).get("assignment") || undefined,
+                requestedAssignmentId: assignmentId || undefined,
+                requestedAssignmentRevision: assignmentRevision,
                 requestedRetake: retakeConfig || undefined,
             })
         ));
@@ -1987,7 +2119,7 @@ export default function SolvePage() {
             return;
         }
         setDurableSyncError("다른 기기의 최신 응시 상태를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.");
-    }, [id, retakeConfig, router, secureAttemptTicket]);
+    }, [assignmentId, assignmentRevision, id, retakeConfig, router, secureAttemptTicket]);
 
     useEffect(() => {
         if (!durableAttempt || !entryConfirmed || submittedRef.current) return;
@@ -2030,6 +2162,9 @@ export default function SolvePage() {
                 try {
                     const result = await checkpointDurableStudentAttemptSession({
                         sessionId: current.session.sessionId,
+                        examId: current.session.examId,
+                        assignmentId: current.session.assignmentId,
+                        assignmentRevision: current.session.assignmentRevision,
                         expectedRevision: current.session.revision,
                         expectedLeaseEpoch: current.session.leaseEpoch,
                         leaseToken: current.leaseToken,
@@ -2107,6 +2242,9 @@ export default function SolvePage() {
                 try {
                     const result = await heartbeatDurableStudentAttemptSession({
                         sessionId: current.session.sessionId,
+                        examId: current.session.examId,
+                        assignmentId: current.session.assignmentId,
+                        assignmentRevision: current.session.assignmentRevision,
                         expectedLeaseEpoch: current.session.leaseEpoch,
                         leaseToken: current.leaseToken,
                     });
@@ -2210,6 +2348,7 @@ export default function SolvePage() {
             nextAnswers = { ...previousAnswers, [qId]: optionIndex };
         }
         const nextDraft: SolveDraft = {
+            scopeBinding: DRAFT_KEY,
             answers: nextAnswers,
             subQuestionAnswers: subQuestionAnswersRef.current,
             drawings: compactDrawings(drawings),
@@ -2415,7 +2554,8 @@ export default function SolvePage() {
         if (!examData) return false;
         const result = await openStudentExam({
             examId: examData.id,
-            assignmentId: new URLSearchParams(window.location.search).get("assignment") || undefined,
+            assignmentId: assignmentId || undefined,
+            assignmentRevision,
             pin: pinInput,
             retake: retakeConfig ? {
                 sourceAttemptId: retakeConfig.sourceAttemptId,
@@ -2464,10 +2604,20 @@ export default function SolvePage() {
         setPinVerified(true);
         setEntryError("");
         const actorId = submitter.studentId || submitter.guestId || persistId;
-        const scopeKey = retakeConfig
+        const retakeSegment = retakeConfig
             ? `${retakeConfig.mode}:${retakeConfig.sourceAttemptId}:${retakeConfig.questionIds.join(",")}`
             : "base";
-        const resumeKey = durableAttemptResumeKey(result.exam.id, actorId, scopeKey);
+        const resumeKey = durableAttemptResumeKey({
+            examId: result.exam.id,
+            actorId,
+            assignmentId: assignmentId || undefined,
+            assignmentRevision,
+            retakeSegment,
+        });
+        if (!resumeKey) {
+            setEntryError("배정 정보를 확인할 수 없습니다. 선생님에게 새 링크를 요청해주세요.");
+            return false;
+        }
         durableResumeKeyRef.current = resumeKey;
         const storedResume = readDurableAttemptResumeCredential(window.sessionStorage, resumeKey);
         let attemptTicket = storedResume?.ticket || result.ticket;
@@ -2476,7 +2626,8 @@ export default function SolvePage() {
             attemptTicket,
             pin: pinInput,
             currentLeaseToken: storedResume?.leaseToken,
-            requestedAssignmentId: new URLSearchParams(window.location.search).get("assignment") || undefined,
+            requestedAssignmentId: assignmentId || undefined,
+            requestedAssignmentRevision: assignmentRevision,
             requestedRetake: retakeConfig || undefined,
         });
         if (durable.status === "invalid" && storedResume) {
@@ -2486,7 +2637,8 @@ export default function SolvePage() {
                 examId: result.exam.id,
                 attemptTicket,
                 pin: pinInput,
-                requestedAssignmentId: new URLSearchParams(window.location.search).get("assignment") || undefined,
+                requestedAssignmentId: assignmentId || undefined,
+                requestedAssignmentRevision: assignmentRevision,
                 requestedRetake: retakeConfig || undefined,
             });
         }
@@ -2710,6 +2862,9 @@ export default function SolvePage() {
                     ownerFingerprint,
                     {
                         sessionId: current.session.sessionId,
+                        examId: current.session.examId,
+                        assignmentId: current.session.assignmentId,
+                        assignmentRevision: current.session.assignmentRevision,
                         expectedRevision: current.session.revision,
                         expectedLeaseEpoch: current.session.leaseEpoch,
                         leaseToken: current.leaseToken,
@@ -2742,6 +2897,7 @@ export default function SolvePage() {
                 const replay = await withSubmissionTimeout(replaySecureSubmissionsForOwner(
                     ownerFingerprint,
                     {
+                        resolveLegacyScope: resolveLegacyDurableStudentAttemptSessionScope,
                         checkpoint: checkpointDurableStudentAttemptSession,
                         submit: submitDurableStudentAttemptSession,
                     },
@@ -2873,6 +3029,8 @@ export default function SolvePage() {
             const cachedAttempt: Attempt = {
                 id: result.receipt.attemptId,
                 examId: result.receipt.examId,
+                assignmentId: result.receipt.assignmentId,
+                assignmentRevision: result.receipt.assignmentRevision,
                 examTitle: examData.title,
                 studentName: submitter.name,
                 studentId: submitter.studentId || submitter.guestId || persistId,
@@ -3259,6 +3417,28 @@ export default function SolvePage() {
         return <SolveLoadErrorCard error={loadError} />;
     }
 
+    const downloadLegacyDraftRecovery = () => {
+        if (!legacyDraftRecoveryExport) return;
+        if (!isCurrentLegacyStudentDraftRecovery(
+            legacyDraftRecoveryExport,
+            getSession(),
+            getStudentSessionGeneration(),
+            getStudentSharedIdentityEpoch(),
+            id,
+        )) {
+            setLegacyDraftRecoveryExport(null);
+            toast.info("복구 파일 보호", "학생 로그인 정보가 변경되어 이전 복구 파일을 숨겼습니다.");
+            return;
+        }
+        const blob = new Blob([legacyDraftRecoveryExport.json], { type: "application/json;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = legacyDraftRecoveryExport.fileName;
+        anchor.click();
+        URL.revokeObjectURL(url);
+    };
+
     const submitPin = async () => {
         if (secureRemoteMode) {
             // The compatibility gateway verifies the PIN together with the
@@ -3292,6 +3472,9 @@ export default function SolvePage() {
                 typeof window === "undefined"
                     ? undefined
                     : new URLSearchParams(window.location.search).get("assignment") || undefined,
+                typeof window === "undefined"
+                    ? undefined
+                    : Number(new URLSearchParams(window.location.search).get("assignmentRevision")) || undefined,
             ),
             readLocalExam,
             evaluateLocalAccess: (exam) => {
@@ -3307,7 +3490,14 @@ export default function SolvePage() {
                 setSecureRequiresPin(true);
             }
             // The PIN just passed — tell applyLoadedExam not to re-gate a local exam.
-            await applyLoadedExam(res.exam as Exam, res.source, user, res.source === "local");
+            await applyLoadedExam(
+                res.exam as Exam,
+                res.source,
+                user,
+                res.source === "local",
+                assignmentId,
+                assignmentRevision,
+            );
             return;
         }
         setPinError(
@@ -3507,6 +3697,14 @@ export default function SolvePage() {
                     <span>{durableSyncError}</span>
                     <button type="button" className="btn btn-secondary" onClick={() => window.location.reload()} style={{ minHeight: 32, padding: '0.3rem 0.65rem' }}>
                         서버 상태 다시 불러오기
+                    </button>
+                </div>
+            )}
+            {legacyDraftRecoveryExport && legacyDraftRecoveryExport.examId === id && (
+                <div role="alert" style={{ padding: '0.55rem 1rem', background: 'rgba(245,158,11,0.14)', color: 'var(--warning)', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.75rem', fontSize: '0.78rem', fontWeight: 750 }}>
+                    <span>범위를 확인할 수 없는 이전 임시저장은 자동 복원하지 않고 이 브라우저에 보관했습니다.</span>
+                    <button type="button" className="btn btn-secondary" onClick={downloadLegacyDraftRecovery} style={{ minHeight: 32, padding: '0.3rem 0.65rem' }}>
+                        이전 임시저장 내보내기
                     </button>
                 </div>
             )}

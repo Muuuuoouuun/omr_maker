@@ -18,6 +18,14 @@ type OpenGateway = (
     | (Extract<StudentAttemptSessionMutationResult, { status: "active" }> & { gradingSnapshot: Exam })
 >;
 
+export function durableAttemptSessionIds(ticketId: string): { sessionId: string; attemptId: string } {
+    const stableTicketId = ticketId.trim();
+    return {
+        sessionId: `session_${stableTicketId}`,
+        attemptId: `attempt_${stableTicketId}`,
+    };
+}
+
 export interface OpenStudentAttemptSessionServiceInput {
     exam: Exam;
     identity: StudentServerIdentity;
@@ -29,6 +37,7 @@ export interface OpenStudentAttemptSessionServiceInput {
     };
     authorization?: {
         assignmentId?: string;
+        assignmentRevision?: number;
         retake?: Pick<RetakeMetadata, "sourceAttemptId" | "mode" | "questionIds">;
     };
     secret: string;
@@ -62,6 +71,7 @@ export async function openStudentAttemptSessionService(
         organizationId: exam.organizationId,
         examId: exam.id,
         assignmentId: params.authorization?.assignmentId,
+        assignmentRevision: params.authorization?.assignmentRevision,
         ownerStudentId: ownerStudentId(identity),
         studentName: identity.name,
         identityType: identity.identityType,
@@ -92,6 +102,9 @@ export async function openStudentAttemptSessionService(
 export interface SubmitStudentAttemptSessionServiceInput {
     identity: StudentServerIdentity;
     sessionId: string;
+    examId: string;
+    assignmentId?: string;
+    assignmentRevision?: number;
     expectedRevision: number;
     expectedLeaseEpoch: number;
     leaseToken: string;
@@ -104,7 +117,10 @@ export interface SubmitStudentAttemptSessionServiceInput {
     prepareGateway: (input: {
         sessionId: string;
         organizationId: string;
+        examId: string;
         ownerStudentId: string;
+        assignmentId?: string;
+        assignmentRevision?: number;
         expectedRevision: number;
         expectedLeaseEpoch: number;
         leaseTokenHash: string;
@@ -115,7 +131,10 @@ export interface SubmitStudentAttemptSessionServiceInput {
     commitGateway: (input: {
         sessionId: string;
         organizationId: string;
+        examId: string;
         ownerStudentId: string;
+        assignmentId?: string;
+        assignmentRevision?: number;
         expectedRevision: number;
         expectedLeaseEpoch: number;
         leaseTokenHash: string;
@@ -135,7 +154,10 @@ export async function submitStudentAttemptSessionService(
     const prepared = await params.prepareGateway({
         sessionId: params.sessionId,
         organizationId,
+        examId: params.examId,
         ownerStudentId: studentId,
+        assignmentId: params.assignmentId,
+        assignmentRevision: params.assignmentRevision,
         expectedRevision: params.expectedRevision,
         expectedLeaseEpoch: params.expectedLeaseEpoch,
         leaseTokenHash: hashedLease,
@@ -151,6 +173,9 @@ export async function submitStudentAttemptSessionService(
     }
 
     const finishedAt = params.finishedAt || new Date().toISOString();
+    if (!session.gradingSnapshot || !session.submissionId || !session.attemptId) {
+        return { status: "service_unavailable" };
+    }
     const retake: RetakeMetadata | undefined = session.retake
         ? {
             ...session.retake,
@@ -171,10 +196,14 @@ export async function submitStudentAttemptSessionService(
         retake,
     }, session.gradingSnapshot, params.identity, session.attemptId, finishedAt);
     attempt.assignmentId = session.assignmentId;
+    attempt.assignmentRevision = session.assignmentRevision;
     return params.commitGateway({
         sessionId: params.sessionId,
         organizationId,
+        examId: params.examId,
         ownerStudentId: studentId,
+        assignmentId: session.assignmentId,
+        assignmentRevision: session.assignmentRevision,
         expectedRevision: session.revision,
         expectedLeaseEpoch: session.leaseEpoch,
         leaseTokenHash: hashedLease,

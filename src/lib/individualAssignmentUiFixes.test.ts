@@ -14,6 +14,7 @@ function assignment(overrides: Partial<StudentAssignmentPreview> = {}): StudentA
     return {
         id: "exam-1",
         assignmentId: "assignment-1",
+        assignmentRevision: 8,
         assignmentMode: "retake",
         retakeSourceAttemptId: "base-attempt",
         retakeQuestionIds: [2],
@@ -31,6 +32,7 @@ function attempt(overrides: Partial<StudentAttemptSummary> = {}): StudentAttempt
         examId: "exam-1",
         examTitle: "시험",
         assignmentId: "assignment-1",
+        assignmentRevision: 8,
         status: "completed",
         score: 80,
         totalScore: 100,

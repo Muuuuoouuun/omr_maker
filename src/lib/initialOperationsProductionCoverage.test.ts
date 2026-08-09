@@ -19,12 +19,12 @@ function sqlFunctionBody(sql: string, signaturePrefix: string): string {
 }
 
 const requiredProductionPaths = [
-    "rpc:omr_open_attempt_session_v2",
-    "rpc:omr_checkpoint_attempt_session_v1",
-    "rpc:omr_heartbeat_attempt_session_v1",
-    "rpc:omr_prepare_attempt_session_submit_v1",
-    "rpc:omr_commit_attempt_session_submit_v1",
-    "rpc:omr_list_active_attempt_sessions_v1",
+    "rpc:omr_open_attempt_session_v3",
+    "rpc:omr_checkpoint_attempt_session_v2",
+    "rpc:omr_heartbeat_attempt_session_v2",
+    "rpc:omr_prepare_attempt_session_submit_v2",
+    "rpc:omr_commit_attempt_session_submit_v2",
+    "rpc:omr_list_active_attempt_sessions_v2",
     "table:omr_remote_assets",
     "rpc:omr_prepare_teacher_asset_upload_v2",
     "rpc:omr_authorize_teacher_asset_finalize_v2",
@@ -46,8 +46,8 @@ describe("initial-operations production workload coverage", () => {
         expect(gateway).toContain("prepareStudentAttemptSessionSubmitWithGateway");
         expect(gateway).toContain("commitStudentAttemptSessionSubmitWithGateway");
         expect(gateway).toContain("listTeacherActiveAttemptSessionsWithGateway");
-        expect(studentSessionGateway).toContain('client.rpc("omr_open_attempt_session_v2"');
-        expect(studentSessionGateway).not.toContain('client.rpc("omr_open_attempt_session_v1"');
+        expect(studentSessionGateway).toContain('client.rpc("omr_open_attempt_session_v3"');
+        expect(studentSessionGateway).not.toContain('client.rpc("omr_open_attempt_session_v2"');
     });
 
     it("attests the exact production path map in the staging contract and every raw request", () => {
@@ -61,6 +61,10 @@ describe("initial-operations production workload coverage", () => {
         expect(driver).toContain("productionWorkloadPaths");
         expect(driver).toContain("workloadPaths: result.body?.workloadPaths");
         expect(core).toContain("INITIAL_OPERATIONS_PRODUCTION_WORKLOAD_PATHS");
+        const unexercisedForceFinish = '"teacher-force-finish": Object.freeze(["rpc:omr_force_finish_attempt_sessions_compact_v2"])';
+        expect(source("src/lib/initialOperationsLoadGateway.server.ts")).not.toContain(unexercisedForceFinish);
+        expect(core).not.toContain(unexercisedForceFinish);
+        expect(driver).not.toContain(unexercisedForceFinish);
         expect(core).toContain('fail("production_workload_coverage"');
     });
 
@@ -72,10 +76,10 @@ describe("initial-operations production workload coverage", () => {
         expect(existsSync(migrationPath)).toBe(true);
         if (!existsSync(migrationPath)) return;
         const migration = readFileSync(migrationPath, "utf8");
-        const effectiveMigration = source("supabase/migrations/202608080008_effective_workspace_plan_enforcement.sql");
+        const effectiveMigration = source("supabase/migrations/202608090001_assignment_generation_scope.sql");
         const effectiveSnapshotBody = sqlFunctionBody(
             effectiveMigration,
-            "create function public.omr_initial_ops_database_snapshot_v1",
+            "create or replace function public.omr_initial_ops_database_snapshot_v1",
         );
         const bundle = source("scripts/initial-operations-evidence-bundle.mjs");
         const core = source("scripts/initial-operations-core.mjs");
@@ -103,8 +107,8 @@ describe("initial-operations production workload coverage", () => {
             "create function public.omr_initial_ops_fixture_v1",
         );
         const snapshotBody = sqlFunctionBody(
-            migration,
-            "create function public.omr_initial_ops_database_snapshot_v1",
+            source("supabase/migrations/202608090001_assignment_generation_scope.sql"),
+            "create or replace function public.omr_initial_ops_database_snapshot_v1",
         );
 
         expect(fixtureBody).toContain("teacherIdentity");
@@ -113,11 +117,11 @@ describe("initial-operations production workload coverage", () => {
         expect(fixtureBody).toContain("accountId");
         expect(fixtureBody).toContain("accountSessionGeneration");
         expect(fixtureBody).toContain("actorUserId");
-        expect(snapshotBody).toContain("rpc:omr_open_attempt_session_v2");
+        expect(snapshotBody).toContain("rpc:omr_open_attempt_session_v3");
         expect(snapshotBody).toContain("rpc:omr_prepare_teacher_asset_upload_v2");
         expect(snapshotBody).toContain("rpc:omr_authorize_teacher_asset_finalize_v2");
         expect(snapshotBody).toContain("rpc:omr_finalize_teacher_asset_upload_v2");
-        expect(snapshotBody).not.toContain("rpc:omr_open_attempt_session_v1");
+        expect(snapshotBody).not.toContain("rpc:omr_open_attempt_session_v2");
         expect(snapshotBody).not.toContain("rpc:omr_prepare_teacher_asset_upload_v1");
         expect(snapshotBody).not.toContain("rpc:omr_authorize_teacher_asset_finalize_v1");
         expect(snapshotBody).not.toContain("rpc:omr_finalize_teacher_asset_upload_v1");

@@ -77,6 +77,12 @@ describe("student server authentication surface", () => {
         expect(dialog).not.toMatch(/localStorage|sessionStorage|clipboard|console\./);
     });
 
+    it("derives the durable session id from the signed ticket for response-loss retries", () => {
+        const action = source("src/app/actions/studentAttemptSession.ts");
+        expect(action).toContain("ids: durableAttemptSessionIds(claims.ticketId)");
+        expect(action).not.toContain("sessionId: `session_${randomUUID()}`");
+    });
+
     it("keeps the server exam action primary and limits fallback to device-local data", () => {
         const client = source("src/lib/studentExamClient.ts");
         const solvePage = source("src/app/solve/[id]/page.tsx");
@@ -85,7 +91,7 @@ describe("student server authentication surface", () => {
         expect(client).toContain("readLocalExam: (examId: string) => Exam | null");
         expect(client).toContain("must never fetch the");
         expect(client).toContain("full exam (with answers) from Supabase");
-        expect(solvePage).toContain("server: (examId, pin) => loadExamForSolving(examId, pin, linkInviteToken, linkAssignmentId)");
+        expect(solvePage).toContain("server: (examId, pin) => loadExamForSolving(");
         expect(solvePage).toContain("readLocalExam");
     });
 
@@ -149,5 +155,17 @@ describe("student server authentication surface", () => {
         expect(submitAction).toContain('if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) return { status: "error" }');
         expect(submitAction.indexOf("isSameOriginServerActionRequest"))
             .toBeLessThan(submitAction.indexOf("resolveCtx()"));
+    });
+
+    it("fails the unsigned direct submit path closed for targeted exams before any attempt write", () => {
+        const action = source("src/app/actions/studentExam.ts");
+        const submitStart = action.indexOf("export async function submitAttempt");
+        const submitEnd = action.indexOf("export async function listMyAssignments", submitStart);
+        const submitAction = action.slice(submitStart, submitEnd);
+        const targetedGuard = submitAction.indexOf('exam.accessConfig?.type === "targeted"');
+        expect(targetedGuard).toBeGreaterThanOrEqual(0);
+        expect(submitAction.slice(targetedGuard, targetedGuard + 250)).toContain('return { status: "denied" }');
+        expect(targetedGuard).toBeLessThan(submitAction.indexOf("evaluateDurableGatedAccess"));
+        expect(targetedGuard).toBeLessThan(submitAction.indexOf("saveSessionAttemptAtomically"));
     });
 });

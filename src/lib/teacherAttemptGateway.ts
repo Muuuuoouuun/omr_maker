@@ -59,11 +59,11 @@ export interface TeacherAttemptGatewayClient {
     ): Promise<AttemptQueryResult<Array<{ payload: Attempt }> | { payload: Attempt }>>;
     rpc(
         name:
-            | "omr_list_active_attempt_sessions_v1"
+            | "omr_list_active_attempt_sessions_v2"
             | "omr_prepare_teacher_force_finish_sessions_v1"
-            | "omr_prepare_teacher_force_finish_sessions_compact_v1"
+            | "omr_prepare_teacher_force_finish_sessions_compact_v2"
             | "omr_force_finish_attempt_sessions_v1"
-            | "omr_force_finish_attempt_sessions_compact_v1",
+            | "omr_force_finish_attempt_sessions_compact_v2",
         args: Record<string, unknown>,
     ): Promise<AttemptQueryResult<unknown>>;
 }
@@ -74,6 +74,7 @@ export interface TeacherActiveAttemptSession {
     examId: string;
     classId?: string;
     assignmentId?: string;
+    assignmentRevision?: number;
     ownerStudentId: string;
     studentProfileId?: string;
     studentName: string;
@@ -595,18 +596,21 @@ function activeSessionFromProjection(value: unknown): TeacherActiveAttemptSessio
     const answeredCount = safeNonNegativeInteger(row.answered_count);
     const totalQuestionCount = safePositiveInteger(row.total_question_count);
     const currentQuestionId = safePositiveInteger(row.current_question_id);
+    const assignmentId = optionalClean(row.assignment_id);
+    const assignmentRevision = safePositiveInteger(row.assignment_revision);
     if (
         !sessionId || !attemptId || !examId || !ownerStudentId || !studentName
         || (identityType !== "guest" && identityType !== "temporary" && identityType !== "registered")
         || !startedAt || !deadlineAt || !lastHeartbeatAt || !revision
         || answeredCount === null || !totalQuestionCount || answeredCount > totalQuestionCount
+        || Boolean(assignmentId) !== Boolean(assignmentRevision)
     ) return null;
     return {
         sessionId,
         attemptId,
         examId,
         ...(optionalClean(row.class_id) ? { classId: optionalClean(row.class_id) } : {}),
-        ...(optionalClean(row.assignment_id) ? { assignmentId: optionalClean(row.assignment_id) } : {}),
+        ...(assignmentId && assignmentRevision ? { assignmentId, assignmentRevision } : {}),
         ownerStudentId,
         ...(optionalClean(row.student_profile_id) ? { studentProfileId: optionalClean(row.student_profile_id) } : {}),
         studentName,
@@ -629,7 +633,7 @@ export async function listTeacherActiveAttemptSessionsWithGateway(
     if (!mutationContextIsAuthorized(context)) return { status: "forbidden" };
     const normalizedExamId = clean(examId);
     if (!normalizedExamId) return { status: "service_unavailable", error: "Invalid exam scope" };
-    const result = await client.rpc("omr_list_active_attempt_sessions_v1", {
+    const result = await client.rpc("omr_list_active_attempt_sessions_v2", {
         p_organization_id: clean(context.organizationId),
         p_exam_id: normalizedExamId,
         p_actor_user_id: clean(context.actorUserId),
@@ -849,6 +853,8 @@ interface PreparedTeacherAttemptSession {
     sessionId: string;
     revision: number;
     gradingFingerprint: string;
+    assignmentId?: string;
+    assignmentRevision?: number;
 }
 
 function safeRecord(value: unknown): Record<string, unknown> | null {
@@ -863,15 +869,19 @@ function preparedTeacherSession(value: unknown, organizationId: string): Prepare
     const sessionId = clean(row.session_id);
     const revision = safePositiveInteger(row.revision);
     const gradingFingerprint = clean(row.grading_fingerprint);
+    const assignmentId = optionalClean(row.assignment_id);
+    const assignmentRevision = safePositiveInteger(row.assignment_revision);
     if (
         !sessionId || !revision
         || !/^[a-f0-9]{64}$/.test(gradingFingerprint)
         || clean(row.organization_id) !== organizationId
+        || Boolean(assignmentId) !== Boolean(assignmentRevision)
     ) return null;
     return {
         sessionId,
         revision,
         gradingFingerprint,
+        ...(assignmentId && assignmentRevision ? { assignmentId, assignmentRevision } : {}),
     };
 }
 
@@ -889,7 +899,7 @@ export async function forceFinishTeacherAttemptSessionsWithGateway(
         || !Number.isFinite(Date.parse(finishedAt))
     ) return { status: "invalid_request" };
 
-    const preparedResult = await client.rpc("omr_prepare_teacher_force_finish_sessions_compact_v1", {
+    const preparedResult = await client.rpc("omr_prepare_teacher_force_finish_sessions_compact_v2", {
         p_organization_id: clean(context.organizationId),
         p_session_ids: sessionIds,
         p_actor_user_id: clean(context.actorUserId),
@@ -919,7 +929,7 @@ export async function forceFinishTeacherAttemptSessionsWithGateway(
     if (expectations.some(expectation => !expectation)) {
         return { status: "service_unavailable", error: "Missing session grading CAS" };
     }
-    const result = await client.rpc("omr_force_finish_attempt_sessions_compact_v1", {
+    const result = await client.rpc("omr_force_finish_attempt_sessions_compact_v2", {
         p_organization_id: clean(context.organizationId),
         p_session_ids: sessionIds,
         p_finished_at: finishedAt,

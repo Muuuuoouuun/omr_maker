@@ -13,6 +13,8 @@ import type { AssignmentLifecycle } from "@/lib/assignmentLifecycle";
 export interface StudentExamAccessInput {
     examId: string;
     assignmentId?: string;
+    /** Required whenever assignmentId is present; assignment ids are reused across revisions. */
+    assignmentRevision?: number;
     pin?: string;
     questionIds?: number[];
     retake?: {
@@ -70,6 +72,8 @@ export interface StudentAssignmentPreview {
     id: string;
     /** Opaque server assignment scope. Student ids are never embedded here or in the URL. */
     assignmentId?: string;
+    /** Immutable targeted-assignment generation; legacy null rows are review-only. */
+    assignmentRevision?: number;
     assignmentMode?: "base" | "retake";
     retakeSourceAttemptId?: string;
     retakeQuestionIds?: number[];
@@ -96,6 +100,8 @@ export interface StudentAttemptSummary {
     id: string;
     examId: string;
     assignmentId?: string;
+    /** Immutable targeted-assignment generation; legacy null rows are review-only. */
+    assignmentRevision?: number;
     examTitle: string;
     status: "completed" | "in_progress";
     score: number;
@@ -143,6 +149,9 @@ export function studentAttemptSummaryFromAttempt(attempt: Attempt): StudentAttem
         id: attempt.id,
         examId: attempt.examId,
         ...(attempt.assignmentId ? { assignmentId: attempt.assignmentId } : {}),
+        ...(Number.isSafeInteger(attempt.assignmentRevision) && Number(attempt.assignmentRevision) > 0
+            ? { assignmentRevision: Number(attempt.assignmentRevision) }
+            : {}),
         examTitle: attempt.examTitle,
         status: attempt.status,
         score: attempt.score,
@@ -191,6 +200,8 @@ export interface StudentAttemptSubmission {
 export interface ServerGradedAttemptReceipt {
     attemptId: string;
     examId: string;
+    assignmentId?: string;
+    assignmentRevision?: number;
     score: number;
     totalScore: number;
     correctCount: number;

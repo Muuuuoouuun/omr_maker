@@ -65,8 +65,8 @@ describe("core/free feedback boundary migration", () => {
         expect(boundary).toContain("omr_save_feedback_v4");
         expect(boundary).toContain("phase-c-effective-plan-enforcement:202608080008");
         expect(boundary).toContain("'feedbackCoreFreeReady'");
-        expect(boundary).toContain("'version', '202608080010'");
-        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608080010"');
+        expect(boundary).toContain("'version', '202608090001'");
+        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608090001"');
         expect(readiness).toContain('"feedbackCoreFreeReady"');
         expect(liveBoundary).toContain("readiness ->> 'feedbackCoreFreeReady' <> 'true'");
         expect(live).toContain("free core feedback save did not persist bounded text and comments");

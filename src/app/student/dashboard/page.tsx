@@ -30,9 +30,12 @@ import { clearStudentServerSession, refreshStudentSession } from "@/app/actions/
 import { listMyAssignmentsClient } from "@/lib/studentExamClient";
 import type { StudentAssignmentPreview, StudentAttemptSummary } from "@/lib/studentExamContract";
 import {
+    assignmentAttemptScopeKey,
     buildMissingCompletedReviewAssignments,
     findCompletedAttemptForAssignment,
+    findInProgressAttemptForAssignment,
     localStudentAssignmentPreview,
+    studentAssignmentDraftStorageKey,
     type ReviewOnlyCompletedAssignment,
 } from "@/lib/studentAssignmentClassification";
 import { loadStudentReturnedFeedbackWithDevFallback } from "@/lib/studentFeedbackClient";
@@ -42,22 +45,33 @@ import {
     INITIAL_FEEDBACK_CAPACITY_REMEDIATION_KO,
 } from "@/lib/initialOperationsPolicy";
 
-/** True when this device holds an unsubmitted draft for the exam/owner pair. */
-function hasLocalDraftFor(examId: string, ownerKey: string): boolean {
+/** True only for the exact immutable assignment generation displayed. */
+function hasLocalDraftFor(exam: Exam | StudentAssignmentPreview, ownerKey: string): boolean {
     if (typeof window === "undefined" || !ownerKey) return false;
     try {
-        const prefix = `omr_draft_${examId}_${ownerKey}`;
-        for (let i = 0; i < window.localStorage.length; i++) {
-            const key = window.localStorage.key(i);
-            if (key && key.startsWith(prefix)) return true;
-        }
+        const assignment = "assignmentId" in exam ? exam : {};
+        const retakeSegment = "assignmentMode" in exam && exam.assignmentMode === "retake"
+            ? [
+                "retake",
+                encodeURIComponent(exam.retakeSourceAttemptId || "source"),
+                "wrong",
+                [...new Set(exam.retakeQuestionIds || [])].sort((a, b) => a - b).join("-") || "questions",
+            ].join("_")
+            : "base";
+        const key = studentAssignmentDraftStorageKey(exam.id, ownerKey, assignment, retakeSegment);
+        if (!key) return false;
+        const parsed = JSON.parse(window.localStorage.getItem(key) || "null") as { scopeBinding?: unknown } | null;
+        return parsed?.scopeBinding === key;
     } catch {
         // storage blocked — treat as no draft
     }
     return false;
 }
 
-type DashboardAssignment = (Exam | StudentAssignmentPreview) & { hasLocalDraft?: boolean };
+type DashboardAssignment = (Exam | StudentAssignmentPreview) & {
+    hasLocalDraft?: boolean;
+    hasRemoteProgress?: boolean;
+};
 type DashboardCompletedAssignment = (Exam | StudentAssignmentPreview | ReviewOnlyCompletedAssignment) & {
     attemptId: string;
     hasUnreadFeedback?: boolean;
@@ -74,6 +88,12 @@ export default function StudentDashboard() {
     const [user, setUser] = useState<StudentSession | null>(null);
     const [todoExams, setTodoExams] = useState<DashboardAssignment[]>([]);
     const [doneExams, setDoneExams] = useState<DashboardCompletedAssignment[]>([]);
+    const [assignmentServerNow, setAssignmentServerNow] = useState("");
+    const [assignmentServerClock, setAssignmentServerClock] = useState<{
+        serverNow: string;
+        requestStartedMonotonicMs: number;
+        receivedMonotonicMs: number;
+    }>();
     const [stats, setStats] = useState({
         avgScore: 0,
         completedCount: 0,
@@ -214,7 +234,8 @@ export default function StudentDashboard() {
             // 3. Categorize Exams
             const done: DashboardCompletedAssignment[] = [];
             const todo: DashboardAssignment[] = [];
-            const visibleExamIds = new Set<string>();
+            const visibleAssignmentScopes = new Set<string>();
+            const classifiedAt = myAttemptsResult.serverNow || loadObservedAt;
 
             allExams.forEach(rawExam => {
                 const hasAccess = attemptSource === "server" || (() => {
@@ -230,11 +251,12 @@ export default function StudentDashboard() {
                 const exam = attemptSource === "server"
                     ? rawExam
                     : localStudentAssignmentPreview(rawExam as Exam, loadObservedAt);
-                visibleExamIds.add(exam.id);
+                visibleAssignmentScopes.add(assignmentAttemptScopeKey(exam));
 
                 // Check if completed
                 const attempt = findCompletedAttemptForAssignment(exam, myAttempts);
-                const hasLocalDraft = hasLocalDraftFor(exam.id, currentUser.studentId || "");
+                const inProgressAttempt = findInProgressAttemptForAssignment(exam, myAttempts);
+                const hasLocalDraft = hasLocalDraftFor(exam, currentUser.studentId || "");
                 if (attempt) {
                     done.push({
                         ...exam,
@@ -248,18 +270,25 @@ export default function StudentDashboard() {
                     // exam catalog is not broadcast to anonymous identities.
                     !(currentUser.isGuest && attemptSource === "server")
                     || hasLocalDraft
+                    || !!inProgressAttempt
                 ) {
-                    todo.push({ ...exam, hasLocalDraft });
+                    todo.push({ ...exam, hasLocalDraft, hasRemoteProgress: !!inProgressAttempt });
                 }
             });
 
-            done.push(...buildMissingCompletedReviewAssignments(visibleExamIds, myAttempts).map(review => ({
+            done.push(...buildMissingCompletedReviewAssignments(visibleAssignmentScopes, myAttempts).map(review => ({
                 ...review,
                 hasUnreadFeedback: unreadFeedbackAttemptIds.has(review.attemptId),
             })));
 
             setTodoExams(todo);
             setDoneExams(done);
+            setAssignmentServerNow(classifiedAt);
+            setAssignmentServerClock(myAttemptsResult.serverClock || {
+                serverNow: classifiedAt,
+                requestStartedMonotonicMs: performance.now(),
+                receivedMonotonicMs: performance.now(),
+            });
 
             // 4. Calculate Stats
             const avg = myBaseAttempts.length === 0
@@ -762,7 +791,14 @@ export default function StudentDashboard() {
                 <div className={`bento-grid student-dashboard-grid student-dashboard-task-flow${stats.completedCount === 0 ? " is-zero-completions" : ""}`}>
                     {/* Todo List (Main Focus) */}
                     <div className="col-span-2 row-span-2 student-dashboard-primary-task">
-                        <AssignmentBlock type="todo" exams={todoExams} readOnly={dashboardReadOnly} />
+                        <AssignmentBlock
+                            type="todo"
+                            exams={todoExams}
+                            readOnly={dashboardReadOnly}
+                            serverNow={assignmentServerNow}
+                            serverClock={assignmentServerClock}
+                            onClockRefresh={() => setRefreshKey(current => current + 1)}
+                        />
                     </div>
 
                     {/* Stats */}
@@ -792,7 +828,14 @@ export default function StudentDashboard() {
 
                     {/* Completed List */}
                     <div className="col-span-2 student-dashboard-completed-task">
-                        <AssignmentBlock type="done" exams={doneExams} readOnly={dashboardReadOnly} />
+                        <AssignmentBlock
+                            type="done"
+                            exams={doneExams}
+                            readOnly={dashboardReadOnly}
+                            serverNow={assignmentServerNow}
+                            serverClock={assignmentServerClock}
+                            onClockRefresh={() => setRefreshKey(current => current + 1)}
+                        />
                     </div>
                 </div>
                     </div>

@@ -8,12 +8,13 @@ export const STUDENT_ATTEMPT_TICKET_CLOCK_SKEW_MS = 30 * 1000;
 type Env = Record<string, string | undefined>;
 
 export interface StudentAttemptTicketClaims {
-    schemaVersion: 1;
+    schemaVersion: 2;
     audience: "omr-attempt";
     ticketId: string;
     examId: string;
     organizationId: string;
     assignmentId?: string;
+    assignmentRevision?: number;
     studentId: string;
     studentName: string;
     identityType: IdentityType;
@@ -31,6 +32,7 @@ export interface StudentAttemptTicketInput {
     examId: string;
     organizationId: string;
     assignmentId?: string;
+    assignmentRevision?: number;
     studentId: string;
     studentName: string;
     identityType: IdentityType;
@@ -79,21 +81,26 @@ export function createStudentAttemptTicket(
     const studentName = clean(input.studentName);
     const allowedQuestionIds = normalizeQuestionIds(input.allowedQuestionIds);
     const retakeSourceAttemptId = clean(input.retakeSourceAttemptId);
+    const assignmentId = clean(input.assignmentId);
+    const assignmentRevision = Number.isSafeInteger(input.assignmentRevision) && Number(input.assignmentRevision) > 0
+        ? Number(input.assignmentRevision)
+        : null;
     const validRetakeMode = input.retakeMode === "wrong" || input.retakeMode === "similar" || input.retakeMode === "custom";
     if (
         !secret || !examId || !organizationId || !studentId || !studentName
         || allowedQuestionIds.length === 0 || allowedQuestionIds.length > 500
         || Boolean(retakeSourceAttemptId) !== Boolean(input.retakeMode)
+        || Boolean(assignmentId) !== Boolean(assignmentRevision)
         || (input.retakeMode !== undefined && !validRetakeMode)
     ) return null;
 
     const claims: StudentAttemptTicketClaims = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         audience: "omr-attempt",
         ticketId,
         examId,
         organizationId,
-        ...(clean(input.assignmentId) ? { assignmentId: clean(input.assignmentId) } : {}),
+        ...(assignmentId && assignmentRevision ? { assignmentId, assignmentRevision } : {}),
         studentId,
         studentName,
         identityType: input.identityType,
@@ -129,10 +136,14 @@ export function parseStudentAttemptTicket(
         const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<StudentAttemptTicketClaims>;
         const allowedQuestionIds = normalizeQuestionIds(Array.isArray(claims.allowedQuestionIds) ? claims.allowedQuestionIds : []);
         const retakeSourceAttemptId = clean(claims.retakeSourceAttemptId);
+        const assignmentId = clean(claims.assignmentId);
+        const assignmentRevision = Number.isSafeInteger(claims.assignmentRevision) && Number(claims.assignmentRevision) > 0
+            ? Number(claims.assignmentRevision)
+            : null;
         const hasRetakeMode = claims.retakeMode !== undefined && claims.retakeMode !== null;
         const validRetakeMode = claims.retakeMode === "wrong" || claims.retakeMode === "similar" || claims.retakeMode === "custom";
         if (
-            claims.schemaVersion !== 1
+            claims.schemaVersion !== 2
             || claims.audience !== "omr-attempt"
             || !clean(claims.ticketId)
             || !clean(claims.examId)
@@ -148,17 +159,18 @@ export function parseStudentAttemptTicket(
             || (claims.expiresAt as number) - (claims.issuedAt as number) > STUDENT_ATTEMPT_TICKET_TTL_MS
             || (claims.expiresAt as number) <= now
             || Boolean(retakeSourceAttemptId) !== hasRetakeMode
+            || Boolean(assignmentId) !== Boolean(assignmentRevision)
             || (hasRetakeMode && !validRetakeMode)
         ) {
             return null;
         }
         return {
-            schemaVersion: 1,
+            schemaVersion: 2,
             audience: "omr-attempt",
             ticketId: clean(claims.ticketId),
             examId: clean(claims.examId),
             organizationId: clean(claims.organizationId),
-            ...(clean(claims.assignmentId) ? { assignmentId: clean(claims.assignmentId) } : {}),
+            ...(assignmentId && assignmentRevision ? { assignmentId, assignmentRevision } : {}),
             studentId: clean(claims.studentId),
             studentName: clean(claims.studentName),
             identityType: claims.identityType as IdentityType,

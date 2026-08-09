@@ -41,34 +41,31 @@ function clientWithNewestRows(
     serverMaxRows = Number.POSITIVE_INFINITY,
 ) {
     const limits: number[] = [];
-    const ranges: Array<[number, number]> = [];
     const orders: Array<[string, { ascending: boolean }]> = [];
     const client = {
         from() {
+            let cursorId: string | undefined;
             const query = {
                 eq() { return query; },
                 gt() { return query; },
+                or(filter: string) {
+                    cursorId = /id\.lt\."([^"]+)"/.exec(filter)?.[1];
+                    return query;
+                },
                 order(column: string, options: { ascending: boolean }) {
                     orders.push([column, options]);
                     return query;
                 },
                 async limit(value: number) {
                     limits.push(value);
+                    const orderedRows = [...rows]
+                        .sort((left, right) => right.finished_at.localeCompare(left.finished_at)
+                            || right.id.localeCompare(left.id));
+                    const start = cursorId
+                        ? Math.max(0, orderedRows.findIndex(row => row.id === cursorId) + 1)
+                        : 0;
                     return {
-                        data: [...rows]
-                            .sort((left, right) => right.finished_at.localeCompare(left.finished_at)
-                                || right.id.localeCompare(left.id))
-                            .slice(0, Math.min(value, serverMaxRows)),
-                        error: null,
-                    };
-                },
-                async range(from: number, to: number) {
-                    ranges.push([from, to]);
-                    return {
-                        data: [...rows]
-                            .sort((left, right) => right.finished_at.localeCompare(left.finished_at)
-                                || right.id.localeCompare(left.id))
-                            .slice(from, Math.min(to + 1, from + serverMaxRows)),
+                        data: orderedRows.slice(start, start + Math.min(value, serverMaxRows)),
                         error: null,
                     };
                 },
@@ -76,7 +73,7 @@ function clientWithNewestRows(
             return { select: () => query };
         },
     } as unknown as TeacherAttemptGatewayClient;
-    return { client, limits, ranges, orders };
+    return { client, limits, orders };
 }
 
 function rows(count: number) {
@@ -100,50 +97,25 @@ describe("teacher attempt capacity fail-soft page", () => {
             page: { partial: false, hasMore: false },
         });
 
-        expect(fixture.limits).toEqual([]);
-        expect(fixture.ranges).toHaveLength(9);
-        expect(fixture.ranges[0]).toEqual([0, INITIAL_OPERATIONS_LIMITS.listPageSize - 1]);
-        expect(fixture.ranges.at(-1)).toEqual([
-            INITIAL_OPERATIONS_LIMITS.teacherAttempts,
-            INITIAL_OPERATIONS_LIMITS.teacherAttempts,
-        ]);
+        expect(fixture.limits).toHaveLength(9);
+        expect(fixture.limits[0]).toBe(INITIAL_OPERATIONS_LIMITS.listPageSize);
     });
 
     it.each([
         ["full", listTeacherAttemptsWithGateway],
         ["summary", listTeacherAttemptSummariesWithGateway],
-    ] as const)("keeps the newest 2,000 %s rows and marks the 2,001st as partial", async (_kind, list) => {
+    ] as const)("rejects an incomplete %s collection at the 2,001st row", async (_kind, list) => {
         const fixture = clientWithNewestRows(rows(INITIAL_OPERATIONS_LIMITS.teacherAttempts + 1));
 
         const result = await list(fixture.client, {
             organizationId: "org-a",
             organizationName: "Org A",
         });
-
-        expect(result).toMatchObject({
-            status: "loaded",
-            attempts: { length: INITIAL_OPERATIONS_LIMITS.teacherAttempts },
-            page: {
-                partial: true,
-                hasMore: true,
-                itemCount: INITIAL_OPERATIONS_LIMITS.teacherAttempts,
-                nextCursor: {
-                    id: "attempt-00001",
-                    finishedAt: new Date(Date.parse(baseAttempt.finishedAt) + 1_000).toISOString(),
-                },
-            },
+        expect(result).toEqual({
+            status: "service_unavailable",
+            error: "Incomplete canonical attempt collection",
         });
-        if (result.status === "loaded") {
-            expect(result.attempts[0]?.id).toBe("attempt-02000");
-            expect(result.attempts.at(-1)?.id).toBe("attempt-00001");
-            expect(result.attempts.some(item => item.id === "attempt-00000")).toBe(false);
-        }
-        expect(fixture.limits).toEqual([]);
-        expect(fixture.ranges).toHaveLength(9);
-        expect(fixture.ranges.at(-1)).toEqual([
-            INITIAL_OPERATIONS_LIMITS.teacherAttempts,
-            INITIAL_OPERATIONS_LIMITS.teacherAttempts,
-        ]);
+        expect(fixture.limits).toHaveLength(9);
         expect(fixture.orders.slice(0, 2)).toEqual([
             ["finished_at", { ascending: false }],
             ["id", { ascending: false }],
@@ -165,15 +137,9 @@ describe("teacher attempt capacity fail-soft page", () => {
             organizationName: "Org A",
         });
 
-        expect(result).toMatchObject({
-            status: "loaded",
-            page: {
-                partial: true,
-                nextCursor: {
-                    finishedAt: baseAttempt.finishedAt,
-                    id: "attempt-00001",
-                },
-            },
+        expect(result).toEqual({
+            status: "service_unavailable",
+            error: "Incomplete canonical attempt collection",
         });
     });
 
@@ -188,14 +154,10 @@ describe("teacher attempt capacity fail-soft page", () => {
             organizationName: "Org A",
         });
 
-        expect(result).toMatchObject({
-            status: "loaded",
-            attempts: { length: INITIAL_OPERATIONS_LIMITS.teacherAttempts },
-            page: { partial: true, hasMore: true },
+        expect(result).toEqual({
+            status: "service_unavailable",
+            error: "Incomplete canonical attempt collection",
         });
-        expect(fixture.ranges.at(-1)).toEqual([
-            INITIAL_OPERATIONS_LIMITS.teacherAttempts,
-            INITIAL_OPERATIONS_LIMITS.teacherAttempts,
-        ]);
+        expect(fixture.limits).toHaveLength(9);
     });
 });

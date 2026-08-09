@@ -4,6 +4,8 @@ import type { FocusLossEvent, QuestionTiming, SubQuestionAnswers } from "@/types
 
 export const SECURE_SUBMISSION_OUTBOX_LIMIT = 5;
 export const MAX_SECURE_SUBMISSION_RECORD_BYTES = 512 * 1024;
+const MAX_RECOVERED_SECURE_SUBMISSION_RECORD_BYTES = MAX_SECURE_SUBMISSION_RECORD_BYTES + 1024;
+const MAX_LEGACY_SUBMISSION_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
 export const MAX_SECURE_SUBMISSION_OUTBOX_BYTES = 2 * 1024 * 1024;
 export const SECURE_SUBMISSION_TTL_MS = 24 * 60 * 60 * 1000;
 export const SECURE_SUBMISSION_OUTBOX_EVENT = "omr:secure-submission-outbox-change";
@@ -32,6 +34,9 @@ type SecureSubmissionBlockReason =
 
 export interface SecureSubmissionSnapshot {
     sessionId: string;
+    examId: string;
+    assignmentId?: string;
+    assignmentRevision?: number;
     expectedRevision: number;
     expectedLeaseEpoch: number;
     leaseToken: string;
@@ -46,7 +51,7 @@ export interface SecureSubmissionSnapshot {
 }
 
 export interface SecureSubmissionOutboxRecord {
-    schemaVersion: 1;
+    schemaVersion: 2;
     id: string;
     ownerFingerprint: string;
     createdAt: string;
@@ -59,12 +64,30 @@ export interface SecureSubmissionOutboxRecord {
     replayClaim?: { id: string; expiresAt: string };
     /** Mutable replay cursor; the snapshot itself is never replaced. */
     checkpointRevision?: number;
+    /** Allows only the bounded exam-id overhead added while recovering a v1 snapshot. */
+    recoveredFromSchemaVersion?: 1;
     snapshot: SecureSubmissionSnapshot;
+}
+
+interface LegacySecureSubmissionQuarantine {
+    schemaVersion: 1;
+    id: string;
+    ownerFingerprint: string;
+    expiresAt: string;
+    byteLength: number;
+    createdAt: string;
+    state: SecureSubmissionState;
+    retryCount: number;
+    nextAttemptAt: string;
+    blockReason?: SecureSubmissionBlockReason;
+    replayClaim?: { id: string; expiresAt: string };
+    checkpointRevision?: number;
+    snapshot: Omit<SecureSubmissionSnapshot, "examId" | "assignmentId" | "assignmentRevision">;
 }
 
 export interface SecureSubmissionRecoveryNotice {
     id: string;
-    kind: "expired" | "invalid";
+    kind: "expired" | "invalid" | "legacy_recovery_required";
     sessionId?: string;
     createdAt: string;
 }
@@ -79,6 +102,11 @@ export type SecureSubmissionCommit =
 export interface SecureSubmissionOutboxStore {
     list(): Promise<unknown[]>;
     put(record: SecureSubmissionOutboxRecord): Promise<void>;
+    replaceLegacy(
+        id: string,
+        expected: unknown,
+        replacement: SecureSubmissionOutboxRecord,
+    ): Promise<SecureSubmissionOutboxRecord | null>;
     delete(id: string): Promise<void>;
     deleteInvalid(raw: unknown): Promise<boolean>;
     claim(id: string, ownerFingerprint: string, claimId: string, now: number, expiresAt: number): Promise<SecureSubmissionOutboxRecord | null>;
@@ -99,8 +127,15 @@ interface OutboxOptions {
 }
 
 interface ReplayActions {
+    resolveLegacyScope?(input: { sessionId: string }): Promise<
+        | { status: "resolved"; examId: string }
+        | { status: "targeted" | "not_found" | "unauthenticated" | "invalid" | "service_unavailable" | "error" }
+    >;
     checkpoint(input: {
         sessionId: string;
+        examId: string;
+        assignmentId?: string;
+        assignmentRevision?: number;
         expectedRevision: number;
         expectedLeaseEpoch: number;
         leaseToken: string;
@@ -111,6 +146,9 @@ interface ReplayActions {
     }): Promise<{ status: string; session?: { revision: number; leaseEpoch: number } }>;
     submit(input: {
         sessionId: string;
+        examId: string;
+        assignmentId?: string;
+        assignmentRevision?: number;
         expectedRevision: number;
         expectedLeaseEpoch: number;
         leaseToken: string;
@@ -161,11 +199,41 @@ function validPositiveInteger(value: unknown): value is number {
     return Number.isSafeInteger(value) && Number(value) >= 1;
 }
 
+function validBlockReason(value: unknown): value is SecureSubmissionBlockReason {
+    return typeof value === "string" && [
+        "revision_conflict", "lease_conflict", "expired", "unauthenticated", "invalid",
+        "not_found", "not_owned", "not_active", "retake_denied", "max_attempts",
+    ].includes(value);
+}
+
+function validReplayClaim(value: unknown): value is { id: string; expiresAt: string } {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+        && Object.keys(value).every(key => key === "id" || key === "expiresAt")
+        && clean((value as { id?: unknown }).id).length > 0
+        && clean((value as { id?: unknown }).id).length <= 256
+        && clean((value as { expiresAt?: unknown }).expiresAt).length <= 40
+        && Number.isFinite(Date.parse(clean((value as { expiresAt?: unknown }).expiresAt)));
+}
+
 function validSnapshot(value: unknown): value is SecureSubmissionSnapshot {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     const candidate = value as Partial<SecureSubmissionSnapshot>;
-    return clean(candidate.sessionId).length > 0
+    const assignmentId = clean(candidate.assignmentId);
+    const assignmentRevision = Number(candidate.assignmentRevision);
+    const exactKeys = [
+        "answers", "assignmentId", "assignmentRevision", "autoSubmitted", "examId",
+        "expectedLeaseEpoch", "expectedRevision", "finishedAt", "focusLossEvents",
+        "leaseToken", "progressPayload", "questionTimings", "sessionId",
+        "subQuestionAnswers", "tabFociLostCount",
+    ];
+    return Object.keys(candidate).every(key => exactKeys.includes(key))
+        && clean(candidate.sessionId).length > 0
         && clean(candidate.sessionId).length <= 256
+        && clean(candidate.examId).length > 0
+        && clean(candidate.examId).length <= 256
+        && (assignmentId
+            ? validPositiveInteger(assignmentRevision)
+            : candidate.assignmentRevision === undefined)
         && validPositiveInteger(candidate.expectedRevision)
         && validPositiveInteger(candidate.expectedLeaseEpoch)
         && clean(candidate.leaseToken).length > 0
@@ -183,23 +251,115 @@ function validSnapshot(value: unknown): value is SecureSubmissionSnapshot {
 function normalizedRecord(value: unknown): SecureSubmissionOutboxRecord | null {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const candidate = value as Partial<SecureSubmissionOutboxRecord>;
+    const exactKeys = [
+        "blockReason", "byteLength", "checkpointRevision", "createdAt", "expiresAt", "id",
+        "nextAttemptAt", "ownerFingerprint", "recoveredFromSchemaVersion", "replayClaim",
+        "retryCount", "schemaVersion", "snapshot", "state",
+    ];
+    const snapshotBytes = bytes(candidate.snapshot);
+    const recordLimit = candidate.recoveredFromSchemaVersion === 1
+        ? MAX_RECOVERED_SECURE_SUBMISSION_RECORD_BYTES
+        : MAX_SECURE_SUBMISSION_RECORD_BYTES;
     if (
-        candidate.schemaVersion !== 1
+        candidate.schemaVersion !== 2
+        || Object.keys(candidate).some(key => !exactKeys.includes(key))
         || clean(candidate.id).length === 0
+        || clean(candidate.id).length > 256
         || clean(candidate.ownerFingerprint).length !== 64
+        || clean(candidate.createdAt).length > 40
         || !Number.isFinite(Date.parse(clean(candidate.createdAt)))
+        || clean(candidate.expiresAt).length > 40
         || !Number.isFinite(Date.parse(clean(candidate.expiresAt)))
         || !Number.isSafeInteger(candidate.byteLength)
         || Number(candidate.byteLength) <= 0
-        || Number(candidate.byteLength) > MAX_SECURE_SUBMISSION_RECORD_BYTES
+        || Number(candidate.byteLength) !== snapshotBytes
+        || Number(candidate.byteLength) > recordLimit
+        || (candidate.recoveredFromSchemaVersion !== undefined && candidate.recoveredFromSchemaVersion !== 1)
         || (candidate.state !== "queued" && candidate.state !== "blocked")
+        || (candidate.blockReason !== undefined && !validBlockReason(candidate.blockReason))
         || !Number.isSafeInteger(candidate.retryCount)
         || Number(candidate.retryCount) < 0
+        || Number(candidate.retryCount) > 1_000_000
+        || clean(candidate.nextAttemptAt).length > 40
         || !Number.isFinite(Date.parse(clean(candidate.nextAttemptAt)))
+        || (candidate.replayClaim !== undefined && !validReplayClaim(candidate.replayClaim))
+        || (candidate.checkpointRevision !== undefined && !validPositiveInteger(candidate.checkpointRevision))
+        || bytes(value) > snapshotBytes + MAX_LEGACY_SUBMISSION_ENVELOPE_OVERHEAD_BYTES
         || !validSnapshot(candidate.snapshot)
         || candidate.id !== candidate.snapshot.sessionId
     ) return null;
     return candidate as SecureSubmissionOutboxRecord;
+}
+
+function normalizedLegacyQuarantine(value: unknown): LegacySecureSubmissionQuarantine | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const candidate = value as Record<string, unknown>;
+    const snapshot = candidate.snapshot;
+    const legacySnapshot = snapshot as Partial<SecureSubmissionSnapshot>;
+    const legacyKeys = [
+        "answers", "autoSubmitted", "expectedLeaseEpoch", "expectedRevision",
+        "finishedAt", "focusLossEvents", "leaseToken", "progressPayload",
+        "questionTimings", "sessionId", "subQuestionAnswers", "tabFociLostCount",
+    ];
+    const exactKeys = [
+        "blockReason", "byteLength", "checkpointRevision", "createdAt", "expiresAt", "id",
+        "nextAttemptAt", "ownerFingerprint", "replayClaim", "retryCount", "schemaVersion",
+        "snapshot", "state",
+    ];
+    const snapshotBytes = bytes(snapshot);
+    const replayClaim = candidate.replayClaim;
+    if (
+        candidate.schemaVersion !== 1
+        || Object.keys(candidate).some(key => !exactKeys.includes(key))
+        || clean(candidate.id).length === 0
+        || clean(candidate.id).length > 256
+        || clean(candidate.ownerFingerprint).length !== 64
+        || clean(candidate.createdAt).length > 40
+        || !Number.isFinite(Date.parse(clean(candidate.createdAt)))
+        || clean(candidate.expiresAt).length > 40
+        || !Number.isFinite(Date.parse(clean(candidate.expiresAt)))
+        || !Number.isSafeInteger(candidate.byteLength)
+        || Number(candidate.byteLength) <= 0
+        || Number(candidate.byteLength) > MAX_SECURE_SUBMISSION_RECORD_BYTES
+        || Number(candidate.byteLength) !== snapshotBytes
+        || bytes(value) > snapshotBytes + MAX_LEGACY_SUBMISSION_ENVELOPE_OVERHEAD_BYTES
+        || !snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)
+        || clean((snapshot as { sessionId?: unknown }).sessionId) !== clean(candidate.id)
+        || Object.keys(snapshot).some(key => !legacyKeys.includes(key)
+            && key !== "examId" && key !== "assignmentId" && key !== "assignmentRevision")
+        || !validSnapshot({
+            ...legacySnapshot,
+            examId: "legacy-recovery-validation",
+            assignmentId: undefined,
+            assignmentRevision: undefined,
+        })
+        || (candidate.state !== "queued" && candidate.state !== "blocked")
+        || (candidate.blockReason !== undefined && !validBlockReason(candidate.blockReason))
+        || !Number.isSafeInteger(candidate.retryCount) || Number(candidate.retryCount) < 0
+        || Number(candidate.retryCount) > 1_000_000
+        || clean(candidate.nextAttemptAt).length > 40
+        || !Number.isFinite(Date.parse(clean(candidate.nextAttemptAt)))
+        || (replayClaim !== undefined && !validReplayClaim(replayClaim))
+        || (candidate.checkpointRevision !== undefined && !validPositiveInteger(candidate.checkpointRevision))
+    ) return null;
+    const recoveredSnapshot = Object.fromEntries(
+        legacyKeys.map(key => [key, (snapshot as Record<string, unknown>)[key]]),
+    ) as unknown as Omit<SecureSubmissionSnapshot, "examId" | "assignmentId" | "assignmentRevision">;
+    return {
+        schemaVersion: 1,
+        id: clean(candidate.id),
+        ownerFingerprint: clean(candidate.ownerFingerprint),
+        expiresAt: clean(candidate.expiresAt),
+        byteLength: Number(candidate.byteLength),
+        createdAt: clean(candidate.createdAt),
+        state: candidate.state,
+        retryCount: Number(candidate.retryCount),
+        nextAttemptAt: clean(candidate.nextAttemptAt),
+        ...(candidate.blockReason ? { blockReason: candidate.blockReason as SecureSubmissionBlockReason } : {}),
+        ...(replayClaim ? { replayClaim: replayClaim as { id: string; expiresAt: string } } : {}),
+        ...(candidate.checkpointRevision ? { checkpointRevision: Number(candidate.checkpointRevision) } : {}),
+        snapshot: recoveredSnapshot,
+    };
 }
 
 function normalizedNotice(value: unknown): SecureSubmissionRecoveryNotice | null {
@@ -207,7 +367,7 @@ function normalizedNotice(value: unknown): SecureSubmissionRecoveryNotice | null
     const candidate = value as Partial<SecureSubmissionRecoveryNotice>;
     if (
         clean(candidate.id).length === 0
-        || (candidate.kind !== "expired" && candidate.kind !== "invalid")
+        || !["expired", "invalid", "legacy_recovery_required"].includes(String(candidate.kind))
         || !Number.isFinite(Date.parse(clean(candidate.createdAt)))
         || (candidate.sessionId !== undefined && clean(candidate.sessionId).length === 0)
     ) return null;
@@ -323,6 +483,46 @@ async function atomicRecordMutation<T>(
     });
 }
 
+async function atomicLegacyReplace(
+    id: string,
+    expected: unknown,
+    replacement: SecureSubmissionOutboxRecord,
+): Promise<SecureSubmissionOutboxRecord | null> {
+    const database = await openDatabase();
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(STORE_NAME, "readwrite");
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.get(id) as IDBRequest<unknown>;
+        let result: SecureSubmissionOutboxRecord | null = null;
+        request.onsuccess = () => {
+            const currentRecord = normalizedRecord(request.result);
+            if (currentRecord) {
+                result = currentRecord;
+                return;
+            }
+            const currentLegacy = normalizedLegacyQuarantine(request.result);
+            const expectedLegacy = normalizedLegacyQuarantine(expected);
+            if (!currentLegacy || !expectedLegacy
+                || JSON.stringify(currentLegacy) !== JSON.stringify(expectedLegacy)) return;
+            result = replacement;
+            store.put(replacement);
+        };
+        request.onerror = () => transaction.abort();
+        transaction.oncomplete = () => {
+            database.close();
+            resolve(result);
+        };
+        transaction.onerror = () => {
+            database.close();
+            reject(transaction.error || new Error("Secure submission legacy replacement failed"));
+        };
+        transaction.onabort = () => {
+            database.close();
+            reject(transaction.error || request.error || new Error("Secure submission legacy replacement aborted"));
+        };
+    });
+}
+
 function claimRecord(
     record: SecureSubmissionOutboxRecord | null,
     ownerFingerprint: string,
@@ -373,6 +573,7 @@ function commitRecord(
 const indexedDbStore: SecureSubmissionOutboxStore = {
     list: () => transact("readonly", store => store.getAll()),
     put: record => transact("readwrite", store => store.put(record)).then(() => undefined),
+    replaceLegacy: atomicLegacyReplace,
     delete: id => transact("readwrite", store => store.delete(id)).then(() => undefined),
     deleteInvalid: async raw => {
         const id = raw && typeof raw === "object" && !Array.isArray(raw)
@@ -420,6 +621,17 @@ export function createMemorySecureSubmissionStore(): SecureSubmissionOutboxStore
     return {
         list: async () => [...records.values()].map(clone),
         put: async record => { records.set(record.id, clone(record)); },
+        replaceLegacy: async (id, expected, replacement) => {
+            const current = records.get(id) as unknown;
+            const currentRecord = normalizedRecord(current);
+            if (currentRecord) return clone(currentRecord);
+            const currentLegacy = normalizedLegacyQuarantine(current);
+            const expectedLegacy = normalizedLegacyQuarantine(expected);
+            if (!currentLegacy || !expectedLegacy
+                || JSON.stringify(currentLegacy) !== JSON.stringify(expectedLegacy)) return null;
+            records.set(id, clone(replacement));
+            return clone(replacement);
+        },
         delete: async id => { records.delete(id); },
         deleteInvalid: async raw => {
             for (const [key, value] of records) {
@@ -475,9 +687,11 @@ export async function queueSecureSubmission(
         return await lock(async () => {
             const rawRecords = await store.list();
             const records = rawRecords.map(normalizedRecord);
-            if (records.some(record => !record)) return { status: "storage_error" as const };
-            const validRecords = records as SecureSubmissionOutboxRecord[];
+            const legacy = rawRecords.map(normalizedLegacyQuarantine);
+            if (records.some((record, index) => !record && !legacy[index])) return { status: "storage_error" as const };
+            const validRecords = records.filter((record): record is SecureSubmissionOutboxRecord => !!record);
             const existing = validRecords.find(record => record.id === snapshot.sessionId);
+            if (legacy.some(record => record?.id === snapshot.sessionId)) return { status: "conflict" as const };
             if (existing) {
                 if (existing.ownerFingerprint !== ownerFingerprint || JSON.stringify(existing.snapshot) !== JSON.stringify(snapshot)) {
                     return { status: "conflict" as const };
@@ -486,10 +700,11 @@ export async function queueSecureSubmission(
             }
             if (
                 validRecords.length >= SECURE_SUBMISSION_OUTBOX_LIMIT
-                || validRecords.reduce((total, record) => total + record.byteLength, 0) + byteLength > MAX_SECURE_SUBMISSION_OUTBOX_BYTES
+                || validRecords.filter(Boolean).reduce((total, record) => total + record.byteLength, 0)
+                    + byteLength > MAX_SECURE_SUBMISSION_OUTBOX_BYTES
             ) return { status: "capacity_exceeded" as const };
             const record: SecureSubmissionOutboxRecord = {
-                schemaVersion: 1,
+                schemaVersion: 2,
                 id: snapshot.sessionId,
                 ownerFingerprint,
                 createdAt: new Date(now).toISOString(),
@@ -552,6 +767,25 @@ export async function maintainSecureSubmissionOutbox(
         for (const raw of await store.list()) {
             const record = normalizedRecord(raw);
             if (!record) {
+                const legacy = normalizedLegacyQuarantine(raw);
+                if (legacy) {
+                    if (Date.parse(legacy.expiresAt) <= now) {
+                        await persistNotice({
+                            id: randomId("expired"),
+                            kind: "expired",
+                            sessionId: legacy.id,
+                            createdAt: new Date(now).toISOString(),
+                        });
+                        await store.delete(legacy.id);
+                        expiredCount += 1;
+                        emitOutboxEvent({ sessionId: legacy.id, status: "expired" });
+                    } else {
+                        // v1 did not persist the exact exam/assignment tuple.
+                        // Recovery resolves it through the exact-owner server
+                        // session boundary; maintenance retains it until TTL.
+                    }
+                    continue;
+                }
                 const id = raw && typeof raw === "object" && !Array.isArray(raw) ? clean((raw as { id?: unknown }).id) : "";
                 await persistNotice({
                     id: randomId("invalid"),
@@ -631,14 +865,82 @@ async function replaySecureSubmissionsForOwnerInternal(
 ): Promise<SecureSubmissionReplayResult> {
     if (clean(ownerFingerprint).length !== 64) return { status: "empty", submitted: [] };
     const store = options.store || defaultStore();
+    const lock = options.lock || defaultLock();
     const now = options.now ?? Date.now();
     try {
         const rawRecords = await store.list();
         const records = rawRecords.map(normalizedRecord);
-        if (records.some(record => !record)) {
+        const legacy = rawRecords.map(normalizedLegacyQuarantine);
+        if (records.some((record, index) => !record && !legacy[index])) {
             return { status: "storage_error", submitted: [], blockedCount: 0 };
         }
-        const owned = (records as SecureSubmissionOutboxRecord[])
+        const recoveredRecords: SecureSubmissionOutboxRecord[] = [];
+        for (const candidate of legacy.filter((record): record is LegacySecureSubmissionQuarantine => (
+            !!record && record.ownerFingerprint === ownerFingerprint && Date.parse(record.expiresAt) > now
+        ))) {
+            let resolution: Awaited<ReturnType<NonNullable<ReplayActions["resolveLegacyScope"]>>> | null = null;
+            try {
+                resolution = actions.resolveLegacyScope
+                    ? await actions.resolveLegacyScope({ sessionId: candidate.id })
+                    : null;
+            } catch {
+                resolution = null;
+            }
+            const resolvedExamId = resolution?.status === "resolved" ? clean(resolution.examId) : "";
+            const exactResolved = resolution?.status === "resolved"
+                && resolvedExamId.length > 0
+                && resolvedExamId.length <= 256
+                && Object.keys(resolution).every(key => key === "status" || key === "examId");
+            if (exactResolved) {
+                const snapshot: SecureSubmissionSnapshot = {
+                    ...candidate.snapshot,
+                    examId: resolvedExamId,
+                };
+                const migrated: SecureSubmissionOutboxRecord = {
+                    schemaVersion: 2,
+                    id: candidate.id,
+                    ownerFingerprint: candidate.ownerFingerprint,
+                    createdAt: candidate.createdAt,
+                    expiresAt: candidate.expiresAt,
+                    byteLength: bytes(snapshot),
+                    state: candidate.state,
+                    ...(candidate.blockReason ? { blockReason: candidate.blockReason } : {}),
+                    retryCount: candidate.retryCount,
+                    nextAttemptAt: candidate.nextAttemptAt,
+                    ...(candidate.replayClaim ? { replayClaim: candidate.replayClaim } : {}),
+                    ...(candidate.checkpointRevision ? { checkpointRevision: candidate.checkpointRevision } : {}),
+                    recoveredFromSchemaVersion: 1,
+                    snapshot,
+                };
+                if (!validSnapshot(snapshot) || migrated.byteLength > MAX_RECOVERED_SECURE_SUBMISSION_RECORD_BYTES) {
+                    return { status: "storage_error", submitted: [], blockedCount: 0 };
+                }
+                const recovered = await lock(async () => {
+                    const replacement = await store.replaceLegacy(candidate.id, candidate, migrated);
+                    if (!replacement) return null;
+                    const notices = (await store.listNotices()).map(normalizedNotice);
+                    for (const notice of notices) {
+                        if (notice?.kind === "legacy_recovery_required" && notice.sessionId === candidate.id) {
+                            await store.deleteNotice(notice.id);
+                        }
+                    }
+                    return replacement;
+                });
+                if (recovered) recoveredRecords.push(recovered);
+            } else {
+                const notices = (await store.listNotices()).map(normalizedNotice);
+                if (!notices.some(notice => notice?.kind === "legacy_recovery_required" && notice.sessionId === candidate.id)) {
+                    await store.putNotice({
+                        id: randomId("legacy"),
+                        kind: "legacy_recovery_required",
+                        sessionId: candidate.id,
+                        createdAt: new Date(now).toISOString(),
+                    });
+                }
+            }
+        }
+        const owned = [...records.filter((record): record is SecureSubmissionOutboxRecord => !!record), ...recoveredRecords]
+            .filter((record): record is SecureSubmissionOutboxRecord => !!record)
             .filter(record => (
                 record.ownerFingerprint === ownerFingerprint
                 && Date.parse(record.expiresAt) > now
@@ -684,6 +986,9 @@ async function replaySecureSubmissionsForOwnerInternal(
             try {
                 checkpoint = await actions.checkpoint({
                     sessionId: snapshot.sessionId,
+                    examId: snapshot.examId,
+                    assignmentId: snapshot.assignmentId,
+                    assignmentRevision: snapshot.assignmentRevision,
                     expectedRevision: record.checkpointRevision || snapshot.expectedRevision,
                     expectedLeaseEpoch: snapshot.expectedLeaseEpoch,
                     leaseToken: snapshot.leaseToken,
@@ -722,6 +1027,9 @@ async function replaySecureSubmissionsForOwnerInternal(
             try {
                 result = await actions.submit({
                     sessionId: snapshot.sessionId,
+                    examId: snapshot.examId,
+                    assignmentId: snapshot.assignmentId,
+                    assignmentRevision: snapshot.assignmentRevision,
                     expectedRevision: revision,
                     expectedLeaseEpoch: checkpoint.session.leaseEpoch || snapshot.expectedLeaseEpoch,
                     leaseToken: snapshot.leaseToken,

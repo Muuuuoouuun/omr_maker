@@ -25,18 +25,18 @@ const OPERATIONS = new Set([
 ]);
 
 export const INITIAL_OPERATIONS_CONTROL_PRODUCTION_PATHS = Object.freeze({
-    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v2"]),
-    checkpoint: Object.freeze(["rpc:omr_checkpoint_attempt_session_v1"]),
-    heartbeat: Object.freeze(["rpc:omr_heartbeat_attempt_session_v1"]),
-    "teacher-live-read": Object.freeze(["rpc:omr_list_active_attempt_sessions_v1"]),
+    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v3"]),
+    checkpoint: Object.freeze(["rpc:omr_checkpoint_attempt_session_v2"]),
+    heartbeat: Object.freeze(["rpc:omr_heartbeat_attempt_session_v2"]),
+    "teacher-live-read": Object.freeze(["rpc:omr_list_active_attempt_sessions_v2"]),
     "teacher-upload-read": Object.freeze(["table:omr_remote_assets"]),
     "student-submit": Object.freeze([
-        "rpc:omr_prepare_attempt_session_submit_v1",
-        "rpc:omr_commit_attempt_session_submit_v1",
+        "rpc:omr_prepare_attempt_session_submit_v2",
+        "rpc:omr_commit_attempt_session_submit_v2",
     ]),
     "student-submit-replay": Object.freeze([
-        "rpc:omr_prepare_attempt_session_submit_v1",
-        "rpc:omr_commit_attempt_session_submit_v1",
+        "rpc:omr_prepare_attempt_session_submit_v2",
+        "rpc:omr_commit_attempt_session_submit_v2",
     ]),
     "teacher-max-pdf-upload-prepare": Object.freeze(["rpc:omr_prepare_teacher_asset_upload_v2"]),
     "teacher-max-pdf-upload-finalize": Object.freeze([

@@ -46,6 +46,7 @@ describe("student attempt session contract", () => {
     it("parses only the answer-safe session projection", () => {
         expect(studentAttemptSessionStateFromRpc({
             session_id: "session-1",
+            exam_id: "exam-1",
             status: "in_progress",
             revision: 4,
             lease_epoch: 2,
@@ -58,6 +59,7 @@ describe("student attempt session contract", () => {
             grading_snapshot: { questions: [{ answer: 3 }] },
         })).toEqual({
             sessionId: "session-1",
+            examId: "exam-1",
             status: "in_progress",
             revision: 4,
             leaseEpoch: 2,
@@ -74,6 +76,7 @@ describe("student attempt session contract", () => {
     it("drops answers and subanswers outside the authorized bounded scope", () => {
         const parsed = studentAttemptSessionStateFromRpc({
             session_id: "session-1",
+            exam_id: "exam-1",
             status: "in_progress",
             revision: 1,
             lease_epoch: 1,
@@ -103,6 +106,7 @@ describe("student attempt session contract", () => {
         });
         const parsed = studentAttemptSessionStateFromRpc({
             session_id: "session-1",
+            exam_id: "exam-1",
             status: "in_progress",
             revision: 2,
             lease_epoch: 2,
@@ -139,6 +143,7 @@ describe("student attempt session contract", () => {
     it("drops a forged free-text handwriting checkpoint instead of reflecting it to another device", () => {
         const parsed = studentAttemptSessionStateFromRpc({
             session_id: "session-1",
+            exam_id: "exam-1",
             status: "in_progress",
             revision: 2,
             lease_epoch: 2,

@@ -1743,16 +1743,16 @@ describe("service UI surface", () => {
         expect(handwritingLink).toContain("minHeight: 44");
         expect(modalReportLink).toContain("minHeight: 44");
 
-        const selectedActionStart = usersPage.indexOf("<div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>");
+        const selectedActionStart = usersPage.indexOf("!rosterMutationsDisabled && latestStableAttempt ? (");
         const selectedActions = usersPage.slice(
             selectedActionStart,
-            usersPage.indexOf("{tab === \"groups\"", usersPage.indexOf("{latestStableAttempt ? (")),
+            usersPage.indexOf('{tab === "groups" && (', selectedActionStart),
         );
         expect(selectedActions).toContain('buildStudentResultHref(latestStableAttempt.id, "report")');
         expect(selectedActions).toContain("studentGrowthReportsEnabled &&");
         expect(selectedActions).toContain("onClick={handleOpenDetail}");
         expect(selectedActions).toContain("성장 분석");
-        expect(selectedActions).toContain("flexWrap: 'wrap'");
+        expect(usersPage).toContain("flexWrap: 'wrap'");
     });
 
     it("resets route-scoped student result state while preserving peer attempts on load failure", () => {
@@ -2196,13 +2196,12 @@ describe("service UI surface", () => {
             + readProjectFile("src/components/teacher/users/InvitesTab.tsx");
 
         expect(usersPage).toContain('type RosterDataMode = "real" | "demo"');
-        expect(usersPage).toContain("hasStoredRosterData(localStorage)");
-        expect(usersPage).toContain("function isLegacyDemoRosterSnapshot");
-        expect(usersPage).toContain("localStorage.removeItem(key)");
-        expect(usersPage).toContain("const storedStudents = readRosterStudents(localStorage)");
+        expect(usersPage).toContain("readTeacherRosterDegradedCache(localStorage");
+        expect(usersPage).toContain("localStorage.removeItem(STUDENT_CODES_STORAGE_KEY)");
+        expect(usersPage).toContain("sanitizeTeacherRosterCandidate(rosterResult.candidate)");
         expect(usersPage).toContain("loadTeacherRosterSnapshot(localStorage)");
-        expect(usersPage).toContain("const nextStudents = useDemoRoster ? [] : rosterResult.students");
-        expect(usersPage).toContain("saveTeacherRosterSnapshot(localStorage");
+        expect(usersPage).toContain("students: useDemoRoster ? [] : freshSnapshot.students");
+        expect(usersPage).toContain("persistTeacherRosterCompletionIfCurrent(");
         expect(usersPage).toContain("데모 명단 모드");
         expect(usersPage).toContain('aria-label="데모 명단 안내"');
         expect(usersPage).toContain("const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students");

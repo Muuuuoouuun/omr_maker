@@ -223,6 +223,7 @@ describe("public guest durable action flow", () => {
 
         const checkpoint = await checkpointDurableStudentAttemptSession({
             sessionId: durable.session.sessionId,
+            examId: exam.id,
             expectedRevision: durable.session.revision,
             expectedLeaseEpoch: durable.session.leaseEpoch,
             leaseToken: durable.leaseToken,
@@ -234,6 +235,7 @@ describe("public guest durable action flow", () => {
 
         const submitted = await submitDurableStudentAttemptSession({
             sessionId: checkpoint.session.sessionId,
+            examId: exam.id,
             expectedRevision: checkpoint.session.revision,
             expectedLeaseEpoch: checkpoint.session.leaseEpoch,
             leaseToken: durable.leaseToken,

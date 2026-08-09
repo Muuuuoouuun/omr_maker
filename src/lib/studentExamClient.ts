@@ -4,6 +4,7 @@ import { studentAttemptSummaryFromAttempt, type StudentAssignmentPreview, type S
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 import type { SubmissionReceiptStatus } from "@/lib/studentAttemptReceipt";
 import { INITIAL_CAPACITY_EXCEEDED_ERROR } from "@/lib/initialOperationsPolicy";
+import { resolveAssignmentLifecycle } from "@/lib/assignmentLifecycle";
 
 /**
  * Client-side wrapper over the student exam server actions.
@@ -53,6 +54,13 @@ export interface ListAttemptsClientResult {
     status: "ok" | "unauthenticated" | "error";
     attempts: StudentAttemptSummary[];
     exams?: StudentAssignmentPreview[];
+    /** Exact authoritative clock used by the gateway to classify these rows. */
+    serverNow?: string;
+    serverClock?: {
+        serverNow: string;
+        requestStartedMonotonicMs: number;
+        receivedMonotonicMs: number;
+    };
     source: ExamSource;
     /** True only when local rows replace a failed remote read, not intentional local-only mode. */
     remoteFailed?: boolean;
@@ -173,15 +181,35 @@ export async function listMyAssignmentsClient(deps: {
         status: string;
         attempts?: StudentAttemptSummary[];
         exams?: StudentAssignmentPreview[];
+        serverNow?: string;
         error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
     }>;
     localFallback: () => Promise<Attempt[]>;
+    monotonicNow?: () => number;
 }): Promise<ListAttemptsClientResult> {
     let remoteFailed = false;
+    const monotonicNow = deps.monotonicNow || (() => typeof performance !== "undefined" ? performance.now() : 0);
+    const requestStartedMonotonicMs = monotonicNow();
     try {
         const res = await deps.server();
-        if (res.status === "ok" && res.attempts) {
-            return { status: "ok", attempts: res.attempts, exams: res.exams || [], source: "server" };
+        const receivedMonotonicMs = monotonicNow();
+        if (
+            res.status === "ok"
+            && res.attempts
+            && resolveAssignmentLifecycle({ state: "open", now: res.serverNow }) !== "invalid"
+        ) {
+            return {
+                status: "ok",
+                attempts: res.attempts,
+                exams: res.exams || [],
+                source: "server",
+                serverNow: res.serverNow,
+                serverClock: {
+                    serverNow: res.serverNow!,
+                    requestStartedMonotonicMs,
+                    receivedMonotonicMs,
+                },
+            };
         }
         if (res.status === "unauthenticated") {
             return { status: "unauthenticated", attempts: [], exams: [], source: "server" };

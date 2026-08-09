@@ -74,7 +74,7 @@ function validInput(overrides: Record<string, unknown> = {}) {
         previewArtifactDigest: PREVIEW_ARTIFACT_DIGEST,
         previewAttestationSignature: PREVIEW_ATTESTATION_SIGNATURE,
         qualificationArtifactDigest: QUALIFICATION_ARTIFACT_DIGEST,
-        readinessVersion: "202608080010",
+        readinessVersion: "202608090001",
         expectedDatabaseProjectRefHash: DATABASE_PROJECT_HASH,
         previousDeploymentId: "dpl_previous_Z9y8x7",
         manifestPath: "/private/qualification/release/rebound-release-quality-manifest.json",
@@ -101,7 +101,7 @@ function verifiedEvidence() {
             previewArtifactDigest: PREVIEW_ARTIFACT_DIGEST,
             previewIdentityAttested: true,
         },
-        readinessVersion: "202608080010",
+        readinessVersion: "202608090001",
         databaseProjectRefHash: DATABASE_PROJECT_HASH,
         access: { anon: "denied", authenticated: "denied" },
     };

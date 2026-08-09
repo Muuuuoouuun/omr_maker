@@ -33,6 +33,7 @@ describe("initial-operations Supabase load gateway", () => {
                     ? { status: "created", organizationId: fixture.organizationId, examId: fixture.examId }
                     : {
                         session_id: `${RUN_ID}:session:${context.actorId}`,
+                        exam_id: fixture.examId,
                         status: "in_progress",
                         revision: 2,
                         lease_epoch: 1,
@@ -57,7 +58,7 @@ describe("initial-operations Supabase load gateway", () => {
         })).resolves.toMatchObject({
             status: "ok",
             revision: 2,
-            workloadPaths: ["rpc:omr_checkpoint_attempt_session_v1"],
+            workloadPaths: ["rpc:omr_checkpoint_attempt_session_v2"],
         });
         await expect(gateway.mutateFixture("cleanup", context, fixture)).resolves.toEqual({
             status: "cleaned",
@@ -65,8 +66,9 @@ describe("initial-operations Supabase load gateway", () => {
         });
         expect(remove).toHaveBeenCalledWith([`organizations/${fixture.organizationId}/exams/${fixture.examId}/problem/a.pdf`]);
         expect(exists).toHaveBeenCalledWith(`organizations/${fixture.organizationId}/exams/${fixture.examId}/problem/a.pdf`);
-        expect(rpc).toHaveBeenCalledWith("omr_checkpoint_attempt_session_v1", expect.objectContaining({
+        expect(rpc).toHaveBeenCalledWith("omr_checkpoint_attempt_session_v2", expect.objectContaining({
             p_organization_id: fixture.organizationId,
+            p_exam_id: fixture.examId,
             p_owner_student_id: context.actorId,
             p_expected_revision: 1,
         }));
@@ -274,7 +276,7 @@ describe("initial-operations Supabase load gateway", () => {
 
     it("rejects unknown or malformed operation success payloads", async () => {
         const rpc = vi.fn(async (name: string) => ({
-            data: name === "omr_list_active_attempt_sessions_v1"
+            data: name === "omr_list_active_attempt_sessions_v2"
                 ? [{}]
                 : { status: "unknown", revision: 2 },
             error: null,

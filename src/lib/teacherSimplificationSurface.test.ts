@@ -56,9 +56,9 @@ describe("teacher surface simplification regressions", () => {
         expect(dashboard).toContain('data-testid="canonical-error-no-cache"');
         expect(dashboard).toContain("dashboard-empty-onboarding");
         expect(dashboard).toContain("첫 시험 만들기");
-        expect(dashboard).toContain("!isRealDashboardEmpty && renderTabs()");
+        expect(dashboard).toContain('!isRealDashboardEmpty && teacherDataCapability === "fresh_mutable" && renderTabs()');
         expect(dashboard).toMatch(/function isDashboardSnapshotEmpty[\s\S]*snapshot\.rosterGroups\.length === 0/);
-        expect(dashboard).toContain("&& isDashboardSnapshotEmpty(dashboardLoadState.data)");
+        expect(dashboard).toContain("&& isDashboardLoadDataEmpty(dashboardLoadState.data)");
         expect(dashboard).toContain('options.notifyOnError === true');
         expect(dashboard).toContain('notifyOnSuccess: true, notifyOnError: true');
     });

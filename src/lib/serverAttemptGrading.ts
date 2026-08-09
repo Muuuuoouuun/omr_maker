@@ -60,6 +60,10 @@ export function serverGradedAttemptReceiptFromAttempt(
     return {
         attemptId: attempt.id,
         examId: attempt.examId,
+        ...(attempt.assignmentId ? { assignmentId: attempt.assignmentId } : {}),
+        ...(attempt.assignmentId && Number.isSafeInteger(attempt.assignmentRevision) && Number(attempt.assignmentRevision) > 0
+            ? { assignmentRevision: attempt.assignmentRevision }
+            : {}),
         score: attempt.score,
         totalScore: attempt.totalScore,
         correctCount: questionResults.filter(row => row.status === "correct").length,

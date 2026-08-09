@@ -14,7 +14,7 @@ function pinnedActionIndex(action: "checkout" | "setup-node"): number {
 describe("production readiness workflow release identity", () => {
     it("defaults the protected workflow to the exact current readiness contract", () => {
         expect(workflow).toMatch(
-            /      expected_readiness_version:\n(?:        .+\n)*?        default: "202608080010"\n/,
+            /      expected_readiness_version:\n(?:        .+\n)*?        default: "202608090001"\n/,
         );
         expect(workflow).not.toContain('default: "202608080007"');
     });

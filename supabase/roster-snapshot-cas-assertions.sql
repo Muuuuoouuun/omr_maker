@@ -207,7 +207,7 @@ declare
     v_readiness jsonb;
 begin
     v_readiness := public.omr_service_readiness_v1();
-    if v_readiness->>'version' <> '202608080010'
+    if v_readiness->>'version' <> '202608090001'
        or v_readiness->>'rosterSnapshotCasReady' <> 'false'
        or v_readiness->>'serverGatewayCapabilitiesReady' <> 'false'
        or v_readiness->>'ready' <> 'false' then

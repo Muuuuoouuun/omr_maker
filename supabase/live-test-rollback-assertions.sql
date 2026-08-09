@@ -418,3 +418,22 @@ begin
 end
 $$;
 reset role;
+
+do $assignment_generation_scope$
+begin
+    if pg_catalog.to_regprocedure('public.omr_list_student_assignments_v2(text,text,text,text,text)') is null
+       or pg_catalog.to_regprocedure('public.omr_resolve_student_assignment_v2(text,text,text,text,text,text,bigint,text)') is null
+       or pg_catalog.to_regprocedure('public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer)') is null
+       or pg_catalog.to_regprocedure('public.omr_checkpoint_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb,jsonb,integer,boolean)') is null
+       or pg_catalog.to_regprocedure('public.omr_heartbeat_attempt_session_v2(text,text,text,text,text,bigint,bigint,text,integer)') is null
+       or pg_catalog.to_regprocedure('public.omr_takeover_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,integer)') is null
+       or pg_catalog.to_regprocedure('public.omr_prepare_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text)') is null
+       or pg_catalog.to_regprocedure('public.omr_commit_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb)') is null
+       or pg_catalog.to_regprocedure('public.omr_list_active_attempt_sessions_v2(text,text,text,text,integer)') is null
+       or pg_catalog.to_regprocedure('public.omr_resolve_legacy_attempt_session_scope_v1(text,text,text)') is null
+       or pg_catalog.to_regprocedure('public.omr_prepare_teacher_force_finish_sessions_compact_v2(text,text[],text,text)') is null
+       or pg_catalog.to_regprocedure('public.omr_force_finish_attempt_sessions_compact_v2(text,text[],timestamptz,text,text,text,jsonb)') is null then
+        raise exception 'assignment generation rollback signature unavailable';
+    end if;
+end
+$assignment_generation_scope$;

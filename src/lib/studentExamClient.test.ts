@@ -154,13 +154,50 @@ describe("submitAttemptClient", () => {
 
 describe("listMyAssignmentsClient", () => {
     it("uses the server list when available", async () => {
+        const serverNow = "2026-08-09T12:34:56.789Z";
         const res = await listMyAssignmentsClient({
-            server: vi.fn().mockResolvedValue({ status: "ok", attempts: [ATTEMPT], exams: [{ id: "e1", title: "서버 시험", questions: [] }] }),
+            server: vi.fn().mockResolvedValue({
+                status: "ok",
+                attempts: [ATTEMPT],
+                exams: [{ id: "e1", title: "서버 시험", questions: [] }],
+                serverNow,
+            }),
             localFallback: vi.fn(),
         });
-        expect(res).toMatchObject({ status: "ok", source: "server" });
+        expect(res).toMatchObject({ status: "ok", source: "server", serverNow });
         expect(res.attempts).toHaveLength(1);
         expect(res.exams).toEqual([expect.objectContaining({ id: "e1" })]);
+    });
+
+    it("captures the request start and receipt performance anchors around the exact server promise", async () => {
+        const samples = [100, 460];
+        const res = await listMyAssignmentsClient({
+            monotonicNow: () => samples.shift()!,
+            server: vi.fn().mockResolvedValue({
+                status: "ok", attempts: [], exams: [], serverNow: "2026-08-09T12:00:00.000Z",
+            }),
+            localFallback: vi.fn(),
+        });
+        expect(res).toMatchObject({
+            source: "server",
+            serverClock: {
+                serverNow: "2026-08-09T12:00:00.000Z",
+                requestStartedMonotonicMs: 100,
+                receivedMonotonicMs: 460,
+            },
+        });
+    });
+
+    it("fails closed to a remoteFailed local result when an ok response omits its classification clock", async () => {
+        const localFallback = vi.fn().mockResolvedValue([ATTEMPT]);
+        const res = await listMyAssignmentsClient({
+            server: vi.fn().mockResolvedValue({ status: "ok", attempts: [ATTEMPT], exams: [] }),
+            localFallback,
+        });
+
+        expect(res).toMatchObject({ status: "ok", source: "local", remoteFailed: true });
+        expect(res.serverNow).toBeUndefined();
+        expect(localFallback).toHaveBeenCalledOnce();
     });
 
     it("normalizes the local fallback to the same minimal summary contract", async () => {

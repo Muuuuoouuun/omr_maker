@@ -19,7 +19,7 @@ const STRONG_STUDENT_ATTEMPT_SECRET = "student-attempt-secret-at-least-32-bytes"
 
 const readyDatabaseProbe = {
     ready: true,
-    version: "202608080010",
+    version: "202608090001",
     browserSchemaPrivilegesDenied: true,
     anonTablePrivilegesDenied: true,
     authenticatedCanonicalPrivilegesDenied: true,
@@ -567,7 +567,7 @@ describe("deployment readiness", () => {
             OMR_PRODUCTION_RLS_APPLIED: "true",
         }, {
             ready: true,
-            version: "202608080010",
+            version: "202608090001",
         });
 
         expect(summary.checks).toContainEqual(expect.objectContaining({

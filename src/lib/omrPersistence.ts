@@ -94,6 +94,7 @@ export interface SupabaseAttemptRow {
     organization_id?: string | null;
     class_id?: string | null;
     assignment_id?: string | null;
+    assignment_revision?: number | null;
     student_profile_id?: string | null;
     exam_id: string;
     student_name: string;
@@ -519,6 +520,9 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
         organization_id: scopedValue(attempt.organizationId) || contextOrganizationId(context),
         class_id: classId,
         assignment_id: scopedValue(attempt.assignmentId),
+        assignment_revision: Number.isSafeInteger(attempt.assignmentRevision) && Number(attempt.assignmentRevision) > 0
+            ? Number(attempt.assignmentRevision)
+            : null,
         student_profile_id: studentProfileId,
         exam_id: attempt.examId,
         student_name: attempt.studentName,
@@ -550,6 +554,9 @@ export function attemptFromSupabaseRow(row: SupabaseAttemptRow | { payload: Atte
         const organizationId = scopedValue(row.organization_id);
         const classId = scopedValue(row.class_id);
         const assignmentId = scopedValue(row.assignment_id);
+        const assignmentRevision = Number.isSafeInteger(row.assignment_revision) && Number(row.assignment_revision) > 0
+            ? Number(row.assignment_revision)
+            : null;
         const rowIdentityType = identityTypeValue(row.identity_type);
         const guestIdentity = rowIdentityType === "guest" || (
             !rowIdentityType
@@ -593,6 +600,7 @@ export function attemptFromSupabaseRow(row: SupabaseAttemptRow | { payload: Atte
             ...(organizationId ? { organizationId } : {}),
             ...(classId && classId !== attempt.groupId ? { classId } : {}),
             ...(assignmentId ? { assignmentId } : {}),
+            ...(assignmentId && assignmentRevision ? { assignmentRevision } : {}),
             ...(studentProfileId ? { studentProfileId } : {}),
         };
     }

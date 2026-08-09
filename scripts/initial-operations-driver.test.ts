@@ -20,13 +20,13 @@ const TEACHER_IDENTITY = {
     actorUserId: FIXTURE.organizationId,
 };
 const CONTROL_PATHS = {
-    "student-read": ["rpc:omr_open_attempt_session_v2"],
-    checkpoint: ["rpc:omr_checkpoint_attempt_session_v1"],
-    heartbeat: ["rpc:omr_heartbeat_attempt_session_v1"],
-    "teacher-live-read": ["rpc:omr_list_active_attempt_sessions_v1"],
+    "student-read": ["rpc:omr_open_attempt_session_v3"],
+    checkpoint: ["rpc:omr_checkpoint_attempt_session_v2"],
+    heartbeat: ["rpc:omr_heartbeat_attempt_session_v2"],
+    "teacher-live-read": ["rpc:omr_list_active_attempt_sessions_v2"],
     "teacher-upload-read": ["table:omr_remote_assets"],
-    "student-submit": ["rpc:omr_prepare_attempt_session_submit_v1", "rpc:omr_commit_attempt_session_submit_v1"],
-    "student-submit-replay": ["rpc:omr_prepare_attempt_session_submit_v1", "rpc:omr_commit_attempt_session_submit_v1"],
+    "student-submit": ["rpc:omr_prepare_attempt_session_submit_v2", "rpc:omr_commit_attempt_session_submit_v2"],
+    "student-submit-replay": ["rpc:omr_prepare_attempt_session_submit_v2", "rpc:omr_commit_attempt_session_submit_v2"],
     "teacher-max-pdf-upload-prepare": ["rpc:omr_prepare_teacher_asset_upload_v2"],
     "teacher-max-pdf-upload-finalize": ["rpc:omr_authorize_teacher_asset_finalize_v2", "rpc:omr_finalize_teacher_asset_upload_v2"],
 };

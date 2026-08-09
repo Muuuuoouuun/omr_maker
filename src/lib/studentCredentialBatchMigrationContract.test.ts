@@ -161,13 +161,13 @@ describe("student start-code batch migration contract", () => {
 
         expect(boundary).toContain("studentCredentialBatchReady");
         expect(boundary).toContain("student-credential-batch:202608080010");
-        expect(boundary).toContain("'version', '202608080010'");
+        expect(boundary).toContain("'version', '202608090001'");
         expect(boundary).toContain("omr_student_credential_batch_receipts");
         expect(rollback).toContain("omr_student_credential_batch_receipts");
         expect(rollback).toContain("omr_issue_student_start_code_batch_v1");
         expect(rollback).toMatch(/revoke all on function public\.omr_rotate_student_start_credential_v1\([^)]+\)\s+from public, anon, authenticated, service_role/i);
-        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608080010"');
+        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608090001"');
         expect(docs).toContain("canonical 42개");
-        expect(docs).toContain("202608080010");
+        expect(docs).toContain("202608090001");
     });
 });

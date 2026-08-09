@@ -94,7 +94,7 @@ describe("feedback CAS and plan-safe workspace bootstrap migration", () => {
             expect(migration).toContain(`revoke all on function ${signature} from public, anon, authenticated`);
             expect(migration).toContain(`grant execute on function ${signature} to service_role`);
         }
-        expect(boundary).toContain("'version', '202608080010'");
+        expect(boundary).toContain("'version', '202608090001'");
         expect(boundary).toContain("'feedbackCasReady'");
         expect(boundary).toContain("'workspaceBootstrapPlanSafe'");
     });

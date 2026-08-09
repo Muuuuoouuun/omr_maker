@@ -598,6 +598,7 @@ declare
     v_effective_workspace_plan_enforcement_ready boolean;
     v_student_session_generation_ready boolean;
     v_student_credential_batch_ready boolean;
+    v_assignment_generation_scope_ready boolean;
     v_ready boolean;
 begin
     v_previous := public.omr_service_readiness_v10_snapshot();
@@ -2814,7 +2815,41 @@ begin
        and not exists (select name, args from actual except select name, args from expected)
       into v_legacy_gateway_catalog_ready;
 
+    v_assignment_generation_scope_ready :=
+        pg_catalog.to_regprocedure('public.omr_list_student_assignments_v2(text,text,text,text,text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_resolve_student_assignment_v2(text,text,text,text,text,text,bigint,text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer)') is not null
+        and pg_catalog.to_regprocedure('public.omr_checkpoint_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb,jsonb,integer,boolean)') is not null
+        and pg_catalog.to_regprocedure('public.omr_heartbeat_attempt_session_v2(text,text,text,text,text,bigint,bigint,text,integer)') is not null
+        and pg_catalog.to_regprocedure('public.omr_takeover_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,integer)') is not null
+        and pg_catalog.to_regprocedure('public.omr_prepare_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_commit_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb)') is not null
+        and pg_catalog.to_regprocedure('public.omr_list_active_attempt_sessions_v2(text,text,text,text,integer)') is not null
+        and pg_catalog.to_regprocedure('public.omr_resolve_legacy_attempt_session_scope_v1(text,text,text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_prepare_teacher_force_finish_sessions_compact_v2(text,text[],text,text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_force_finish_attempt_sessions_compact_v2(text,text[],timestamptz,text,text,text,jsonb)') is not null
+        and not exists (
+            select 1 from pg_catalog.unnest(array[
+                'public.omr_list_student_assignments_v2(text,text,text,text,text)',
+                'public.omr_resolve_student_assignment_v2(text,text,text,text,text,text,bigint,text)',
+                'public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer)',
+                'public.omr_checkpoint_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb,jsonb,integer,boolean)',
+                'public.omr_heartbeat_attempt_session_v2(text,text,text,text,text,bigint,bigint,text,integer)',
+                'public.omr_takeover_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,integer)',
+                'public.omr_prepare_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text)',
+                'public.omr_commit_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb)',
+                'public.omr_list_active_attempt_sessions_v2(text,text,text,text,integer)',
+                'public.omr_resolve_legacy_attempt_session_scope_v1(text,text,text)',
+                'public.omr_prepare_teacher_force_finish_sessions_compact_v2(text,text[],text,text)',
+                'public.omr_force_finish_attempt_sessions_compact_v2(text,text[],timestamptz,text,text,text,jsonb)'
+            ]) signature
+            where not pg_catalog.has_function_privilege('service_role',pg_catalog.to_regprocedure(signature),'EXECUTE')
+               or pg_catalog.has_function_privilege('anon',pg_catalog.to_regprocedure(signature),'EXECUTE')
+               or pg_catalog.has_function_privilege('authenticated',pg_catalog.to_regprocedure(signature),'EXECUTE')
+        );
+
     v_server_gateway_capabilities_ready := v_legacy_gateway_catalog_ready
+        and v_assignment_generation_scope_ready
         and v_student_session_generation_ready
         and v_student_credential_batch_ready
         and v_effective_workspace_plan_enforcement_ready
@@ -2871,7 +2906,7 @@ begin
             - 'directUploadIntentLifecycleReady'
             - 'teacherAssetFinalizePreauthorizationReady'
         || pg_catalog.jsonb_build_object(
-            'version', '202608080010',
+            'version', '202608090001',
             'canonicalTablesForceRls', v_canonical_tables_force_rls,
             'serviceRolePrivilegesReady', v_service_role_privileges_ready,
             'serverGatewayCapabilitiesReady', v_server_gateway_capabilities_ready,
@@ -3026,5 +3061,27 @@ revoke all on function public.omr_release_plan_usage_v2(text,text,bigint,text,te
 grant execute on function public.omr_release_plan_usage_v2(text,text,bigint,text,text,text,text) to service_role;
 revoke all on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) from public, anon, authenticated;
 grant execute on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) to service_role;
+
+do $$
+declare signature text;
+begin
+    foreach signature in array array[
+        'omr_list_student_assignments_v2(text,text,text,text,text)',
+        'omr_resolve_student_assignment_v2(text,text,text,text,text,text,bigint,text)',
+        'omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer)',
+        'omr_checkpoint_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb,jsonb,integer,boolean)',
+        'omr_heartbeat_attempt_session_v2(text,text,text,text,text,bigint,bigint,text,integer)',
+        'omr_takeover_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,integer)',
+        'omr_prepare_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text)',
+        'omr_commit_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb)',
+        'omr_list_active_attempt_sessions_v2(text,text,text,text,integer)',
+        'omr_resolve_legacy_attempt_session_scope_v1(text,text,text)',
+        'omr_prepare_teacher_force_finish_sessions_compact_v2(text,text[],text,text)',
+        'omr_force_finish_attempt_sessions_compact_v2(text,text[],timestamptz,text,text,text,jsonb)'
+    ] loop
+        execute pg_catalog.format('revoke all on function public.%s from public, anon, authenticated',signature);
+        execute pg_catalog.format('grant execute on function public.%s to service_role',signature);
+    end loop;
+end $$;
 
 commit;

@@ -62,7 +62,7 @@ on:
       expected_readiness_version:
         description: Expected Supabase readiness contract version
         required: true
-        default: "202608080010"
+        default: "202608090001"
         type: string
       asset_gc_scheduler_pause_confirmation:
         description: Exact target-bound confirmation (asset-gc-paused:<production-host>)

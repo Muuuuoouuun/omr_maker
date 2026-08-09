@@ -35,4 +35,19 @@ describe("durable student attempt session actions", () => {
         expect(action).toContain("takeoverStudentAttemptSessionWithGateway");
         expect(action).toContain("submitStudentAttemptSessionService");
     });
+
+    it("recovers legacy outbox scope only from the current exact student identity", () => {
+        const action = source();
+        const recovery = action.slice(
+            action.indexOf("export async function resolveLegacyDurableStudentAttemptSessionScope"),
+            action.indexOf("export async function checkpointDurableStudentAttemptSession"),
+        );
+        expect(recovery).toContain("sameOriginMutation");
+        expect(recovery).toContain("parseStudentAttemptSessionContext");
+        expect(recovery).toContain("organizationId: context.identity.organizationId");
+        expect(recovery).toContain("ownerStudentId: ownerStudentId(context.identity)");
+        expect(recovery).not.toContain("input.ownerStudentId");
+        expect(recovery).not.toContain("input.examId");
+    });
+
 });

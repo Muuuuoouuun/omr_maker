@@ -27,10 +27,12 @@ import {
     heartbeatStudentAttemptSessionWithGateway,
     openStudentAttemptSessionWithGateway,
     prepareStudentAttemptSessionSubmitWithGateway,
+    resolveLegacyStudentAttemptSessionScopeWithGateway,
     takeoverStudentAttemptSessionWithGateway,
     type StudentAttemptSessionRpcClient,
 } from "@/lib/studentAttemptSessionGateway.server";
 import {
+    durableAttemptSessionIds,
     openStudentAttemptSessionService,
     submitStudentAttemptSessionService,
 } from "@/lib/studentAttemptSessionService.server";
@@ -139,6 +141,8 @@ export interface OpenDurableStudentAttemptSessionInput {
     /** Confirmation only. The signed capability remains authoritative. */
     requestedAssignmentId?: string;
     /** Confirmation only. The signed capability remains authoritative. */
+    requestedAssignmentRevision?: number;
+    /** Confirmation only. The signed capability remains authoritative. */
     requestedRetake?: Pick<RetakeMetadata, "sourceAttemptId" | "mode" | "questionIds">;
 }
 
@@ -158,6 +162,7 @@ export async function openDurableStudentAttemptSession(
         ownerStudentId: studentId,
         identityType: context.identity.identityType,
         requestedAssignmentId: input.requestedAssignmentId,
+        requestedAssignmentRevision: input.requestedAssignmentRevision,
         requestedRetake: input.requestedRetake,
     });
     if (authorization.status !== "authorized") return { status: "invalid" as const };
@@ -175,10 +180,7 @@ export async function openDurableStudentAttemptSession(
         },
         authorization,
         secret: context.secret,
-        ids: {
-            sessionId: `session_${randomUUID()}`,
-            attemptId: `attempt_${claims.ticketId}`,
-        },
+        ids: durableAttemptSessionIds(claims.ticketId),
         openGateway: gatewayInput => openStudentAttemptSessionWithGateway(context.admin, gatewayInput),
     });
     if ((result.status === "active" || result.status === "lease_conflict") && "gradingSnapshot" in result) {
@@ -193,9 +195,25 @@ export async function openDurableStudentAttemptSession(
 
 export interface DurableStudentAttemptMutationInput {
     sessionId: string;
+    examId: string;
+    assignmentId?: string;
+    assignmentRevision?: number;
     expectedRevision: number;
     expectedLeaseEpoch: number;
     leaseToken: string;
+}
+
+export async function resolveLegacyDurableStudentAttemptSessionScope(
+    input: { sessionId: string },
+) {
+    if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
+    const context = await parseStudentAttemptSessionContext();
+    if (typeof context === "string") return { status: context };
+    return resolveLegacyStudentAttemptSessionScopeWithGateway(context.admin, {
+        sessionId: input.sessionId,
+        organizationId: context.identity.organizationId || "",
+        ownerStudentId: ownerStudentId(context.identity),
+    });
 }
 
 export async function checkpointDurableStudentAttemptSession(
@@ -212,7 +230,10 @@ export async function checkpointDurableStudentAttemptSession(
     return checkpointStudentAttemptSessionWithGateway(context.admin, {
         sessionId: input.sessionId,
         organizationId: context.identity.organizationId || "",
+        examId: input.examId,
         ownerStudentId: ownerStudentId(context.identity),
+        assignmentId: input.assignmentId,
+        assignmentRevision: input.assignmentRevision,
         expectedRevision: input.expectedRevision,
         expectedLeaseEpoch: input.expectedLeaseEpoch,
         leaseTokenHash: leaseTokenHash(input.leaseToken, context.secret),
@@ -232,7 +253,10 @@ export async function heartbeatDurableStudentAttemptSession(
     return heartbeatStudentAttemptSessionWithGateway(context.admin, {
         sessionId: input.sessionId,
         organizationId: context.identity.organizationId || "",
+        examId: input.examId,
         ownerStudentId: ownerStudentId(context.identity),
+        assignmentId: input.assignmentId,
+        assignmentRevision: input.assignmentRevision,
         expectedLeaseEpoch: input.expectedLeaseEpoch,
         leaseTokenHash: leaseTokenHash(input.leaseToken, context.secret),
     });
@@ -248,7 +272,10 @@ export async function takeoverDurableStudentAttemptSession(
     const result = await takeoverStudentAttemptSessionWithGateway(context.admin, {
         sessionId: input.sessionId,
         organizationId: context.identity.organizationId || "",
+        examId: input.examId,
         ownerStudentId: ownerStudentId(context.identity),
+        assignmentId: input.assignmentId,
+        assignmentRevision: input.assignmentRevision,
         expectedRevision: input.expectedRevision,
         expectedLeaseEpoch: input.expectedLeaseEpoch,
         newLeaseTokenHash: leaseTokenHash(leaseToken, context.secret),
@@ -271,6 +298,9 @@ export async function submitDurableStudentAttemptSession(
     const result = await submitStudentAttemptSessionService({
         identity: context.identity,
         sessionId: input.sessionId,
+        examId: input.examId,
+        assignmentId: input.assignmentId,
+        assignmentRevision: input.assignmentRevision,
         expectedRevision: input.expectedRevision,
         expectedLeaseEpoch: input.expectedLeaseEpoch,
         leaseToken: input.leaseToken,

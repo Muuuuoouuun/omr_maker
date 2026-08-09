@@ -12,6 +12,7 @@ import {
     readSecureSubmission,
     readSecureSubmissionRecoveryNotices,
     replaySecureSubmissionsForOwner,
+    type SecureSubmissionOutboxLock,
     type SecureSubmissionSnapshot,
 } from "./studentSecureSubmissionOutbox";
 
@@ -22,6 +23,7 @@ const OWNER_B = "b".repeat(64);
 function snapshot(overrides: Partial<SecureSubmissionSnapshot> = {}): SecureSubmissionSnapshot {
     return {
         sessionId: "session-1",
+        examId: "exam-1",
         expectedRevision: 3,
         expectedLeaseEpoch: 2,
         leaseToken: "lease-secret",
@@ -34,6 +36,27 @@ function snapshot(overrides: Partial<SecureSubmissionSnapshot> = {}): SecureSubm
         focusLossEvents: [],
         finishedAt: "2026-08-07T12:00:00.000Z",
         ...overrides,
+    };
+}
+
+function legacySnapshot(value: SecureSubmissionSnapshot): Omit<
+    SecureSubmissionSnapshot,
+    "examId" | "assignmentId" | "assignmentRevision"
+> {
+    const copy = { ...value } as Partial<SecureSubmissionSnapshot>;
+    delete copy.examId;
+    delete copy.assignmentId;
+    delete copy.assignmentRevision;
+    return copy as Omit<SecureSubmissionSnapshot, "examId" | "assignmentId" | "assignmentRevision">;
+}
+
+function legacyRecord(record: NonNullable<Awaited<ReturnType<typeof readSecureSubmission>>>) {
+    const legacy = legacySnapshot(record.snapshot);
+    return {
+        ...record,
+        schemaVersion: 1 as const,
+        byteLength: new TextEncoder().encode(JSON.stringify(legacy)).byteLength,
+        snapshot: legacy,
     };
 }
 
@@ -51,6 +74,15 @@ const receipt: ServerGradedAttemptReceipt = {
 };
 
 describe("secure submission outbox", () => {
+    it("rejects an assignment id without its exact generation", async () => {
+        const store = createMemorySecureSubmissionStore();
+        await expect(queueSecureSubmission(OWNER_A, snapshot({
+            assignmentId: "assignment-reused",
+            assignmentRevision: undefined,
+        }), { store, now: NOW })).resolves.toEqual({ status: "invalid" });
+        expect(await store.list()).toEqual([]);
+    });
+
     it("keeps an immutable first snapshot for the session id", async () => {
         const store = createMemorySecureSubmissionStore();
         await expect(queueSecureSubmission(OWNER_A, snapshot(), { store, now: NOW }))
@@ -151,7 +183,10 @@ describe("secure submission outbox", () => {
 
     it("replays only the active owner and clears on the canonical submitted receipt", async () => {
         const store = createMemorySecureSubmissionStore();
-        await queueSecureSubmission(OWNER_A, snapshot(), { store, now: NOW });
+        await queueSecureSubmission(OWNER_A, snapshot({
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+        }), { store, now: NOW });
         const checkpoint = vi.fn(async () => ({
             status: "active" as const,
             session: { revision: 4, leaseEpoch: 2 },
@@ -163,15 +198,167 @@ describe("secure submission outbox", () => {
         await expect(replaySecureSubmissionsForOwner(OWNER_A, { checkpoint, submit }, { store, now: NOW }))
             .resolves.toEqual({ status: "submitted", submitted: [receipt] });
         expect(checkpoint).toHaveBeenCalledWith(expect.objectContaining({
+            examId: "exam-1",
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
             expectedRevision: 3,
             leaseToken: "lease-secret",
             finalCheckpoint: true,
         }));
         expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+            examId: "exam-1",
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
             expectedRevision: 4,
             leaseToken: "lease-secret",
         }));
         expect(await store.list()).toEqual([]);
+    });
+
+    it("recovers an exact-owner legacy public/group row and replays it without deleting offline answers", async () => {
+        const store = createMemorySecureSubmissionStore();
+        await queueSecureSubmission(OWNER_A, snapshot(), { store, now: NOW });
+        const record = await readSecureSubmission("session-1", { store });
+        await store.put(legacyRecord(record!) as never);
+        const resolveLegacyScope = vi.fn(async () => ({ status: "resolved" as const, examId: "exam-1" }));
+        const checkpoint = vi.fn(async () => ({
+            status: "active" as const,
+            session: { revision: 4, leaseEpoch: 2 },
+        }));
+        const submit = vi.fn(async () => ({ status: "submitted" as const, receipt }));
+
+        await expect(maintainSecureSubmissionOutbox({ store, now: NOW }))
+            .resolves.toEqual({ expiredCount: 0, invalidCount: 0 });
+        expect(await store.list()).toHaveLength(1);
+        await expect(replaySecureSubmissionsForOwner(OWNER_A, { resolveLegacyScope, checkpoint, submit }, { store, now: NOW }))
+            .resolves.toEqual({ status: "submitted", submitted: [receipt] });
+        expect(resolveLegacyScope).toHaveBeenCalledWith({ sessionId: "session-1" });
+        expect(checkpoint).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: "session-1",
+            examId: "exam-1",
+            assignmentId: undefined,
+            assignmentRevision: undefined,
+        }));
+        expect(await store.list()).toEqual([]);
+    });
+
+    it("re-reads a legacy row under the cross-document lock before replacing it", async () => {
+        const store = createMemorySecureSubmissionStore();
+        await queueSecureSubmission(OWNER_A, snapshot(), { store, now: NOW });
+        const current = await readSecureSubmission("session-1", { store });
+        expect(current).not.toBeNull();
+        await store.put(legacyRecord(current!) as never);
+        const concurrentlyClaimed = {
+            ...current!,
+            state: "blocked" as const,
+            blockReason: "revision_conflict" as const,
+            replayClaim: { id: "other-document", expiresAt: new Date(NOW + 30_000).toISOString() },
+        };
+        let lockCalls = 0;
+        const lock: SecureSubmissionOutboxLock = async operation => {
+            lockCalls += 1;
+            return operation();
+        };
+        const replaceLegacy = vi.spyOn(store, "replaceLegacy");
+        const checkpoint = vi.fn();
+
+        await expect(replaySecureSubmissionsForOwner(OWNER_A, {
+            resolveLegacyScope: vi.fn(async () => {
+                await store.put(concurrentlyClaimed);
+                return { status: "resolved" as const, examId: "exam-1" };
+            }),
+            checkpoint,
+            submit: vi.fn(),
+        }, { store, lock, now: NOW })).resolves.toMatchObject({ status: "blocked" });
+
+        expect(lockCalls).toBeGreaterThan(0);
+        expect(replaceLegacy).toHaveBeenCalledTimes(1);
+        expect(checkpoint).not.toHaveBeenCalled();
+        expect(await store.list()).toEqual([concurrentlyClaimed]);
+    });
+
+    it("retains a legacy snapshot at the exact 512 KiB snapshot bound despite bounded envelope overhead", async () => {
+        const store = createMemorySecureSubmissionStore();
+        const bounded = legacySnapshot(snapshot());
+        bounded.progressPayload = { body: "" };
+        const encoder = new TextEncoder();
+        const baseBytes = encoder.encode(JSON.stringify(bounded)).byteLength;
+        bounded.progressPayload = { body: "x".repeat(MAX_SECURE_SUBMISSION_RECORD_BYTES - baseBytes) };
+        expect(encoder.encode(JSON.stringify(bounded)).byteLength).toBe(MAX_SECURE_SUBMISSION_RECORD_BYTES);
+        const legacy = {
+            schemaVersion: 1,
+            id: "session-1",
+            ownerFingerprint: OWNER_A,
+            createdAt: new Date(NOW).toISOString(),
+            expiresAt: new Date(NOW + SECURE_SUBMISSION_TTL_MS).toISOString(),
+            byteLength: MAX_SECURE_SUBMISSION_RECORD_BYTES,
+            state: "queued",
+            retryCount: 0,
+            nextAttemptAt: new Date(NOW).toISOString(),
+            snapshot: bounded,
+        };
+        expect(encoder.encode(JSON.stringify(legacy)).byteLength).toBeGreaterThan(MAX_SECURE_SUBMISSION_RECORD_BYTES);
+        await store.put(legacy as never);
+
+        await expect(maintainSecureSubmissionOutbox({ store, now: NOW }))
+            .resolves.toEqual({ expiredCount: 0, invalidCount: 0 });
+        expect(await store.list()).toEqual([legacy]);
+
+        await expect(replaySecureSubmissionsForOwner(OWNER_A, {
+            resolveLegacyScope: vi.fn(async () => ({ status: "resolved" as const, examId: "exam-1" })),
+            checkpoint: vi.fn(async () => ({ status: "revision_conflict" as const })),
+            submit: vi.fn(),
+        }, { store, now: NOW })).resolves.toMatchObject({ status: "blocked", blockedCount: 1 });
+        expect(await store.list()).toEqual([
+            expect.objectContaining({
+                schemaVersion: 2,
+                recoveredFromSchemaVersion: 1,
+                byteLength: expect.any(Number),
+                state: "blocked",
+                snapshot: expect.objectContaining({ examId: "exam-1" }),
+            }),
+        ]);
+        expect(((await store.list())[0] as { byteLength: number }).byteLength)
+            .toBeGreaterThan(MAX_SECURE_SUBMISSION_RECORD_BYTES);
+    });
+
+    it("quarantines and never replays a legacy targeted row without exact generation", async () => {
+        const store = createMemorySecureSubmissionStore();
+        const queued = await queueSecureSubmission(OWNER_A, snapshot({
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+        }), { store, now: NOW });
+        expect(queued.status).toBe("queued");
+        const record = await readSecureSubmission("session-1", { store });
+        expect(record).not.toBeNull();
+        await store.put({ ...record!, schemaVersion: 1 } as never);
+
+        await expect(maintainSecureSubmissionOutbox({ store, now: NOW }))
+            .resolves.toEqual({ expiredCount: 0, invalidCount: 0 });
+        expect(await store.list()).toHaveLength(1);
+        const checkpoint = vi.fn();
+        const submit = vi.fn();
+        const resolveLegacyScope = vi.fn(async () => ({ status: "targeted" as const }));
+        await expect(replaySecureSubmissionsForOwner(OWNER_A, { resolveLegacyScope, checkpoint, submit }, { store, now: NOW }))
+            .resolves.toEqual({ status: "empty", submitted: [] });
+        expect(checkpoint).not.toHaveBeenCalled();
+        expect(submit).not.toHaveBeenCalled();
+        expect(await store.list()).toHaveLength(1);
+        expect(await readSecureSubmissionRecoveryNotices({ store })).toEqual([
+            expect.objectContaining({ kind: "legacy_recovery_required", sessionId: "session-1" }),
+        ]);
+    });
+
+    it("does not let quarantined legacy rows consume active v2 queue capacity", async () => {
+        const store = createMemorySecureSubmissionStore();
+        for (let index = 0; index < SECURE_SUBMISSION_OUTBOX_LIMIT; index += 1) {
+            await queueSecureSubmission(OWNER_A, snapshot({ sessionId: `legacy-${index}` }), { store, now: NOW });
+            const record = await readSecureSubmission(`legacy-${index}`, { store });
+            await store.put(legacyRecord(record!) as never);
+        }
+        await expect(queueSecureSubmission(OWNER_A, snapshot({ sessionId: "current-v2" }), { store, now: NOW }))
+            .resolves.toMatchObject({ status: "queued" });
+        expect(await store.list()).toHaveLength(SECURE_SUBMISSION_OUTBOX_LIMIT + 1);
     });
 
     it.each(["revision_conflict", "lease_conflict", "expired", "unauthenticated", "invalid"])(

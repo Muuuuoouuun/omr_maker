@@ -261,12 +261,16 @@ export async function openStudentExamWithGateway(
             };
 
     const requestedAssignmentId = clean(input.assignmentId);
+    const requestedAssignmentRevision = Number(input.assignmentRevision);
     if (exam.accessConfig?.type === "targeted" && !requestedAssignmentId) {
         return verifiedGuest || !verifiedStudent ? { status: "login_required" } : { status: "group_denied" };
     }
     let assignmentId: string | undefined;
     let assignmentRetake: StudentExamAccessInput["retake"] | undefined;
     if (requestedAssignmentId) {
+        if (!Number.isSafeInteger(requestedAssignmentRevision) || requestedAssignmentRevision < 1) {
+            return { status: "group_denied" };
+        }
         if (!verifiedStudent || verifiedGuest) return { status: "login_required" };
         const assignment = await resolveStudentTargetedAssignmentWithGateway(
             client,
@@ -282,11 +286,13 @@ export async function openStudentExamWithGateway(
                 expiresAt: now + 1,
             },
             requestedAssignmentId,
+            requestedAssignmentRevision,
             exam.id,
         );
         if (assignment.status === "service_unavailable") return { status: "service_unavailable" };
         if (assignment.status !== "authorized") return { status: "group_denied" };
         assignmentId = assignment.assignmentId;
+        input = { ...input, assignmentRevision: assignment.assignmentRevision };
         assignmentRetake = assignment.mode === "retake"
             ? { sourceAttemptId: assignment.sourceAttemptId, mode: "wrong", questionIds: assignment.questionIds }
             : undefined;
@@ -423,6 +429,7 @@ export async function openStudentExamWithGateway(
         examId: exam.id,
         organizationId: exam.organizationId!,
         assignmentId,
+        assignmentRevision: assignmentId ? input.assignmentRevision : undefined,
         studentId: effectiveStudent.studentId,
         studentName: effectiveStudent.studentName,
         identityType: effectiveStudent.identityType,

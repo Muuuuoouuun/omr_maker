@@ -93,7 +93,16 @@ async function seedLifecycleDashboard(page: Page) {
         }
         window.localStorage.setItem("omr_attempts", JSON.stringify(completed));
         window.localStorage.setItem("omr_guest_id", studentId);
-        window.localStorage.setItem(`omr_draft_one-second-before-end_${studentId}_base`, "{}");
+        const draftKey = `omr_draft:v2:${encodeURIComponent(JSON.stringify([
+            "student-assignment-draft",
+            2,
+            "one-second-before-end",
+            studentId,
+            null,
+            null,
+            "base",
+        ]))}`;
+        window.localStorage.setItem(draftKey, JSON.stringify({ scopeBinding: draftKey }));
         window.localStorage.setItem("omr_student_session_backup", JSON.stringify(session));
         window.sessionStorage.setItem("omr_student_session", JSON.stringify(session));
     }, { studentId: STUDENT_ID });
@@ -105,6 +114,7 @@ if (hostedMode) {
     });
 } else {
     test("local lifecycle fixture renders boundaries without claiming hosted authorization", async ({ page, context }) => {
+        await page.clock.install({ time: new Date("2035-01-01T00:00:00.000Z") });
         await resetBrowserState(page, context);
         await seedLifecycleDashboard(page);
         await page.goto("/student/dashboard");
@@ -132,6 +142,14 @@ if (hostedMode) {
             .getByRole("link", { name: "시작" })).toBeVisible();
         await expect(page.locator('[data-assignment-id="one-second-before-end"]')
             .getByRole("link", { name: "계속 풀기" })).toBeVisible();
+
+        const transitioning = page.locator('[data-assignment-id="one-second-before-start"]');
+        await page.clock.runFor(60_000);
+        await expect(transitioning.getByText("응시 가능", { exact: true })).toBeVisible();
+        await expect(transitioning.getByRole("link", { name: "시작" })).toBeVisible();
+        await page.clock.runFor(60_000);
+        await expect(transitioning.locator(".student-assignment-meta").getByText("마감", { exact: true })).toBeVisible();
+        await expect(transitioning.getByRole("link", { name: /시작|계속 풀기/ })).toHaveCount(0);
 
         const done = page.getByRole("heading", { name: "완료 기록" }).locator("..").locator("..");
         await expect(done.getByRole("link", { name: "복습" })).toHaveCount(4);

@@ -278,12 +278,16 @@ export async function loadExamForSolving(
     pin?: string,
     inviteToken?: string,
     assignmentId?: string,
+    assignmentRevision?: number,
 ): Promise<SolveLoadResult> {
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
         let organizationId = ctx.identity.organizationId || "";
         if (inviteToken && assignmentId) return { status: "denied" };
+        if (assignmentId && (!Number.isSafeInteger(assignmentRevision) || Number(assignmentRevision) < 1)) {
+            return { status: "denied" };
+        }
         if (inviteToken) {
             const invite = await resolveExamEntryInviteWithGateway(ctx.admin, examId, inviteToken);
             if (invite.status === "service_unavailable") return { status: "error" };
@@ -299,7 +303,9 @@ export async function loadExamForSolving(
             organizationId = invite.scope.organizationId;
         }
         const targeted = assignmentId
-            ? await resolveStudentTargetedAssignmentWithGateway(ctx.admin, ctx.identity, assignmentId, examId)
+            ? await resolveStudentTargetedAssignmentWithGateway(
+                ctx.admin, ctx.identity, assignmentId, Number(assignmentRevision), examId,
+            )
             : null;
         if (targeted?.status === "service_unavailable") return { status: "error" };
         if (targeted?.status === "denied") {
@@ -383,15 +389,18 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
             () => ownAttempt(ctx.admin, ctx.identity, attemptId),
             () => fetchExamRowById(ctx.admin, ctx.identity.organizationId || "", input.examId),
         );
+        if (!examRow) return { status: "not_found" };
+        const exam = examFromSupabaseRow(examRow as Parameters<typeof examFromSupabaseRow>[0]);
+        // Targeted exams are authorized only by the signed, exact-generation
+        // durable session flow. The unsigned compatibility action must never
+        // infer authorization from student identity or an exam row alone.
+        if (exam.accessConfig?.type === "targeted") return { status: "denied" };
         if (existingAttempt) {
             // This also repairs analytical rows if an older app version wrote
             // only the canonical attempt before its second query failed.
             const repaired = await saveSessionAttemptAtomically(ctx.admin, ctx.identity, existingAttempt);
             return repaired ? { status: "ok", attempt: repaired } : { status: "error" };
         }
-
-        if (!examRow) return { status: "not_found" };
-        const exam = examFromSupabaseRow(examRow as Parameters<typeof examFromSupabaseRow>[0]);
         const access = await evaluateDurableGatedAccess(exam, ctx.identity, pin, { graceMs: SUBMIT_ENDAT_GRACE_MS });
         if (access !== "allowed") return { status: access };
         const premium = hasArchiveableHandwriting(input)
@@ -413,21 +422,20 @@ export async function listMyAssignments(): Promise<{
     status: Status;
     attempts?: StudentAttemptSummary[];
     exams?: StudentAssignmentPreview[];
+    serverNow?: string;
     error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
 }> {
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
-        const [attempts, assignmentList] = await Promise.all([
-            ownAttemptSummaries(ctx.admin, ctx.identity),
-            listStudentAssignmentsWithGateway(ctx.admin, ctx.identity),
-        ]);
+        const attempts = await ownAttemptSummaries(ctx.admin, ctx.identity);
+        const assignmentList = await listStudentAssignmentsWithGateway(ctx.admin, ctx.identity);
         if (assignmentList.status === "capacity_exceeded") {
             return { status: "error", error: INITIAL_CAPACITY_EXCEEDED_ERROR };
         }
         if (assignmentList.status !== "loaded") return { status: "error" };
         const exams = assignmentList.assignments;
-        return { status: "ok", attempts, exams };
+        return { status: "ok", attempts, exams, serverNow: assignmentList.serverNow };
     } catch (e) {
         console.error("listMyAssignments failed", e);
         if (e instanceof Error && e.message === INITIAL_CAPACITY_EXCEEDED_ERROR) {

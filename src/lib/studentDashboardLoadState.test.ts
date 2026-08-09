@@ -44,7 +44,12 @@ describe("student dashboard load-state contract", () => {
 
     it("derives local lifecycle and restores missing completed exams as review-only cards", () => {
         expect(dashboardSource).toContain("localStudentAssignmentPreview");
+        expect(dashboardSource).toContain("assignmentAttemptScopeKey");
+        expect(dashboardSource).toContain("findInProgressAttemptForAssignment");
+        expect(dashboardSource).toContain("hasRemoteProgress: !!inProgressAttempt");
         expect(dashboardSource).toContain("buildMissingCompletedReviewAssignments");
         expect(dashboardSource).toContain("loadObservedAt");
+        expect(dashboardSource).toContain("myAttemptsResult.serverNow || loadObservedAt");
+        expect(dashboardSource).toContain("serverNow={assignmentServerNow}");
     });
 });

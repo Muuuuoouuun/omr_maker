@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Attempt } from "@/types/omr";
+import { isCurrentLegacyStudentDraftRecovery } from "@/lib/studentAssignmentClassification";
 import {
     attemptBelongsToSession,
     attemptMatchesStudentProfile,
@@ -7,6 +8,8 @@ import {
     consumePendingGuestMerge,
     getOrCreateGuestId,
     getSession,
+    getStudentSessionGeneration,
+    getStudentSharedIdentityEpoch,
     guestLoginIdFor,
     mergeGuestAttempts,
     previewGuestMerge,
@@ -17,6 +20,7 @@ import {
     STORAGE_KEYS,
     STUDENT_SESSION_CHANGED_EVENT,
     STUDENT_SESSION_GENERATION_KEY,
+    STUDENT_SHARED_IDENTITY_EPOCH_KEY,
     type StudentSession,
 } from "./storage";
 
@@ -154,6 +158,79 @@ describe("student storage helpers", () => {
 
         saveSession(session, { rememberDevice: false });
         expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+    });
+
+    it("rotates a PII-free shared epoch when another tab logs in with remember disabled", () => {
+        const localStorage = createStorage();
+        const tabAStorage = createStorage();
+        stubBrowserStorage(localStorage, tabAStorage);
+        saveSession({
+            studentId: "student-a", name: "학생 A", isGuest: false, identityType: "registered",
+        }, { rememberDevice: false });
+        const epochA = getStudentSharedIdentityEpoch();
+        expect(epochA).toBeTruthy();
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+        expect(localStorage.getItem(STUDENT_SHARED_IDENTITY_EPOCH_KEY)).toBe(epochA);
+        expect(epochA).not.toContain("student-a");
+
+        const tabBStorage = createStorage();
+        stubBrowserStorage(localStorage, tabBStorage);
+        saveSession({
+            studentId: "student-b", name: "학생 B", isGuest: false, identityType: "registered",
+        }, { rememberDevice: false });
+        const epochB = getStudentSharedIdentityEpoch();
+        expect(epochB).toBeTruthy();
+        expect(epochB).not.toBe(epochA);
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+
+        clearSession();
+        expect(getStudentSharedIdentityEpoch()).not.toBe(epochB);
+    });
+
+    it("invalidates tab A recovery when tab B logs in without a remembered backup", () => {
+        const sharedLocalStorage = createStorage();
+        const tabAStorage = createStorage();
+        stubBrowserStorage(sharedLocalStorage, tabAStorage);
+        saveSession({
+            studentId: "student-a", name: "학생 A", isGuest: false, identityType: "registered",
+        }, { rememberDevice: false });
+        const binding = {
+            ownerStudentId: "student-a",
+            sessionGeneration: getStudentSessionGeneration(),
+            sharedIdentityEpoch: getStudentSharedIdentityEpoch(),
+            examId: "exam-a",
+        };
+
+        const tabBStorage = createStorage();
+        stubBrowserStorage(sharedLocalStorage, tabBStorage);
+        saveSession({
+            studentId: "student-b", name: "학생 B", isGuest: false, identityType: "registered",
+        }, { rememberDevice: false });
+        expect(sharedLocalStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+
+        // Tab A still has its old tab-local identity and generation, but the
+        // shared epoch prevents an identity-bound download after B's login.
+        stubBrowserStorage(sharedLocalStorage, tabAStorage);
+        expect(getSession()?.studentId).toBe("student-a");
+        expect(isCurrentLegacyStudentDraftRecovery(
+            binding,
+            getSession(),
+            getStudentSessionGeneration(),
+            getStudentSharedIdentityEpoch(),
+            "exam-a",
+        )).toBe(false);
+    });
+
+    it("fails closed when the shared localStorage getter is unavailable", () => {
+        const runtime = {} as { localStorage?: Storage };
+        Object.defineProperty(runtime, "localStorage", {
+            get() {
+                throw new Error("blocked");
+            },
+        });
+        vi.stubGlobal("window", runtime);
+
+        expect(getStudentSharedIdentityEpoch()).toBe("");
     });
 
     it("restores a same-device student session backup after tab session storage is gone", () => {

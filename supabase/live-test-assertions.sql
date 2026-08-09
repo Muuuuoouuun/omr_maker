@@ -3965,7 +3965,7 @@ declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202608080010'
+    if readiness->>'version' <> '202608090001'
         or readiness->>'ready' <> 'true'
         or exists (
             select 1
@@ -9778,5 +9778,32 @@ end
 $phase_c_usage_denials$;
 reset role;
 rollback;
+
+do $assignment_generation_scope$
+declare signature text;
+begin
+    foreach signature in array array[
+        'public.omr_list_student_assignments_v2(text,text,text,text,text)',
+        'public.omr_resolve_student_assignment_v2(text,text,text,text,text,text,bigint,text)',
+        'public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer)',
+        'public.omr_checkpoint_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb,jsonb,integer,boolean)',
+        'public.omr_heartbeat_attempt_session_v2(text,text,text,text,text,bigint,bigint,text,integer)',
+        'public.omr_takeover_attempt_session_v2(text,text,text,text,text,bigint,bigint,bigint,text,integer)',
+        'public.omr_prepare_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text)',
+        'public.omr_commit_attempt_session_submit_v2(text,text,text,text,text,bigint,bigint,bigint,text,jsonb,jsonb)',
+        'public.omr_list_active_attempt_sessions_v2(text,text,text,text,integer)',
+        'public.omr_resolve_legacy_attempt_session_scope_v1(text,text,text)',
+        'public.omr_prepare_teacher_force_finish_sessions_compact_v2(text,text[],text,text)',
+        'public.omr_force_finish_attempt_sessions_compact_v2(text,text[],timestamptz,text,text,text,jsonb)'
+    ] loop
+        if pg_catalog.to_regprocedure(signature) is null
+           or not pg_catalog.has_function_privilege('service_role',pg_catalog.to_regprocedure(signature),'EXECUTE')
+           or pg_catalog.has_function_privilege('anon',pg_catalog.to_regprocedure(signature),'EXECUTE')
+           or pg_catalog.has_function_privilege('authenticated',pg_catalog.to_regprocedure(signature),'EXECUTE') then
+            raise exception 'assignment generation scope boundary unavailable: %',signature;
+        end if;
+    end loop;
+end
+$assignment_generation_scope$;
 
 select 'OMR live PostgreSQL verification passed' as result;

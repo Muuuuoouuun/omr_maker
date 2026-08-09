@@ -17,6 +17,7 @@ export interface AuthorizeStudentAttemptSessionScopeInput {
     ownerStudentId: string;
     identityType: IdentityType;
     requestedAssignmentId?: string;
+    requestedAssignmentRevision?: number;
     requestedRetake?: Pick<RetakeMetadata, "sourceAttemptId" | "mode" | "questionIds">;
 }
 
@@ -24,6 +25,7 @@ export type AuthorizedStudentAttemptSessionScope =
     | {
         status: "authorized";
         assignmentId?: string;
+        assignmentRevision?: number;
         retake?: Pick<RetakeMetadata, "sourceAttemptId" | "mode" | "questionIds">;
     }
     | { status: "denied" };
@@ -45,8 +47,15 @@ export function authorizeStudentAttemptSessionScope(
     ) return { status: "denied" };
 
     const assignmentId = clean(claims.assignmentId);
+    const assignmentRevision = Number(claims.assignmentRevision);
     const requestedAssignmentId = clean(input.requestedAssignmentId);
-    if (requestedAssignmentId && requestedAssignmentId !== assignmentId) return { status: "denied" };
+    const requestedAssignmentRevision = Number(input.requestedAssignmentRevision);
+    if (
+        Boolean(assignmentId) !== (Number.isSafeInteger(assignmentRevision) && assignmentRevision > 0)
+        || requestedAssignmentId && requestedAssignmentId !== assignmentId
+        || requestedAssignmentId && requestedAssignmentRevision !== assignmentRevision
+        || !requestedAssignmentId && input.requestedAssignmentRevision !== undefined
+    ) return { status: "denied" };
 
     const sourceAttemptId = clean(claims.retakeSourceAttemptId);
     const mode = claims.retakeMode;
@@ -64,6 +73,7 @@ export function authorizeStudentAttemptSessionScope(
     return {
         status: "authorized",
         ...(assignmentId ? { assignmentId } : {}),
+        ...(assignmentId ? { assignmentRevision } : {}),
         ...(sourceAttemptId && mode
             ? {
                 retake: {

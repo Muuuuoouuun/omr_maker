@@ -67,7 +67,7 @@ GitHub Actions의 **Initial operations qualification**을 수동 실행하고 �
 
 - `build_sha`: workflow/default-branch revision 및 immutable preview와 같은 lowercase 40자리 SHA
 - `preview_deployment_id`, `preview_artifact_digest`, `preview_attestation_signature`
-- `expected_readiness_version`: 현재 exact contract version(기본 `202608080010`)
+- `expected_readiness_version`: 현재 exact contract version(기본 `202608090001`)
 
 workflow는 `set -euo pipefail`로 다음을 순서대로 수행합니다.
 

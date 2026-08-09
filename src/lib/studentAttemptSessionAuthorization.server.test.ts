@@ -3,12 +3,13 @@ import type { StudentAttemptTicketClaims } from "@/lib/studentAttemptTicket";
 import { authorizeStudentAttemptSessionScope } from "./studentAttemptSessionAuthorization.server";
 
 const claims: StudentAttemptTicketClaims = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     audience: "omr-attempt",
     ticketId: "ticket-1",
     examId: "exam-1",
     organizationId: "org-1",
     assignmentId: "assignment-1",
+    assignmentRevision: 8,
     studentId: "student-1",
     studentName: "학생",
     identityType: "registered",
@@ -25,6 +26,8 @@ const base = {
     examId: "exam-1",
     ownerStudentId: "student-1",
     identityType: "registered" as const,
+    requestedAssignmentId: "assignment-1",
+    requestedAssignmentRevision: 8,
 };
 
 describe("student attempt session authorization", () => {
@@ -33,6 +36,7 @@ describe("student attempt session authorization", () => {
         ["mode", { requestedRetake: { sourceAttemptId: "source-1", mode: "custom" as const, questionIds: [2, 3] } }],
         ["question ids", { requestedRetake: { sourceAttemptId: "source-1", mode: "wrong" as const, questionIds: [1, 2] } }],
         ["assignment", { requestedAssignmentId: "assignment-forged" }],
+        ["assignment revision", { requestedAssignmentRevision: 7 }],
     ])("rejects a forged %s", (_label, forged) => {
         expect(authorizeStudentAttemptSessionScope({ ...base, ...forged })).toEqual({ status: "denied" });
     });
@@ -41,6 +45,7 @@ describe("student attempt session authorization", () => {
         expect(authorizeStudentAttemptSessionScope(base)).toEqual({
             status: "authorized",
             assignmentId: "assignment-1",
+            assignmentRevision: 8,
             retake: { sourceAttemptId: "source-1", mode: "wrong", questionIds: [2, 3] },
         });
     });

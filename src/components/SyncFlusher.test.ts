@@ -29,6 +29,7 @@ vi.mock("@/app/actions/studentExam", () => ({
 
 vi.mock("@/app/actions/studentAttemptSession", () => ({
     checkpointDurableStudentAttemptSession: vi.fn(),
+    resolveLegacyDurableStudentAttemptSessionScope: vi.fn(),
     submitDurableStudentAttemptSession: vi.fn(),
 }));
 
@@ -65,7 +66,7 @@ vi.mock("@/utils/storage", () => ({
 import SyncFlusher from "./SyncFlusher";
 
 async function flushMicrotasks(): Promise<void> {
-    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+    for (let index = 0; index < 16; index += 1) await Promise.resolve();
 }
 
 describe("SyncFlusher boot cleanup scheduling", () => {
@@ -189,7 +190,7 @@ describe("SyncFlusher boot cleanup scheduling", () => {
         expect(state.secureSubmissionOwnerFingerprint).toHaveBeenCalledWith("student-a");
         expect(state.replaySecureSubmissionsForOwner).toHaveBeenCalledWith(
             "a".repeat(64),
-            expect.objectContaining({ checkpoint: expect.any(Function), submit: expect.any(Function) }),
+            expect.objectContaining({ resolveLegacyScope: expect.any(Function), checkpoint: expect.any(Function), submit: expect.any(Function) }),
         );
 
         const onlineListener = vi.mocked(window.addEventListener).mock.calls
@@ -221,5 +222,23 @@ describe("SyncFlusher boot cleanup scheduling", () => {
         options.onAction();
         await flushMicrotasks();
         expect(state.acknowledgeSecureSubmissionRecoveryNotice).toHaveBeenCalledWith("notice-1");
+    });
+
+    it("describes quarantined legacy answers honestly without claiming deletion", async () => {
+        state.readSecureSubmissionRecoveryNotices.mockResolvedValueOnce([{
+            id: "notice-legacy",
+            kind: "legacy_recovery_required",
+            sessionId: "session-legacy",
+            createdAt: "2026-08-07T12:00:00.000Z",
+        }]);
+        SyncFlusher();
+        await flushMicrotasks();
+        expect(state.toastAction).toHaveBeenCalledWith(
+            "error",
+            "이전 제출 복구 필요",
+            expect.stringContaining("답안은 보관 중"),
+            expect.any(Object),
+        );
+        expect(state.toastAction.mock.calls.at(-1)?.[2]).not.toContain("정리했습니다");
     });
 });

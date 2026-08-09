@@ -5,7 +5,22 @@ import {
 
 type Env = Record<string, string | undefined>;
 
-export const SUPABASE_READINESS_VERSION = "202608080010";
+export const SUPABASE_READINESS_VERSION = "202608090001";
+
+export const SUPABASE_ASSIGNMENT_GENERATION_REQUIRED_RPCS = Object.freeze([
+    "omr_list_student_assignments_v2",
+    "omr_resolve_student_assignment_v2",
+    "omr_open_attempt_session_v3",
+    "omr_checkpoint_attempt_session_v2",
+    "omr_heartbeat_attempt_session_v2",
+    "omr_takeover_attempt_session_v2",
+    "omr_prepare_attempt_session_submit_v2",
+    "omr_commit_attempt_session_submit_v2",
+    "omr_list_active_attempt_sessions_v2",
+    "omr_resolve_legacy_attempt_session_scope_v1",
+    "omr_prepare_teacher_force_finish_sessions_compact_v2",
+    "omr_force_finish_attempt_sessions_compact_v2",
+]);
 
 export const SUPABASE_READINESS_CHECK_KEYS = [
     "browserSchemaPrivilegesDenied",

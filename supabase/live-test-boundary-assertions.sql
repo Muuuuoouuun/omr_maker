@@ -91,7 +91,7 @@ begin
         raise exception 'production boundary weakened atomic student credential batch ACL';
     end if;
     readiness := public.omr_service_readiness_v1();
-    if readiness ->> 'version' <> '202608080010'
+    if readiness ->> 'version' <> '202608090001'
        or readiness ->> 'ready' <> 'true'
        or readiness ->> 'studentCredentialBatchReady' <> 'true'
        or readiness ->> 'teacherUploadCleanupQueueReady' <> 'true'

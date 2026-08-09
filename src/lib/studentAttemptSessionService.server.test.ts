@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Exam } from "@/types/omr";
 import {
+    durableAttemptSessionIds,
     openStudentAttemptSessionService,
     submitStudentAttemptSessionService,
 } from "./studentAttemptSessionService.server";
@@ -30,12 +31,25 @@ const identity = {
 };
 
 describe("student attempt session service", () => {
+    it("derives stable response-loss retry ids from the immutable signed ticket id", () => {
+        const first = durableAttemptSessionIds("00000000-0000-4000-8000-000000000001");
+        const retry = durableAttemptSessionIds("00000000-0000-4000-8000-000000000001");
+        expect(retry).toEqual(first);
+        expect(first).toEqual({
+            sessionId: "session_00000000-0000-4000-8000-000000000001",
+            attemptId: "attempt_00000000-0000-4000-8000-000000000001",
+        });
+        expect(durableAttemptSessionIds("00000000-0000-4000-8000-000000000002"))
+            .not.toEqual(first);
+    });
+
     it("starts from server data and adopts the database-authorized retake scope", async () => {
         const openGateway = vi.fn(async () => ({
             status: "active" as const,
             gradingSnapshot: exam,
             session: {
                 sessionId: "session-1",
+                examId: "exam-1",
                 status: "in_progress" as const,
                 revision: 1,
                 leaseEpoch: 1,
@@ -56,6 +70,8 @@ describe("student attempt session service", () => {
                 leaseToken: "lease-1",
             },
             authorization: {
+                assignmentId: "assignment-reused",
+                assignmentRevision: 8,
                 retake: { sourceAttemptId: "source-1", mode: "wrong", questionIds: [1] },
             },
             secret: "server-secret",
@@ -70,6 +86,8 @@ describe("student attempt session service", () => {
         });
         expect(openGateway).toHaveBeenCalledWith(expect.objectContaining({
             ownerStudentId: "student-1",
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
             newLeaseTokenHash: expect.stringMatching(/^[a-f0-9]{64}$/),
             retake: { sourceAttemptId: "source-1", mode: "wrong", questionIds: [1] },
         }));
@@ -82,6 +100,7 @@ describe("student attempt session service", () => {
             gradingSnapshot: exam,
             session: {
                 sessionId: "session-1",
+                examId: "exam-1",
                 status: "in_progress" as const,
                 revision: 2,
                 leaseEpoch: 2,
@@ -120,11 +139,13 @@ describe("student attempt session service", () => {
             expectedRevision: 4,
             expectedLeaseEpoch: 2,
             sessionId: "session-1",
+            examId: "exam-1",
             secret: "server-secret",
             prepareGateway: async () => ({
                 status: "prepared" as const,
                 session: {
                     sessionId: "session-1",
+                    examId: "exam-1",
                     status: "in_progress" as const,
                     revision: 4,
                     leaseEpoch: 2,
@@ -137,6 +158,8 @@ describe("student attempt session service", () => {
                     gradingSnapshot: exam,
                     submissionId: "submission-1",
                     attemptId: "attempt-1",
+                    assignmentId: "assignment-reused",
+                    assignmentRevision: 8,
                     retake: { sourceAttemptId: "source-1", mode: "wrong" as const },
                     progressPayload: {},
                 },
@@ -153,12 +176,18 @@ describe("student attempt session service", () => {
                 score: 5,
                 totalScore: 5,
                 retake: { sourceAttemptId: "source-1", mode: "wrong", questionIds: [2] },
+                assignmentId: "assignment-reused",
+                assignmentRevision: 8,
             },
         });
         expect(commitGateway).toHaveBeenCalledWith(expect.objectContaining({
             expectedRevision: 4,
             expectedLeaseEpoch: 2,
-            attempt: expect.objectContaining({ answers: { 2: 2 } }),
+            attempt: expect.objectContaining({
+                answers: { 2: 2 },
+                assignmentId: "assignment-reused",
+                assignmentRevision: 8,
+            }),
         }));
     });
 
@@ -186,11 +215,13 @@ describe("student attempt session service", () => {
             expectedRevision: 4,
             expectedLeaseEpoch: 2,
             sessionId: "session-1",
+            examId: "exam-1",
             secret: "server-secret",
             prepareGateway: async () => ({
                 status: "prepared" as const,
                 session: {
                     sessionId: "session-1",
+                    examId: "exam-1",
                     status: "submitted" as const,
                     revision: 4,
                     leaseEpoch: 2,

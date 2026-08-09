@@ -30,6 +30,9 @@ export async function observeLatestAttemptSession(
 export function takeoverRequestFromLatestSession(session: StudentAttemptSessionState) {
     return {
         sessionId: session.sessionId,
+        examId: session.examId,
+        assignmentId: session.assignmentId,
+        assignmentRevision: session.assignmentRevision,
         expectedRevision: session.revision,
         expectedLeaseEpoch: session.leaseEpoch,
     };

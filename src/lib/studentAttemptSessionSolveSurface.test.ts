@@ -53,6 +53,38 @@ describe("durable multi-device solve surface", () => {
         expect(source).toContain("clearDurableAttemptResumeCredential(window.sessionStorage, durableResumeKeyRef.current)");
     });
 
+    it("binds drafts, drawings, and resume credentials to the same exact assignment-generation tuple", () => {
+        const source = solve();
+        expect(source).toContain("studentAssignmentDraftStorageKey");
+        expect(source).toContain("migrateLegacyStudentDraftStorage");
+        expect(source).toContain("buildLegacyStudentDraftRecoveryExport");
+        expect(source).toContain("이전 임시저장 내보내기");
+        expect(source).toContain("URL.createObjectURL");
+        expect(source).toContain("ownerStudentId: session.studentId");
+        expect(source).toContain("sessionGeneration: recoverySessionGeneration");
+        expect(source).toContain("sharedIdentityEpoch: recoverySharedIdentityEpoch");
+        expect(source).toContain("examId: id");
+        expect(source).toContain("legacyDraftRecoveryExport.examId === id");
+        expect(source).toContain("isCurrentLegacyStudentDraftRecovery");
+        expect(source).toContain("getStudentSessionGeneration()");
+        expect(source).toContain("getStudentSharedIdentityEpoch()");
+        expect(source).toContain("STUDENT_SHARED_IDENTITY_EPOCH_KEY");
+        expect(source).toContain("setLegacyDraftRecoveryExport(null)");
+        expect(source).toContain("STUDENT_SESSION_KEY");
+        expect(source).toContain('window.addEventListener("storage"');
+        expect(source).toContain("안전한 내보내기 형식으로 확인할 수 없습니다");
+        expect(source).not.toContain("resolveLegacyStudentDraftScope");
+        expect(source).toContain("legacySegmentedDraftKey");
+        expect(source).toContain("이전 임시저장 복구 필요");
+        expect(source).toContain("assignmentRevision");
+        expect(source).toContain("scopeBinding: DRAFT_KEY");
+        expect(source).toContain("draft.scopeBinding !== scopedDraftKey");
+        expect(source).toContain("saveJsonRecord(`draft:${encodeURIComponent(DRAFT_KEY)}:drawings`");
+        expect(source).toContain("durableAttemptResumeKey({");
+        const targetedRestore = source.slice(source.indexOf("const DRAFT_KEY"), source.indexOf("const OMR_PANEL_KEY"));
+        expect(targetedRestore).not.toContain("omr_draft_${id}_${draftOwnerKey}");
+    });
+
     it("keeps PIN-authenticated server exams on the durable path", () => {
         const source = solve();
         const pinSuccess = source.slice(source.indexOf('if (res.status === "ok" && res.exam) {'));

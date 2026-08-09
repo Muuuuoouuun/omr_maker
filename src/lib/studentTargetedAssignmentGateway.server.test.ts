@@ -35,8 +35,9 @@ describe("student targeted assignment gateway", () => {
         const gateway = await subject();
         expect(gateway.listStudentAssignmentsWithGateway).toBeTypeOf("function");
         if (!gateway.listStudentAssignmentsWithGateway) return;
-        const rpc = vi.fn(async () => ({ data: [{
+        const rpc = vi.fn(async () => ({ data: { serverNow: "2026-08-07T01:00:00.000Z", assignments: [{
             assignment_id: "assignment-1",
+            assignment_revision: 8,
             assignment_mode: "retake",
             retake_source_attempt_id: "attempt-1",
             retake_question_ids: [2, 4],
@@ -49,15 +50,16 @@ describe("student targeted assignment gateway", () => {
             start_at: "2026-08-07T00:00:00.000Z",
             end_at: "2026-08-07T02:00:00.000Z",
             access_type: "targeted",
-        }], error: null }));
+        }] }, error: null }));
 
         await expect(gateway.listStudentAssignmentsWithGateway(
-            { rpc }, student, "2026-08-07T01:00:00.000Z",
+            { rpc }, student,
         )).resolves.toEqual({
             status: "loaded",
             assignments: [{
                 id: "exam-1",
                 assignmentId: "assignment-1",
+                assignmentRevision: 8,
                 assignmentMode: "retake",
                 retakeSourceAttemptId: "attempt-1",
                 retakeQuestionIds: [2, 4],
@@ -71,8 +73,9 @@ describe("student targeted assignment gateway", () => {
                 endsAt: "2026-08-07T02:00:00.000Z",
                 access: { type: "targeted", entryCheck: "required" },
             }],
+            serverNow: "2026-08-07T01:00:00.000Z",
         });
-        expect(rpc).toHaveBeenCalledWith("omr_list_student_assignments_v1", expect.objectContaining({
+        expect(rpc).toHaveBeenCalledWith("omr_list_student_assignments_v2", expect.objectContaining({
             p_organization_id: "org-1",
             p_owner_student_id: "student-1",
             p_identity_type: "registered",
@@ -94,23 +97,59 @@ describe("student targeted assignment gateway", () => {
             duration_min: 30,
             access_type: "public",
         };
-        const rpc = vi.fn(async () => ({ data: [
+        const rpc = vi.fn(async () => ({ data: { serverNow: "2026-08-07T01:00:00.000Z", assignments: [
             { ...base, id: "scheduled", archived: false, start_at: "2026-08-07T01:00:01.000Z", end_at: null },
             { ...base, id: "at-end", archived: false, start_at: null, end_at: "2026-08-07T01:00:00.000Z" },
             { ...base, id: "archived", archived: true, start_at: null, end_at: null },
-        ], error: null }));
+        ] }, error: null }));
 
         const result = await gateway.listStudentAssignmentsWithGateway(
-            { rpc }, student, "2026-08-07T01:00:00.000Z",
+            { rpc }, student,
         );
         expect(result).toMatchObject({
             status: "loaded",
+            serverNow: "2026-08-07T01:00:00.000Z",
             assignments: [
                 { id: "scheduled", lifecycle: "scheduled", startsAt: "2026-08-07T01:00:01.000Z" },
                 { id: "at-end", lifecycle: "closed", endsAt: "2026-08-07T01:00:00.000Z" },
                 { id: "archived", lifecycle: "closed" },
             ],
         });
+    });
+
+    it("classifies with one authoritative server time captured after the assignment RPC completes", async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime("2026-08-07T01:00:00.000Z");
+        try {
+            const gateway = await subject();
+            const rpc = vi.fn(async () => {
+                vi.setSystemTime("2026-08-07T01:00:05.000Z");
+                return { data: { serverNow: "2026-08-07T01:00:05.000Z", assignments: [{
+                    assignment_id: null,
+                    assignment_revision: null,
+                    assignment_mode: null,
+                    retake_source_attempt_id: null,
+                    retake_question_ids: [],
+                    id: "crossed-end",
+                    title: "경계 시험",
+                    created_at: "2026-08-07T00:00:00.000Z",
+                    updated_at: "2026-08-07T00:00:00.000Z",
+                    archived: false,
+                    duration_min: 30,
+                    start_at: null,
+                    end_at: "2026-08-07T01:00:03.000Z",
+                    access_type: "public",
+                }] }, error: null };
+            });
+
+            await expect(gateway.listStudentAssignmentsWithGateway({ rpc }, student)).resolves.toMatchObject({
+                status: "loaded",
+                serverNow: "2026-08-07T01:00:05.000Z",
+                assignments: [{ id: "crossed-end", lifecycle: "closed" }],
+            });
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it.each([
@@ -132,7 +171,7 @@ describe("student targeted assignment gateway", () => {
         const gateway = await subject();
         expect(gateway.listStudentAssignmentsWithGateway).toBeTypeOf("function");
         if (!gateway.listStudentAssignmentsWithGateway) return;
-        const rpc = vi.fn(async () => ({ data: [{
+        const rpc = vi.fn(async () => ({ data: { serverNow: "2026-08-07T01:00:00.000Z", assignments: [{
             assignment_id: null,
             assignment_mode: null,
             retake_source_attempt_id: null,
@@ -146,10 +185,10 @@ describe("student targeted assignment gateway", () => {
             start_at: null,
             end_at: null,
             ...override,
-        }], error: null }));
+        }] }, error: null }));
 
         await expect(gateway.listStudentAssignmentsWithGateway(
-            { rpc }, student, "2026-08-07T01:00:00.000Z",
+            { rpc }, student,
         )).resolves.toEqual({ status: "service_unavailable" });
     });
 
@@ -157,8 +196,8 @@ describe("student targeted assignment gateway", () => {
         const gateway = await subject();
         expect(gateway.listStudentAssignmentsWithGateway).toBeTypeOf("function");
         if (!gateway.listStudentAssignmentsWithGateway) return;
-        const rpc = vi.fn(async () => ({ data: [], error: null }));
-        await expect(gateway.listStudentAssignmentsWithGateway({ rpc }, student, "client-ish"))
+        const rpc = vi.fn(async () => ({ data: { serverNow: "client-ish", assignments: [] }, error: null }));
+        await expect(gateway.listStudentAssignmentsWithGateway({ rpc }, student))
             .resolves.toEqual({ status: "service_unavailable" });
     });
 
@@ -168,7 +207,7 @@ describe("student targeted assignment gateway", () => {
         if (!gateway.resolveStudentTargetedAssignmentWithGateway) return;
         const rpc = vi.fn();
         await expect(gateway.resolveStudentTargetedAssignmentWithGateway(
-            { rpc }, guest, "assignment-1", "exam-1",
+            { rpc }, guest, "assignment-1", 8, "exam-1",
         )).resolves.toEqual({ status: "denied" });
         expect(rpc).not.toHaveBeenCalled();
     });
@@ -180,6 +219,7 @@ describe("student targeted assignment gateway", () => {
         const rpc = vi.fn(async () => ({ data: {
             status: "authorized",
             assignmentId: "assignment-1",
+            assignmentRevision: 8,
             examId: "exam-1",
             mode: "retake",
             sourceAttemptId: "attempt-1",
@@ -187,14 +227,19 @@ describe("student targeted assignment gateway", () => {
         }, error: null }));
 
         await expect(gateway.resolveStudentTargetedAssignmentWithGateway(
-            { rpc }, student, " assignment-1 ", " exam-1 ",
+            { rpc }, student, " assignment-1 ", 8, " exam-1 ",
         )).resolves.toEqual({
             status: "authorized",
             assignmentId: "assignment-1",
+            assignmentRevision: 8,
             examId: "exam-1",
             mode: "retake",
             sourceAttemptId: "attempt-1",
             questionIds: [2, 4],
         });
+        expect(rpc).toHaveBeenCalledWith("omr_resolve_student_assignment_v2", expect.objectContaining({
+            p_assignment_id: "assignment-1",
+            p_assignment_revision: 8,
+        }));
     });
 });

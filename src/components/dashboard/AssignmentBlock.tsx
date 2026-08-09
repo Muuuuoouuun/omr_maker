@@ -1,8 +1,11 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
 import type { StudentAssignmentPreview } from "@/lib/studentExamContract";
-import type { AssignmentLifecycle } from "@/lib/assignmentLifecycle";
+import { resolveAssignmentLifecycle, type AssignmentLifecycle } from "@/lib/assignmentLifecycle";
 import type { ReviewOnlyCompletedAssignment } from "@/lib/studentAssignmentClassification";
 import StatusPill from "@/components/dashboard/StatusPill";
 
@@ -11,12 +14,20 @@ type AssignmentCard = (Exam | SolvableExam | StudentAssignmentPreview | ReviewOn
   hasUnreadFeedback?: boolean;
   answeredQuestionCount?: number;
   hasLocalDraft?: boolean;
+  hasRemoteProgress?: boolean;
 };
 
 interface AssignmentBlockProps {
   exams: AssignmentCard[];
   type: "todo" | "done";
   readOnly?: boolean;
+  serverNow: string;
+  serverClock?: {
+    serverNow: string;
+    requestStartedMonotonicMs: number;
+    receivedMonotonicMs: number;
+  };
+  onClockRefresh?: () => void;
 }
 
 const KOREAN_ASSIGNMENT_TIME = new Intl.DateTimeFormat("ko-KR", {
@@ -35,21 +46,194 @@ function formattedStart(value: unknown): string | null {
   return Number.isFinite(parsed) ? KOREAN_ASSIGNMENT_TIME.format(new Date(parsed)) : null;
 }
 
-function lifecyclePresentation(exam: AssignmentCard): {
+function assignmentBoundary(exam: AssignmentCard, field: "start" | "end"): unknown {
+  if (field === "start") {
+    return "startsAt" in exam ? exam.startsAt : "startAt" in exam ? exam.startAt : undefined;
+  }
+  return "endsAt" in exam ? exam.endsAt : "endAt" in exam ? exam.endAt : undefined;
+}
+
+type MonotonicClock = {
+  latestServerMs: number;
+  anchorServerMs: number;
+  anchorMonotonicMs: number;
+  highWaterMs: number;
+  uncertaintyMs: number;
+};
+
+function validServerTime(value: string): number | null {
+  if (resolveAssignmentLifecycle({ state: "open", now: value }) === "invalid") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sampleClock(clock: MonotonicClock, monotonicNow: number): number {
+  const elapsed = Math.max(0, monotonicNow - clock.anchorMonotonicMs);
+  clock.highWaterMs = Math.max(clock.highWaterMs, clock.anchorServerMs + elapsed);
+  return clock.highWaterMs;
+}
+
+function acceptAuthoritativeTime(
+  clock: MonotonicClock | null,
+  serverNow: string,
+  monotonicNow: number,
+  requestStartedMonotonicMs: number,
+  receivedMonotonicMs: number,
+): MonotonicClock | null {
+  const parsed = validServerTime(serverNow);
+  if (parsed === null) return clock;
+  if (!clock) {
+    return {
+      latestServerMs: parsed,
+      anchorServerMs: parsed,
+      anchorMonotonicMs: monotonicNow,
+      highWaterMs: parsed,
+      uncertaintyMs: Math.max(0, receivedMonotonicMs - requestStartedMonotonicMs),
+    };
+  }
+  sampleClock(clock, monotonicNow);
+  if (parsed > clock.latestServerMs) {
+    clock.latestServerMs = parsed;
+    clock.anchorServerMs = Math.max(parsed, clock.highWaterMs);
+    clock.anchorMonotonicMs = monotonicNow;
+    clock.highWaterMs = clock.anchorServerMs;
+    clock.uncertaintyMs = Math.max(0, receivedMonotonicMs - requestStartedMonotonicMs);
+  }
+  return clock;
+}
+
+function useMonotonicAssignmentTime(
+  serverNow: string,
+  serverClock: AssignmentBlockProps["serverClock"],
+  exams: AssignmentCard[],
+  onClockRefresh?: () => void,
+): { lowerNow: string; upperNow: string; trusted: boolean } {
+  const initialServerMs = serverClock?.serverNow === serverNow ? validServerTime(serverNow) : null;
+  const initialClock: MonotonicClock | null = initialServerMs === null || !serverClock
+    ? null
+    : {
+        latestServerMs: initialServerMs,
+        anchorServerMs: initialServerMs,
+        anchorMonotonicMs: serverClock.receivedMonotonicMs,
+        highWaterMs: initialServerMs,
+        uncertaintyMs: Math.max(0, serverClock.receivedMonotonicMs - serverClock.requestStartedMonotonicMs),
+      };
+  const clockRef = useRef<MonotonicClock | null>(initialClock);
+  const [nowMs, setNowMs] = useState(() => initialClock
+    ? sampleClock(initialClock, performance.now())
+    : Number.NaN);
+  const [uncertaintyMs, setUncertaintyMs] = useState(initialClock?.uncertaintyMs || 0);
+  const [trusted, setTrusted] = useState(!!initialClock);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!serverClock || serverClock.serverNow !== serverNow) {
+      queueMicrotask(() => {
+        if (!cancelled) setTrusted(false);
+      });
+      return () => { cancelled = true; };
+    }
+    const clock = acceptAuthoritativeTime(
+      clockRef.current,
+      serverNow,
+      serverClock.receivedMonotonicMs,
+      serverClock.requestStartedMonotonicMs,
+      serverClock.receivedMonotonicMs,
+    );
+    clockRef.current = clock;
+    if (clock) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setTrusted(true);
+        setUncertaintyMs(clock.uncertaintyMs);
+        setNowMs(current => Math.max(current, sampleClock(clock, performance.now())));
+      });
+    }
+    return () => { cancelled = true; };
+  }, [serverClock, serverNow]);
+
+  useEffect(() => {
+    const invalidate = () => setTrusted(false);
+    const handleVisibility = () => {
+      invalidate();
+      if (document.visibilityState === "visible") onClockRefresh?.();
+    };
+    const handlePageShow = () => {
+      invalidate();
+      onClockRefresh?.();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("pageshow", handlePageShow);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [onClockRefresh]);
+
+  useEffect(() => {
+    const clock = clockRef.current;
+    if (!clock || !Number.isFinite(nowMs)) return;
+    let nextBoundary = Number.POSITIVE_INFINITY;
+    for (const exam of exams) {
+      for (const value of [assignmentBoundary(exam, "start"), assignmentBoundary(exam, "end")]) {
+        if (typeof value !== "string") continue;
+        const parsed = Date.parse(value);
+        if (Number.isFinite(parsed) && parsed > nowMs) nextBoundary = Math.min(nextBoundary, parsed);
+      }
+    }
+    if (!Number.isFinite(nextBoundary)) return;
+    const timer = window.setTimeout(() => {
+      const active = clockRef.current;
+      if (active) setNowMs(sampleClock(active, performance.now()));
+    }, Math.min(Math.max(0, nextBoundary - nowMs), 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [exams, nowMs, serverNow]);
+
+  return Number.isFinite(nowMs)
+    ? {
+        lowerNow: new Date(nowMs).toISOString(),
+        upperNow: new Date(nowMs + uncertaintyMs).toISOString(),
+        trusted,
+      }
+    : { lowerNow: "", upperNow: "", trusted: false };
+}
+
+function lifecyclePresentation(exam: AssignmentCard, lowerNow: string, upperNow: string, trusted: boolean): {
   lifecycle: AssignmentLifecycle;
   label: string;
   tone: "success" | "primary" | "muted" | "warning";
   detail?: string;
 } {
   const raw = (exam as { lifecycle?: unknown }).lifecycle;
-  if (raw === "scheduled") {
-    const startsAt = formattedStart((exam as { startsAt?: unknown }).startsAt);
-    return startsAt
-      ? { lifecycle: "scheduled", label: "예정", tone: "primary", detail: `${startsAt} 시작` }
+  const reviewOnly = "reviewOnly" in exam && exam.reviewOnly === true;
+  if (reviewOnly) return { lifecycle: "closed", label: "마감", tone: "muted" };
+  if (!trusted) return { lifecycle: "invalid", label: "확인 필요", tone: "warning" };
+  if (raw !== "scheduled" && raw !== "open" && raw !== "closed") {
+    return { lifecycle: "invalid", label: "확인 필요", tone: "warning" };
+  }
+  const startsAt = assignmentBoundary(exam, "start");
+  const endsAt = assignmentBoundary(exam, "end");
+  const lowerLifecycle = resolveAssignmentLifecycle({
+    state: "archived" in exam && exam.archived ? "archived" : "open",
+    startsAt,
+    endsAt,
+    now: lowerNow,
+  });
+  const upperLifecycle = resolveAssignmentLifecycle({
+    state: "archived" in exam && exam.archived ? "archived" : "open",
+    startsAt,
+    endsAt,
+    now: upperNow,
+  });
+  const lifecycle = lowerLifecycle === upperLifecycle ? lowerLifecycle : "invalid";
+  if (lifecycle === "scheduled") {
+    const formatted = formattedStart(startsAt);
+    return formatted
+      ? { lifecycle: "scheduled", label: "예정", tone: "primary", detail: `${formatted} 시작` }
       : { lifecycle: "invalid", label: "확인 필요", tone: "warning" };
   }
-  if (raw === "open") return { lifecycle: "open", label: "응시 가능", tone: "success" };
-  if (raw === "closed") return { lifecycle: "closed", label: "마감", tone: "muted" };
+  if (lifecycle === "open") return { lifecycle: "open", label: "응시 가능", tone: "success" };
+  if (lifecycle === "closed") return { lifecycle: "closed", label: "마감", tone: "muted" };
   return { lifecycle: "invalid", label: "확인 필요", tone: "warning" };
 }
 
@@ -93,6 +277,10 @@ function FolderIcon() {
 function assignmentSolveHref(exam: AssignmentCard): string {
   if (!("assignmentId" in exam) || !exam.assignmentId) return `/solve/${exam.id}`;
   const query = new URLSearchParams({ assignment: exam.assignmentId });
+  if (!("assignmentRevision" in exam) || !Number.isSafeInteger(exam.assignmentRevision) || Number(exam.assignmentRevision) < 1) {
+    return `/solve/${exam.id}`;
+  }
+  query.set("assignmentRevision", String(exam.assignmentRevision));
   if (exam.assignmentMode === "retake" && exam.retakeSourceAttemptId && exam.retakeQuestionIds?.length) {
     query.set("retakeFrom", exam.retakeSourceAttemptId);
     query.set("questions", exam.retakeQuestionIds.join(","));
@@ -101,8 +289,9 @@ function assignmentSolveHref(exam: AssignmentCard): string {
   return `/solve/${exam.id}?${query.toString()}`;
 }
 
-export default function AssignmentBlock({ exams, type, readOnly = false }: AssignmentBlockProps) {
+export default function AssignmentBlock({ exams, type, readOnly = false, serverNow, serverClock, onClockRefresh }: AssignmentBlockProps) {
   const isTodo = type === "todo";
+  const monotonicNow = useMonotonicAssignmentTime(serverNow, serverClock, exams, onClockRefresh);
 
   return (
     <div className={`bento-card ${isTodo ? "col-span-2 row-span-2" : "col-span-2 row-span-1"}`}>
@@ -196,7 +385,12 @@ export default function AssignmentBlock({ exams, type, readOnly = false }: Assig
                 : "accessConfig" in exam
                   ? exam.accessConfig?.type
                   : undefined;
-            const availability = lifecyclePresentation(exam);
+            const availability = lifecyclePresentation(
+              exam,
+              monotonicNow.lowerNow,
+              monotonicNow.upperNow,
+              monotonicNow.trusted,
+            );
             return (
             <div
               key={("assignmentId" in exam && exam.assignmentId) || exam.id}
@@ -321,7 +515,7 @@ export default function AssignmentBlock({ exams, type, readOnly = false }: Assig
                   className="btn btn-primary student-assignment-action"
                   style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
                 >
-                  {exam.hasLocalDraft ? "계속 풀기" : "시작"}
+                  {exam.hasLocalDraft || exam.hasRemoteProgress ? "계속 풀기" : "시작"}
                 </Link>
               ) : !isTodo ? (
                 <Link
