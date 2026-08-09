@@ -1,4 +1,5 @@
 import { INITIAL_OPERATIONS_LIMITS } from "@/lib/initialOperationsPolicy";
+import { resolveAssignmentLifecycle } from "@/lib/assignmentLifecycle";
 import type { StudentAssignmentPreview } from "@/lib/studentExamContract";
 import { ownerStudentId } from "@/lib/studentExamCore";
 import type { StudentServerIdentity } from "@/lib/studentServerSession";
@@ -75,7 +76,11 @@ function rpcScope(identity: StudentServerIdentity) {
 export async function listStudentAssignmentsWithGateway(
     client: StudentTargetedAssignmentGatewayClient,
     identity: StudentServerIdentity,
+    serverNow = new Date().toISOString(),
 ): Promise<StudentAssignmentListGatewayResult> {
+    if (resolveAssignmentLifecycle({ state: "open", now: serverNow }) === "invalid") {
+        return { status: "service_unavailable" };
+    }
     const scope = rpcScope(identity);
     if (!scope.p_organization_id || !scope.p_owner_student_id) return { status: "service_unavailable" };
     const response = await client.rpc("omr_list_student_assignments_v1", scope);
@@ -91,9 +96,20 @@ export async function listStudentAssignmentsWithGateway(
             const assignmentId = clean(row.assignment_id);
             const assignmentMode = row.assignment_mode === "retake" ? "retake" : row.assignment_mode === "base" ? "base" : undefined;
             const accessType = row.access_type === "targeted" ? "targeted" : row.access_type === "group" ? "group" : "public";
-            if (!id || !title || !createdAt || (accessType === "targeted" && (!assignmentId || !assignmentMode))) {
+            if (
+                !id || !title || !createdAt
+                || typeof row.archived !== "boolean"
+                || (accessType === "targeted" && (!assignmentId || !assignmentMode))
+            ) {
                 throw new Error("invalid assignment row");
             }
+            const lifecycle = resolveAssignmentLifecycle({
+                state: row.archived ? "archived" : "open",
+                startsAt: row.start_at,
+                endsAt: row.end_at,
+                now: serverNow,
+            });
+            if (lifecycle === "invalid") throw new Error("invalid assignment lifecycle");
             const retakeQuestionIds = questionIds(row.retake_question_ids);
             const retakeSourceAttemptId = clean(row.retake_source_attempt_id);
             if (assignmentMode === "retake" && (!retakeSourceAttemptId || retakeQuestionIds.length < 1)) {
@@ -109,9 +125,10 @@ export async function listStudentAssignmentsWithGateway(
                 createdAt,
                 ...(optionalString(row.updated_at) ? { updatedAt: optionalString(row.updated_at) } : {}),
                 ...(optionalNumber(row.duration_min) !== undefined ? { durationMin: optionalNumber(row.duration_min) } : {}),
-                ...(optionalString(row.start_at) ? { startAt: optionalString(row.start_at) } : {}),
-                ...(optionalString(row.end_at) ? { endAt: optionalString(row.end_at) } : {}),
-                archived: row.archived === true,
+                lifecycle,
+                ...(typeof row.start_at === "string" ? { startsAt: row.start_at } : {}),
+                ...(typeof row.end_at === "string" ? { endsAt: row.end_at } : {}),
+                archived: row.archived,
                 access: { type: accessType, entryCheck: "required" as const },
             } satisfies StudentAssignmentPreview;
         });

@@ -46,10 +46,14 @@ describe("student targeted assignment gateway", () => {
             updated_at: "2026-08-07T01:00:00.000Z",
             archived: false,
             duration_min: 30,
+            start_at: "2026-08-07T00:00:00.000Z",
+            end_at: "2026-08-07T02:00:00.000Z",
             access_type: "targeted",
         }], error: null }));
 
-        await expect(gateway.listStudentAssignmentsWithGateway({ rpc }, student)).resolves.toEqual({
+        await expect(gateway.listStudentAssignmentsWithGateway(
+            { rpc }, student, "2026-08-07T01:00:00.000Z",
+        )).resolves.toEqual({
             status: "loaded",
             assignments: [{
                 id: "exam-1",
@@ -62,6 +66,9 @@ describe("student targeted assignment gateway", () => {
                 updatedAt: "2026-08-07T01:00:00.000Z",
                 archived: false,
                 durationMin: 30,
+                lifecycle: "open",
+                startsAt: "2026-08-07T00:00:00.000Z",
+                endsAt: "2026-08-07T02:00:00.000Z",
                 access: { type: "targeted", entryCheck: "required" },
             }],
         });
@@ -70,6 +77,85 @@ describe("student targeted assignment gateway", () => {
             p_owner_student_id: "student-1",
             p_identity_type: "registered",
         }));
+    });
+
+    it("uses one supplied server time for scheduled, exclusive-end, and archived rows", async () => {
+        const gateway = await subject();
+        expect(gateway.listStudentAssignmentsWithGateway).toBeTypeOf("function");
+        if (!gateway.listStudentAssignmentsWithGateway) return;
+        const base = {
+            assignment_id: null,
+            assignment_mode: null,
+            retake_source_attempt_id: null,
+            retake_question_ids: [],
+            title: "시험",
+            created_at: "2026-08-07T00:00:00.000Z",
+            updated_at: "2026-08-07T00:00:00.000Z",
+            duration_min: 30,
+            access_type: "public",
+        };
+        const rpc = vi.fn(async () => ({ data: [
+            { ...base, id: "scheduled", archived: false, start_at: "2026-08-07T01:00:01.000Z", end_at: null },
+            { ...base, id: "at-end", archived: false, start_at: null, end_at: "2026-08-07T01:00:00.000Z" },
+            { ...base, id: "archived", archived: true, start_at: null, end_at: null },
+        ], error: null }));
+
+        const result = await gateway.listStudentAssignmentsWithGateway(
+            { rpc }, student, "2026-08-07T01:00:00.000Z",
+        );
+        expect(result).toMatchObject({
+            status: "loaded",
+            assignments: [
+                { id: "scheduled", lifecycle: "scheduled", startsAt: "2026-08-07T01:00:01.000Z" },
+                { id: "at-end", lifecycle: "closed", endsAt: "2026-08-07T01:00:00.000Z" },
+                { id: "archived", lifecycle: "closed" },
+            ],
+        });
+    });
+
+    it.each([
+        ["missing archived state", { archived: undefined }],
+        ["string archived state", { archived: "false" }],
+        ["malformed start", { archived: false, start_at: "soon" }],
+        ["blank start", { archived: false, start_at: "" }],
+        ["malformed end", { archived: false, end_at: "2026-08-07" }],
+        ["reversed window", {
+            archived: false,
+            start_at: "2026-08-07T02:00:00.000Z",
+            end_at: "2026-08-07T01:00:00.000Z",
+        }],
+    ])("returns service_unavailable for %s", async (_label, override) => {
+        const gateway = await subject();
+        expect(gateway.listStudentAssignmentsWithGateway).toBeTypeOf("function");
+        if (!gateway.listStudentAssignmentsWithGateway) return;
+        const rpc = vi.fn(async () => ({ data: [{
+            assignment_id: null,
+            assignment_mode: null,
+            retake_source_attempt_id: null,
+            retake_question_ids: [],
+            id: "exam-1",
+            title: "시험",
+            created_at: "2026-08-07T00:00:00.000Z",
+            updated_at: "2026-08-07T00:00:00.000Z",
+            duration_min: 30,
+            access_type: "public",
+            start_at: null,
+            end_at: null,
+            ...override,
+        }], error: null }));
+
+        await expect(gateway.listStudentAssignmentsWithGateway(
+            { rpc }, student, "2026-08-07T01:00:00.000Z",
+        )).resolves.toEqual({ status: "service_unavailable" });
+    });
+
+    it("returns service_unavailable when supplied server time is malformed", async () => {
+        const gateway = await subject();
+        expect(gateway.listStudentAssignmentsWithGateway).toBeTypeOf("function");
+        if (!gateway.listStudentAssignmentsWithGateway) return;
+        const rpc = vi.fn(async () => ({ data: [], error: null }));
+        await expect(gateway.listStudentAssignmentsWithGateway({ rpc }, student, "client-ish"))
+            .resolves.toEqual({ status: "service_unavailable" });
     });
 
     it("refuses a guest before any targeted-assignment RPC", async () => {

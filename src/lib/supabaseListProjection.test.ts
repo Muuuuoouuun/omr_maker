@@ -126,7 +126,7 @@ describe("canonical list projections", () => {
             questions: [{ id: 1, label: "비밀 지문", answer: 3 }],
             pdf_data_ref: { key: "private-object" },
             access_config: { type: "group", groupIds: ["class-1"], pin: "4321" },
-        });
+        }, "2026-08-07T00:30:00.000Z");
 
         expect(preview).toEqual({
             id: "exam-student-list",
@@ -134,12 +134,55 @@ describe("canonical list projections", () => {
             createdAt: "2026-08-06T00:00:00.000Z",
             updatedAt: "2026-08-06T01:00:00.000Z",
             durationMin: 50,
-            startAt: "2026-08-07T00:00:00.000Z",
-            endAt: "2026-08-07T01:00:00.000Z",
+            lifecycle: "open",
+            startsAt: "2026-08-07T00:00:00.000Z",
+            endsAt: "2026-08-07T01:00:00.000Z",
             archived: false,
             access: { type: "group", entryCheck: "required" },
         });
         expect(JSON.stringify(preview)).not.toMatch(/비밀 지문|private-object|4321/);
+    });
+
+    it("fails closed when a student assignment projection has invalid lifecycle data", () => {
+        const base = {
+            id: "exam-invalid",
+            title: "학생 목록 시험",
+            created_at: "2026-08-06T00:00:00.000Z",
+            updated_at: "2026-08-06T01:00:00.000Z",
+            archived: false,
+            duration_min: 50,
+            start_at: null,
+            end_at: null,
+            access_type: "group",
+        };
+        for (const override of [
+            { archived: "false" },
+            { archived: undefined },
+            { start_at: "tomorrow" },
+            { end_at: "2026-08-07" },
+            { start_at: "2026-08-07T02:00:00.000Z", end_at: "2026-08-07T01:00:00.000Z" },
+        ]) {
+            expect(() => studentAssignmentPreviewFromSupabaseListRow(
+                { ...base, ...override }, "2026-08-07T00:30:00.000Z",
+            )).toThrow("Invalid student assignment lifecycle");
+        }
+        expect(() => studentAssignmentPreviewFromSupabaseListRow(base, "not-server-time"))
+            .toThrow("Invalid student assignment lifecycle");
+    });
+
+    it("keeps absent lifecycle timestamps optional", () => {
+        const preview = studentAssignmentPreviewFromSupabaseListRow({
+            id: "exam-unbounded",
+            title: "상시 시험",
+            created_at: "2026-08-06T00:00:00.000Z",
+            archived: false,
+            start_at: null,
+            end_at: null,
+            access_type: "public",
+        }, "2026-08-07T00:30:00.000Z");
+        expect(preview).toMatchObject({ lifecycle: "open" });
+        expect(preview).not.toHaveProperty("startsAt");
+        expect(preview).not.toHaveProperty("endsAt");
     });
 
     it("uses an explicit student attempt summary projection with no pre-entry secrets or telemetry", () => {

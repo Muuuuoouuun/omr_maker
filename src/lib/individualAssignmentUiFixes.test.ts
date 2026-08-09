@@ -21,6 +21,7 @@ function assignment(overrides: Partial<StudentAssignmentPreview> = {}): StudentA
         createdAt: "2026-08-07T00:00:00.000Z",
         access: { type: "targeted", entryCheck: "required" },
         ...overrides,
+        lifecycle: overrides.lifecycle ?? "open",
     };
 }
 

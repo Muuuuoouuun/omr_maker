@@ -154,6 +154,7 @@ describe("student assignment capacity action boundary", () => {
                 createdAt: "2026-07-14T00:00:00.000Z",
                 updatedAt: "2026-07-14T00:00:00.000Z",
                 archived: false,
+                lifecycle: "open",
                 access: { type: "public", entryCheck: "required" },
             }],
         });

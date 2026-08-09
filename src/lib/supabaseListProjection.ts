@@ -5,6 +5,7 @@ import {
     type SupabaseExamRow,
 } from "@/lib/omrPersistence";
 import type { Attempt, Exam } from "@/types/omr";
+import { resolveAssignmentLifecycle } from "@/lib/assignmentLifecycle";
 import { answeredQuestionSummaryFromListValue, type StudentAssignmentPreview, type StudentAttemptSummary } from "@/lib/studentExamContract";
 import type { TeacherAttemptSummary } from "@/lib/teacherAttemptSummary";
 
@@ -41,21 +42,35 @@ function withOptionalNumber(value: unknown, key: string): Record<string, unknown
     return Number.isFinite(parsed) ? { [key]: parsed } : {};
 }
 
-export function studentAssignmentPreviewFromSupabaseListRow(value: unknown): StudentAssignmentPreview {
+export function studentAssignmentPreviewFromSupabaseListRow(
+    value: unknown,
+    serverNow = new Date().toISOString(),
+): StudentAssignmentPreview {
     const row = value as ListRow;
     const id = clean(row.id);
     const title = clean(row.title);
     const createdAt = clean(row.created_at);
-    if (!id || !title || !createdAt) throw new Error("Invalid student assignment preview");
+    if (!id || !title || !createdAt) {
+        throw new Error("Invalid student assignment preview");
+    }
+    if (typeof row.archived !== "boolean") throw new Error("Invalid student assignment lifecycle");
+    const lifecycle = resolveAssignmentLifecycle({
+        state: row.archived ? "archived" : "open",
+        startsAt: row.start_at,
+        endsAt: row.end_at,
+        now: serverNow,
+    });
+    if (lifecycle === "invalid") throw new Error("Invalid student assignment lifecycle");
     return {
         id,
         title,
         createdAt,
         ...withOptionalString(row.updated_at, "updatedAt"),
         ...withOptionalNumber(row.duration_min, "durationMin"),
-        ...withOptionalString(row.start_at, "startAt"),
-        ...withOptionalString(row.end_at, "endAt"),
-        archived: row.archived === true,
+        lifecycle,
+        ...(typeof row.start_at === "string" ? { startsAt: row.start_at } : {}),
+        ...(typeof row.end_at === "string" ? { endsAt: row.end_at } : {}),
+        archived: row.archived,
         access: {
             type: row.access_type === "targeted" ? "targeted" : row.access_type === "group" ? "group" : "public",
             entryCheck: "required",
