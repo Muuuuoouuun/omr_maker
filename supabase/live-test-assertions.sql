@@ -5435,7 +5435,11 @@ insert into public.omr_exams (id, organization_id, title, payload, created_at, u
 do $$
 declare
     issued jsonb;
+    rotated jsonb;
     resolved jsonb;
+    metadata_result jsonb;
+    first_revoke jsonb;
+    second_revoke jsonb;
 begin
     issued := public.omr_rotate_exam_entry_invite_v1(
         'live-invite-org-a', 'live-invite-exam-a',
@@ -5443,6 +5447,19 @@ begin
     );
     if issued->>'status' <> 'issued' then
         raise exception 'opaque exam invite issuance failed';
+    end if;
+    metadata_result := public.omr_get_exam_entry_invite_metadata_v1(
+        'live-invite-org-a', 'live-invite-exam-a',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    );
+    if metadata_result->>'status' <> 'found'
+       or metadata_result #>> '{metadata,examId}' <> 'live-invite-exam-a'
+       or metadata_result #>> '{metadata,targetType}' <> 'groups'
+       or metadata_result #> '{metadata,targetIds}' <> '["live-invite-class-a"]'::jsonb
+       or (metadata_result #>> '{metadata,generation}')::integer <> 1
+       or not (lower(metadata_result::text) not like '%token%'
+               and lower(metadata_result::text) not like '%hash%') then
+        raise exception 'opaque exam invite metadata leaked a secret or lost scope: %', metadata_result;
     end if;
     resolved := public.omr_resolve_exam_entry_invite_v1(repeat('a', 64), 'live-invite-exam-a');
     if resolved->>'status' <> 'resolved'
@@ -5456,22 +5473,72 @@ begin
        or public.omr_rotate_exam_entry_invite_v1(
            'live-invite-org-a', 'live-invite-exam-a',
            'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', null, now() + interval '1 day'
-       )->>'status' <> 'invalid' then
+       )->>'status' <> 'invalid'
+       or public.omr_get_exam_entry_invite_metadata_v1(
+           'live-invite-org-a', 'live-invite-exam-b',
+           'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+       )->>'status' <> 'invalid_scope'
+       or public.omr_get_exam_entry_invite_metadata_v1(
+           'live-invite-org-a', 'live-invite-exam-a',
+           'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+       )->>'status' <> 'unauthorized' then
         raise exception 'opaque exam invite accepted a tampered or cross-org scope';
     end if;
-    perform public.omr_rotate_exam_entry_invite_v1(
+    rotated := public.omr_rotate_exam_entry_invite_v1(
         'live-invite-org-a', 'live-invite-exam-a',
         'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', repeat('c', 64), now() + interval '1 day'
     );
-    if public.omr_resolve_exam_entry_invite_v1(repeat('a', 64), 'live-invite-exam-a')->>'status' <> 'invalid'
+    if rotated->>'status' <> 'issued'
+       or (rotated #>> '{metadata,generation}')::integer <> 2
+       or rotated #>> '{metadata,inviteId}' = issued #>> '{metadata,inviteId}' then
+        raise exception 'opaque exam invite rotation did not advance generation: %', rotated;
+    end if;
+    metadata_result := public.omr_get_exam_entry_invite_metadata_v1(
+        'live-invite-org-a', 'live-invite-exam-a',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    );
+    if metadata_result->>'status' <> 'found'
+       or metadata_result->'metadata' is distinct from rotated->'metadata'
+       or lower(metadata_result::text) like '%token%'
+       or lower(metadata_result::text) like '%hash%'
+       or public.omr_resolve_exam_entry_invite_v1(repeat('a', 64), 'live-invite-exam-a')->>'status' <> 'invalid'
        or public.omr_resolve_exam_entry_invite_v1(repeat('c', 64), 'live-invite-exam-a')->>'status' <> 'resolved' then
         raise exception 'opaque exam invite rotation did not revoke the prior bearer';
     end if;
+
+    first_revoke := public.omr_revoke_exam_entry_invite_v1(
+        'live-invite-org-a', 'live-invite-exam-a',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    );
+    second_revoke := public.omr_revoke_exam_entry_invite_v1(
+        'live-invite-org-a', 'live-invite-exam-a',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    );
+    if first_revoke->>'status' <> 'revoked'
+       or first_revoke is distinct from second_revoke
+       or first_revoke #>> '{metadata,revokedAt}' is null
+       or first_revoke #>> '{metadata,generation}' <> '2'
+       or public.omr_resolve_exam_entry_invite_v1(repeat('c', 64), 'live-invite-exam-a')->>'status' <> 'invalid' then
+        raise exception 'opaque exam invite revoke was not idempotent: first=%, second=%', first_revoke, second_revoke;
+    end if;
+    metadata_result := public.omr_get_exam_entry_invite_metadata_v1(
+        'live-invite-org-a', 'live-invite-exam-a',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    );
+    if metadata_result->>'status' <> 'found'
+       or metadata_result->'metadata' is distinct from first_revoke->'metadata' then
+        raise exception 'opaque exam invite metadata did not retain the latest revoked state';
+    end if;
+
+    perform public.omr_rotate_exam_entry_invite_v1(
+        'live-invite-org-a', 'live-invite-exam-a',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', repeat('d', 64), now() + interval '1 day'
+    );
     update public.omr_exam_entry_invites
        set created_at = now() - interval '2 seconds',
            expires_at = now() - interval '1 second'
-     where token_hash = repeat('c', 64);
-    if public.omr_resolve_exam_entry_invite_v1(repeat('c', 64), 'live-invite-exam-a')->>'status' <> 'invalid' then
+     where token_hash = repeat('d', 64);
+    if public.omr_resolve_exam_entry_invite_v1(repeat('d', 64), 'live-invite-exam-a')->>'status' <> 'invalid' then
         raise exception 'opaque exam invite accepted an expired bearer';
     end if;
     if exists (
@@ -5483,8 +5550,12 @@ begin
     end if;
     if has_table_privilege('service_role', 'public.omr_exam_entry_invites', 'select,insert,update,delete')
        or has_function_privilege('anon', 'public.omr_resolve_exam_entry_invite_v1(text,text)', 'execute')
+       or has_function_privilege('anon', 'public.omr_get_exam_entry_invite_metadata_v1(text,text,text)', 'execute')
        or has_function_privilege('authenticated', 'public.omr_rotate_exam_entry_invite_v1(text,text,text,text,timestamptz)', 'execute')
-       or not has_function_privilege('service_role', 'public.omr_resolve_exam_entry_invite_v1(text,text)', 'execute') then
+       or has_function_privilege('authenticated', 'public.omr_revoke_exam_entry_invite_v1(text,text,text)', 'execute')
+       or not has_function_privilege('service_role', 'public.omr_resolve_exam_entry_invite_v1(text,text)', 'execute')
+       or not has_function_privilege('service_role', 'public.omr_get_exam_entry_invite_metadata_v1(text,text,text)', 'execute')
+       or not has_function_privilege('service_role', 'public.omr_revoke_exam_entry_invite_v1(text,text,text)', 'execute') then
         raise exception 'opaque exam invite server-only grants are unsafe';
     end if;
     if public.omr_service_readiness_v1()->>'examEntryInvitesReady' <> 'true' then
