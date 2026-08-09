@@ -20,7 +20,9 @@ import {
     prepareTeacherExamAssetUpload,
 } from "@/app/actions/remoteAssets";
 import {
+    getTeacherExamEntryInviteMetadata,
     loadTeacherCanonicalExam,
+    revokeTeacherExamEntryInvite,
     rotateTeacherExamEntryInvite,
     saveTeacherCanonicalExam,
 } from "@/app/actions/teacherExam";
@@ -62,6 +64,10 @@ import { createEditorRouteGenerationController } from "@/lib/editorRouteGenerati
 import { validateExamDraft } from "@/lib/examValidation";
 import { buildSolveShareUrl, isShareUrlReachableByStudents } from "@/lib/shareLink";
 import type { DistributionShareResultLike } from "@/lib/distributionInviteRotation";
+import type {
+    ExamEntryInviteMetadata,
+    ExamEntryInviteRawUrlState,
+} from "@/lib/examEntryInviteLifecycle";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
 import {
@@ -902,9 +908,16 @@ function CreateOMRPageInner() {
         shareUrl: string;
         expiresAt?: string;
     } | null>(null);
+    const [distributionInviteRawUrl, setDistributionInviteRawUrl] = useState<ExamEntryInviteRawUrlState | null>(null);
     const [isAssetHydrating, setIsAssetHydrating] = useState(false);
     const [assetHydrationFailures, setAssetHydrationFailures] = useState({ problem: false, answer: false });
     const assetHydrationFailed = assetHydrationFailures.problem || assetHydrationFailures.answer;
+
+    useEffect(() => {
+        setDistributionInviteRawUrl(current => (
+            current?.examId === editId ? current : null
+        ));
+    }, [editId]);
 
     const selectedQuestion = useMemo(
         () => questions.find(q => q.id === selectedQuestionId) || null,
@@ -2545,6 +2558,7 @@ function CreateOMRPageInner() {
             }
             let inviteToken: string | undefined;
             let inviteExpiresAt: string | undefined;
+            let inviteMetadata: ExamEntryInviteMetadata | undefined;
             if (accessConfig.type === "group") {
                 const invite = await rotateTeacherExamEntryInvite(id);
                 if (invite.status !== "issued") {
@@ -2558,9 +2572,18 @@ function CreateOMRPageInner() {
                 }
                 inviteToken = invite.token;
                 inviteExpiresAt = invite.expiresAt;
+                inviteMetadata = invite.metadata;
             }
             const shareUrl = buildSolveShareUrl(id, { inviteToken });
             if (isCurrentRoute()) {
+                if (accessConfig.type === "group" && inviteMetadata) {
+                    setDistributionInviteRawUrl({
+                        url: shareUrl,
+                        examId: id,
+                        generation: inviteMetadata.generation,
+                        issuedAt: inviteMetadata.issuedAt,
+                    });
+                }
                 if (!isShareUrlReachableByStudents(shareUrl)) {
                     // Desktop/loopback origin: students on other devices cannot open it.
                     toast.info(
@@ -2583,7 +2606,12 @@ function CreateOMRPageInner() {
                     router.replace(`/create?edit=${id}`, { scroll: false });
                 }
             }
-            return { shareUrl, expiresAt: inviteExpiresAt, examId: id };
+            return {
+                shareUrl,
+                expiresAt: inviteExpiresAt,
+                examId: id,
+                ...(inviteMetadata ? { metadata: inviteMetadata } : {}),
+            };
         } catch (e) {
             console.error(e);
             if (isCurrentRoute()) {
@@ -3075,6 +3103,14 @@ function CreateOMRPageInner() {
                     onAssignStudents={saveTeacherIndividualAssignment}
                     onClearStudentAssignment={clearTeacherIndividualAssignment}
                     onLoadStudentAssignment={loadTeacherIndividualAssignment}
+                    onLoadInviteMetadata={getTeacherExamEntryInviteMetadata}
+                    onRevokeInvite={revokeTeacherExamEntryInvite}
+                    inviteRawUrlState={
+                        distributionInviteRawUrl?.examId === loadedExam?.id
+                            ? distributionInviteRawUrl
+                            : null
+                    }
+                    onInviteRawUrlStateChange={setDistributionInviteRawUrl}
                     retakeAssignmentsEnabled={hasPlanEntitlement(currentPlan, 'retakeAssignments')}
                     onAutoMatchRegions={handleAutoMatchMissingRegions}
                     validationSummary={validationSummary}

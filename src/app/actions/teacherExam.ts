@@ -22,7 +22,15 @@ import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import type { Exam } from "@/types/omr";
 import { reportServerError } from "@/lib/reportServerError";
-import { rotateExamEntryInviteWithGateway } from "@/lib/examEntryInviteGateway";
+import {
+    getExamEntryInviteMetadataWithGateway,
+    revokeExamEntryInviteWithGateway,
+    rotateExamEntryInviteWithGateway,
+    type ExamEntryInviteRpcClient,
+} from "@/lib/examEntryInviteGateway";
+import type { ExamEntryInviteMetadata } from "@/lib/examEntryInviteLifecycle";
+import type { TeacherMemberRole, TeacherSession } from "@/lib/teacherSession";
+import { createExamEntryInviteE2eSimulationClient } from "@/lib/examEntryInviteE2eSimulation";
 
 export type TeacherCanonicalExamSaveResult = TeacherExamSaveResult
     | { status: "local_only" | "unauthorized" }
@@ -37,8 +45,28 @@ export type TeacherCanonicalExamListResult =
     | { status: "local_only" | "unauthorized" | "service_unavailable"; error?: string };
 
 export type TeacherExamEntryInviteResult =
-    | { status: "issued"; token: string; expiresAt: string }
-    | { status: "local_only" | "invalid_scope" | "unauthorized" | "service_unavailable" };
+    | { status: "issued"; token: string; expiresAt: string; metadata: ExamEntryInviteMetadata }
+    | { status: "forbidden" | "dependency_unavailable" };
+
+export type TeacherExamEntryInviteMetadataResult =
+    | { status: "found"; metadata: ExamEntryInviteMetadata }
+    | { status: "not_found" | "forbidden" | "dependency_unavailable" };
+
+export type TeacherExamEntryInviteRevokeResult =
+    | { status: "revoked"; metadata: ExamEntryInviteMetadata }
+    | { status: "not_found" | "forbidden" | "dependency_unavailable" };
+
+const EXAM_ENTRY_INVITE_ROLES = new Set<TeacherMemberRole>([
+    "owner",
+    "admin",
+    "teacher",
+]);
+
+function isExamEntryInviteRoleAuthorized(
+    session: Pick<TeacherSession, "memberRole"> | null | undefined,
+): boolean {
+    return !!session?.memberRole && EXAM_ENTRY_INVITE_ROLES.has(session.memberRole);
+}
 
 async function teacherGatewayContext(requireWrite = false): Promise<{
     client: TeacherExamGatewayClient;
@@ -56,6 +84,28 @@ async function teacherGatewayContext(requireWrite = false): Promise<{
     }
     return {
         client: createSupabaseAdminClient(config) as unknown as TeacherExamGatewayClient,
+        context: workspaceContextFromTeacherSession(session),
+    };
+}
+
+async function teacherInviteGatewayContext(): Promise<{
+    client: ExamEntryInviteRpcClient;
+    context: ReturnType<typeof workspaceContextFromTeacherSession>;
+} | { status: "forbidden" | "dependency_unavailable" }> {
+    const headerStore = await headers();
+    if (!isSameOriginServerActionRequest(headerStore)) return { status: "forbidden" };
+    const cookieStore = await cookies();
+    const session = await resolveAuthorizedTeacherSessionCookie(
+        cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
+    );
+    if (!session || !isExamEntryInviteRoleAuthorized(session)) return { status: "forbidden" };
+    const config = getSupabaseServerConfigFromEnv();
+    const client: ExamEntryInviteRpcClient | null = config
+        ? createSupabaseAdminClient(config) as unknown as ExamEntryInviteRpcClient
+        : createExamEntryInviteE2eSimulationClient(process.env);
+    if (!client) return { status: "dependency_unavailable" };
+    return {
+        client,
         context: workspaceContextFromTeacherSession(session),
     };
 }
@@ -167,7 +217,7 @@ export async function rotateTeacherExamEntryInvite(
     requestedTtlMs?: number,
 ): Promise<TeacherExamEntryInviteResult> {
     try {
-        const gateway = await teacherGatewayContext(true);
+        const gateway = await teacherInviteGatewayContext();
         if ("status" in gateway) return gateway;
         const result = await rotateExamEntryInviteWithGateway(
             gateway.client,
@@ -181,12 +231,79 @@ export async function rotateTeacherExamEntryInvite(
                 code: "service_unavailable",
             });
         }
-        return result;
+        if (result.status === "issued") return result;
+        return {
+            status: result.status === "service_unavailable"
+                ? "dependency_unavailable"
+                : "forbidden",
+        };
     } catch {
         await reportServerError("teacher-exam-entry-invite", {
             status: "service_unavailable",
             code: "unexpected_failure",
         });
-        return { status: "service_unavailable" };
+        return { status: "dependency_unavailable" };
+    }
+}
+
+/** Read current group invite metadata without making the bearer recoverable. */
+export async function getTeacherExamEntryInviteMetadata(
+    examId: string,
+): Promise<TeacherExamEntryInviteMetadataResult> {
+    try {
+        const gateway = await teacherInviteGatewayContext();
+        if ("status" in gateway) return gateway;
+        const result = await getExamEntryInviteMetadataWithGateway(
+            gateway.client,
+            gateway.context,
+            examId,
+        );
+        if (result.status === "found") return result;
+        if (result.status === "not_found") return { status: "not_found" };
+        if (result.status === "service_unavailable") {
+            await reportServerError("teacher-exam-entry-invite-metadata", {
+                status: result.status,
+                code: "service_unavailable",
+            });
+            return { status: "dependency_unavailable" };
+        }
+        return { status: "forbidden" };
+    } catch {
+        await reportServerError("teacher-exam-entry-invite-metadata", {
+            status: "dependency_unavailable",
+            code: "unexpected_failure",
+        });
+        return { status: "dependency_unavailable" };
+    }
+}
+
+/** Idempotently revoke the latest group invite without returning any secret. */
+export async function revokeTeacherExamEntryInvite(
+    examId: string,
+): Promise<TeacherExamEntryInviteRevokeResult> {
+    try {
+        const gateway = await teacherInviteGatewayContext();
+        if ("status" in gateway) return gateway;
+        const result = await revokeExamEntryInviteWithGateway(
+            gateway.client,
+            gateway.context,
+            examId,
+        );
+        if (result.status === "revoked") return result;
+        if (result.status === "not_found") return { status: "not_found" };
+        if (result.status === "service_unavailable") {
+            await reportServerError("teacher-exam-entry-invite-revoke", {
+                status: result.status,
+                code: "service_unavailable",
+            });
+            return { status: "dependency_unavailable" };
+        }
+        return { status: "forbidden" };
+    } catch {
+        await reportServerError("teacher-exam-entry-invite-revoke", {
+            status: "dependency_unavailable",
+            code: "unexpected_failure",
+        });
+        return { status: "dependency_unavailable" };
     }
 }

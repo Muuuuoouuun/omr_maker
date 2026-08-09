@@ -1,14 +1,18 @@
+import type { ExamEntryInviteMetadata } from "@/lib/examEntryInviteLifecycle";
+
 export type DistributionShareResult = {
     shareUrl: string;
     expiresAt?: string;
     /** Canonical exam id, used to create a normalized server assignment after first publish. */
     examId?: string;
+    /** Safe metadata returned atomically with a one-time group invite bearer. */
+    metadata?: ExamEntryInviteMetadata;
 };
 
 export type DistributionShareResultLike = string | DistributionShareResult;
 
 export const EXISTING_GROUP_INVITE_ROTATION_CONFIRMATION =
-    "새 링크를 발급하면 지금 배포한 링크와 QR은 즉시 사용할 수 없게 됩니다. 새 링크를 발급할까요?";
+    "새 링크를 발급하면 기존 링크와 QR은 즉시 무효화됩니다. 새 링크를 발급할까요?";
 
 export function normalizeDistributionShareResult(
     result: DistributionShareResultLike,
@@ -20,10 +24,12 @@ export function normalizeDistributionShareResult(
         ? result.expiresAt
         : undefined;
     const examId = typeof result.examId === "string" ? result.examId.trim() : "";
+    const metadata = result.metadata;
     return {
         shareUrl,
         ...(expiresAt ? { expiresAt } : {}),
         ...(examId ? { examId } : {}),
+        ...(metadata ? { metadata } : {}),
     };
 }
 

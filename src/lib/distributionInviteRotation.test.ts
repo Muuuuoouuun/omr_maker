@@ -4,6 +4,17 @@ import {
     normalizeDistributionShareResult,
 } from "@/lib/distributionInviteRotation";
 
+const metadata = {
+    inviteId: "exam_invite_0123456789abcdef0123456789abcdef",
+    examId: "exam-1",
+    targetType: "groups" as const,
+    targetIds: ["group-1"],
+    generation: 2,
+    issuedAt: "2026-08-08T02:00:00.000Z",
+    expiresAt: "2026-08-08T03:00:00.000Z",
+    revokedAt: null,
+};
+
 describe("existing group invite rotation", () => {
     it("does not call the rotate-and-save action when the teacher cancels", async () => {
         const rotateAndSave = vi.fn(async () => ({
@@ -48,6 +59,20 @@ describe("existing group invite rotation", () => {
         });
         expect(normalizeDistributionShareResult("https://exam.example/solve/exam-1")).toEqual({
             shareUrl: "https://exam.example/solve/exam-1",
+        });
+    });
+
+    it("preserves authoritative metadata atomically with the one-time raw URL", () => {
+        expect(normalizeDistributionShareResult({
+            shareUrl: "https://exam.example/solve/exam-1#invite=new-token",
+            expiresAt: metadata.expiresAt,
+            examId: metadata.examId,
+            metadata,
+        })).toEqual({
+            shareUrl: "https://exam.example/solve/exam-1#invite=new-token",
+            expiresAt: metadata.expiresAt,
+            examId: metadata.examId,
+            metadata,
         });
     });
 });

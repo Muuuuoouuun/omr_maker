@@ -55,7 +55,14 @@ import {
     INITIAL_CAPACITY_EXCEEDED_ERROR,
     INITIAL_OPERATIONS_LIMITS,
 } from "@/lib/initialOperationsPolicy";
-import { resolveExamEntryInviteWithGateway } from "@/lib/examEntryInviteGateway";
+import {
+    resolveExamEntryInviteWithGateway,
+    type ExamEntryInviteRpcClient,
+} from "@/lib/examEntryInviteGateway";
+import {
+    createExamEntryInviteE2eSimulationClient,
+    getExamEntryInviteE2eFixtureGroups,
+} from "@/lib/examEntryInviteE2eSimulation";
 
 const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16}|pilot_org_[a-f0-9]{24})$/;
 type QueryError = { message?: string } | null;
@@ -236,7 +243,7 @@ async function setGuestClaimOwnerCookie(
 }
 
 async function resolveStudentLoginScope(
-    client: StudentAuthClient,
+    client: ExamEntryInviteRpcClient,
     input: string | StudentExamInviteContext,
 ): Promise<
     | { status: "resolved"; organizationId: string; groupIds?: string[] }
@@ -267,6 +274,24 @@ export async function loadStudentLoginDirectory(input: string | StudentExamInvit
     error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
 }> {
     const client = adminClient();
+    const inviteSimulationClient = !client && typeof input !== "string"
+        ? createExamEntryInviteE2eSimulationClient(process.env)
+        : null;
+    if (inviteSimulationClient && typeof input !== "string") {
+        try {
+            const scope = await resolveStudentLoginScope(inviteSimulationClient, input);
+            if (scope.status === "invalid") return { status: "invalid_workspace" };
+            if (scope.status === "service_unavailable") return { status: "error" };
+            const groups = getExamEntryInviteE2eFixtureGroups(
+                process.env,
+                scope.organizationId,
+                scope.groupIds || [],
+            );
+            return groups.length > 0 ? { status: "ok", groups } : { status: "invalid_workspace" };
+        } catch {
+            return { status: "error" };
+        }
+    }
     if (!client) {
         return { status: process.env.NODE_ENV === "production" ? "error" : "degraded_local" };
     }
