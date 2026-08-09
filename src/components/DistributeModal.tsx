@@ -39,6 +39,7 @@ import type {
     TeacherExamEntryInviteMetadataResult,
     TeacherExamEntryInviteRevokeResult,
 } from '@/app/actions/teacherExam';
+import { resolveCanonicalLoad, type CanonicalLoadState } from '@/lib/canonicalLoadState';
 
 type AccessConfig = NonNullable<Exam["accessConfig"]>;
 
@@ -66,6 +67,8 @@ interface DistributeModalProps {
 type InviteMetadataLoadState =
     | { status: "idle" | "loading" | "not_found" | "forbidden" | "dependency_unavailable" }
     | { status: "found"; metadata: ExamEntryInviteMetadata };
+type DistributionRosterData = { groups: RosterGroup[]; students: RosterStudent[] };
+const TEACHER_ROSTER_CACHE_STALE_AT_KEY = "omr_teacher_roster_cache_stale_at_v1";
 
 export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAssignStudents, onClearStudentAssignment, onLoadStudentAssignment, onLoadInviteMetadata, onRevokeInvite, inviteRawUrlState, onInviteRawUrlStateChange, retakeAssignmentsEnabled, onAutoMatchRegions, validationSummary, initialAccessConfig, initialShareUrl, initialShareExpiresAt, examId, isExistingExam = false }: DistributeModalProps) {
     const [accessType, setAccessType] = useState<'public' | 'group' | 'student'>('public');
@@ -87,6 +90,8 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     const [newStudentEmail, setNewStudentEmail] = useState("");
     const [isRosterLoading, setIsRosterLoading] = useState(false);
     const [rosterLoadError, setRosterLoadError] = useState("");
+    const [distributionRosterState, setDistributionRosterState] = useState<CanonicalLoadState<DistributionRosterData>>({ state: "loading" });
+    const [rosterRetryGeneration, setRosterRetryGeneration] = useState(0);
     const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
     const [studentSearch, setStudentSearch] = useState("");
     const [assignmentMode, setAssignmentMode] = useState<"base" | "retake">("base");
@@ -115,31 +120,60 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
         if (!isOpen) {
             setIsRosterLoading(false);
             setRosterLoadError("");
+            setDistributionRosterState({ state: "loading" });
             return;
         }
 
+        const loadObservedAt = new Date().toISOString();
+        let localData: DistributionRosterData = { groups: [], students: [] };
+        let cachedAt: string | null = null;
         try {
-            setGroups(readRosterGroups(localStorage));
-            setStudents(readRosterStudents(localStorage));
+            localData = { groups: readRosterGroups(localStorage), students: readRosterStudents(localStorage) };
+            cachedAt = localStorage.getItem(TEACHER_ROSTER_CACHE_STALE_AT_KEY);
         } catch {
-            setGroups([]);
-            setStudents([]);
+            localData = { groups: [], students: [] };
         }
 
         setIsRosterLoading(true);
+        setDistributionRosterState({ state: "loading" });
         setRosterLoadError("");
         void loadTeacherRosterSnapshot(localStorage)
             .then(snapshot => {
                 if (rosterLoadGenerationRef.current !== loadGeneration) return;
-                setGroups(snapshot.groups);
-                setStudents(snapshot.students);
+                const loadedData = { groups: snapshot.groups, students: snapshot.students };
+                const nextState = resolveCanonicalLoad({
+                    remote: snapshot.remoteError ? { ok: false } : { ok: true, data: loadedData },
+                    cache: snapshot.remoteError && cachedAt ? { data: localData, staleAt: cachedAt } : null,
+                    now: loadObservedAt,
+                }, data => data.groups.length === 0 && data.students.length === 0);
+                setDistributionRosterState(nextState);
+                const visibleData = nextState.state === "loaded_empty" || nextState.state === "loaded_data" || nextState.state === "degraded_with_cache"
+                    ? nextState.data
+                    : { groups: [], students: [] };
+                setGroups(visibleData.groups);
+                setStudents(visibleData.students);
                 if (snapshot.remoteError) {
-                    setRosterLoadError("서버 명단을 불러오지 못해 이 기기에 저장된 명단을 표시합니다.");
+                    setRosterLoadError(nextState.state === "degraded_with_cache"
+                        ? "서버 명단을 불러오지 못해 검증된 저장 명단을 표시합니다."
+                        : "서버 명단을 불러오지 못했고 검증된 저장 명단이 없습니다.");
+                } else if (snapshot.remoteLoaded) {
+                    try { localStorage.setItem(TEACHER_ROSTER_CACHE_STALE_AT_KEY, loadObservedAt); } catch { /* cache remains optional */ }
                 }
             })
             .catch(() => {
                 if (rosterLoadGenerationRef.current !== loadGeneration) return;
-                setRosterLoadError("서버 명단을 불러오지 못해 이 기기에 저장된 명단을 표시합니다.");
+                const nextState = resolveCanonicalLoad({
+                    remote: { ok: false },
+                    cache: cachedAt ? { data: localData, staleAt: cachedAt } : null,
+                    now: loadObservedAt,
+                }, data => data.groups.length === 0 && data.students.length === 0);
+                setDistributionRosterState(nextState);
+                const visibleData = nextState.state === "degraded_with_cache" ? nextState.data : { groups: [], students: [] };
+                setGroups(visibleData.groups);
+                setStudents(visibleData.students);
+                setRosterLoadError(nextState.state === "degraded_with_cache"
+                    ? "서버 명단을 불러오지 못해 검증된 저장 명단을 표시합니다."
+                    : "서버 명단을 불러오지 못했고 검증된 저장 명단이 없습니다.");
             })
             .finally(() => {
                 if (rosterLoadGenerationRef.current === loadGeneration) {
@@ -152,7 +186,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 rosterLoadGenerationRef.current += 1;
             }
         };
-    }, [isOpen]);
+    }, [isOpen, rosterRetryGeneration]);
 
     useEffect(() => {
         if (!isOpen) {
@@ -306,6 +340,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             || inviteMetadataLoad.status === "loading"
             || inviteMetadataLoad.status === "forbidden"
             || inviteMetadataLoad.status === "dependency_unavailable");
+    const distributionRosterUnavailable = distributionRosterState.state === "error_without_cache";
     const visibleShareUrl = accessType === "group"
         ? inviteCapability === "copyable_here" ? inviteRawUrlState?.url || null : null
         : isGroupInviteShareUrl(shareUrl) ? null : shareUrl;
@@ -326,6 +361,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
 
     const handleShareClick = async () => {
         setFormError("");
+        if (distributionRosterUnavailable) {
+            setFormError("서버 명단 상태를 확인할 수 없어 배포를 진행하지 않습니다. 다시 시도해주세요.");
+            return;
+        }
         if (accessType === "group" && inviteLifecycleBlocksIssuance) {
             setFormError("기존 배포 링크 상태를 확인한 뒤 새 링크를 발급할 수 있습니다. 다시 시도해주세요.");
             return;
@@ -590,7 +629,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     };
 
     const handleCreateGroup = () => {
-        if (isRosterLoading) {
+        if (isRosterLoading || distributionRosterUnavailable) {
             setFormError("서버 명단을 불러온 뒤 반을 추가해주세요.");
             return;
         }
@@ -620,7 +659,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     };
 
     const handleAddStudent = (groupId: string) => {
-        if (isRosterLoading) {
+        if (isRosterLoading || distributionRosterUnavailable) {
             setFormError("서버 명단을 불러온 뒤 학생을 추가해주세요.");
             return;
         }
@@ -702,6 +741,22 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 <div className="distribute-dialog-body">
                     {!visibleShareUrl ? (
                         <>
+                            {distributionRosterState.state === "error_without_cache" && (
+                                <div data-testid="canonical-error-no-cache" role="alert" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                                    <strong style={{ display: 'block', marginBottom: '0.25rem' }}>서버 명단을 불러오지 못했습니다.</strong>
+                                    검증된 저장 명단이 없어 배포와 명단 변경을 비활성화했습니다.
+                                    <button data-testid="canonical-distribution-roster-retry" type="button" className="btn btn-secondary" onClick={() => setRosterRetryGeneration(value => value + 1)} style={{ display: 'block', marginTop: '0.65rem' }}>
+                                        다시 시도
+                                    </button>
+                                </div>
+                            )}
+                            {distributionRosterState.state === "degraded_with_cache" && (
+                                <div data-testid="canonical-degraded-cache" role="status" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                                    <strong style={{ display: 'block' }}>저장된 데이터를 표시 중</strong>
+                                    마지막 저장 {new Date(distributionRosterState.staleAt).toLocaleString('ko-KR')} · 서버 명단을 다시 확인해주세요.
+                                    <button type="button" className="btn btn-secondary" onClick={() => setRosterRetryGeneration(value => value + 1)} style={{ display: 'block', marginTop: '0.65rem' }}>다시 시도</button>
+                                </div>
+                            )}
                             {accessType === "group" && inviteMetadataLoad.status === "loading" && (
                                 <div
                                     role="status"
@@ -889,7 +944,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                         <button
                                             type="button"
                                             onClick={() => { setShowNewGroup(v => !v); setFormError(""); }}
-                                            disabled={isRosterLoading}
+                                            disabled={isRosterLoading || distributionRosterUnavailable}
                                             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', fontSize: '0.78rem', fontWeight: 700, borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--foreground)', cursor: 'pointer' }}
                                         >
                                             <Plus size={13} /> 새 반
@@ -912,6 +967,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                             <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                                                 <input
                                                     aria-label="새 반 이름"
+                                                    disabled={isRosterLoading || distributionRosterUnavailable}
                                                     value={newGroupName}
                                                     onChange={e => setNewGroupName(e.target.value)}
                                                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreateGroup(); } }}
@@ -921,6 +977,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                 />
                                                 <input
                                                     aria-label="새 반 지역"
+                                                    disabled={isRosterLoading || distributionRosterUnavailable}
                                                     value={newGroupRegion}
                                                     onChange={e => setNewGroupRegion(e.target.value)}
                                                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreateGroup(); } }}
@@ -930,6 +987,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                             </div>
                                             <button
                                                 type="button"
+                                                disabled={isRosterLoading || distributionRosterUnavailable}
                                                 onClick={handleCreateGroup}
                                                 className="btn btn-primary"
                                                 style={{ width: '100%', padding: '0.5rem', fontSize: '0.82rem' }}
@@ -965,7 +1023,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                             </label>
                                                             <button
                                                                 type="button"
-                                                                disabled={isRosterLoading}
+                                                                disabled={isRosterLoading || distributionRosterUnavailable}
                                                                 onClick={() => {
                                                                     setStudentFormGroupId(prev => prev === g.id ? null : g.id);
                                                                     setNewStudentName("");
@@ -982,6 +1040,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                             <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.45rem', flexWrap: 'wrap' }}>
                                                                 <input
                                                                     aria-label="학생 이름"
+                                                                    disabled={isRosterLoading || distributionRosterUnavailable}
                                                                     value={newStudentName}
                                                                     onChange={e => setNewStudentName(e.target.value)}
                                                                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddStudent(g.id); } }}
@@ -991,6 +1050,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                                 <input
                                                                     aria-label="학생 이메일"
                                                                     type="email"
+                                                                    disabled={isRosterLoading || distributionRosterUnavailable}
                                                                     value={newStudentEmail}
                                                                     onChange={e => setNewStudentEmail(e.target.value)}
                                                                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddStudent(g.id); } }}
@@ -999,7 +1059,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                                 />
                                                                 <button
                                                                     type="button"
-                                                                    disabled={isRosterLoading}
+                                                                    disabled={isRosterLoading || distributionRosterUnavailable}
                                                                     onClick={() => handleAddStudent(g.id)}
                                                                     style={{ padding: '0.45rem 0.7rem', fontSize: '0.78rem', fontWeight: 700, borderRadius: '6px', border: 'none', background: 'var(--primary)', color: 'white', cursor: 'pointer', flexShrink: 0 }}
                                                                 >
@@ -1111,7 +1171,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                 onClick={handleShareClick}
                                 className="btn btn-primary distribute-dialog-primary-action"
                                 style={{ width: '100%', padding: '0.8rem' }}
-                                disabled={isSaving || isAssignmentLoading || inviteLifecycleBlocksIssuance || (validationSummary ? !validationSummary.isPublishable : false)}
+                                disabled={distributionRosterUnavailable || isSaving || isAssignmentLoading || inviteLifecycleBlocksIssuance || (validationSummary ? !validationSummary.isPublishable : false)}
                             >
                                 {isSaving
                                     ? "생성 중..."

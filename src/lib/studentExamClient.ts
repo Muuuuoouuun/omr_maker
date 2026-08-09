@@ -54,6 +54,8 @@ export interface ListAttemptsClientResult {
     attempts: StudentAttemptSummary[];
     exams?: StudentAssignmentPreview[];
     source: ExamSource;
+    /** True only when local rows replace a failed remote read, not intentional local-only mode. */
+    remoteFailed?: boolean;
     error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
 }
 
@@ -175,6 +177,7 @@ export async function listMyAssignmentsClient(deps: {
     }>;
     localFallback: () => Promise<Attempt[]>;
 }): Promise<ListAttemptsClientResult> {
+    let remoteFailed = false;
     try {
         const res = await deps.server();
         if (res.status === "ok" && res.attempts) {
@@ -192,7 +195,9 @@ export async function listMyAssignmentsClient(deps: {
                 error: INITIAL_CAPACITY_EXCEEDED_ERROR,
             };
         }
+        remoteFailed = res.status !== "degraded_local";
     } catch {
+        remoteFailed = true;
         // fall through to local
     }
     try {
@@ -200,6 +205,7 @@ export async function listMyAssignmentsClient(deps: {
             status: "ok",
             attempts: (await deps.localFallback()).map(studentAttemptSummaryFromAttempt),
             source: "local",
+            remoteFailed,
         };
     } catch {
         return { status: "error", attempts: [], source: "local" };

@@ -29,8 +29,14 @@ import { listMyAssignments } from "@/app/actions/studentExam";
 import { clearStudentServerSession, refreshStudentSession } from "@/app/actions/studentSession";
 import { listMyAssignmentsClient } from "@/lib/studentExamClient";
 import type { StudentAssignmentPreview, StudentAttemptSummary } from "@/lib/studentExamContract";
-import { findCompletedAttemptForAssignment } from "@/lib/studentAssignmentClassification";
+import {
+    buildMissingCompletedReviewAssignments,
+    findCompletedAttemptForAssignment,
+    localStudentAssignmentPreview,
+    type ReviewOnlyCompletedAssignment,
+} from "@/lib/studentAssignmentClassification";
 import { loadStudentReturnedFeedbackWithDevFallback } from "@/lib/studentFeedbackClient";
+import { resolveCanonicalLoad, type CanonicalLoadState } from "@/lib/canonicalLoadState";
 import {
     INITIAL_CAPACITY_REMEDIATION_KO,
     INITIAL_FEEDBACK_CAPACITY_REMEDIATION_KO,
@@ -51,14 +57,23 @@ function hasLocalDraftFor(examId: string, ownerKey: string): boolean {
     return false;
 }
 
-type DashboardDataState = "loading" | "ready" | "error";
 type DashboardAssignment = (Exam | StudentAssignmentPreview) & { hasLocalDraft?: boolean };
+type DashboardCompletedAssignment = (Exam | StudentAssignmentPreview | ReviewOnlyCompletedAssignment) & {
+    attemptId: string;
+    hasUnreadFeedback?: boolean;
+    answeredQuestionCount?: number;
+};
+type StudentDashboardSnapshot = {
+    todoExams: DashboardAssignment[];
+    doneExams: DashboardCompletedAssignment[];
+};
+const STUDENT_DASHBOARD_CACHE_STALE_AT_KEY = "omr_student_dashboard_cache_stale_at_v1";
 
 export default function StudentDashboard() {
     const router = useRouter();
     const [user, setUser] = useState<StudentSession | null>(null);
     const [todoExams, setTodoExams] = useState<DashboardAssignment[]>([]);
-    const [doneExams, setDoneExams] = useState<Array<(Exam | StudentAssignmentPreview) & { attemptId: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }>>([]);
+    const [doneExams, setDoneExams] = useState<DashboardCompletedAssignment[]>([]);
     const [stats, setStats] = useState({
         avgScore: 0,
         completedCount: 0,
@@ -68,7 +83,7 @@ export default function StudentDashboard() {
     const [guestMergePreview, setGuestMergePreview] = useState<GuestMergePreview | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
     const [logoutPending, setLogoutPending] = useState(false);
-    const [dataState, setDataState] = useState<DashboardDataState>("loading");
+    const [dataState, setDataState] = useState<CanonicalLoadState<StudentDashboardSnapshot>>({ state: "loading" });
     const [dataError, setDataError] = useState("");
     const [feedbackSyncError, setFeedbackSyncError] = useState("");
     const [accountConnectionNotice, setAccountConnectionNotice] = useState("");
@@ -83,10 +98,15 @@ export default function StudentDashboard() {
             setStats({ avgScore: 0, completedCount: 0, retakeCount: 0 });
             setGuestMergePreview(null);
             setDataError(message);
-            setDataState("error");
+            setDataState(resolveCanonicalLoad({
+                remote: { ok: false },
+                cache: null,
+                now: new Date().toISOString(),
+            }, data => data.todoExams.length === 0 && data.doneExams.length === 0));
         };
         const loadStudentData = async () => {
-            setDataState("loading");
+            const loadObservedAt = new Date().toISOString();
+            setDataState({ state: "loading" });
             setDataError("");
             setFeedbackSyncError("");
             // 1. Rebuild the client view from the signed HttpOnly cookie when
@@ -192,16 +212,25 @@ export default function StudentDashboard() {
                 : null;
 
             // 3. Categorize Exams
-            const done: Array<(Exam | StudentAssignmentPreview) & { attemptId: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }> = [];
+            const done: DashboardCompletedAssignment[] = [];
             const todo: DashboardAssignment[] = [];
+            const visibleExamIds = new Set<string>();
 
-            allExams.forEach(exam => {
+            allExams.forEach(rawExam => {
                 const hasAccess = attemptSource === "server" || (() => {
-                    const access = evaluateExamAccess(exam as Exam, { session: currentUser });
-                    return access.status === "allowed" || access.status === "pin_required";
+                    const access = evaluateExamAccess(rawExam as Exam, { session: currentUser });
+                    return access.status === "allowed"
+                        || access.status === "pin_required"
+                        || access.status === "not_started"
+                        || access.status === "ended"
+                        || access.status === "archived";
                 })();
 
                 if (!hasAccess) return;
+                const exam = attemptSource === "server"
+                    ? rawExam
+                    : localStudentAssignmentPreview(rawExam as Exam, loadObservedAt);
+                visibleExamIds.add(exam.id);
 
                 // Check if completed
                 const attempt = findCompletedAttemptForAssignment(exam, myAttempts);
@@ -224,6 +253,11 @@ export default function StudentDashboard() {
                 }
             });
 
+            done.push(...buildMissingCompletedReviewAssignments(visibleExamIds, myAttempts).map(review => ({
+                ...review,
+                hasUnreadFeedback: unreadFeedbackAttemptIds.has(review.attemptId),
+            })));
+
             setTodoExams(todo);
             setDoneExams(done);
 
@@ -239,6 +273,33 @@ export default function StudentDashboard() {
                 retakeCount: myRetakeAttempts.length,
             });
             setGuestMergePreview(mergePreview && mergePreview.mergeableCount > 0 ? mergePreview : null);
+
+            const snapshot: StudentDashboardSnapshot = { todoExams: todo, doneExams: done };
+            const isEmpty = (data: StudentDashboardSnapshot) => data.todoExams.length === 0 && data.doneExams.length === 0;
+            if (myAttemptsResult.remoteFailed !== true) {
+                const nextState = resolveCanonicalLoad({
+                    remote: { ok: true, data: snapshot },
+                    cache: null,
+                    now: loadObservedAt,
+                }, isEmpty);
+                setDataState(nextState);
+                if (attemptSource === "server") {
+                    try { localStorage.setItem(STUDENT_DASHBOARD_CACHE_STALE_AT_KEY, loadObservedAt); } catch { /* cache remains optional */ }
+                }
+            } else {
+                let staleAt: string | null = null;
+                try { staleAt = localStorage.getItem(STUDENT_DASHBOARD_CACHE_STALE_AT_KEY); } catch { /* fail closed below */ }
+                const nextState = resolveCanonicalLoad({
+                    remote: { ok: false },
+                    cache: staleAt ? { data: snapshot, staleAt } : null,
+                    now: loadObservedAt,
+                }, isEmpty);
+                if (nextState.state === "error_without_cache") {
+                    failDataLoad("서버 학습 현황을 확인하지 못했고 이 기기에 검증된 저장 시각이 없습니다. 네트워크를 확인한 뒤 다시 시도해주세요.");
+                    return;
+                }
+                setDataState(nextState);
+            }
 
             // Preserve teacher-answer arrival notifications without transferring
             // question ids or either side's free-text bodies in this list call.
@@ -269,7 +330,6 @@ export default function StudentDashboard() {
                     }
                 } catch { /* storage unavailable — the scalar badge still surfaces answers */ }
             }
-            setDataState("ready");
         };
 
         void loadStudentData().catch(() => {
@@ -361,7 +421,7 @@ export default function StudentDashboard() {
     const handleDashboardRetry = () => {
         setSessionState("checking");
         setDataError("");
-        setDataState("loading");
+        setDataState({ state: "loading" });
         setRefreshKey(key => key + 1);
     };
 
@@ -390,7 +450,7 @@ export default function StudentDashboard() {
         setGuestMergePreview(null);
         setSessionState("missing");
         setDataError("");
-        setDataState("loading");
+        setDataState({ state: "loading" });
         toast.info("로그아웃됨", "다시 시험을 보려면 학생 로그인이 필요합니다.");
         router.replace("/");
     };
@@ -505,7 +565,7 @@ export default function StudentDashboard() {
             </header>
 
             <main className="container animate-fade-in" style={{ paddingBottom: '4rem' }}>
-                {dataState === "loading" && (
+                {dataState.state === "loading" && (
                     <section
                         data-testid="student-dashboard-loading"
                         role="status"
@@ -534,9 +594,10 @@ export default function StudentDashboard() {
                     </section>
                 )}
 
-                {dataState === "error" && (
+                {dataState.state === "error_without_cache" && (
                     <section
                         data-testid="student-dashboard-error"
+                        data-canonical-state="error_without_cache"
                         role="status"
                         aria-live="polite"
                         aria-atomic="true"
@@ -589,8 +650,22 @@ export default function StudentDashboard() {
                     </section>
                 )}
 
-                {dataState === "ready" && (
-                    <>
+                {dataState.state === "degraded_with_cache" && (
+                    <section
+                        data-testid="student-dashboard-degraded"
+                        role="status"
+                        style={{ marginTop: "1.5rem", padding: "1rem 1.25rem", border: "1px solid rgba(245,158,11,0.35)", borderRadius: "var(--radius-lg)", background: "rgba(245,158,11,0.08)" }}
+                    >
+                        <strong>저장된 데이터를 표시 중</strong>
+                        <p className="text-muted" style={{ marginTop: "0.3rem" }}>
+                            마지막 저장 {new Date(dataState.staleAt).toLocaleString("ko-KR")} · 서버 연결을 확인한 뒤 다시 시도해주세요.
+                        </p>
+                        <button type="button" className="btn" onClick={handleDashboardRetry}>다시 시도</button>
+                    </section>
+                )}
+
+                {(dataState.state === "loaded_empty" || dataState.state === "loaded_data" || dataState.state === "degraded_with_cache") && (
+                    <div data-canonical-state={dataState.state}>
                 {feedbackSyncError && (
                     <section
                         data-testid="student-feedback-sync-error"
@@ -718,7 +793,7 @@ export default function StudentDashboard() {
                         <AssignmentBlock type="done" exams={doneExams} />
                     </div>
                 </div>
-                    </>
+                    </div>
                 )}
             </main>
         </div>

@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import { resetBrowserState } from "./helpers";
 
 test("dashboard data failure is not presented as an empty successful dashboard and can recover", async ({ page, context }) => {
+    let failCanonicalActions = false;
+    let injectedFailureCount = 0;
     await resetBrowserState(page, context);
 
     await page.goto("/?role=student");
@@ -28,16 +30,25 @@ test("dashboard data failure is not presented as an empty successful dashboard a
         };
     });
     await page.route("**/*", async (route) => {
-        if (route.request().method() === "POST" && route.request().headers()["next-action"]) {
-            await route.abort("failed");
+        if (failCanonicalActions && route.request().method() === "POST" && route.request().headers()["next-action"]) {
+            const response = await route.fetch();
+            const body = await response.text();
+            const failedBody = body.replaceAll('"degraded_local"', '"error"');
+            if (failedBody !== body || body.includes('"error"')) injectedFailureCount += 1;
+            await route.fulfill({
+                response,
+                body: failedBody,
+            });
             return;
         }
         await route.continue();
     });
+    failCanonicalActions = true;
     await page.reload();
 
     const errorStatus = page.getByTestId("student-dashboard-error");
     await expect(errorStatus).toBeVisible();
+    await expect(errorStatus).toHaveAttribute("data-canonical-state", "error_without_cache");
     await expect(errorStatus).toHaveAttribute("role", "status");
     await expect(errorStatus).toHaveAttribute("aria-live", "polite");
     await expect(errorStatus.getByRole("heading", { name: "학습 현황을 불러오지 못했습니다" })).toBeVisible();
@@ -54,8 +65,11 @@ test("dashboard data failure is not presented as an empty successful dashboard a
     await expect(errorStatus.getByRole("link", { name: "로그인 안내" })).toHaveAttribute("href", "/");
     await expect(errorStatus.getByRole("link", { name: "홈으로" })).toHaveAttribute("href", "/");
 
+    failCanonicalActions = false;
     await retryButton.click();
     await expect(errorStatus).toBeHidden();
     await expect(page.getByText("나의 원시험 평균", { exact: true })).toBeVisible();
     await expect(page.getByText("오늘은 예정된 시험이 없습니다", { exact: false })).toBeVisible();
+    await expect(page.locator('[data-canonical-state="loaded_empty"]')).toBeVisible();
+    expect(injectedFailureCount).toBeGreaterThan(0);
 });

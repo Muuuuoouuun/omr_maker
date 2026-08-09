@@ -206,16 +206,16 @@ describe("listMyAssignmentsClient", () => {
     });
 
     it("falls back to the local list on degraded/error/throw", async () => {
-        for (const server of [
-            vi.fn().mockResolvedValue({ status: "degraded_local" }),
-            vi.fn().mockResolvedValue({ status: "error" }),
-            vi.fn().mockRejectedValue(new Error("network")),
-        ]) {
+        for (const [server, remoteFailed] of [
+            [vi.fn().mockResolvedValue({ status: "degraded_local" }), false],
+            [vi.fn().mockResolvedValue({ status: "error" }), true],
+            [vi.fn().mockRejectedValue(new Error("network")), true],
+        ] as const) {
             const res = await listMyAssignmentsClient({
                 server,
                 localFallback: vi.fn().mockResolvedValue([ATTEMPT]),
             });
-            expect(res).toMatchObject({ status: "ok", source: "local" });
+            expect(res).toMatchObject({ status: "ok", source: "local", remoteFailed });
             expect(res.attempts).toHaveLength(1);
         }
     });

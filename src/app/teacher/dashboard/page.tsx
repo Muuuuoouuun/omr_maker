@@ -58,6 +58,7 @@ import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient
 import type { TeacherAttemptAggregate } from "@/lib/teacherAttemptReportingGateway";
 import { loadTeacherIndividualAssignmentTargetCounts } from "@/app/actions/teacherAssignment";
 import type { ExamAnalyticsSampleStatus } from "@/lib/examAnalyticsReport";
+import { resolveCanonicalLoad, type CanonicalLoadState } from "@/lib/canonicalLoadState";
 
 type TabType = 'overview' | 'exam' | 'student';
 type DashboardDataMode = "real" | "demo";
@@ -87,6 +88,15 @@ type DetailedAttemptLoad = {
     generation: number;
     promise: ReturnType<typeof loadTeacherAttempts>;
 };
+const TEACHER_DASHBOARD_CACHE_STALE_AT_KEY = "omr_teacher_dashboard_cache_stale_at_v1";
+
+function isDashboardSnapshotEmpty(snapshot: DashboardSnapshot): boolean {
+    return snapshot.forceDemoData !== true
+        && snapshot.exams.length === 0
+        && snapshot.attempts.length === 0
+        && snapshot.rosterStudents.length === 0
+        && snapshot.rosterGroups.length === 0;
+}
 
 function buildAttemptSummarySignal(attempts: Attempt[]): string {
     return attempts
@@ -167,7 +177,7 @@ function TeacherDashboard() {
     const [dataMode, setDataMode] = useState<DashboardDataMode>("real");
     const { plan: currentPlan } = useServerPlan();
     const [syncStatus, setSyncStatus] = useState<PersistenceHealth>(() => summarizePersistenceHealth([]));
-    const [hasDashboardDataResolved, setHasDashboardDataResolved] = useState(false);
+    const [dashboardLoadState, setDashboardLoadState] = useState<CanonicalLoadState<DashboardSnapshot>>({ state: "loading" });
     const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
     const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);
     const [detailedAttemptSampleStatus, setDetailedAttemptSampleStatus] = useState<ExamAnalyticsSampleStatus>("ready");
@@ -356,15 +366,21 @@ function TeacherDashboard() {
     }, [invalidateDetailedAttempts]);
 
     const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
+        const loadObservedAt = new Date().toISOString();
         if (isMockupAccount) {
-            applyDashboardSnapshot({
+            const snapshot: DashboardSnapshot = {
                 exams: [],
                 attempts: [],
                 rosterStudents: [],
                 rosterGroups: [],
                 forceDemoData: true,
-            });
-            setHasDashboardDataResolved(true);
+            };
+            applyDashboardSnapshot(snapshot);
+            setDashboardLoadState(resolveCanonicalLoad({
+                remote: { ok: true, data: snapshot },
+                cache: null,
+                now: loadObservedAt,
+            }, isDashboardSnapshotEmpty));
             if (options.notifyOnSuccess) {
                 toast.success("데모 데이터 새로고침 완료", "고정된 예시 데이터로 화면을 다시 구성했습니다.");
             }
@@ -377,8 +393,10 @@ function TeacherDashboard() {
             rosterStudents: localRoster.students,
             rosterGroups: localRoster.groups,
         };
+        let cachedAt: string | null = null;
+        try { cachedAt = localStorage.getItem(TEACHER_DASHBOARD_CACHE_STALE_AT_KEY); } catch { /* fail closed below */ }
 
-        const aggregatePromise = loadTeacherAttemptAggregate();
+        const aggregatePromise = loadTeacherAttemptAggregate().catch(() => ({ status: "service_unavailable" as const }));
         let results: Awaited<ReturnType<typeof Promise.all<[
             ReturnType<typeof loadTeacherExams>,
             ReturnType<typeof loadTeacherAttemptSummaries>,
@@ -402,8 +420,13 @@ function TeacherDashboard() {
                     + localSnapshot.rosterGroups.length,
                 remoteError: message,
             }]));
-            applyDashboardSnapshot(localSnapshot);
-            setHasDashboardDataResolved(true);
+            const nextState = resolveCanonicalLoad({
+                remote: { ok: false },
+                cache: cachedAt ? { data: localSnapshot, staleAt: cachedAt } : null,
+                now: loadObservedAt,
+            }, isDashboardSnapshotEmpty);
+            setDashboardLoadState(nextState);
+            if (nextState.state === "degraded_with_cache") applyDashboardSnapshot(nextState.data);
             if (options.notifyOnError === true) {
                 toast.info(
                     "로컬 데이터 기준으로 표시 중",
@@ -413,7 +436,7 @@ function TeacherDashboard() {
             return;
         }
         const [examResult, attemptResult, rosterResult] = results;
-        const aggregateResult = await aggregatePromise.catch(() => ({ status: "service_unavailable" as const }));
+        const aggregateResult = await aggregatePromise;
         if (options.isCancelled?.()) return;
 
         const nextSyncStatus = summarizePersistenceHealth([examResult, attemptResult, rosterResult]);
@@ -436,7 +459,8 @@ function TeacherDashboard() {
             : { status: "loaded" as const, targetCounts: {}, assignmentModes: {} };
         if (options.isCancelled?.()) return;
 
-        applyDashboardSnapshot({
+        const remoteFailed = !!examResult.remoteError || !!attemptResult.remoteError || !!rosterResult.remoteError;
+        const successfulSnapshot: DashboardSnapshot = {
             exams: preferredExams,
             attempts: preferLocalDashboardItems(attemptResult, localSnapshot.attempts),
             rosterStudents: rosterResult.remoteError ? localSnapshot.rosterStudents : rosterResult.students,
@@ -448,8 +472,19 @@ function TeacherDashboard() {
                     individualAssignmentModes: assignmentCountsResult.assignmentModes,
                 }
                 : {}),
-        });
-        setHasDashboardDataResolved(true);
+        };
+        const nextState = resolveCanonicalLoad({
+            remote: remoteFailed ? { ok: false } : { ok: true, data: successfulSnapshot },
+            cache: remoteFailed && cachedAt ? { data: localSnapshot, staleAt: cachedAt } : null,
+            now: loadObservedAt,
+        }, isDashboardSnapshotEmpty);
+        setDashboardLoadState(nextState);
+        if (nextState.state === "loaded_empty" || nextState.state === "loaded_data" || nextState.state === "degraded_with_cache") {
+            applyDashboardSnapshot(nextState.data);
+        }
+        if (!remoteFailed && examResult.remoteLoaded && attemptResult.remoteLoaded && rosterResult.remoteLoaded) {
+            try { localStorage.setItem(TEACHER_DASHBOARD_CACHE_STALE_AT_KEY, loadObservedAt); } catch { /* cache remains optional */ }
+        }
 
         if (options.notifyOnSuccess && nextSyncStatus.kind !== "error") {
             toast.success("동기화 확인 완료", nextSyncStatus.detail);
@@ -464,14 +499,19 @@ function TeacherDashboard() {
         // useful without waiting for Supabase reconciliation. The existing loader
         // then refreshes and replaces it with the merged source of truth.
         if (isMockupAccount) {
-            applyDashboardSnapshot({
+            const snapshot: DashboardSnapshot = {
                 exams: [],
                 attempts: [],
                 rosterStudents: [],
                 rosterGroups: [],
                 forceDemoData: true,
-            });
-            setHasDashboardDataResolved(true);
+            };
+            applyDashboardSnapshot(snapshot);
+            setDashboardLoadState(resolveCanonicalLoad({
+                remote: { ok: true, data: snapshot },
+                cache: null,
+                now: new Date().toISOString(),
+            }, isDashboardSnapshotEmpty));
         } else {
             const localRoster = readLocalRosterSnapshot(localStorage);
             const localExams = readLocalExams();
@@ -482,17 +522,17 @@ function TeacherDashboard() {
                 rosterStudents: localRoster.students,
                 rosterGroups: localRoster.groups,
             });
-            // A usable local snapshot should render immediately while the remote
-            // reconciliation continues in the background. Keep the skeleton only
-            // for a genuinely empty local cache so remote-only data never flashes
-            // as an empty onboarding state.
-            if (
-                localExams.length > 0
-                || localAttempts.length > 0
-                || localRoster.students.length > 0
-                || localRoster.groups.length > 0
-            ) {
-                setHasDashboardDataResolved(true);
+            let cachedAt: string | null = null;
+            try { cachedAt = localStorage.getItem(TEACHER_DASHBOARD_CACHE_STALE_AT_KEY); } catch { /* keep loading */ }
+            if (cachedAt) {
+                setDashboardLoadState(resolveCanonicalLoad({
+                    remote: { ok: false },
+                    cache: {
+                        data: { exams: localExams, attempts: localAttempts, rosterStudents: localRoster.students, rosterGroups: localRoster.groups },
+                        staleAt: cachedAt,
+                    },
+                    now: new Date().toISOString(),
+                }, isDashboardSnapshotEmpty));
             }
         }
         const refreshTimer = window.setTimeout(() => {
@@ -580,6 +620,7 @@ function TeacherDashboard() {
     const handleRefreshDashboardData = async () => {
         if (isRefreshingDashboardData) return;
         setIsRefreshingDashboardData(true);
+        if (dashboardLoadState.state === "error_without_cache") setDashboardLoadState({ state: "loading" });
         setSyncStatus(summarizePersistenceHealth([]));
         try {
             await loadDashboardData({ notifyOnSuccess: true, notifyOnError: true });
@@ -784,14 +825,14 @@ function TeacherDashboard() {
 
         return actions;
     }, [analyticsDataHealth.issues, analyticsDataHealth.kind, dataMode, isMockupAccount, questionResultRepairPlan.repairableCount]);
-    const isDashboardResolving = !isAccountModeResolved || !hasDashboardDataResolved;
-    const isRealDashboardEmpty = !isDashboardResolving
+    const isDashboardResolving = !isAccountModeResolved || dashboardLoadState.state === "loading";
+    const isDashboardUnavailable = dashboardLoadState.state === "error_without_cache";
+    const isDashboardDegraded = dashboardLoadState.state === "degraded_with_cache";
+    const isRealDashboardEmpty = dashboardLoadState.state === "loaded_empty"
         && !isMockupAccount
         && dataMode === "real"
-        && exams.length === 0
-        && attempts.length === 0
-        && rosterStudents.length === 0
-        && rosterGroups.length === 0;
+        && isDashboardSnapshotEmpty(dashboardLoadState.data);
+    const dashboardHasRenderableData = dashboardLoadState.state === "loaded_data" || isDashboardDegraded;
 
     // Tab Navigation Component
     const renderTabs = () => isMockupAccount ? (
@@ -947,7 +988,7 @@ function TeacherDashboard() {
                                 tone={dataHealthPillTone}
                             />
                         </div>}
-                        {!isDashboardResolving && !isRealDashboardEmpty && <Link href="/create" className="dashboard-create-action" style={{
+                        {dashboardHasRenderableData && <Link href="/create" className="dashboard-create-action" style={{
                                 padding: '0.55rem 1.1rem', background: 'var(--primary)',
                                 color: 'white', borderRadius: 'var(--radius-full)',
                                 fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem',
@@ -957,6 +998,22 @@ function TeacherDashboard() {
                         </Link>}
                     </div>}
                 </div>
+
+                {isDashboardDegraded && (
+                    <section
+                        data-testid="canonical-degraded-cache"
+                        role="status"
+                        style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', padding: '1rem 1.1rem', marginBottom: '1.5rem', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 'var(--radius-lg)', background: 'rgba(245,158,11,0.08)', flexWrap: 'wrap' }}
+                    >
+                        <div>
+                            <strong>저장된 데이터를 표시 중</strong>
+                            <p className="text-muted" style={{ marginTop: '0.25rem' }}>
+                                마지막 저장 {new Date(dashboardLoadState.staleAt).toLocaleString('ko-KR')} · 서버 연결을 확인해주세요.
+                            </p>
+                        </div>
+                        <button type="button" className="btn btn-secondary" onClick={() => { void handleRefreshDashboardData(); }}>다시 시도</button>
+                    </section>
+                )}
 
                 {dataMode === "demo" && (
                     <div
@@ -1118,7 +1175,7 @@ function TeacherDashboard() {
                     </div>
                 )}
 
-                {!isDashboardResolving && !isRealDashboardEmpty && !isMockupAccount && activeTab !== "overview" && activeTab !== "exam" && <div
+                {dashboardHasRenderableData && !isMockupAccount && activeTab !== "overview" && activeTab !== "exam" && <div
                     className="dashboard-analysis-actions"
                     aria-label="분석 다음 조치"
                     style={{
@@ -1188,6 +1245,20 @@ function TeacherDashboard() {
 
                 {isDashboardResolving ? (
                     <AnalyticsTabSkeleton />
+                ) : isDashboardUnavailable ? (
+                    <section
+                        data-testid="canonical-error-no-cache"
+                        role="alert"
+                        className="bento-card"
+                        style={{ minHeight: 280, display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}
+                    >
+                        <div>
+                            <AlertTriangle size={28} color="var(--warning)" style={{ margin: '0 auto 0.75rem' }} />
+                            <h2 style={{ fontSize: '1.25rem', fontWeight: 850 }}>서버 데이터를 불러오지 못했습니다</h2>
+                            <p className="text-muted" style={{ margin: '0.5rem 0 1rem' }}>검증된 저장 데이터가 없어 빈 대시보드로 표시하지 않습니다.</p>
+                            <button data-testid="canonical-dashboard-retry" type="button" className="btn btn-primary" onClick={() => { void handleRefreshDashboardData(); }}>다시 시도</button>
+                        </div>
+                    </section>
                 ) : isRealDashboardEmpty ? (
                     <section
                         className="bento-card dashboard-empty-onboarding"

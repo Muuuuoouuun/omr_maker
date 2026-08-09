@@ -8,12 +8,15 @@ const dashboardSource = readFileSync(
 );
 
 describe("student dashboard load-state contract", () => {
-    it("models loading, ready, and error independently from the student session", () => {
-        expect(dashboardSource).toContain('type DashboardDataState = "loading" | "ready" | "error"');
-        expect(dashboardSource).toContain('useState<DashboardDataState>("loading")');
+    it("models the canonical load states independently from the student session", () => {
+        expect(dashboardSource).toContain("CanonicalLoadState");
+        expect(dashboardSource).toContain("resolveCanonicalLoad");
+        expect(dashboardSource).toContain("myAttemptsResult.remoteFailed !== true");
+        expect(dashboardSource).toContain('state: "loading"');
         expect(dashboardSource).toContain('myAttemptsResult.status !== "ok"');
-        expect(dashboardSource).toContain('setDataState("error")');
-        expect(dashboardSource).toContain('setDataState("ready")');
+        expect(dashboardSource).toContain('state === "error_without_cache"');
+        expect(dashboardSource).toContain('state === "loaded_empty"');
+        expect(dashboardSource).toContain('state === "loaded_data"');
     });
 
     it("renders status announcements and recovery actions before any success-only content", () => {
@@ -25,7 +28,9 @@ describe("student dashboard load-state contract", () => {
         expect(dashboardSource).not.toContain('href="/?role=student"');
         expect(dashboardSource).toContain("선생님이 보낸 최신 초대 링크");
         expect(dashboardSource).toContain('href="/"');
-        expect(dashboardSource).toMatch(/dataState === "ready"\s*&&\s*\(/);
+        expect(dashboardSource).toContain('dataState.state === "loaded_empty"');
+        expect(dashboardSource).toContain('dataState.state === "loaded_data"');
+        expect(dashboardSource).toContain('data-testid="student-dashboard-degraded"');
     });
 
     it("uses only minimal attempt summaries before entry", () => {
@@ -35,5 +40,11 @@ describe("student dashboard load-state contract", () => {
         expect(dashboardSource).not.toContain("newlyAnsweredKeys");
         expect(dashboardSource).toContain("answeredQuestionCount");
         expect(dashboardSource).toContain("latestAnsweredAt");
+    });
+
+    it("derives local lifecycle and restores missing completed exams as review-only cards", () => {
+        expect(dashboardSource).toContain("localStudentAssignmentPreview");
+        expect(dashboardSource).toContain("buildMissingCompletedReviewAssignments");
+        expect(dashboardSource).toContain("loadObservedAt");
     });
 });

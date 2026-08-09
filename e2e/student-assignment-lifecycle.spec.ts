@@ -16,36 +16,38 @@ async function seedLifecycleDashboard(page: Page) {
             guestId: studentId,
             identityType: "guest",
         };
+        const observedAt = Date.now();
+        const instant = (offsetMs: number) => new Date(observedAt + offsetMs).toISOString();
         const exam = (
             id: string,
-            lifecycle: "scheduled" | "open" | "closed" | "invalid" | undefined,
-            startsAt: string,
-            endsAt: string,
+            startAt: string,
+            endAt: string,
+            archived = false,
         ) => ({
             id,
             title: `${id} 시험`,
-            createdAt: "2026-08-09T00:00:00.000Z",
-            startsAt,
-            endsAt,
-            lifecycle,
+            createdAt: instant(-120_000),
+            startAt,
+            endAt,
+            archived,
             durationMin: 30,
             accessConfig: { type: "public", groupIds: [] },
             questions: [{ id: 1, number: 1, answer: 1, choices: 5, score: 10 }],
         });
         const exams = [
-            exam("one-second-before-start", "scheduled", "2026-08-09T01:00:00.000Z", "2026-08-09T02:00:00.000Z"),
-            exam("at-start-boundary", "open", "2026-08-09T01:00:00.000Z", "2026-08-09T02:00:00.000Z"),
-            exam("one-second-before-end", "open", "2026-08-09T00:00:00.000Z", "2026-08-09T02:00:00.000Z"),
-            exam("at-end-boundary", "closed", "2026-08-09T00:00:00.000Z", "2026-08-09T02:00:00.000Z"),
-            exam("archived-closed", "closed", "2026-08-09T00:00:00.000Z", "2026-08-09T03:00:00.000Z"),
-            exam("malformed-lifecycle", undefined, "2026-08-09T00:00:00.000Z", "2026-08-09T03:00:00.000Z"),
-            exam("completed-closed", "closed", "2026-08-09T00:00:00.000Z", "2026-08-09T02:00:00.000Z"),
-            exam("completed-open", "open", "2026-08-09T00:00:00.000Z", "2026-08-09T03:00:00.000Z"),
+            exam("one-second-before-start", instant(60_000), instant(120_000)),
+            exam("at-start-boundary", instant(-60_000), instant(60_000)),
+            exam("one-second-before-end", instant(-60_000), instant(60_000)),
+            exam("at-end-boundary", instant(-120_000), instant(0)),
+            exam("archived-closed", instant(-120_000), instant(60_000), true),
+            exam("malformed-lifecycle", "not-a-time", instant(60_000)),
+            exam("completed-closed", instant(-120_000), instant(0)),
+            exam("completed-open", instant(-60_000), instant(60_000)),
         ];
-        const completed = ["completed-closed", "completed-open"].map((examId, index) => ({
+        const completed = ["completed-closed", "completed-open", "omitted-archived"].map((examId, index) => ({
             id: `attempt-${index + 1}`,
             examId,
-            examTitle: `${examId} 시험`,
+            examTitle: examId === "omitted-archived" ? "목록에서 제외된 보관 시험" : `${examId} 시험`,
             studentName: session.name,
             studentId,
             guestId: studentId,
@@ -53,8 +55,8 @@ async function seedLifecycleDashboard(page: Page) {
             status: "completed",
             score: 10,
             totalScore: 10,
-            startedAt: "2026-08-09T00:00:00.000Z",
-            finishedAt: "2026-08-09T00:30:00.000Z",
+            startedAt: instant(-120_000),
+            finishedAt: instant(-90_000 + index),
             answers: { 1: 1 },
         }));
         for (const item of exams) {
@@ -76,21 +78,17 @@ if (hostedMode) {
     test("local lifecycle fixture renders boundaries without claiming hosted authorization", async ({ page, context }) => {
         await resetBrowserState(page, context);
         await seedLifecycleDashboard(page);
-        await page.route("**/*", async route => {
-            const request = route.request();
-            if (request.method() === "POST" && request.headers()["next-action"]) {
-                await route.abort("failed");
-                return;
-            }
-            await route.continue();
-        });
         await page.goto("/student/dashboard");
 
-        const todo = page.getByRole("heading", { name: "미완료 과제" }).locator("..").locator("..");
-        await expect(todo.getByText("예정", { exact: true })).toBeVisible();
-        await expect(todo.getByText("응시 가능", { exact: true })).toHaveCount(2);
-        await expect(todo.getByText("마감", { exact: true })).toHaveCount(4);
-        await expect(todo.getByText("확인 필요", { exact: true })).toHaveCount(2);
+        const lifecycleBadge = (id: string, label: string) => page
+            .locator(`[data-assignment-id="${id}"] .student-assignment-meta`)
+            .getByText(label, { exact: true });
+        await expect(lifecycleBadge("one-second-before-start", "예정")).toBeVisible();
+        await expect(lifecycleBadge("at-start-boundary", "응시 가능")).toBeVisible();
+        await expect(lifecycleBadge("one-second-before-end", "응시 가능")).toBeVisible();
+        await expect(lifecycleBadge("at-end-boundary", "마감")).toBeVisible();
+        await expect(lifecycleBadge("archived-closed", "마감")).toBeVisible();
+        await expect(lifecycleBadge("malformed-lifecycle", "확인 필요")).toBeVisible();
 
         for (const id of ["one-second-before-start", "at-end-boundary", "archived-closed", "malformed-lifecycle"]) {
             const row = page.locator(`[data-assignment-id="${id}"]`);
@@ -107,7 +105,11 @@ if (hostedMode) {
             .getByRole("link", { name: "계속 풀기" })).toBeVisible();
 
         const done = page.getByRole("heading", { name: "완료 기록" }).locator("..").locator("..");
-        await expect(done.getByRole("link", { name: "복습" })).toHaveCount(2);
+        await expect(done.getByRole("link", { name: "복습" })).toHaveCount(3);
         await expect(done.locator('a[href^="/solve/"]')).toHaveCount(0);
+        const archivedReview = page.locator('[data-assignment-id="omitted-archived"]');
+        await expect(archivedReview.getByText("복습 전용", { exact: true })).toBeVisible();
+        await expect(archivedReview.getByRole("link", { name: "복습" })).toHaveAttribute("href", "/student/review/attempt-3");
+        await expect(archivedReview.locator('a[href^="/solve/"]')).toHaveCount(0);
     });
 }

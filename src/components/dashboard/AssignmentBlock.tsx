@@ -3,9 +3,10 @@ import { Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
 import type { StudentAssignmentPreview } from "@/lib/studentExamContract";
 import type { AssignmentLifecycle } from "@/lib/assignmentLifecycle";
+import type { ReviewOnlyCompletedAssignment } from "@/lib/studentAssignmentClassification";
 import StatusPill from "@/components/dashboard/StatusPill";
 
-type AssignmentCard = (Exam | SolvableExam | StudentAssignmentPreview) & {
+type AssignmentCard = (Exam | SolvableExam | StudentAssignmentPreview | ReviewOnlyCompletedAssignment) & {
   attemptId?: string;
   hasUnreadFeedback?: boolean;
   answeredQuestionCount?: number;
@@ -88,7 +89,7 @@ function FolderIcon() {
   );
 }
 
-function assignmentSolveHref(exam: Exam | SolvableExam | StudentAssignmentPreview): string {
+function assignmentSolveHref(exam: AssignmentCard): string {
   if (!("assignmentId" in exam) || !exam.assignmentId) return `/solve/${exam.id}`;
   const query = new URLSearchParams({ assignment: exam.assignmentId });
   if (exam.assignmentMode === "retake" && exam.retakeSourceAttemptId && exam.retakeQuestionIds?.length) {
@@ -186,7 +187,14 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
         ) : (
           exams.map((exam) => {
             const questionCount = "questions" in exam ? exam.questions.length : undefined;
-            const accessType = "access" in exam ? exam.access.type : exam.accessConfig?.type;
+            const reviewOnly = "reviewOnly" in exam && exam.reviewOnly === true;
+            const accessType = reviewOnly
+              ? undefined
+              : "access" in exam
+                ? exam.access.type
+                : "accessConfig" in exam
+                  ? exam.accessConfig?.type
+                  : undefined;
             const availability = lifecyclePresentation(exam);
             return (
             <div
@@ -270,7 +278,7 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                     }
                     style={{ padding: "1px 7px", fontSize: "0.7rem" }}
                   >
-                    {accessType === "targeted" ? "개별 배정" : accessType === "group" ? "클래스" : "공개"}
+                    {reviewOnly ? "복습 전용" : accessType === "targeted" ? "개별 배정" : accessType === "group" ? "클래스" : "공개"}
                   </span>
                   <StatusPill
                     size="sm"

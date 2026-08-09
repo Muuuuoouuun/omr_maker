@@ -119,9 +119,24 @@ import {
     INITIAL_CAPACITY_EXCEEDED_ERROR,
     INITIAL_CAPACITY_REMEDIATION_KO,
 } from "@/lib/initialOperationsPolicy";
+import { resolveCanonicalLoad, type CanonicalLoadState } from "@/lib/canonicalLoadState";
 
 type TabType = "students" | "groups" | "invites";
 type RosterDataMode = "real" | "demo";
+type CanonicalRosterData = {
+    students: RosterStudent[];
+    groups: RosterGroup[];
+    invites: RosterInvite[];
+    forceDemo?: boolean;
+};
+const TEACHER_ROSTER_CACHE_STALE_AT_KEY = "omr_teacher_roster_cache_stale_at_v1";
+
+function isCanonicalRosterEmpty(data: CanonicalRosterData): boolean {
+    return data.forceDemo !== true
+        && data.students.length === 0
+        && data.groups.length === 0
+        && data.invites.length === 0;
+}
 
 function isCompleteTeacherAttemptCollection(result: TeacherAttemptCollectionLoadResult): boolean {
     return resolveTeacherAttemptCollectionCompleteness(result) === "ready";
@@ -303,6 +318,8 @@ function ManageUsersInner() {
     const issuedStudentCredentialIdsRef = useRef<Set<string>>(new Set());
     const { plan: currentPlan } = useServerPlan();
     const [hydrated, setHydrated] = useState(false);
+    const [rosterLoadState, setRosterLoadState] = useState<CanonicalLoadState<CanonicalRosterData>>({ state: "loading" });
+    const [rosterRetryGeneration, setRosterRetryGeneration] = useState(0);
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
     const advancedAnalyticsEnabled = hasPlanEntitlement(currentPlan, "advancedAnalytics");
     const retakeAssignmentsEnabled = hasPlanEntitlement(currentPlan, "retakeAssignments");
@@ -345,12 +362,19 @@ function ManageUsersInner() {
     useEffect(() => {
         let cancelled = false;
         const hydrateRoster = async () => {
+            const loadObservedAt = new Date().toISOString();
+            setRosterLoadState({ state: "loading" });
+            setHydrated(false);
+            let localData: CanonicalRosterData = { students: [], groups: [], invites: [] };
+            let cachedAt: string | null = null;
             try {
                 localStorage.removeItem(STUDENT_CODES_STORAGE_KEY);
                 const storedRosterExists = hasStoredRosterData(localStorage);
                 const storedStudents = readRosterStudents(localStorage);
                 const storedGroups = readRosterGroups(localStorage);
                 const storedInvites = readRosterInvites(localStorage);
+                localData = { students: storedStudents, groups: storedGroups, invites: storedInvites };
+                cachedAt = localStorage.getItem(TEACHER_ROSTER_CACHE_STALE_AT_KEY);
                 const legacyDemoRoster = storedRosterExists
                     && shouldUseDemoData(readTeacherSession())
                     && isLegacyDemoRosterSnapshot(storedStudents, storedGroups, storedInvites);
@@ -367,11 +391,29 @@ function ManageUsersInner() {
                 const nextStudents = useDemoRoster ? [] : rosterResult.students;
                 const nextGroups = useDemoRoster ? [] : rosterResult.groups;
                 const nextInvites = useDemoRoster ? [] : rosterResult.invites;
+                const loadedData: CanonicalRosterData = {
+                    students: nextStudents,
+                    groups: nextGroups,
+                    invites: nextInvites,
+                    ...(useDemoRoster ? { forceDemo: true } : {}),
+                };
+                const nextState = resolveCanonicalLoad({
+                    remote: rosterResult.remoteError ? { ok: false } : { ok: true, data: loadedData },
+                    cache: rosterResult.remoteError && cachedAt ? { data: localData, staleAt: cachedAt } : null,
+                    now: loadObservedAt,
+                }, isCanonicalRosterEmpty);
                 // Hydrate client-only localStorage data after mount.
-                setStudents(nextStudents);
-                setGroups(nextGroups);
-                setInvites(nextInvites);
+                const visibleData = nextState.state === "loaded_empty" || nextState.state === "loaded_data" || nextState.state === "degraded_with_cache"
+                    ? nextState.data
+                    : { students: [], groups: [], invites: [] };
+                setStudents(visibleData.students);
+                setGroups(visibleData.groups);
+                setInvites(visibleData.invites);
                 setRosterDataMode(useDemoRoster ? "demo" : "real");
+                setRosterLoadState(nextState);
+                if (!rosterResult.remoteError && rosterResult.remoteLoaded) {
+                    try { localStorage.setItem(TEACHER_ROSTER_CACHE_STALE_AT_KEY, loadObservedAt); } catch { /* cache remains optional */ }
+                }
                 if (rosterResult.remoteError && !useDemoRoster) {
                     if (rosterResult.remoteError === INITIAL_CAPACITY_EXCEEDED_ERROR) {
                         toast.error("초기 운영 지원 범위 초과", INITIAL_CAPACITY_REMEDIATION_KO);
@@ -387,17 +429,26 @@ function ManageUsersInner() {
                 setIssuedStudentCredentialIds(storedIssuedIds);
             } catch {
                 if (cancelled) return;
-                setStudents([]);
-                setGroups([]);
-                setInvites([]);
+                const nextState = resolveCanonicalLoad({
+                    remote: { ok: false },
+                    cache: cachedAt ? { data: localData, staleAt: cachedAt } : null,
+                    now: loadObservedAt,
+                }, isCanonicalRosterEmpty);
+                const visibleData = nextState.state === "degraded_with_cache"
+                    ? nextState.data
+                    : { students: [], groups: [], invites: [] };
+                setStudents(visibleData.students);
+                setGroups(visibleData.groups);
+                setInvites(visibleData.invites);
                 setRosterDataMode("real");
+                setRosterLoadState(nextState);
             }
             setHydrated(true);
         };
 
         void hydrateRoster();
         return () => { cancelled = true; };
-    }, []);
+    }, [rosterRetryGeneration]);
 
     useEffect(() => {
         let cancelled = false;
@@ -563,9 +614,10 @@ function ManageUsersInner() {
             .map(student => ({ studentId: student.id, name: student.name, group: student.group }));
     }, [credentialBatchExpectedStudents, displayStudents]);
     const hasStudentRosterData = displayStudents.length > 0;
+    const rosterMutationsDisabled = rosterLoadState.state === "loading" || rosterLoadState.state === "error_without_cache";
     // Keep the established controls while the client snapshot is hydrating, then
     // collapse to the single empty-state action set when the real roster is empty.
-    const showStudentListControls = !hydrated || hasStudentRosterData;
+    const showStudentListControls = !rosterMutationsDisabled && (!hydrated || hasStudentRosterData);
 
     const displayGroups = useMemo(() => (
         recomputeRosterGroupsFromStudents(displayStudents, rosterGroups)
@@ -1325,6 +1377,45 @@ function ManageUsersInner() {
         );
     };
 
+    const handleCanonicalRosterRetry = () => {
+        setRosterLoadState({ state: "loading" });
+        setRosterRetryGeneration(generation => generation + 1);
+    };
+
+    if (rosterLoadState.state === "loading" || rosterLoadState.state === "error_without_cache") {
+        const unavailable = rosterLoadState.state === "error_without_cache";
+        return (
+            <div className="layout-main">
+                <TeacherHeader badge="USERS" badgeColor="#22c55e" />
+                <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
+                    <div style={{ margin: '3rem 0 2rem' }}>
+                        <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>사용자 관리</h1>
+                        <p className="text-muted">학생, 반, 초대를 한 곳에서 관리하세요.</p>
+                    </div>
+                    <section
+                        {...(unavailable ? { "data-testid": "canonical-error-no-cache" } : { "data-testid": "canonical-roster-loading" })}
+                        role={unavailable ? "alert" : "status"}
+                        className="bento-card"
+                        style={{ minHeight: 280, display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}
+                    >
+                        <div>
+                            <AlertTriangle size={28} color={unavailable ? "var(--warning)" : "var(--primary)"} style={{ margin: '0 auto 0.75rem' }} />
+                            <h2 style={{ fontSize: '1.2rem', fontWeight: 850 }}>
+                                {unavailable ? "서버 명단을 불러오지 못했습니다" : "명단을 불러오는 중입니다"}
+                            </h2>
+                            <p className="text-muted" style={{ margin: '0.5rem 0 1rem' }}>
+                                {unavailable ? "검증된 저장 명단이 없어 빈 명단이나 추가 화면으로 표시하지 않습니다." : "학생과 반의 최신 상태를 확인하고 있습니다."}
+                            </p>
+                            {unavailable && (
+                                <button data-testid="canonical-roster-retry" type="button" className="btn btn-primary" onClick={handleCanonicalRosterRetry}>다시 시도</button>
+                            )}
+                        </div>
+                    </section>
+                </main>
+            </div>
+        );
+    }
+
     return (
         <div className="layout-main">
             <div className="orb orb-primary" />
@@ -1387,6 +1478,22 @@ function ManageUsersInner() {
                         )}
                     </div>}
                 </div>
+
+                {rosterLoadState.state === "degraded_with_cache" && (
+                    <section
+                        data-testid="canonical-degraded-cache"
+                        role="status"
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '1rem 1.1rem', marginBottom: '1.5rem', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 'var(--radius-lg)', background: 'rgba(245,158,11,0.08)', flexWrap: 'wrap' }}
+                    >
+                        <div>
+                            <strong>저장된 데이터를 표시 중</strong>
+                            <p className="text-muted" style={{ marginTop: '0.25rem' }}>
+                                마지막 저장 {new Date(rosterLoadState.staleAt).toLocaleString('ko-KR')} · 서버 명단을 다시 확인해주세요.
+                            </p>
+                        </div>
+                        <button type="button" className="btn btn-secondary" onClick={handleCanonicalRosterRetry}>다시 시도</button>
+                    </section>
+                )}
 
                 {isDemoRoster && (
                     <div
@@ -2035,7 +2142,7 @@ function ManageUsersInner() {
                                                 color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
                                                 display: 'flex', alignItems: 'center', gap: '0.4rem'
                                             }}>
-                                            <UserPlus size={14} /> 학생 추가
+                                            <UserPlus size={14} /> 첫 학생 추가
                                         </button>
                                         <button
                                             onClick={() => fileInputRef.current?.click()}
