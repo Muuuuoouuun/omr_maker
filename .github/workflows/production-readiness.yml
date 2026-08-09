@@ -12,11 +12,51 @@ on:
         required: true
         type: string
       preview_artifact_digest:
-        description: SHA-256 digest of the verified preview artifact
+        description: Exact sha256:<64 lowercase hex> digest of the verified preview artifact
         required: true
         type: string
       preview_attestation_signature:
         description: HMAC-SHA256 signature for the immutable preview identity
+        required: true
+        type: string
+      qualified_preview_url:
+        description: Exact HTTPS URL of the qualified immutable preview
+        required: true
+        type: string
+      qualified_preview_host:
+        description: Exact hostname pinned to the qualified preview URL
+        required: true
+        type: string
+      qualification_run_id:
+        description: Protected initial-operations qualification workflow run ID
+        required: true
+        type: string
+      qualification_artifact_digest:
+        description: Raw lowercase SHA-256 digest from upload-artifact
+        required: true
+        type: string
+      qualification_environment_digest:
+        description: Exact qualified staging environment digest
+        required: true
+        type: string
+      expected_database_project_ref_hash:
+        description: SHA-256 hash of the target production database project ref
+        required: true
+        type: string
+      previous_production_deployment_id:
+        description: Exact currently serving deployment ID for rollback
+        required: true
+        type: string
+      operator_id:
+        description: Exact authenticated github.actor requesting promotion
+        required: true
+        type: string
+      promotion_confirmation:
+        description: Exact target/build/operator-bound promotion confirmation
+        required: true
+        type: string
+      writes_pause_confirmation:
+        description: Exact target-bound confirmation (writes-paused:<production-host>)
         required: true
         type: string
       expected_readiness_version:
@@ -35,16 +75,31 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  verify-protected-dispatch:
+    name: Reject non-default production dispatches
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify protected default branch dispatch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INPUT_OPERATOR_ID: ${{ inputs.operator_id }}
+          VERIFIED_OPERATOR_ID: ${{ github.actor }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test "$INPUT_OPERATOR_ID" = "$VERIFIED_OPERATOR_ID"
+
   verify-hosted-boundary:
     name: Hosted build · readiness · access denials
-    # Production secrets may only reach workflow code from the protected
-    # default branch. The immutable checkout below binds verifier and artifact.
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    # Production secrets may only reach workflow code after the explicit
+    # default-branch gate. The immutable checkout below binds verifier and artifact.
+    needs: verify-protected-dispatch
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Verify requested build matches trusted workflow revision
         env:
@@ -56,7 +111,7 @@ jobs:
           OMR_PRODUCTION_ASSET_GC_PAUSED_REF: ${{ inputs.asset_gc_scheduler_pause_confirmation }}
           OMR_PRODUCTION_HOST: ${{ secrets.OMR_PRODUCTION_HOST }}
         run: test "$OMR_PRODUCTION_ASSET_GC_PAUSED_REF" = "asset-gc-paused:$OMR_PRODUCTION_HOST"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           ref: ${{ inputs.expected_build }}
@@ -69,12 +124,95 @@ jobs:
           test "$(git rev-parse --verify HEAD)" = "$OMR_PRODUCTION_EXPECTED_BUILD"
           git rev-parse --verify "origin/$OMR_PRODUCTION_DEFAULT_BRANCH^{commit}" >/dev/null
           git merge-base --is-ancestor "$OMR_PRODUCTION_EXPECTED_BUILD" "origin/$OMR_PRODUCTION_DEFAULT_BRANCH"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22.13.0"
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Resolve immutable qualification artifact
+        id: resolve-qualification-artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: initial-operations-qualification-${{ inputs.expected_build }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          QUALIFICATION_ARTIFACT_DIGEST: ${{ inputs.qualification_artifact_digest }}
+          OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
+        run: |
+          set -euo pipefail
+          [[ "$QUALIFICATION_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          [[ "$QUALIFICATION_ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+          RUN_RESPONSE="$(gh api --method GET \
+            "/repos/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID")"
+          test "$(jq -r '.repository.full_name' <<<"$RUN_RESPONSE")" = "$GITHUB_REPOSITORY"
+          test "$(jq -r '.path' <<<"$RUN_RESPONSE")" = ".github/workflows/initial-operations-qualification.yml"
+          test "$(jq -r '.event' <<<"$RUN_RESPONSE")" = "workflow_dispatch"
+          test "$(jq -r '.head_branch' <<<"$RUN_RESPONSE")" = "$DEFAULT_BRANCH"
+          test "$(jq -r '.head_sha' <<<"$RUN_RESPONSE")" = "$OMR_PRODUCTION_EXPECTED_BUILD"
+          test "$(jq -r '.status' <<<"$RUN_RESPONSE")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$RUN_RESPONSE")" = "success"
+          RESPONSE="$(gh api --method GET \
+            "/repos/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID/artifacts?per_page=100")"
+          test "$(jq -r '.total_count' <<<"$RESPONSE")" -le 100
+          MATCHES="$(jq -c --arg name "$ARTIFACT_NAME" \
+            '[.artifacts[] | select(.name == $name and .expired == false)]' <<<"$RESPONSE")"
+          test "$(jq 'length' <<<"$MATCHES")" -eq 1
+          test "$(jq -r '.[0].digest' <<<"$MATCHES")" = "sha256:$QUALIFICATION_ARTIFACT_DIGEST"
+          test "$(jq -r '.[0].workflow_run.head_sha' <<<"$MATCHES")" = "$OMR_PRODUCTION_EXPECTED_BUILD"
+          ARTIFACT_ID="$(jq -r '.[0].id' <<<"$MATCHES")"
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          printf 'artifact_id=%s\n' "$ARTIFACT_ID" >> "$GITHUB_OUTPUT"
+      - name: Create private qualification restore boundary
+        run: |
+          set -euo pipefail
+          umask 077
+          test ! -e "$RUNNER_TEMP/qualified-promotion"
+          mkdir -m 700 "$RUNNER_TEMP/qualified-promotion"
+      - name: Restore immutable qualification artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ steps.resolve-qualification-artifact.outputs.artifact_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.qualification_run_id }}
+          path: ${{ runner.temp }}/qualified-promotion
+          merge-multiple: true
+      - name: Rebind qualification manifest to private restore
+        env:
+          OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
+          OMR_PRODUCTION_HOST: ${{ secrets.OMR_PRODUCTION_HOST }}
+          OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}
+          OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID: ${{ inputs.preview_deployment_id }}
+          OMR_PROMOTION_EXPECTED_DATABASE_PROJECT_REF_HASH: ${{ inputs.expected_database_project_ref_hash }}
+          OMR_PROMOTION_EXPECTED_ENVIRONMENT_DIGEST: ${{ inputs.qualification_environment_digest }}
+          OMR_PROMOTION_MANIFEST_PATH: ${{ runner.temp }}/qualified-promotion/release/rebound-release-quality-manifest.json
+          OMR_PROMOTION_QUALIFICATION_ROOT: ${{ runner.temp }}/qualified-promotion
+          OMR_PROMOTION_QUALIFIED_PREVIEW_HOST: ${{ inputs.qualified_preview_host }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -z "$(find "$OMR_PROMOTION_QUALIFICATION_ROOT" -type l -print -quit)"
+          find "$OMR_PROMOTION_QUALIFICATION_ROOT" -type d -exec chmod 700 {} +
+          find "$OMR_PROMOTION_QUALIFICATION_ROOT" -type f -exec chmod 600 {} +
+          test -f "$OMR_PROMOTION_QUALIFICATION_ROOT/QUALIFICATION_COMPLETE"
+          test ! -e "$OMR_PROMOTION_QUALIFICATION_ROOT/.INCOMPLETE"
+          node scripts/promote-qualified-preview.mjs prepare >/dev/null
+          mkdir -m 700 "$OMR_PROMOTION_QUALIFICATION_ROOT/final-release"
+          printf 'OMR_PROMOTION_MANIFEST_PATH=%s\n' "$OMR_PROMOTION_MANIFEST_PATH" >> "$GITHUB_ENV"
+          printf 'OMR_PROMOTION_MANIFEST_SHA256=%s\n' \
+            "$(sha256sum "$OMR_PROMOTION_MANIFEST_PATH" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+          printf 'OMR_PROMOTION_SCORE_PATH=%s\n' \
+            "$RUNNER_TEMP/qualified-promotion/release/qualified-score.json" >> "$GITHUB_ENV"
+      - name: Re-score restored qualification evidence
+        run: |
+          set -euo pipefail
+          umask 077
+          npm run release:score -- \
+            --manifest="$OMR_PROMOTION_MANIFEST_PATH" \
+            --output="$OMR_PROMOTION_SCORE_PATH"
+      - name: Install pinned promotion client
+        run: npm install --global --ignore-scripts --no-audit --no-fund vercel@58.9.0
       - name: Verify hosted production deployment
         env:
           OMR_PRODUCTION_BASE_URL: ${{ secrets.OMR_PRODUCTION_BASE_URL }}
@@ -93,15 +231,54 @@ jobs:
           OMR_RELEASE_ATTESTATION_SECRET: ${{ secrets.OMR_RELEASE_ATTESTATION_SECRET }}
           OMR_PRODUCTION_EXPECTED_READINESS_VERSION: ${{ inputs.expected_readiness_version }}
           OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: ${{ secrets.OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID }}
-        run: >-
-          npm run ops:verify:production --
-          --confirm-production-host="$OMR_PRODUCTION_HOST"
-          --output="$RUNNER_TEMP/production-readiness.json"
+          OMR_PROMOTION_ALLOWED_PREVIEW_HOST_SUFFIX: ${{ vars.OMR_QUALIFIED_PREVIEW_HOST_SUFFIX }}
+          OMR_PROMOTION_EXPECTED_DATABASE_PROJECT_REF_HASH: ${{ inputs.expected_database_project_ref_hash }}
+          OMR_PROMOTION_EXPECTED_ENVIRONMENT_DIGEST: ${{ inputs.qualification_environment_digest }}
+          OMR_PROMOTION_FINAL_RELEASE_ROOT: ${{ runner.temp }}/qualified-promotion/final-release
+          OMR_PROMOTION_OPERATOR_CONFIRMATION: ${{ inputs.promotion_confirmation }}
+          OMR_PROMOTION_OPERATOR_ID: ${{ github.actor }}
+          OMR_PROMOTION_PREVIOUS_DEPLOYMENT_ID: ${{ inputs.previous_production_deployment_id }}
+          OMR_PROMOTION_QUALIFICATION_ARTIFACT_DIGEST: ${{ inputs.qualification_artifact_digest }}
+          OMR_PROMOTION_QUALIFIED_PREVIEW_HOST: ${{ inputs.qualified_preview_host }}
+          OMR_PROMOTION_QUALIFIED_PREVIEW_URL: ${{ inputs.qualified_preview_url }}
+          OMR_PROMOTION_ROLLBACK_OUTPUT_PATH: ${{ runner.temp }}/qualified-promotion/rollback-required.json
+          OMR_PROMOTION_VERIFIER_OUTPUT_PATH: ${{ runner.temp }}/qualified-promotion/production-readiness.json
+          OMR_PROMOTION_WRITES_PAUSE_CONFIRMATION: ${{ inputs.writes_pause_confirmation }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # The guard invokes the same post-promotion verifier as `npm run ops:verify:production`.
+          node scripts/promote-qualified-preview.mjs promote
       - name: Upload verified release evidence
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: production-readiness-${{ inputs.expected_build }}
-          path: ${{ runner.temp }}/production-readiness.json
+          path: |
+            ${{ runner.temp }}/qualified-promotion/production-readiness.json
+            ${{ runner.temp }}/qualified-promotion/final-release
+          if-no-files-found: error
+          retention-days: 90
+      - name: Classify rollback-required evidence
+        id: classify-rollback
+        if: failure()
+        run: |
+          set -euo pipefail
+          if test -f "$RUNNER_TEMP/qualified-promotion/rollback-required.json"; then
+            printf 'rollback_required=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'rollback_required=false\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Retain rollback-required evidence
+        if: failure() && steps.classify-rollback.outputs.rollback_required == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rollback-required-${{ inputs.expected_build }}
+          path: |
+            ${{ runner.temp }}/qualified-promotion/rollback-required.json
+            ${{ runner.temp }}/qualified-promotion/final-release
           if-no-files-found: error
           retention-days: 90

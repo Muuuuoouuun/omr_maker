@@ -222,11 +222,83 @@ curl -i -H "Authorization: Bearer $OMR_ASSET_GC_CRON_SECRET" https://<deployment
 curl -i -H "Authorization: Bearer $OMR_READINESS_TOKEN" https://<deployment>/api/readyz
 ```
 
+### 검증된 프리뷰 승격 계약
+
+프로덕션 승격은 protected default branch의 `Production readiness` workflow에서만 수행합니다. 다른
+branch dispatch는 production environment job을 skip하지 않고 앞선 무비밀 gate에서 명시적으로 실패합니다.
+운영자는 exact build SHA와 해당 SHA의 `initial-operations-qualification-<SHA>` bundle을 만든
+protected qualification run ID, upload-artifact가 반환한 raw SHA-256 digest, qualification environment
+digest를 입력합니다. Workflow는 GitHub run API에서 exact workflow path, `workflow_dispatch`, default
+branch, head SHA, repository, completed/success conclusion을 먼저 확인하고 artifact metadata의 name,
+run의 `head_sha`, `sha256:<digest>`를 모두 일치시킨 뒤 bundle을 새로운 0700 private directory로 복원합니다. `.INCOMPLETE`가 있거나
+`QUALIFICATION_COMPLETE`, exact identity, `bundle-index.json`, 열 개의 고정 evidence 파일 중 하나라도
+없거나 SHA가 다르면 승격하지 않습니다.
+
+Qualification job이 만든 score JSON은 경로나 inode가 바뀌므로 승인 입력으로 복사하지 않습니다.
+복원 job은 `bundle-index.json`이 고정한 source attestation 파일을 모두 hash 검증하고 qualification
+builder를 그 바이트에 다시 실행합니다. 재생성한 source provenance와 열 개 evidence가 업로드된 파일과
+정확히 일치해야만 `bundle-index.json`의 상대 파일을 private absolute path로 재결속하고 새 manifest를 만든 뒤
+`npm run release:score`를 다시 실행합니다. 새 0600 score를 exported exact-path consumer가 같은 job에서
+즉시 검증해 GO, exact build/scorer SHA, environment digest, rebound manifest digest를 증명한 경우에만
+승격 guard로 전달합니다. 이전 score hash는 qualification lineage 참고값일 뿐 promotion 권한이 아닙니다.
+Pre-promotion qualification에서는 `hosted_deployment_promotion_lineage`와
+`recovery_release_rollback_evidence`만 `unverified`일 수 있고 나머지 check와 모든 hard gate는 passed여야
+합니다. Bundle identity/index/provenance의 qualified preview host domain hash, deployment ID, artifact
+digest도 dispatch 입력과 정확히 일치해야 하므로 같은 SHA의 다른 preview를 대신 승격할 수 없습니다.
+
+승격 입력에는 qualified preview HTTPS URL, URL과 동일한 host pin, protected
+`OMR_QUALIFIED_PREVIEW_HOST_SUFFIX`, production host, preview deployment ID/artifact digest, expected
+readiness version, production DB project-ref hash, 현재 production deployment ID, bounded operator ID가
+필수입니다. Bundle identity의 production host digest와 production project-ref-hash digest도 이 target에서
+다시 계산해 exact match를 요구합니다. Operator는 `promote-qualified-preview:<production-host>:<build-sha>:<operator-id>`와
+`writes-paused:<production-host>`를 정확히 확인하며 operator ID는 workflow의 authenticated
+`github.actor`와 같아야 합니다. Preview와 production host는 서로 달라야 하며
+loopback이나 임의 suffix는 거부됩니다. 외부 staging/production 환경이나 secret이 없으면 결과는
+통과가 아니라 unverified입니다.
+
+Guard는 promotion 전에 artifact digest의 HMAC attestation을 확인하고 Vercel의 authenticated deployment
+API에서 canonical preview URL이 attested deployment ID, protected owner/project ID, `READY` preview
+target, exact Git SHA를 가리키는지 읽기 전용으로 확인합니다. 같은 API에서 production host가 operator가
+입력한 previous deployment ID, 동일 owner/project, `READY` production target을 현재 가리키는지도
+확인합니다.
+이 proof에 필요한 Vercel token/owner/project가 없거나 응답 lineage가 다르면 unverified이며 승격하지
+않습니다. Guard가 허용하는 변경 명령은 아래 하나뿐입니다. Production workflow는 deploy나 rebuild를
+실행하지 않습니다.
+Vercel child process에는 PATH와 Vercel token/org/project만 전달하며 Supabase service-role key, JWT,
+readiness/cron/attestation secret은 전달하지 않습니다. Post verifier는 그 다음 별도 child process에서만
+필요한 production probe 환경을 사용합니다.
+
+```sh
+vercel promote <qualified-preview-url> --yes
+```
+
+승격 직후 기존 production verifier가 공개 health의 deployed SHA, verifier SHA, preview deployment
+ID/artifact digest lineage, readiness version, DB project-ref hash, anon/authenticated negative access probe를
+다시 비교합니다. 성공 proof는 별도 `final-release` 경로에서 위 두 pre-promotion check를 passed로
+교체한 새 evidence/manifest를 만들고 scorer와 exported exact-path consumer를 다시 통과해야 합니다.
+이 final evidence 전체의 environment digest는 source environment digest, verifier evidence hash,
+rollback guard hash, qualification artifact digest, authenticated operator, previous/target deployment ID,
+target artifact digest, production host/project digest를 canonical 순서로 domain-separated hash한 값입니다.
+따라서 final score 자체가 post-promotion proof와 rollback/target lineage에 결속됩니다. Safe provenance에는
+source/final environment digest와 비식별 hash만 기록합니다.
+Promotion 또는 post-proof 실패는 두 check를 failed로 남긴 final NO-GO evidence를 보존합니다.
+모두 일치해도 writes와 asset-GC scheduler는 evidence 검토가 끝날 때까지 paused 상태를
+유지하고, 운영자가 verified evidence를 확인한 뒤에만 재개합니다.
+
+승격 명령 직전에 guard는 private 0700 directory에 `rollback-required.json`을 원자적으로 0600 모드로
+미리 게시합니다. 승격 명령이 불확실하게 종료되거나 post-promotion proof가 실패하면 이 evidence를
+보존하고 RLS를 완화하지 않으며 writes를 계속 paused 상태로 둡니다. Full post-proof와 final GO score가
+모두 성공한 경우에만 inode-bound rollback evidence를 제거합니다.
+이 파일에는 safe trigger, previous/target deployment ID, build SHA,
+실패 시각, operator ID의 domain-separated hash만 기록하며 raw preview URL, production host, DB project
+hash, operator identifier나 secret은 기록하지 않습니다. 이 evidence를 기준으로 previous deployment를
+별도 승인된 rollback 절차에서 복구하며, 실패한 workflow를 성공으로 재해석하지 않습니다.
+
 ## 4. 배포 참고
 
 - 프리뷰 배포: `vercel deploy` (기본).
-- 프로덕션: 검증한 프리뷰 빌드를 `vercel promote <preview-url>`로 승격하거나 `vercel deploy --prod`.
-  승격은 재빌드 없이 동일 빌드를 올리므로 프리뷰에서 확인한 코드와 100% 동일합니다.
+- 프로덕션: protected workflow가 검증한 프리뷰만 위의 exact `vercel promote` guard로 승격합니다.
+  승격은 재빌드 없이 qualification한 immutable deployment를 그대로 production alias로 이동합니다.
 - production build의 `postbuild`는 홈, 학생 대시보드·응시·리뷰, 시험 생성,
   강사 대시보드·라이브·명단 라우트의 first-load JS raw/gzip 예산을 검사합니다.
   초기 운영 검증은 배포 URL의 immutable 정적 JS가 실제 `Content-Encoding`으로 압축되는지도 확인합니다.

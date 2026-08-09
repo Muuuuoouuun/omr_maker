@@ -7,10 +7,8 @@ const workflow = readFileSync(resolve(".github/workflows/production-readiness.ym
 const operationsGuide = readFileSync(resolve("docs/production-readiness.md"), "utf8");
 const backupRunbook = readFileSync(resolve("docs/operations/backup-restore-runbook.md"), "utf8");
 const evidenceTemplate = readFileSync(resolve("docs/operations/release-evidence-template.md"), "utf8");
-const defaultBranchOnly = "if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)";
-
-function hasDefaultBranchOnlyGate(candidate: string): boolean {
-    return candidate.split("\n").some((line) => line.trim() === defaultBranchOnly);
+function pinnedActionIndex(action: "checkout" | "setup-node"): number {
+    return workflow.search(new RegExp(`- uses: actions/${action}@[a-f0-9]{40}(?:\\s|$)`));
 }
 
 describe("production readiness workflow release identity", () => {
@@ -57,7 +55,7 @@ describe("production readiness workflow release identity", () => {
             /      asset_gc_scheduler_pause_confirmation:\n(?:        .+\n)*?        required: true\n/,
         );
         const gate = workflow.indexOf("- name: Verify asset GC scheduler pause confirmation");
-        const checkout = workflow.indexOf("- uses: actions/checkout@v4");
+        const checkout = pinnedActionIndex("checkout");
         expect(gate).toBeGreaterThan(-1);
         expect(gate).toBeLessThan(checkout);
         const preCheckout = workflow.slice(gate, checkout);
@@ -79,13 +77,24 @@ describe("production readiness workflow release identity", () => {
         expect(workflow).not.toContain("          ref: ${{ github.event.repository.default_branch }}");
     });
 
+    it("pins checkout, setup-node, download-artifact, and upload-artifact to immutable revisions", () => {
+        const revisions = [...workflow.matchAll(
+            /uses: actions\/(checkout|setup-node|download-artifact|upload-artifact)@([^\s]+)/g,
+        )];
+        expect(new Set(revisions.map(([, action]) => action))).toEqual(new Set([
+            "checkout", "setup-node", "download-artifact", "upload-artifact",
+        ]));
+        expect(revisions.every(([, , revision]) => /^[a-f0-9]{40}$/.test(revision))).toBe(true);
+        expect(workflow).not.toMatch(/uses: actions\/(?:checkout|setup-node|download-artifact|upload-artifact)@v\d/);
+    });
+
     it("rejects a historical build before checkout or repository-controlled execution", () => {
         const workflowGate = "- name: Verify requested build matches trusted workflow revision";
         const equalityCheck = 'test "$OMR_PRODUCTION_EXPECTED_BUILD" = "$WORKFLOW_SHA"';
         const gate = workflow.indexOf(workflowGate);
         const equality = workflow.indexOf(equalityCheck);
-        const checkout = workflow.indexOf("- uses: actions/checkout@v4");
-        const setupNode = workflow.indexOf("- uses: actions/setup-node@v4");
+        const checkout = pinnedActionIndex("checkout");
+        const setupNode = pinnedActionIndex("setup-node");
         const install = workflow.indexOf("run: npm ci");
         const verifier = workflow.indexOf("- name: Verify hosted production deployment");
 
@@ -107,18 +116,24 @@ describe("production readiness workflow release identity", () => {
         expect(historical.status).not.toBe(0);
     });
 
-    it("rejects a workflow shape that is not restricted to the protected default branch", () => {
-        expect(hasDefaultBranchOnlyGate(workflow)).toBe(true);
-        expect(hasDefaultBranchOnlyGate(workflow.replace(defaultBranchOnly, "if: always()"))).toBe(false);
-        expect(hasDefaultBranchOnlyGate(workflow.replace(
-            defaultBranchOnly,
-            `${defaultBranchOnly} || github.ref == 'refs/heads/untrusted'`,
-        ))).toBe(false);
+    it("fails non-default dispatches explicitly before the protected production job", () => {
+        const dispatchGate = workflow.indexOf("verify-protected-dispatch:");
+        const productionJob = workflow.indexOf("verify-hosted-boundary:");
+        const gate = workflow.slice(dispatchGate, productionJob);
+        const production = workflow.slice(productionJob);
+        expect(dispatchGate).toBeGreaterThan(-1);
+        expect(productionJob).toBeGreaterThan(dispatchGate);
+        expect(gate).toContain('test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"');
+        expect(gate).toContain("VERIFIED_OPERATOR_ID: ${{ github.actor }}");
+        expect(gate).toContain('test "$INPUT_OPERATOR_ID" = "$VERIFIED_OPERATOR_ID"');
+        expect(production).toContain("needs: verify-protected-dispatch");
+        expect(production).toContain("OMR_PROMOTION_OPERATOR_ID: ${{ github.actor }}");
+        expect(production).not.toContain("if: github.ref == format(");
     });
 
     it("checks exact HEAD and default-branch ancestry before repository-controlled commands", () => {
         const gateStart = workflow.indexOf("- name: Verify trusted immutable verifier checkout");
-        const setupNode = workflow.indexOf("- uses: actions/setup-node@v4");
+        const setupNode = pinnedActionIndex("setup-node");
         const install = workflow.indexOf("run: npm ci");
         const verifier = workflow.indexOf("- name: Verify hosted production deployment");
         const gate = workflow.slice(gateStart, setupNode);
