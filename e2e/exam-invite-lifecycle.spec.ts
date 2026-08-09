@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { loginAsTeacher, resetBrowserState } from "./helpers";
+import { exactNextActionId, loginAsTeacher, resetBrowserState } from "./helpers";
 
 const EXAM_A = "e2e-invite-exam-a";
 const EXAM_B = "e2e-invite-exam-b";
@@ -77,8 +77,22 @@ async function prepareInviteDraft(page: Page, examId: string, title: string) {
     await restoreInviteDraft(page, title);
 }
 
+async function ensureCanonicalTeacherIdentity(page: Page) {
+    await page.evaluate(() => {
+        const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+        if (!rawSession) throw new Error("teacher session missing");
+        const session = JSON.parse(rawSession) as Record<string, unknown>;
+        session.teacherId = "admin";
+        session.organizationId = "default";
+        session.accountSessionGeneration = 1;
+        session.sessionAuthority = "legacy_account";
+        window.sessionStorage.setItem("omr_teacher_session", JSON.stringify(session));
+    });
+}
+
 async function openDistribution(page: Page) {
     await expect(page.getByRole("heading", { name: /^(?:새 시험 만들기|시험 편집)$/ })).toBeVisible();
+    await ensureCanonicalTeacherIdentity(page);
     await page.getByRole("button", { name: "저장하고 배포하기" }).click();
     const modal = page.getByRole("dialog", { name: "시험 배포하기" });
     await expect(modal).toBeVisible();
@@ -144,6 +158,37 @@ test("group invite lifecycle stays honest across reopen, refresh, rotation, and 
     await seedInviteDraft(page, EXAM_A, "초대 생명주기 A 시험");
     await loginAsTeacher(page, "/create");
     await restoreInviteDraft(page, "초대 생명주기 A 시험", false);
+    await ensureCanonicalTeacherIdentity(page);
+    const rosterActionId = exactNextActionId(
+        "src/app/actions/teacherRoster.ts",
+        "loadTeacherCanonicalRoster",
+        "app/create/page",
+    );
+    let rosterRewriteCount = 0;
+    await page.route("**/*", async route => {
+        const request = route.request();
+        if (request.method() !== "POST" || request.headers()["next-action"] !== rosterActionId) {
+            await route.continue();
+            return;
+        }
+        const response = await route.fetch();
+        const body = await response.text();
+        const loadedAt = new Date().toISOString();
+        const loaded = JSON.stringify({
+            status: "loaded",
+            snapshot: {
+                students: [],
+                groups: [{ id: GROUP_A, name: "E2E A반", region: "서울", count: 0, avgScore: 0, color: "#4f46e5" },
+                    { id: GROUP_B, name: "E2E B반", region: "부산", count: 0, avgScore: 0, color: "#10b981" }],
+                invites: [],
+            },
+            revision: 1,
+            meta: { organizationId: "default", loadedAt, rawCount: 2, parsedCount: 2 },
+        });
+        const rewritten = body.replaceAll('{"status":"local_only"}', loaded);
+        if (rewritten !== body) rosterRewriteCount += 1;
+        await route.fulfill({ response, body: rewritten });
+    });
     await page.waitForLoadState("networkidle");
 
     let modal = await openDistribution(page);
@@ -215,5 +260,6 @@ test("group invite lifecycle stays honest across reopen, refresh, rotation, and 
     await expectInviteDirectory(crossExamPage, crossExamUrl.toString(), null);
     await expect(crossExamPage.getByLabel("반 선택").locator("option", { hasText: "E2E B반" })).toHaveCount(0);
     await crossExamPage.close();
+    expect(rosterRewriteCount).toBeGreaterThan(0);
     expect(browserErrors).toEqual([]);
 });

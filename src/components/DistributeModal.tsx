@@ -7,11 +7,27 @@ import type { Exam } from '@/types/omr';
 import { formatRegionScopedLabel } from '@/lib/dashboardSelection';
 import type { ExamValidationSummary } from '@/lib/examValidation';
 import { isValidExamPin, normalizeExamPin } from '@/lib/examAccess';
-import { readRosterGroups, readRosterInvites, readRosterStudents, type RosterGroup, type RosterInvite, type RosterStudent } from '@/lib/rosterStorage';
+import type { RosterGroup, RosterInvite, RosterStudent } from '@/lib/rosterStorage';
 import { countDistributionGroupMembers, summarizeDistributionTargets } from '@/lib/distributionTargets';
 import { isShareUrlReachableByStudents } from '@/lib/shareLink';
 import { addRosterGroup, addRosterStudent } from '@/lib/rosterMutations';
-import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshot } from '@/lib/teacherRosterClient';
+import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshotIfCurrent } from '@/lib/teacherRosterClient';
+import {
+    beginTeacherRosterIdentityOperation,
+    canContinueTeacherRosterIdentityOperation,
+    persistTeacherRosterCompletionIfCurrent,
+    readTeacherRosterDegradedCache,
+    sanitizeTeacherRosterCandidate,
+    sameTeacherRosterLoadIdentity,
+    toTeacherRosterDegradedDisplayData,
+    type TeacherRosterLoadIdentity,
+    type TeacherRosterIdentityOperation,
+} from '@/lib/teacherRosterCanonicalCache';
+import {
+    TEACHER_SESSION_IDENTITY_CHANGED_EVENT,
+    TEACHER_SESSION_KEY,
+    readTeacherSession,
+} from '@/lib/teacherSession';
 import { toast } from '@/components/Toast';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import {
@@ -68,7 +84,20 @@ type InviteMetadataLoadState =
     | { status: "idle" | "loading" | "not_found" | "forbidden" | "dependency_unavailable" }
     | { status: "found"; metadata: ExamEntryInviteMetadata };
 type DistributionRosterData = { groups: RosterGroup[]; students: RosterStudent[] };
-const TEACHER_ROSTER_CACHE_STALE_AT_KEY = "omr_teacher_roster_cache_stale_at_v1";
+
+function captureTeacherRosterLoadIdentity(requestGeneration: number): TeacherRosterLoadIdentity | null {
+    const session = readTeacherSession();
+    if (!session?.organizationId
+        || !session.teacherId
+        || !Number.isSafeInteger(session.accountSessionGeneration)
+        || (session.accountSessionGeneration || 0) < 1) return null;
+    return {
+        organizationId: session.organizationId,
+        accountId: session.teacherId,
+        sessionGeneration: session.accountSessionGeneration as number,
+        requestGeneration,
+    };
+}
 
 export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAssignStudents, onClearStudentAssignment, onLoadStudentAssignment, onLoadInviteMetadata, onRevokeInvite, inviteRawUrlState, onInviteRawUrlStateChange, retakeAssignmentsEnabled, onAutoMatchRegions, validationSummary, initialAccessConfig, initialShareUrl, initialShareExpiresAt, examId, isExistingExam = false }: DistributeModalProps) {
     const [accessType, setAccessType] = useState<'public' | 'group' | 'student'>('public');
@@ -98,6 +127,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     const [assignmentRevision, setAssignmentRevision] = useState(0);
     const [assignmentLoadError, setAssignmentLoadError] = useState("");
     const [isAssignmentLoading, setIsAssignmentLoading] = useState(false);
+    const [assignmentRetryGeneration, setAssignmentRetryGeneration] = useState(0);
     const [inviteMetadataLoad, setInviteMetadataLoad] = useState<InviteMetadataLoadState>({ status: "idle" });
     const [inviteMetadataRetryGeneration, setInviteMetadataRetryGeneration] = useState(0);
     const [inviteClock, setInviteClock] = useState(() => Date.now());
@@ -105,9 +135,79 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     const wasOpenRef = useRef(false);
     const rosterLoadGenerationRef = useRef(0);
     const inviteMetadataLoadGenerationRef = useRef(0);
+    const distributionOperationEpochRef = useRef(0);
+    const modalRosterMutationVersionRef = useRef(0);
+    const rosterInvitesRef = useRef<RosterInvite[] | null>(null);
+    const rosterExpectedRevisionRef = useRef<number | undefined>(undefined);
+    const modalRosterSnapshotRef = useRef<{ students: RosterStudent[]; groups: RosterGroup[]; invites: RosterInvite[] }>({
+        students: [],
+        groups: [],
+        invites: [],
+    });
     const copyResetTimerRef = useRef<number | undefined>(undefined);
     const dialogRef = useDialogFocus(isOpen, onClose);
     const dialogTitleId = useId();
+    const beginIdentityOperation = (): TeacherRosterIdentityOperation | null => {
+        const identity = captureTeacherRosterLoadIdentity(0);
+        return identity
+            ? beginTeacherRosterIdentityOperation(identity, distributionOperationEpochRef.current)
+            : null;
+    };
+    const operationIsCurrent = (operation: TeacherRosterIdentityOperation | null): boolean => (
+        !!operation
+        && canContinueTeacherRosterIdentityOperation(
+            operation,
+            captureTeacherRosterLoadIdentity(0),
+            distributionOperationEpochRef.current,
+        )
+    );
+
+    useEffect(() => {
+        const reloadForIdentityChange = () => {
+            distributionOperationEpochRef.current += 1;
+            modalRosterMutationVersionRef.current += 1;
+            rosterLoadGenerationRef.current += 1;
+            inviteMetadataLoadGenerationRef.current += 1;
+            setGroups([]);
+            setStudents([]);
+            rosterInvitesRef.current = null;
+            rosterExpectedRevisionRef.current = undefined;
+            modalRosterSnapshotRef.current = { students: [], groups: [], invites: [] };
+            setSelectedGroups([]);
+            setSelectedStudentIds([]);
+            setShareUrl(null);
+            setShareExpiresAt(null);
+            onInviteRawUrlStateChange(null);
+            setInviteMetadataLoad({ status: "idle" });
+            setAssignmentRetryGeneration(value => value + 1);
+            setInviteMetadataRetryGeneration(value => value + 1);
+            setAssignmentRevision(0);
+            setAssignmentLoadError("");
+            setIsAssignmentLoading(false);
+            setIsSaving(false);
+            setIsInviteRevoking(false);
+            setFormError("");
+            setCopyStatus("");
+            setDistributionRosterState({ state: "loading" });
+            if (isOpen) setRosterRetryGeneration(value => value + 1);
+        };
+        const handleStorage = (event: StorageEvent) => {
+            if (event.storageArea === window.sessionStorage && event.key === TEACHER_SESSION_KEY) {
+                reloadForIdentityChange();
+            }
+        };
+        window.addEventListener(TEACHER_SESSION_IDENTITY_CHANGED_EVENT, reloadForIdentityChange);
+        window.addEventListener("storage", handleStorage);
+        return () => {
+            window.removeEventListener(TEACHER_SESSION_IDENTITY_CHANGED_EVENT, reloadForIdentityChange);
+            window.removeEventListener("storage", handleStorage);
+        };
+    }, [isOpen, onInviteRawUrlStateChange]);
+
+    useEffect(() => {
+        distributionOperationEpochRef.current += 1;
+        return () => { distributionOperationEpochRef.current += 1; };
+    }, [isOpen]);
 
     useEffect(() => () => {
         if (copyResetTimerRef.current !== undefined) {
@@ -117,6 +217,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
 
     useEffect(() => {
         const loadGeneration = ++rosterLoadGenerationRef.current;
+        modalRosterMutationVersionRef.current += 1;
+        rosterInvitesRef.current = null;
+        rosterExpectedRevisionRef.current = undefined;
+        modalRosterSnapshotRef.current = { students: [], groups: [], invites: [] };
         if (!isOpen) {
             setIsRosterLoading(false);
             setRosterLoadError("");
@@ -125,58 +229,142 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
         }
 
         const loadObservedAt = new Date().toISOString();
-        let localData: DistributionRosterData = { groups: [], students: [] };
+        const capturedIdentity = captureTeacherRosterLoadIdentity(loadGeneration);
+        const completionIsCurrent = () => {
+            if (!capturedIdentity || rosterLoadGenerationRef.current !== loadGeneration) return false;
+            const current = captureTeacherRosterLoadIdentity(loadGeneration);
+            return !!current && sameTeacherRosterLoadIdentity(capturedIdentity, current);
+        };
+        let cachedData: DistributionRosterData | null = null;
         let cachedAt: string | null = null;
         try {
-            localData = { groups: readRosterGroups(localStorage), students: readRosterStudents(localStorage) };
-            cachedAt = localStorage.getItem(TEACHER_ROSTER_CACHE_STALE_AT_KEY);
+            const degraded = capturedIdentity
+                ? readTeacherRosterDegradedCache(localStorage, capturedIdentity, new Date(loadObservedAt))
+                : null;
+            if (degraded) {
+                const display = toTeacherRosterDegradedDisplayData(degraded);
+                cachedData = { groups: display.groups, students: display.students };
+                cachedAt = degraded.staleAt;
+            }
         } catch {
-            localData = { groups: [], students: [] };
+            cachedData = null;
         }
 
         setIsRosterLoading(true);
         setDistributionRosterState({ state: "loading" });
         setRosterLoadError("");
+        if (!capturedIdentity) {
+            setDistributionRosterState(resolveCanonicalLoad({
+                remote: { ok: false },
+                cache: null,
+                now: loadObservedAt,
+            }, data => data.groups.length === 0 && data.students.length === 0));
+            setGroups([]);
+            setStudents([]);
+            setRosterLoadError("서버 명단을 불러오지 못했고 검증된 저장 명단이 없습니다.");
+            setIsRosterLoading(false);
+            return () => {
+                if (rosterLoadGenerationRef.current === loadGeneration) rosterLoadGenerationRef.current += 1;
+            };
+        }
         void loadTeacherRosterSnapshot(localStorage)
             .then(snapshot => {
-                if (rosterLoadGenerationRef.current !== loadGeneration) return;
-                const loadedData = { groups: snapshot.groups, students: snapshot.students };
+                if (!completionIsCurrent()) return;
+                const currentIdentity = captureTeacherRosterLoadIdentity(loadGeneration);
+                if (!currentIdentity || !capturedIdentity) return;
+                let remoteReady = snapshot.remoteLoaded === true
+                    && snapshot.remoteSynced === true
+                    && !snapshot.remoteError
+                    && !!snapshot.candidate
+                    && snapshot.meta?.organizationId === capturedIdentity.organizationId;
+                const safeCandidate = remoteReady && snapshot.candidate
+                    ? sanitizeTeacherRosterCandidate(snapshot.candidate)
+                    : null;
+                if (remoteReady && !safeCandidate) remoteReady = false;
+                if (remoteReady && safeCandidate) {
+                    const persisted = persistTeacherRosterCompletionIfCurrent(
+                        localStorage,
+                        safeCandidate,
+                        capturedIdentity,
+                        currentIdentity,
+                        new Date(loadObservedAt),
+                    );
+                    if (persisted.status === "stale" || !completionIsCurrent()) return;
+                    if (persisted.status === "rejected") remoteReady = false;
+                }
+                const loadedData = remoteReady && safeCandidate
+                    ? { groups: safeCandidate.snapshot.groups, students: safeCandidate.snapshot.students }
+                    : { groups: [], students: [] };
                 const nextState = resolveCanonicalLoad({
-                    remote: snapshot.remoteError ? { ok: false } : { ok: true, data: loadedData },
-                    cache: snapshot.remoteError && cachedAt ? { data: localData, staleAt: cachedAt } : null,
+                    remote: remoteReady ? { ok: true, data: loadedData } : { ok: false },
+                    cache: cachedData && cachedAt ? { data: cachedData, staleAt: cachedAt } : null,
                     now: loadObservedAt,
                 }, data => data.groups.length === 0 && data.students.length === 0);
+                if (!remoteReady) {
+                    rosterInvitesRef.current = null;
+                    rosterExpectedRevisionRef.current = undefined;
+                    distributionOperationEpochRef.current += 1;
+                    inviteMetadataLoadGenerationRef.current += 1;
+                    setIsSaving(false);
+                    setIsInviteRevoking(false);
+                    setShareUrl(null);
+                    setShareExpiresAt(null);
+                    onInviteRawUrlStateChange(null);
+                    setInviteMetadataLoad({ status: "idle" });
+                }
+                if (remoteReady && safeCandidate) {
+                    rosterInvitesRef.current = safeCandidate.snapshot.invites.map(invite => ({ ...invite }));
+                    rosterExpectedRevisionRef.current = safeCandidate.revision;
+                }
                 setDistributionRosterState(nextState);
                 const visibleData = nextState.state === "loaded_empty" || nextState.state === "loaded_data" || nextState.state === "degraded_with_cache"
                     ? nextState.data
                     : { groups: [], students: [] };
                 setGroups(visibleData.groups);
                 setStudents(visibleData.students);
-                if (snapshot.remoteError) {
+                modalRosterSnapshotRef.current = {
+                    groups: visibleData.groups,
+                    students: visibleData.students,
+                    invites: remoteReady && safeCandidate ? safeCandidate.snapshot.invites : [],
+                };
+                if (!remoteReady) {
                     setRosterLoadError(nextState.state === "degraded_with_cache"
                         ? "서버 명단을 불러오지 못해 검증된 저장 명단을 표시합니다."
                         : "서버 명단을 불러오지 못했고 검증된 저장 명단이 없습니다.");
-                } else if (snapshot.remoteLoaded) {
-                    try { localStorage.setItem(TEACHER_ROSTER_CACHE_STALE_AT_KEY, loadObservedAt); } catch { /* cache remains optional */ }
                 }
             })
             .catch(() => {
-                if (rosterLoadGenerationRef.current !== loadGeneration) return;
+                if (!completionIsCurrent()) return;
+                distributionOperationEpochRef.current += 1;
+                rosterInvitesRef.current = null;
+                rosterExpectedRevisionRef.current = undefined;
+                inviteMetadataLoadGenerationRef.current += 1;
+                setIsSaving(false);
+                setIsInviteRevoking(false);
+                setShareUrl(null);
+                setShareExpiresAt(null);
+                onInviteRawUrlStateChange(null);
+                setInviteMetadataLoad({ status: "idle" });
                 const nextState = resolveCanonicalLoad({
                     remote: { ok: false },
-                    cache: cachedAt ? { data: localData, staleAt: cachedAt } : null,
+                    cache: cachedData && cachedAt ? { data: cachedData, staleAt: cachedAt } : null,
                     now: loadObservedAt,
                 }, data => data.groups.length === 0 && data.students.length === 0);
                 setDistributionRosterState(nextState);
                 const visibleData = nextState.state === "degraded_with_cache" ? nextState.data : { groups: [], students: [] };
                 setGroups(visibleData.groups);
                 setStudents(visibleData.students);
+                modalRosterSnapshotRef.current = {
+                    groups: visibleData.groups,
+                    students: visibleData.students,
+                    invites: [],
+                };
                 setRosterLoadError(nextState.state === "degraded_with_cache"
                     ? "서버 명단을 불러오지 못해 검증된 저장 명단을 표시합니다."
                     : "서버 명단을 불러오지 못했고 검증된 저장 명단이 없습니다.");
             })
             .finally(() => {
-                if (rosterLoadGenerationRef.current === loadGeneration) {
+                if (completionIsCurrent()) {
                     setIsRosterLoading(false);
                 }
             });
@@ -186,7 +374,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 rosterLoadGenerationRef.current += 1;
             }
         };
-    }, [isOpen, rosterRetryGeneration]);
+    }, [isOpen, onInviteRawUrlStateChange, rosterRetryGeneration]);
 
     useEffect(() => {
         if (!isOpen) {
@@ -232,9 +420,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             return;
         }
         let cancelled = false;
+        const operation = beginIdentityOperation();
         setIsAssignmentLoading(true);
         void onLoadStudentAssignment(examId).then(result => {
-            if (cancelled) return;
+            if (cancelled || !operationIsCurrent(operation)) return;
             if (result.status === "loaded") {
                 setAccessType("student");
                 setSelectedStudentIds(result.targetStudentIds);
@@ -244,12 +433,12 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 setAssignmentLoadError("기존 개별 배정 상태를 불러오지 못했습니다. 다시 시도해주세요.");
             }
         }).catch(() => {
-            if (!cancelled) setAssignmentLoadError("기존 개별 배정 상태를 불러오지 못했습니다. 다시 시도해주세요.");
+            if (!cancelled && operationIsCurrent(operation)) setAssignmentLoadError("기존 개별 배정 상태를 불러오지 못했습니다. 다시 시도해주세요.");
         }).finally(() => {
-            if (!cancelled) setIsAssignmentLoading(false);
+            if (!cancelled && operationIsCurrent(operation)) setIsAssignmentLoading(false);
         });
         return () => { cancelled = true; };
-    }, [examId, isOpen, onLoadStudentAssignment, retakeAssignmentsEnabled]);
+    }, [assignmentRetryGeneration, examId, isOpen, onLoadStudentAssignment, retakeAssignmentsEnabled]);
 
     useEffect(() => {
         const loadGeneration = ++inviteMetadataLoadGenerationRef.current;
@@ -259,10 +448,11 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
         }
 
         const expectedExamId = examId;
+        const operation = beginIdentityOperation();
         setInviteMetadataLoad({ status: "loading" });
         void onLoadInviteMetadata(expectedExamId)
             .then(result => {
-                if (inviteMetadataLoadGenerationRef.current !== loadGeneration) return;
+                if (inviteMetadataLoadGenerationRef.current !== loadGeneration || !operationIsCurrent(operation)) return;
                 if (result.status === "found") {
                     if (result.metadata.examId !== expectedExamId) {
                         setInviteMetadataLoad({ status: "dependency_unavailable" });
@@ -275,7 +465,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 setInviteMetadataLoad({ status: result.status });
             })
             .catch(() => {
-                if (inviteMetadataLoadGenerationRef.current === loadGeneration) {
+                if (inviteMetadataLoadGenerationRef.current === loadGeneration && operationIsCurrent(operation)) {
                     setInviteMetadataLoad({ status: "dependency_unavailable" });
                 }
             });
@@ -340,16 +530,21 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             || inviteMetadataLoad.status === "loading"
             || inviteMetadataLoad.status === "forbidden"
             || inviteMetadataLoad.status === "dependency_unavailable");
-    const distributionRosterReadOnly = distributionRosterState.state !== "loaded_empty"
-        && distributionRosterState.state !== "loaded_data";
+    const distributionRosterReadOnly = (distributionRosterState.state !== "loaded_empty"
+        && distributionRosterState.state !== "loaded_data")
+        || rosterExpectedRevisionRef.current === undefined;
     const visibleShareUrl = accessType === "group"
         ? inviteCapability === "copyable_here" ? inviteRawUrlState?.url || null : null
         : isGroupInviteShareUrl(shareUrl) ? null : shareUrl;
 
     if (!isOpen) return null;
 
-    const reloadConflictedAssignment = async (targetExamId: string) => {
+    const reloadConflictedAssignment = async (
+        targetExamId: string,
+        operation: TeacherRosterIdentityOperation,
+    ) => {
         const latest = await reloadLatestAssignmentAfterConflict(targetExamId, onLoadStudentAssignment);
+        if (!operationIsCurrent(operation)) return false;
         if (latest.status !== "loaded") {
             setAssignmentLoadError("최신 개별 배정 상태를 불러오지 못했습니다. 창을 닫고 다시 열어주세요.");
             return false;
@@ -413,11 +608,14 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             groupIds: accessType === 'group' ? selectedGroups : undefined,
             pin: accessType === 'public' && pin ? pin : undefined,
         };
+        const operation = beginIdentityOperation();
+        if (!operation) return;
 
         try {
             if (accessType === "student") {
                 setIsSaving(true);
                 let shareResult = examId ? null : normalizeDistributionShareResult(await onSaveAndShare(config));
+                if (!operationIsCurrent(operation)) return;
                 const targetExamId = examId || shareResult?.examId || "";
                 if (!targetExamId) {
                     setFormError("시험 저장 결과를 확인하지 못했습니다. 다시 시도해주세요.");
@@ -429,9 +627,11 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                     mode: assignmentMode,
                     expectedRevision: assignmentRevision,
                 });
+                if (!operationIsCurrent(operation)) return;
                 if (assigned.status !== "saved") {
                     if (assigned.status === "conflict") {
-                        const reloaded = await reloadConflictedAssignment(targetExamId);
+                        const reloaded = await reloadConflictedAssignment(targetExamId, operation);
+                        if (!operationIsCurrent(operation)) return;
                         setFormError(reloaded
                             ? "다른 기기에서 배정이 변경되어 최신 학생과 유형을 다시 불러왔습니다. 확인 후 다시 시도해주세요."
                             : "다른 기기에서 배정이 변경되었습니다. 창을 닫고 다시 열어주세요.");
@@ -453,12 +653,14 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 // For existing exams the assignment RPC owns the public/group → targeted
                 // transition atomically. Persist any editor changes only after that scope exists.
                 if (!shareResult) shareResult = normalizeDistributionShareResult(await onSaveAndShare(config));
+                if (!operationIsCurrent(operation)) return;
                 if (!shareResult.shareUrl) {
                     setFormError("개별 배정은 저장됐지만 시험 편집 내용 저장에 실패했습니다. 다시 시도해주세요.");
                     return;
                 }
                 const targetedUrl = new URL(shareResult.shareUrl, window.location.origin);
                 targetedUrl.searchParams.set("assignment", assigned.assignmentId);
+                if (!operationIsCurrent(operation)) return;
                 setShareUrl(targetedUrl.toString());
                 setShareExpiresAt(null);
                 return;
@@ -471,9 +673,11 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                     accessType,
                     groupIds: accessType === "group" ? selectedGroups : undefined,
                 });
+                if (!operationIsCurrent(operation)) return;
                 if (cleared.status !== "cleared") {
                     if (cleared.status === "conflict") {
-                        const reloaded = await reloadConflictedAssignment(examId);
+                        const reloaded = await reloadConflictedAssignment(examId, operation);
+                        if (!operationIsCurrent(operation)) return;
                         if (reloaded) setAccessType("student");
                         setFormError(reloaded
                             ? "다른 기기에서 배정이 변경되어 최신 학생과 유형을 다시 불러왔습니다. 확인 후 다시 시도해주세요."
@@ -497,6 +701,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                     return onSaveAndShare(config);
                 },
             });
+            if (!operationIsCurrent(operation)) return;
             if (outcome.status === "cancelled") return;
             const shareResult = normalizeDistributionShareResult(outcome.result);
             if (!shareResult.shareUrl) {
@@ -516,6 +721,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                     generation: shareResult.metadata.generation,
                     issuedAt: shareResult.metadata.issuedAt,
                 };
+                if (!operationIsCurrent(operation)) return;
                 setInviteClock(Date.now());
                 setInviteMetadataLoad({ status: "found", metadata: shareResult.metadata });
                 onInviteRawUrlStateChange(nextRawUrlState);
@@ -523,27 +729,30 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             setShareUrl(shareResult.shareUrl);
             setShareExpiresAt(shareResult.expiresAt || null);
         } catch {
-            setFormError("링크 생성에 실패했습니다. 시험 저장 상태를 확인한 뒤 다시 시도해주세요.");
+            if (operationIsCurrent(operation)) setFormError("링크 생성에 실패했습니다. 시험 저장 상태를 확인한 뒤 다시 시도해주세요.");
         } finally {
-            setIsSaving(false);
+            if (operationIsCurrent(operation)) setIsSaving(false);
         }
     };
 
     const copyShareLink = async () => {
         if (!visibleShareUrl) return;
+        const operation = beginIdentityOperation();
+        if (!operation) return;
         if (copyResetTimerRef.current !== undefined) {
             window.clearTimeout(copyResetTimerRef.current);
             copyResetTimerRef.current = undefined;
         }
         try {
             await navigator.clipboard.writeText(visibleShareUrl);
+            if (!operationIsCurrent(operation)) return;
             setCopyStatus("복사됨");
             copyResetTimerRef.current = window.setTimeout(() => {
                 copyResetTimerRef.current = undefined;
                 setCopyStatus("");
             }, 1600);
         } catch {
-            setCopyStatus("복사 실패");
+            if (operationIsCurrent(operation)) setCopyStatus("복사 실패");
         }
     };
 
@@ -555,8 +764,14 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
         }
         setFormError("");
         setIsInviteRevoking(true);
+        const operation = beginIdentityOperation();
+        if (!operation) {
+            setIsInviteRevoking(false);
+            return;
+        }
         try {
             const result = await onRevokeInvite(examId);
+            if (!operationIsCurrent(operation)) return;
             if (result.status === "revoked") {
                 if (result.metadata.examId !== examId) {
                     setInviteMetadataLoad({ status: "dependency_unavailable" });
@@ -582,10 +797,12 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 ? "이 링크를 해지할 권한이 없습니다."
                 : "링크 해지 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
         } catch {
-            setInviteMetadataLoad({ status: "dependency_unavailable" });
-            setFormError("링크 해지 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
+            if (operationIsCurrent(operation)) {
+                setInviteMetadataLoad({ status: "dependency_unavailable" });
+                setFormError("링크 해지 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
+            }
         } finally {
-            setIsInviteRevoking(false);
+            if (operationIsCurrent(operation)) setIsInviteRevoking(false);
         }
     };
 
@@ -608,32 +825,71 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
         );
     };
 
+    const retryCanonicalRoster = () => {
+        distributionOperationEpochRef.current += 1;
+        rosterLoadGenerationRef.current += 1;
+        inviteMetadataLoadGenerationRef.current += 1;
+        setIsSaving(false);
+        setIsInviteRevoking(false);
+        setShareUrl(null);
+        setShareExpiresAt(null);
+        onInviteRawUrlStateChange(null);
+        setInviteMetadataLoad({ status: "idle" });
+        modalRosterMutationVersionRef.current += 1;
+        rosterInvitesRef.current = null;
+        rosterExpectedRevisionRef.current = undefined;
+        modalRosterSnapshotRef.current = { students: [], groups: [], invites: [] };
+        setDistributionRosterState({ state: "loading" });
+        setAssignmentRetryGeneration(value => value + 1);
+        setInviteMetadataRetryGeneration(value => value + 1);
+        setRosterRetryGeneration(value => value + 1);
+    };
+
     // Write the full roster snapshot through (preserving invites) and reflect it locally.
     const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[]) => {
         if (distributionRosterReadOnly) {
             setFormError("최신 서버 명단을 확인한 뒤 명단을 변경할 수 있습니다.");
             return;
         }
-        const previousStudents = students;
-        const previousGroups = groups;
+        const operation = beginIdentityOperation();
+        if (!operation) return;
+        const rosterInvites = rosterInvitesRef.current;
+        const expectedRevision = rosterExpectedRevisionRef.current;
+        if (!rosterInvites || expectedRevision === undefined) {
+            setFormError("최신 서버 초대 명단을 확인한 뒤 명단을 변경할 수 있습니다.");
+            return;
+        }
+        const mutationVersion = ++modalRosterMutationVersionRef.current;
+        const previousSnapshot = modalRosterSnapshotRef.current;
+        const nextSnapshot = {
+            students: nextStudents,
+            groups: nextGroups,
+            invites: rosterInvites.map(invite => ({ ...invite })),
+        };
+        const mutationIsCurrent = () => mutationVersion === modalRosterMutationVersionRef.current
+            && operationIsCurrent(operation);
+        modalRosterSnapshotRef.current = nextSnapshot;
         setStudents(nextStudents);
         setGroups(nextGroups);
-        let invites: RosterInvite[];
-        try {
-            invites = readRosterInvites(localStorage);
-        } catch {
-            invites = [];
-        }
-        void saveTeacherRosterSnapshot(localStorage, { students: nextStudents, groups: nextGroups, invites })
+        void saveTeacherRosterSnapshotIfCurrent(
+            localStorage,
+            nextSnapshot,
+            mutationIsCurrent,
+            expectedRevision,
+            operation.identity,
+        )
             .then(result => {
+                if ("status" in result || !mutationIsCurrent()) return;
+                if (result.remoteRevision !== undefined) rosterExpectedRevisionRef.current = result.remoteRevision;
                 if (result.remoteError && !result.localSaved) {
-                    setStudents(previousStudents);
-                    setGroups(previousGroups);
+                    modalRosterSnapshotRef.current = previousSnapshot;
+                    setStudents(previousSnapshot.students);
+                    setGroups(previousSnapshot.groups);
                     toast.error("명단 저장 실패", "서버에 저장되지 않아 방금 변경을 되돌렸습니다.");
                 }
             })
             .catch(() => {
-                toast.error("명단 저장 실패", "브라우저 저장소 권한을 확인해주세요.");
+                if (mutationIsCurrent()) toast.error("명단 저장 실패", "브라우저 저장소 권한을 확인해주세요.");
             });
     };
 
@@ -762,7 +1018,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                         <div data-testid="canonical-error-no-cache" role="alert" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', lineHeight: 1.5 }}>
                             <strong style={{ display: 'block', marginBottom: '0.25rem' }}>서버 명단을 불러오지 못했습니다.</strong>
                             검증된 저장 명단이 없어 배포와 명단 변경을 비활성화했습니다.
-                            <button data-testid="canonical-distribution-roster-retry" type="button" className="btn btn-secondary" onClick={() => setRosterRetryGeneration(value => value + 1)} style={{ display: 'block', marginTop: '0.65rem' }}>
+                            <button data-testid="canonical-distribution-roster-retry" type="button" className="btn btn-secondary" onClick={retryCanonicalRoster} style={{ display: 'block', marginTop: '0.65rem' }}>
                                 다시 시도
                             </button>
                         </div>
@@ -771,7 +1027,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                         <div data-testid="canonical-degraded-cache" role="status" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e', fontSize: '0.82rem', lineHeight: 1.5 }}>
                             <strong style={{ display: 'block' }}>저장된 데이터를 읽기 전용으로 표시 중</strong>
                             마지막 저장 {new Date(distributionRosterState.staleAt).toLocaleString('ko-KR')} · 서버 명단을 다시 확인해주세요.
-                            <button type="button" className="btn btn-secondary" onClick={() => setRosterRetryGeneration(value => value + 1)} style={{ display: 'block', marginTop: '0.65rem' }}>다시 시도</button>
+                            <button type="button" className="btn btn-secondary" onClick={retryCanonicalRoster} style={{ display: 'block', marginTop: '0.65rem' }}>다시 시도</button>
                         </div>
                     )}
                     {!visibleShareUrl ? (

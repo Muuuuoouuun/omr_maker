@@ -33,6 +33,7 @@ export interface RosterSnapshot {
 export interface RosterPersistenceResult {
     localSaved: boolean;
     remoteSaved: boolean;
+    remoteRevision?: number;
     remoteError?: string;
 }
 

@@ -57,17 +57,21 @@ describe("persistence integration", () => {
         const source = readProjectFile("src/components/DistributeModal.tsx");
 
         expect(source).toContain("loadTeacherRosterSnapshot");
-        expect(source).toContain("void loadTeacherRosterSnapshot(localStorage)");
-        expect(source).toContain("if (rosterLoadGenerationRef.current !== loadGeneration) return;");
+        expect(source).toContain("readTeacherRosterDegradedCache");
+        expect(source).toContain("persistTeacherRosterCompletionIfCurrent");
+        expect(source).toContain("sameTeacherRosterLoadIdentity");
         expect(source).toContain("resolveCanonicalLoad({");
-        expect(source).toContain("remote: snapshot.remoteError ? { ok: false } : { ok: true, data: loadedData }");
+        expect(source).toContain("snapshot.remoteLoaded === true");
+        expect(source).toContain("snapshot.remoteSynced === true");
         expect(source).toContain("setGroups(visibleData.groups)");
         expect(source).toContain("setStudents(visibleData.students)");
         expect(source).toContain('role="status"');
         expect(source).toContain("서버 명단을 불러오는 중입니다.");
         expect(source).toContain("서버 명단을 불러오지 못해 검증된 저장 명단을 표시합니다.");
-        expect(source).toContain('const distributionRosterReadOnly = distributionRosterState.state !== "loaded_empty"');
+        expect(source).toContain('const distributionRosterReadOnly = (distributionRosterState.state !== "loaded_empty"');
+        expect(source).toContain("|| rosterExpectedRevisionRef.current === undefined");
         expect(source.match(/disabled=\{distributionRosterReadOnly\}/g)?.length).toBeGreaterThanOrEqual(3);
+        expect(source).not.toContain("omr_teacher_roster_cache_stale_at_v1");
     });
 
     it("teacher settings checks exam, attempt, roster, and deletion persistence together", () => {

@@ -22,6 +22,63 @@ describe("teacher roster server surface", () => {
         expect(users).not.toContain('from "@/lib/rosterPersistence"');
     });
 
+    it("uses only the exact scoped roster cache after a complete request-identity fence", () => {
+        const users = source("src/app/teacher/users/page.tsx");
+        const distribution = source("src/components/DistributeModal.tsx");
+        for (const surface of [users, distribution]) {
+            expect(surface).toContain("readTeacherRosterDegradedCache");
+            expect(surface).toContain("persistTeacherRosterCompletionIfCurrent");
+            expect(surface).toContain("sameTeacherRosterLoadIdentity");
+            expect(surface).not.toContain("TEACHER_ROSTER_CACHE_STALE_AT_KEY");
+            expect(surface).not.toContain("omr_teacher_roster_cache_stale_at_v1");
+        }
+    });
+
+    it("fences roster mutations, undo, CSV parsing, distribution assignment, invite, and bearer continuations", () => {
+        const users = source("src/app/teacher/users/page.tsx");
+        const distribution = source("src/components/DistributeModal.tsx");
+        expect(users).toContain("saveTeacherRosterSnapshotIfCurrent");
+        expect(users).toContain("canContinueTeacherRosterIdentityOperation");
+        expect(users).toContain("undoOperation");
+        expect(users).toMatch(/file\.arrayBuffer\(\)[\s\S]*csvIsCurrent/);
+        expect(distribution).toContain("distributionOperationEpochRef");
+        expect(distribution).toContain("canContinueTeacherRosterIdentityOperation");
+        expect(distribution).toMatch(/await onSaveAndShare[\s\S]*operationIsCurrent/);
+        expect(distribution).toMatch(/await onRevokeInvite[\s\S]*operationIsCurrent/);
+        expect(distribution).toMatch(/onLoadInviteMetadata[\s\S]*operationIsCurrent/);
+        expect(distribution).toMatch(/onLoadStudentAssignment[\s\S]*operationIsCurrent/);
+    });
+
+    it("loads analytics only behind a fresh roster capability and removes degraded child actions", () => {
+        const users = source("src/app/teacher/users/page.tsx");
+        const groups = source("src/components/teacher/users/GroupsTab.tsx");
+        const invites = source("src/components/teacher/users/InvitesTab.tsx");
+        expect(users).toContain("const rosterIsFresh = rosterLoadState.state");
+        expect(users).toContain("}, [rosterLoadState.state]);");
+        expect(users).toContain("if (!selected || rosterMutationsDisabled) return []");
+        expect(users).toContain("if (rosterMutationsDisabled) return;");
+        expect(users).toContain("setDetailedAttempts(null)");
+        expect(groups).toContain('capability: "degraded_read_only"');
+        expect(groups).toContain('capability: "fresh_mutable"');
+        expect(groups).toContain('if (props.capability === "degraded_read_only")');
+        expect(invites).toContain('capability: "degraded_read_only"');
+        expect(invites).toContain('capability: "fresh_mutable"');
+        expect(invites).toContain('if (props.capability === "degraded_read_only")');
+        expect(users).toContain('capability="degraded_read_only"');
+        expect(users).toContain('capability="fresh_mutable"');
+        expect(users).not.toContain("readOnly={rosterMutationsDisabled}");
+        expect(users).toContain("pendingDeleteUndoRef");
+        expect(users).toContain("rosterSnapshotRef");
+        expect(users).toContain("restoreDeletedStudentsIntoCurrentRoster");
+        expect(users).toContain("const currentSnapshot = rosterSnapshotRef.current");
+        expect(users).toContain('toast.action("info", "학생 삭제됨"');
+        expect(users).not.toContain('toast.action("info", `${label} 삭제됨`');
+        expect(users).toContain("!isDemoRoster && !rosterMutationsDisabled");
+        expect(users).toContain("!rosterMutationsDisabled && studentGrowthReportsEnabled");
+        expect(groups).not.toContain("readOnly:");
+        expect(invites).not.toContain("readOnly:");
+    });
+
     it("tells stale-device writers to refresh instead of blaming connectivity", () => {
         const users = source("src/app/teacher/users/page.tsx");
         expect(users).toContain("ROSTER_REVISION_CONFLICT_ERROR");

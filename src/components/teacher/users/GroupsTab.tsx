@@ -11,12 +11,31 @@ import { regionKeyFor, regionNameForGroup } from "@/lib/regionalAnalytics";
 import { buildRegionScopedAnalyticsHref } from "@/lib/dashboardSelection";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 
-interface GroupsTabProps {
+interface GroupsTabDisplayProps {
     displayGroups: RosterGroup[];
     displayStudents: RosterStudent[];
+}
+
+interface GroupsTabReadOnlyProps extends GroupsTabDisplayProps {
+    capability: "degraded_read_only";
+    analyticsAvailable?: never;
+    isDemoRoster?: never;
+    advancedAnalyticsEnabled?: never;
+    handleOpenGroupProfile?: never;
+    handleAddStudentToGroup?: never;
+    handleOpenEditGroup?: never;
+    handleDeleteGroup?: never;
+    setSelectedRegionKey?: never;
+    setQuery?: never;
+    setTab?: never;
+    setEditingGroup?: never;
+    setShowGroupModal?: never;
+}
+
+interface GroupsTabFreshProps extends GroupsTabDisplayProps {
+    capability: "fresh_mutable";
     analyticsAvailable: boolean;
     isDemoRoster: boolean;
-    readOnly: boolean;
     advancedAnalyticsEnabled: boolean;
     handleOpenGroupProfile: (groupId: string) => void;
     handleAddStudentToGroup: (group: RosterGroup) => void;
@@ -29,12 +48,49 @@ interface GroupsTabProps {
     setShowGroupModal: (open: boolean) => void;
 }
 
-export default function GroupsTab({
+export type GroupsTabProps = GroupsTabReadOnlyProps | GroupsTabFreshProps;
+
+export default function GroupsTab(props: GroupsTabProps) {
+    if (props.capability === "degraded_read_only") {
+        const { displayGroups, displayStudents } = props;
+        if (displayGroups.length === 0) {
+            return (
+                <section className="bento-card teacher-groups-empty-state" aria-labelledby="groups-empty-title">
+                    <div className="teacher-groups-empty-icon" aria-hidden="true"><Users size={22} /></div>
+                    <div>
+                        <h2 id="groups-empty-title">저장된 반이 없습니다</h2>
+                        <p>최신 서버 명단을 다시 불러오세요.</p>
+                    </div>
+                </section>
+            );
+        }
+        return (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "1.25rem" }}>
+                {displayGroups.map(group => (
+                    <article key={group.id} className="bento-card" style={{ padding: "1.5rem", minHeight: 160 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
+                            <div aria-hidden="true" style={{ color: group.color }}><Users size={22} /></div>
+                            <div>
+                                <h3 style={{ fontSize: "1.05rem", fontWeight: 800 }}>{group.name}</h3>
+                                <p style={{ fontSize: "0.83rem", color: "var(--muted)" }}>
+                                    {group.count}명 등록 · {regionNameForGroup(group, displayStudents)}
+                                </p>
+                            </div>
+                        </div>
+                        <div style={{ marginTop: "1rem" }}>
+                            <MiniStat label="학생" value={`${group.count}명`} color={group.color} />
+                        </div>
+                    </article>
+                ))}
+            </div>
+        );
+    }
+
+    const {
     displayGroups,
     displayStudents,
     analyticsAvailable,
     isDemoRoster,
-    readOnly,
     advancedAnalyticsEnabled,
     handleOpenGroupProfile,
     handleAddStudentToGroup,
@@ -45,7 +101,7 @@ export default function GroupsTab({
     setTab,
     setEditingGroup,
     setShowGroupModal,
-}: GroupsTabProps) {
+    } = props;
     if (displayGroups.length === 0) {
         return (
             <section className="bento-card teacher-groups-empty-state" aria-labelledby="groups-empty-title">
@@ -56,7 +112,7 @@ export default function GroupsTab({
                     <h2 id="groups-empty-title">첫 반을 만들어 학생을 묶어보세요</h2>
                     <p>반별 시험 배정과 성취도 비교를 한곳에서 관리할 수 있습니다.</p>
                 </div>
-                {!readOnly && <button
+                <button
                     type="button"
                     className="btn btn-primary"
                     onClick={() => {
@@ -65,7 +121,7 @@ export default function GroupsTab({
                     }}
                 >
                     <FolderPlus size={16} /> 첫 반 만들기
-                </button>}
+                </button>
             </section>
         );
     }
@@ -167,7 +223,7 @@ export default function GroupsTab({
                                             <Search size={13} />
                                             학생 보기
                                         </button>
-                                        {!readOnly && <button
+                                        <button
                                             type="button"
                                             aria-label={`${g.name} 학생 추가`}
                                             onClick={() => handleAddStudentToGroup(g)}
@@ -189,7 +245,7 @@ export default function GroupsTab({
                                         >
                                             <UserPlus size={13} />
                                             학생 추가
-                                        </button>}
+                                        </button>
                                         {advancedAnalyticsEnabled ? (
                                             <button
                                                 type="button"
@@ -215,7 +271,7 @@ export default function GroupsTab({
                                                 <BarChart3 size={13} />
                                                 분석
                                             </button>
-                                        ) : !readOnly ? (
+                                        ) : (
                                             <NextLink
                                                 href="/teacher/billing"
                                                 aria-label={`${g.name} 반별 리포트 Pro 보기`}
@@ -238,8 +294,8 @@ export default function GroupsTab({
                                                 <Lock size={13} />
                                                 리포트 Pro
                                             </NextLink>
-                                        ) : null}
-                                        {!readOnly && <button
+                                        )}
+                                        <button
                                             type="button"
                                             aria-label={`${g.name} 삭제`}
                                             onClick={() => handleDeleteGroup(g)}
@@ -262,7 +318,7 @@ export default function GroupsTab({
                                         >
                                             <Trash2 size={13} />
                                             삭제
-                                        </button>}
+                                        </button>
                                     </div>
                                     <NextLink
                                         href={buildRegionScopedAnalyticsHref("student", g.region ? regionKeyFor(g.region) : undefined)}
@@ -285,7 +341,7 @@ export default function GroupsTab({
                                 </article>
                             );
                         })}
-                        {!readOnly && <button
+                        <button
                             onClick={() => {
                                 setEditingGroup(null);
                                 setShowGroupModal(true);
@@ -299,7 +355,7 @@ export default function GroupsTab({
                             }}>
                             <FolderPlus size={28} />
                             <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>새 반 만들기</span>
-                        </button>}
+                        </button>
                     </div>
     );
 }

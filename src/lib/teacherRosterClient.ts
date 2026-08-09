@@ -137,31 +137,153 @@ function validRosterCollectionMeta(value: unknown): value is CanonicalCollection
         && meta.rawCount === meta.parsedCount;
 }
 
+function predicateAllowsWrite(isCurrent: () => boolean): boolean {
+    try {
+        return isCurrent();
+    } catch {
+        return false;
+    }
+}
+
+type RosterSaveQueueState = {
+    tail: Promise<void>;
+    lastSuccessfulRevision?: number;
+};
+
+export interface TeacherRosterSaveScope {
+    readonly organizationId: string;
+    readonly accountId: string;
+    readonly sessionGeneration: number;
+}
+
+const rosterSaveQueues = new WeakMap<object, Map<string, RosterSaveQueueState>>();
+
+function validatedTeacherRosterSaveScope(value: unknown): TeacherRosterSaveScope | null {
+    try {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+        const keys = Reflect.ownKeys(value);
+        if (keys.length !== 3 || !["organizationId", "accountId", "sessionGeneration"].every(key => keys.includes(key))) return null;
+        const record = value as Record<string, unknown>;
+        for (const key of keys) {
+            if (typeof key !== "string") return null;
+            const descriptor = Object.getOwnPropertyDescriptor(value, key);
+            if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return null;
+        }
+        const organizationId = record.organizationId;
+        const accountId = record.accountId;
+        const sessionGeneration = record.sessionGeneration;
+        const invalidText = (text: unknown) => typeof text !== "string"
+            || !text
+            || text !== text.trim()
+            || /[\u0000-\u001f\u007f-\u009f]/u.test(text);
+        if (invalidText(organizationId)
+            || invalidText(accountId)
+            || !Number.isSafeInteger(sessionGeneration)
+            || Number(sessionGeneration) < 1) return null;
+        return Object.freeze({
+            organizationId: organizationId as string,
+            accountId: accountId as string,
+            sessionGeneration: sessionGeneration as number,
+        });
+    } catch {
+        return null;
+    }
+}
+
+function teacherRosterSaveScopeKey(scope: TeacherRosterSaveScope): string {
+    return JSON.stringify([scope.organizationId, scope.accountId, scope.sessionGeneration]);
+}
+
+function withRosterSaveLock<T>(
+    storage: object,
+    scope: TeacherRosterSaveScope,
+    operation: (state: RosterSaveQueueState) => Promise<T>,
+): Promise<T> {
+    const scopeKey = teacherRosterSaveScopeKey(scope);
+    const queues = rosterSaveQueues.get(storage) ?? new Map<string, RosterSaveQueueState>();
+    const existing = queues.get(scopeKey);
+    const state: RosterSaveQueueState = existing ?? { tail: Promise.resolve() };
+    const run = existing
+        ? existing.tail.then(() => operation(state))
+        : operation(state);
+    const tail = run.then(() => undefined, () => undefined);
+    state.tail = tail;
+    queues.set(scopeKey, state);
+    rosterSaveQueues.set(storage, queues);
+    void tail.then(() => {
+        const currentQueues = rosterSaveQueues.get(storage);
+        if (!currentQueues || currentQueues.get(scopeKey)?.tail !== tail) return;
+        currentQueues.delete(scopeKey);
+        if (currentQueues.size === 0) rosterSaveQueues.delete(storage);
+    });
+    return run;
+}
+
+export function restoreDeletedStudentsIntoCurrentRoster(
+    current: RosterSnapshot,
+    removedStudents: RosterSnapshot["students"],
+): RosterSnapshot {
+    const currentIds = new Set(current.students.map(student => student.id));
+    const missing = removedStudents.filter(student => !currentIds.has(student.id));
+    return {
+        students: [...missing, ...current.students],
+        groups: current.groups,
+        invites: current.invites,
+    };
+}
+
+export async function saveTeacherRosterSnapshotIfCurrent(
+    storage: Pick<Storage, "getItem" | "setItem">,
+    snapshot: RosterSnapshot,
+    isCurrent: () => boolean,
+    expectedRevision: number | null,
+    scope: TeacherRosterSaveScope,
+): Promise<RosterPersistenceResult | { status: "stale" | "rejected" }> {
+    const safeScope = validatedTeacherRosterSaveScope(scope);
+    if (!safeScope
+        || (expectedRevision !== null && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0))) {
+        return { status: "rejected" };
+    }
+    return withRosterSaveLock(storage, safeScope, async queue => {
+        if (!predicateAllowsWrite(isCurrent)) return { status: "stale" };
+        const previous = readLocalRosterSnapshot(storage);
+        if (!predicateAllowsWrite(isCurrent)) return { status: "stale" };
+        const revision = queue.lastSuccessfulRevision ?? expectedRevision;
+        const result = await saveTeacherCanonicalRoster(snapshot, revision);
+        if (result.status === "saved") queue.lastSuccessfulRevision = result.revision;
+        if (!predicateAllowsWrite(isCurrent)) return { status: "stale" };
+        if (result.status === "saved") {
+            const snapshotSaved = writeLocalRosterSnapshot(storage, result.snapshot);
+            writeRosterTombstones(storage, { students: {}, groups: {} });
+            const revisionSaved = writeRosterRevision(storage, result.revision);
+            return { localSaved: snapshotSaved && revisionSaved, remoteSaved: true, remoteRevision: result.revision };
+        }
+        if (result.status === "local_only") {
+            const tombstones = nextRosterTombstones(previous, snapshot, readRosterTombstones(storage));
+            const localSaved = writeLocalRosterSnapshot(storage, snapshot);
+            writeRosterTombstones(storage, tombstones);
+            return { localSaved, remoteSaved: false };
+        }
+        return {
+            localSaved: false,
+            remoteSaved: false,
+            remoteError: result.status === "conflict"
+                ? ROSTER_REVISION_CONFLICT_ERROR
+                : result.status === "unauthorized"
+                    ? "Teacher server session is missing"
+                    : result.error || (result.status === "invalid_roster" ? "Invalid roster payload" : "Canonical roster gateway unavailable"),
+        };
+    });
+}
+
 export async function saveTeacherRosterSnapshot(
     storage: Pick<Storage, "getItem" | "setItem">,
     snapshot: RosterSnapshot,
+    scope: TeacherRosterSaveScope,
 ): Promise<RosterPersistenceResult> {
-    const previous = readLocalRosterSnapshot(storage);
-    const result = await saveTeacherCanonicalRoster(snapshot, readRosterRevision(storage));
-    if (result.status === "saved") {
-        const snapshotSaved = writeLocalRosterSnapshot(storage, result.snapshot);
-        writeRosterTombstones(storage, { students: {}, groups: {} });
-        const revisionSaved = writeRosterRevision(storage, result.revision);
-        return { localSaved: snapshotSaved && revisionSaved, remoteSaved: true };
+    const result = await saveTeacherRosterSnapshotIfCurrent(storage, snapshot, () => true, readRosterRevision(storage), scope);
+    if ("status" in result) {
+        return { localSaved: false, remoteSaved: false, remoteError: "Roster save ownership expired" };
     }
-    if (result.status === "local_only") {
-        const tombstones = nextRosterTombstones(previous, snapshot, readRosterTombstones(storage));
-        const localSaved = writeLocalRosterSnapshot(storage, snapshot);
-        writeRosterTombstones(storage, tombstones);
-        return { localSaved, remoteSaved: false };
-    }
-    return {
-        localSaved: false,
-        remoteSaved: false,
-        remoteError: result.status === "conflict"
-            ? ROSTER_REVISION_CONFLICT_ERROR
-            : result.status === "unauthorized"
-                ? "Teacher server session is missing"
-                : result.error || (result.status === "invalid_roster" ? "Invalid roster payload" : "Canonical roster gateway unavailable"),
-    };
+    return result;
 }

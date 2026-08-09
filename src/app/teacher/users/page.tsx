@@ -31,7 +31,11 @@ import { toast } from "@/components/Toast";
 import type { Attempt, Exam } from "@/types/omr";
 import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
-import { readTeacherSession } from "@/lib/teacherSession";
+import {
+    TEACHER_SESSION_IDENTITY_CHANGED_EVENT,
+    TEACHER_SESSION_KEY,
+    readTeacherSession,
+} from "@/lib/teacherSession";
 import {
     loadTeacherAttemptSummaries,
     loadTeacherAttempts,
@@ -42,8 +46,21 @@ import { loadTeacherExams } from "@/lib/teacherExamClient";
 import {
     loadTeacherRosterSnapshot,
     ROSTER_REVISION_CONFLICT_ERROR,
-    saveTeacherRosterSnapshot,
+    restoreDeletedStudentsIntoCurrentRoster,
+    saveTeacherRosterSnapshotIfCurrent,
 } from "@/lib/teacherRosterClient";
+import {
+    beginTeacherRosterIdentityOperation,
+    canContinueTeacherRosterBoundOperation,
+    canContinueTeacherRosterIdentityOperation,
+    persistTeacherRosterCompletionIfCurrent,
+    readTeacherRosterDegradedCache,
+    sanitizeTeacherRosterCandidate,
+    sameTeacherRosterLoadIdentity,
+    toTeacherRosterDegradedDisplayData,
+    type TeacherRosterIdentityOperation,
+    type TeacherRosterLoadIdentity,
+} from "@/lib/teacherRosterCanonicalCache";
 import { issueStudentCredentialBatch } from "@/app/actions/studentAuth";
 import StudentCredentialBatchDialog, {
     type FrozenCredentialStudent,
@@ -57,12 +74,7 @@ import {
 import {
     AVATAR_COLORS,
     GROUP_COLORS,
-    ROSTER_STORAGE_KEYS,
     disambiguateRosterStudentId,
-    hasStoredRosterData,
-    readRosterGroups,
-    readRosterInvites,
-    readRosterStudents,
     rosterGroupScopeKey,
     rosterStudentFallbackId,
     type RosterGroup,
@@ -129,7 +141,20 @@ type CanonicalRosterData = {
     invites: RosterInvite[];
     forceDemo?: boolean;
 };
-const TEACHER_ROSTER_CACHE_STALE_AT_KEY = "omr_teacher_roster_cache_stale_at_v1";
+
+function captureTeacherRosterLoadIdentity(requestGeneration: number): TeacherRosterLoadIdentity | null {
+    const session = readTeacherSession();
+    if (!session?.organizationId
+        || !session.teacherId
+        || !Number.isSafeInteger(session.accountSessionGeneration)
+        || (session.accountSessionGeneration || 0) < 1) return null;
+    return {
+        organizationId: session.organizationId,
+        accountId: session.teacherId,
+        sessionGeneration: session.accountSessionGeneration as number,
+        requestGeneration,
+    };
+}
 
 function isCanonicalRosterEmpty(data: CanonicalRosterData): boolean {
     return data.forceDemo !== true
@@ -145,7 +170,7 @@ function isCompleteTeacherAttemptCollection(result: TeacherAttemptCollectionLoad
 type PendingDeleteUndo = {
     id: number;
     students: RosterStudent[];
-    label: string;
+    operation: TeacherRosterIdentityOperation;
 };
 
 const DELETE_UNDO_WINDOW_MS = 6000;
@@ -206,26 +231,6 @@ const MOCK_INVITES: RosterInvite[] = [
     { id: "i3", email: "parent.notify@gmail.com", sentAt: "3일 전", status: "accepted" },
     { id: "i4", email: "transferred@school.ac.kr", sentAt: "1주 전", status: "expired" },
 ];
-
-function isLegacyDemoRosterSnapshot(
-    students: RosterStudent[],
-    groups: RosterGroup[],
-    invites: RosterInvite[],
-): boolean {
-    return students.length === MOCK_STUDENTS.length
-        && students.every((student, index) => {
-            const demo = MOCK_STUDENTS[index];
-            return student.id === demo.id
-                && student.name === demo.name
-                && student.email === demo.email
-                && student.group === demo.group;
-        })
-        && groups.length === MOCK_GROUPS.length
-        && groups.every((group, index) => group.id === MOCK_GROUPS[index].id && group.name === MOCK_GROUPS[index].name)
-        && invites.length === MOCK_INVITES.length
-        && invites.every((invite, index) => invite.id === MOCK_INVITES[index].id && invite.email === MOCK_INVITES[index].email);
-}
-
 
 function studentIdForRoster(name: string, groupName: string, groups: RosterGroup[], region = "", groupId = ""): string {
     const group = rosterGroupForStudentInput(groupName, region, groups, groupId);
@@ -307,6 +312,11 @@ function ManageUsersInner() {
     const [students, setStudents] = useState<RosterStudent[]>([]);
     const [groups, setGroups] = useState<RosterGroup[]>([]);
     const [invites, setInvites] = useState<RosterInvite[]>([]);
+    const rosterSnapshotRef = useRef<{ students: RosterStudent[]; groups: RosterGroup[]; invites: RosterInvite[] }>({
+        students: [],
+        groups: [],
+        invites: [],
+    });
     const [rosterDataMode, setRosterDataMode] = useState<RosterDataMode>("real");
     const [allAttempts, setAllAttempts] = useState<Attempt[]>([]);
     const [attemptAnalyticsStatus, setAttemptAnalyticsStatus] = useState<"loading" | "ready" | "unavailable">("loading");
@@ -315,7 +325,12 @@ function ManageUsersInner() {
     const [exams, setExams] = useState<Exam[]>([]);
     const [issuedStudentCredentialIds, setIssuedStudentCredentialIds] = useState<Set<string>>(new Set());
     const rosterMutationVersionRef = useRef(0);
+    const rosterExpectedRevisionRef = useRef<number | null | undefined>(undefined);
     const issuedStudentCredentialIdsRef = useRef<Set<string>>(new Set());
+    const rosterLoadGenerationRef = useRef(0);
+    const analyticsLoadGenerationRef = useRef(0);
+    const detailedAttemptGenerationRef = useRef(0);
+    const rosterOperationEpochRef = useRef(0);
     const { plan: currentPlan } = useServerPlan();
     const [hydrated, setHydrated] = useState(false);
     const [rosterLoadState, setRosterLoadState] = useState<CanonicalLoadState<CanonicalRosterData>>({ state: "loading" });
@@ -325,6 +340,63 @@ function ManageUsersInner() {
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
     const advancedAnalyticsEnabled = hasPlanEntitlement(currentPlan, "advancedAnalytics");
     const retakeAssignmentsEnabled = hasPlanEntitlement(currentPlan, "retakeAssignments");
+
+    useEffect(() => {
+        const reloadForIdentityChange = () => {
+            rosterOperationEpochRef.current += 1;
+            rosterLoadGenerationRef.current += 1;
+            analyticsLoadGenerationRef.current += 1;
+            detailedAttemptGenerationRef.current += 1;
+            rosterMutationVersionRef.current += 1;
+            rosterExpectedRevisionRef.current = undefined;
+            rosterSnapshotRef.current = { students: [], groups: [], invites: [] };
+            setStudents([]);
+            setGroups([]);
+            setInvites([]);
+            setAllAttempts([]);
+            setExams([]);
+            setDetailedAttempts(null);
+            setAttemptAnalyticsStatus("loading");
+            setRosterLoadState({ state: "loading" });
+            setHydrated(false);
+            if (undoTimeoutRef.current) {
+                clearTimeout(undoTimeoutRef.current);
+                undoTimeoutRef.current = null;
+            }
+            pendingDeleteUndoRef.current = null;
+            activeUndoTokenRef.current = null;
+            setSelectedId(null);
+            setSelectedGroupId(null);
+            setSelectedIds(new Set());
+            setSelectedRegionKey(ALL_REGION_KEY);
+            setEditingStudent(null);
+            setEditingGroup(null);
+            setStudentModalDefaultGroupId(undefined);
+            setShowStudentModal(false);
+            setShowGroupModal(false);
+            setShowGroupProfileModal(false);
+            setShowInviteModal(false);
+            setShowMessageModal(false);
+            setShowProfileModal(false);
+            setConfirmAction(null);
+            setPopoverId(null);
+            setShowGroupMoveModal(false);
+            setCsvPreview(null);
+            setCredentialBatchExpectedStudents(null);
+            setRosterRetryGeneration(value => value + 1);
+        };
+        const handleStorage = (event: StorageEvent) => {
+            if (event.storageArea === window.sessionStorage && event.key === TEACHER_SESSION_KEY) {
+                reloadForIdentityChange();
+            }
+        };
+        window.addEventListener(TEACHER_SESSION_IDENTITY_CHANGED_EVENT, reloadForIdentityChange);
+        window.addEventListener("storage", handleStorage);
+        return () => {
+            window.removeEventListener(TEACHER_SESSION_IDENTITY_CHANGED_EVENT, reloadForIdentityChange);
+            window.removeEventListener("storage", handleStorage);
+        };
+    }, []);
 
     // UI state for modals/popovers
     const [showStudentModal, setShowStudentModal] = useState(false);
@@ -343,7 +415,9 @@ function ManageUsersInner() {
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
     const [showGroupMoveModal, setShowGroupMoveModal] = useState(false);
-    const [pendingDeleteUndo, setPendingDeleteUndo] = useState<PendingDeleteUndo | null>(null);
+    const pendingDeleteUndoRef = useRef<PendingDeleteUndo | null>(null);
+    const activeUndoTokenRef = useRef<number | null>(null);
+    const undoTokenSequenceRef = useRef(0);
     const [sortState, setSortState] = useState<{ key: SortKey; direction: SortDirection } | null>(null);
     const [csvPreview, setCsvPreview] = useState<RosterCsvImportPlan | null>(null);
     const [credentialBatchExpectedStudents, setCredentialBatchExpectedStudents] = useState<
@@ -355,68 +429,116 @@ function ManageUsersInner() {
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    // Latest-ref indirection so a fired undo toast always runs the freshest
-    // handler (which reads current state) instead of a stale closure.
-    const undoDeleteRef = useRef<() => void>(() => {});
-
     // Hydrate real roster rows from localStorage. Demo rows stay display-only so
     // they cannot be mistaken for academy data in later sessions.
     useEffect(() => {
         let cancelled = false;
+        const requestGeneration = ++rosterLoadGenerationRef.current;
+        const capturedIdentity = captureTeacherRosterLoadIdentity(requestGeneration);
+        const completionIsCurrent = () => {
+            if (cancelled || !capturedIdentity || rosterLoadGenerationRef.current !== requestGeneration) return false;
+            const current = captureTeacherRosterLoadIdentity(requestGeneration);
+            return !!current && sameTeacherRosterLoadIdentity(capturedIdentity, current);
+        };
         const hydrateRoster = async () => {
             const loadObservedAt = new Date().toISOString();
+            rosterExpectedRevisionRef.current = undefined;
+            analyticsLoadGenerationRef.current += 1;
+            detailedAttemptGenerationRef.current += 1;
+            detailedAttemptLoadRef.current = null;
+            setAllAttempts([]);
+            setExams([]);
+            setDetailedAttempts(null);
+            setAttemptAnalyticsStatus("loading");
+            setShowProfileModal(false);
+            setShowGroupProfileModal(false);
             setRosterLoadState({ state: "loading" });
             setHydrated(false);
-            let localData: CanonicalRosterData = { students: [], groups: [], invites: [] };
-            let cachedAt: string | null = null;
+            if (!capturedIdentity) {
+                const useDemoRoster = shouldUseDemoData(readTeacherSession());
+                const nextState = resolveCanonicalLoad({
+                    remote: useDemoRoster
+                        ? { ok: true, data: { students: [], groups: [], invites: [], forceDemo: true } }
+                        : { ok: false },
+                    cache: null,
+                    now: loadObservedAt,
+                }, isCanonicalRosterEmpty);
+                setStudents([]);
+                setGroups([]);
+                setInvites([]);
+                rosterSnapshotRef.current = { students: [], groups: [], invites: [] };
+                setRosterDataMode(useDemoRoster ? "demo" : "real");
+                rosterExpectedRevisionRef.current = useDemoRoster ? null : undefined;
+                setRosterLoadState(nextState);
+                setHydrated(true);
+                return;
+            }
+            const degraded = capturedIdentity
+                ? readTeacherRosterDegradedCache(localStorage, capturedIdentity, new Date(loadObservedAt))
+                : null;
+            const cachedData = degraded ? toTeacherRosterDegradedDisplayData(degraded) : null;
             try {
                 localStorage.removeItem(STUDENT_CODES_STORAGE_KEY);
-                const storedRosterExists = hasStoredRosterData(localStorage);
-                const storedStudents = readRosterStudents(localStorage);
-                const storedGroups = readRosterGroups(localStorage);
-                const storedInvites = readRosterInvites(localStorage);
-                localData = { students: storedStudents, groups: storedGroups, invites: storedInvites };
-                cachedAt = localStorage.getItem(TEACHER_ROSTER_CACHE_STALE_AT_KEY);
-                const legacyDemoRoster = storedRosterExists
-                    && shouldUseDemoData(readTeacherSession())
-                    && isLegacyDemoRosterSnapshot(storedStudents, storedGroups, storedInvites);
-                if (legacyDemoRoster) {
-                    Object.values(ROSTER_STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
-                }
-
                 const rosterResult = await loadTeacherRosterSnapshot(localStorage);
-                if (cancelled) return;
-                const hasRosterRows = rosterResult.students.length > 0
-                    || rosterResult.groups.length > 0
-                    || rosterResult.invites.length > 0;
-                const useDemoRoster = shouldUseDemoData(readTeacherSession()) && !hasRosterRows;
-                const nextStudents = useDemoRoster ? [] : rosterResult.students;
-                const nextGroups = useDemoRoster ? [] : rosterResult.groups;
-                const nextInvites = useDemoRoster ? [] : rosterResult.invites;
+                if (!completionIsCurrent()) return;
+                const currentIdentity = captureTeacherRosterLoadIdentity(requestGeneration);
+                if (!currentIdentity || !capturedIdentity) return;
+                let remoteReady = rosterResult.remoteLoaded === true
+                    && rosterResult.remoteSynced === true
+                    && !rosterResult.remoteError
+                    && !!rosterResult.candidate
+                    && rosterResult.meta?.organizationId === capturedIdentity.organizationId;
+                const safeCandidate = remoteReady && rosterResult.candidate
+                    ? sanitizeTeacherRosterCandidate(rosterResult.candidate)
+                    : null;
+                if (remoteReady && !safeCandidate) remoteReady = false;
+                if (remoteReady && safeCandidate) {
+                    const persisted = persistTeacherRosterCompletionIfCurrent(
+                        localStorage,
+                        safeCandidate,
+                        capturedIdentity,
+                        currentIdentity,
+                        new Date(loadObservedAt),
+                    );
+                    if (persisted.status === "stale" || !completionIsCurrent()) return;
+                    if (persisted.status === "rejected") remoteReady = false;
+                }
+                const freshSnapshot = remoteReady && safeCandidate
+                    ? safeCandidate.snapshot
+                    : { students: [], groups: [], invites: [] };
+                const hasRosterRows = freshSnapshot.students.length > 0
+                    || freshSnapshot.groups.length > 0
+                    || freshSnapshot.invites.length > 0;
+                const useDemoRoster = shouldUseDemoData(readTeacherSession()) && !hasRosterRows && !rosterResult.remoteError;
+                rosterExpectedRevisionRef.current = remoteReady && safeCandidate
+                    ? safeCandidate.revision
+                    : useDemoRoster ? null : undefined;
                 const loadedData: CanonicalRosterData = {
-                    students: nextStudents,
-                    groups: nextGroups,
-                    invites: nextInvites,
+                    students: useDemoRoster ? [] : freshSnapshot.students,
+                    groups: useDemoRoster ? [] : freshSnapshot.groups,
+                    invites: useDemoRoster ? [] : freshSnapshot.invites,
                     ...(useDemoRoster ? { forceDemo: true } : {}),
                 };
                 const nextState = resolveCanonicalLoad({
-                    remote: rosterResult.remoteError ? { ok: false } : { ok: true, data: loadedData },
-                    cache: rosterResult.remoteError && cachedAt ? { data: localData, staleAt: cachedAt } : null,
+                    remote: remoteReady || useDemoRoster ? { ok: true, data: loadedData } : { ok: false },
+                    cache: cachedData && degraded ? { data: cachedData, staleAt: degraded.staleAt } : null,
                     now: loadObservedAt,
                 }, isCanonicalRosterEmpty);
                 // Hydrate client-only localStorage data after mount.
                 const visibleData = nextState.state === "loaded_empty" || nextState.state === "loaded_data" || nextState.state === "degraded_with_cache"
                     ? nextState.data
                     : { students: [], groups: [], invites: [] };
+                rosterSnapshotRef.current = {
+                    students: visibleData.students,
+                    groups: visibleData.groups,
+                    invites: visibleData.invites,
+                };
                 setStudents(visibleData.students);
                 setGroups(visibleData.groups);
                 setInvites(visibleData.invites);
                 setRosterDataMode(useDemoRoster ? "demo" : "real");
                 setRosterLoadState(nextState);
-                if (!rosterResult.remoteError && rosterResult.remoteLoaded) {
-                    try { localStorage.setItem(TEACHER_ROSTER_CACHE_STALE_AT_KEY, loadObservedAt); } catch { /* cache remains optional */ }
-                }
-                if (rosterResult.remoteError && !useDemoRoster) {
+                if (!remoteReady && !useDemoRoster) {
                     if (rosterResult.remoteError === INITIAL_CAPACITY_EXCEEDED_ERROR) {
                         toast.error("초기 운영 지원 범위 초과", INITIAL_CAPACITY_REMEDIATION_KO);
                     } else {
@@ -430,15 +552,21 @@ function ManageUsersInner() {
                 issuedStudentCredentialIdsRef.current = storedIssuedIds;
                 setIssuedStudentCredentialIds(storedIssuedIds);
             } catch {
-                if (cancelled) return;
+                if (!completionIsCurrent()) return;
+                rosterExpectedRevisionRef.current = undefined;
                 const nextState = resolveCanonicalLoad({
                     remote: { ok: false },
-                    cache: cachedAt ? { data: localData, staleAt: cachedAt } : null,
+                    cache: cachedData && degraded ? { data: cachedData, staleAt: degraded.staleAt } : null,
                     now: loadObservedAt,
                 }, isCanonicalRosterEmpty);
                 const visibleData = nextState.state === "degraded_with_cache"
                     ? nextState.data
                     : { students: [], groups: [], invites: [] };
+                rosterSnapshotRef.current = {
+                    students: visibleData.students,
+                    groups: visibleData.groups,
+                    invites: visibleData.invites,
+                };
                 setStudents(visibleData.students);
                 setGroups(visibleData.groups);
                 setInvites(visibleData.invites);
@@ -449,17 +577,48 @@ function ManageUsersInner() {
         };
 
         void hydrateRoster();
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+            if (rosterLoadGenerationRef.current === requestGeneration) rosterLoadGenerationRef.current += 1;
+        };
     }, [rosterRetryGeneration]);
 
     useEffect(() => {
         let cancelled = false;
+        const requestGeneration = ++analyticsLoadGenerationRef.current;
+        const rosterIsFresh = rosterLoadState.state === "loaded_empty" || rosterLoadState.state === "loaded_data";
+        if (!rosterIsFresh) {
+            setAllAttempts([]);
+            setExams([]);
+            setDetailedAttempts(null);
+            detailedAttemptLoadRef.current = null;
+            setAttemptAnalyticsStatus("loading");
+            return () => {
+                cancelled = true;
+                if (analyticsLoadGenerationRef.current === requestGeneration) analyticsLoadGenerationRef.current += 1;
+            };
+        }
+        const capturedIdentity = captureTeacherRosterLoadIdentity(requestGeneration);
+        const completionIsCurrent = () => {
+            if (cancelled || !capturedIdentity || analyticsLoadGenerationRef.current !== requestGeneration) return false;
+            const current = captureTeacherRosterLoadIdentity(requestGeneration);
+            return !!current && sameTeacherRosterLoadIdentity(capturedIdentity, current);
+        };
+        if (!capturedIdentity) {
+            setAllAttempts([]);
+            setExams([]);
+            setAttemptAnalyticsStatus(shouldUseDemoData(readTeacherSession()) ? "ready" : "unavailable");
+            return () => {
+                cancelled = true;
+                if (analyticsLoadGenerationRef.current === requestGeneration) analyticsLoadGenerationRef.current += 1;
+            };
+        }
         const loadRosterAnalytics = async () => {
             const [attemptResult, examResult] = await Promise.all([
                 loadTeacherAttemptSummaries(),
                 loadTeacherExams(),
             ]);
-            if (cancelled) return;
+            if (!completionIsCurrent()) return;
             const isDemoSession = shouldUseDemoData(readTeacherSession());
             const attemptAnalyticsComplete = isDemoSession || isCompleteTeacherAttemptCollection(attemptResult);
             setAllAttempts(attemptAnalyticsComplete ? attemptResult.items : []);
@@ -492,7 +651,7 @@ function ManageUsersInner() {
         };
 
         void loadRosterAnalytics().catch(() => {
-            if (cancelled) return;
+            if (!completionIsCurrent()) return;
             setAllAttempts([]);
             setAttemptAnalyticsStatus("unavailable");
             toast.error(
@@ -500,8 +659,11 @@ function ManageUsersInner() {
                 "서버 응시 기록을 확인하지 못해 평균·지역·학생 리포트를 표시하지 않습니다.",
             );
         });
-        return () => { cancelled = true; };
-    }, []);
+        return () => {
+            cancelled = true;
+            if (analyticsLoadGenerationRef.current === requestGeneration) analyticsLoadGenerationRef.current += 1;
+        };
+    }, [rosterLoadState.state]);
 
     // M7: dismiss the row action popover on outside click or Escape.
     useEffect(() => {
@@ -552,8 +714,19 @@ function ManageUsersInner() {
             toast.info("읽기 전용 명단", "최신 서버 명단을 확인한 뒤 변경할 수 있습니다.");
             return;
         }
+        const sessionIdentity = captureTeacherRosterLoadIdentity(0);
+        if (!sessionIdentity) return;
+        const expectedRevision = rosterExpectedRevisionRef.current;
+        if (expectedRevision === undefined) return;
+        const operation = beginTeacherRosterIdentityOperation(sessionIdentity, rosterOperationEpochRef.current);
+        const operationIsCurrent = () => canContinueTeacherRosterIdentityOperation(
+            operation,
+            captureTeacherRosterLoadIdentity(0),
+            rosterOperationEpochRef.current,
+        );
         const mutationVersion = ++rosterMutationVersionRef.current;
-        const previousSnapshot = { students, groups, invites };
+        const previousSnapshot = rosterSnapshotRef.current;
+        rosterSnapshotRef.current = { students: nextStudents, groups: nextGroups, invites: nextInvites };
         setRosterDataMode("real");
         setStudents(nextStudents);
         setGroups(nextGroups);
@@ -565,12 +738,17 @@ function ManageUsersInner() {
             return filteredIds.length === prev.size ? prev : new Set(filteredIds);
         });
         setSelectedGroupId(prev => nextGroups.some(group => group.id === prev) ? prev : null);
-        void saveTeacherRosterSnapshot(localStorage, {
+        void saveTeacherRosterSnapshotIfCurrent(localStorage, {
             students: nextStudents,
             groups: nextGroups,
             invites: nextInvites,
-        }).then(result => {
+        }, () => mutationVersion === rosterMutationVersionRef.current && operationIsCurrent(), expectedRevision, operation.identity).then(result => {
+            if ("status" in result || !operationIsCurrent()) return;
+            if (result.remoteRevision !== undefined && mutationVersion === rosterMutationVersionRef.current) {
+                rosterExpectedRevisionRef.current = result.remoteRevision;
+            }
             if (result.remoteError && !result.localSaved && mutationVersion === rosterMutationVersionRef.current) {
+                rosterSnapshotRef.current = previousSnapshot;
                 setStudents(previousSnapshot.students);
                 setGroups(previousSnapshot.groups);
                 setInvites(previousSnapshot.invites);
@@ -609,7 +787,8 @@ function ManageUsersInner() {
     ), [exams]);
 
     const isDemoRoster = rosterDataMode === "demo";
-    const attemptAnalyticsAvailable = isDemoRoster || attemptAnalyticsStatus === "ready";
+    const attemptAnalyticsAvailable = !rosterMutationsDisabled
+        && (isDemoRoster || attemptAnalyticsStatus === "ready");
     const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students;
     const rosterGroups = isDemoRoster ? MOCK_GROUPS : groups;
     const rosterInvites = isDemoRoster ? MOCK_INVITES : invites;
@@ -753,9 +932,9 @@ function ManageUsersInner() {
     // The shared roster performance index already applies strict stable-id and
     // unambiguous legacy matching, and stores each bucket newest first.
     const selectedMatchedAttempts = useMemo<Attempt[]>(() => {
-        if (!selected) return [];
+        if (!selected || rosterMutationsDisabled) return [];
         return profilePerformanceByStudentId.get(selected.id)?.attempts || [];
-    }, [profilePerformanceByStudentId, selected]);
+    }, [profilePerformanceByStudentId, rosterMutationsDisabled, selected]);
 
     const selectedRecentAttempts = selectedMatchedAttempts.slice(0, 3);
     const latestStableAttempt = selectedMatchedAttempts[0] || null;
@@ -782,7 +961,15 @@ function ManageUsersInner() {
     const ensureDetailedAttempts = async (): Promise<Attempt[] | null> => {
         if (detailedAttempts) return detailedAttempts;
         if (detailedAttemptLoadRef.current) return detailedAttemptLoadRef.current;
-        const pending = loadTeacherAttempts().then(result => {
+        const requestGeneration = ++detailedAttemptGenerationRef.current;
+        const capturedIdentity = captureTeacherRosterLoadIdentity(requestGeneration);
+        const completionIsCurrent = () => {
+            if (!capturedIdentity || detailedAttemptGenerationRef.current !== requestGeneration) return false;
+            const current = captureTeacherRosterLoadIdentity(requestGeneration);
+            return !!current && sameTeacherRosterLoadIdentity(capturedIdentity, current);
+        };
+        const pending: Promise<Attempt[] | null> = loadTeacherAttempts().then(result => {
+            if (!completionIsCurrent()) return null;
             if (result.remoteError) {
                 setAllAttempts([]);
                 setAttemptAnalyticsStatus("unavailable");
@@ -796,13 +983,14 @@ function ManageUsersInner() {
             setDetailedAttempts(result.items);
             return result.items;
         }).catch(error => {
+            if (!completionIsCurrent()) return null;
             toast.error(
                 "상세 분석 로드 실패",
                 error instanceof Error ? error.message : "상세 제출 데이터를 불러오지 못했습니다.",
             );
             return null;
         }).finally(() => {
-            detailedAttemptLoadRef.current = null;
+            if (detailedAttemptLoadRef.current === pending) detailedAttemptLoadRef.current = null;
         });
         detailedAttemptLoadRef.current = pending;
         return pending;
@@ -821,6 +1009,7 @@ function ManageUsersInner() {
         setShowMessageModal(true);
     };
     const handleOpenDetail = async () => {
+        if (rosterMutationsDisabled) return;
         if (!studentGrowthReportsEnabled) {
             toast.info("학생 성장 리포트는 Pro 기능입니다", "기본 명단과 최근 점수는 확인할 수 있고, 누적 성장/취약 유형 리포트는 Pro 이상에서 열립니다.");
             return;
@@ -834,6 +1023,7 @@ function ManageUsersInner() {
     };
 
     const handleOpenGroupProfile = async (groupId: string) => {
+        if (rosterMutationsDisabled) return;
         if (!advancedAnalyticsEnabled) {
             toast.info("반별 분석 리포트는 Pro 기능입니다", "반 목록과 평균은 확인할 수 있고, 반별 약점/집중 관리 리포트는 Pro 이상에서 열립니다.");
             return;
@@ -857,16 +1047,34 @@ function ManageUsersInner() {
 
     const handleCopyStudentId = async () => {
         if (!selected) return;
+        const sessionIdentity = captureTeacherRosterLoadIdentity(0);
+        if (!sessionIdentity) return;
+        const operation = beginTeacherRosterIdentityOperation(sessionIdentity, rosterOperationEpochRef.current);
+        const operationIsCurrent = () => canContinueTeacherRosterIdentityOperation(
+            operation,
+            captureTeacherRosterLoadIdentity(0),
+            rosterOperationEpochRef.current,
+        );
+        const copiedStudent = { id: selected.id, name: selected.name };
         try {
-            await navigator.clipboard.writeText(selected.id);
-            toast.success("학생번호 복사됨", `${selected.name}: ${selected.id}`);
+            await navigator.clipboard.writeText(copiedStudent.id);
+            if (!operationIsCurrent()) return;
+            toast.success("학생번호 복사됨", `${copiedStudent.name}: ${copiedStudent.id}`);
         } catch {
-            toast.error("복사 실패", "브라우저 클립보드 권한을 확인해주세요.");
+            if (operationIsCurrent()) toast.error("복사 실패", "브라우저 클립보드 권한을 확인해주세요.");
         }
     };
 
     // ===== Student CRUD =====
     const handleAddStudent = async (data: StudentFormData) => {
+        const sessionIdentity = captureTeacherRosterLoadIdentity(0);
+        if (!sessionIdentity) return;
+        const operation = beginTeacherRosterIdentityOperation(sessionIdentity, rosterOperationEpochRef.current);
+        const operationIsCurrent = () => canContinueTeacherRosterIdentityOperation(
+            operation,
+            captureTeacherRosterLoadIdentity(0),
+            rosterOperationEpochRef.current,
+        );
         const idx = students.length;
         const selectedGroup = groups.find(group => group.id === data.groupId);
         const resolvedRegion = data.region.trim() || selectedGroup?.region || "";
@@ -910,7 +1118,7 @@ function ManageUsersInner() {
             status: "active",
         };
         const next = [newStudent, ...students];
-        if (!await authorizeRosterMutation(next)) return;
+        if (!await authorizeRosterMutation(next) || !operationIsCurrent()) return;
         persistRoster(next, recomputeGroups(next, baseGroups), invites);
     };
 
@@ -970,21 +1178,62 @@ function ManageUsersInner() {
         }
     };
 
-    const scheduleDeleteUndo = (removed: RosterStudent[], label: string) => {
+    const handleUndoDelete = async (expectedId: number, expectedOperation: TeacherRosterIdentityOperation) => {
+        const pending = pendingDeleteUndoRef.current;
+        if (!pending || !canContinueTeacherRosterBoundOperation(
+            expectedOperation,
+            expectedId,
+            pending.id,
+            captureTeacherRosterLoadIdentity(0),
+            rosterOperationEpochRef.current,
+        )) return;
         clearDeleteUndoTimer();
-        const undoId = Date.now();
-        setPendingDeleteUndo({ id: undoId, students: removed, label });
+        activeUndoTokenRef.current = expectedId;
+        pendingDeleteUndoRef.current = null;
+        const operationIsCurrent = () => activeUndoTokenRef.current === expectedId
+            && canContinueTeacherRosterIdentityOperation(
+                expectedOperation,
+                captureTeacherRosterLoadIdentity(0),
+                rosterOperationEpochRef.current,
+            );
+        const currentSnapshot = rosterSnapshotRef.current;
+        const initialRestored = restoreDeletedStudentsIntoCurrentRoster(currentSnapshot, pending.students);
+        if (!await authorizeRosterMutation(initialRestored.students)) {
+            if (operationIsCurrent()) {
+                activeUndoTokenRef.current = null;
+                pendingDeleteUndoRef.current = pending;
+            }
+            return;
+        }
+        if (!operationIsCurrent()) return;
+        const latestSnapshot = rosterSnapshotRef.current;
+        const restored = restoreDeletedStudentsIntoCurrentRoster(latestSnapshot, pending.students);
+        persistRoster(
+            restored.students,
+            recomputeGroups(restored.students, restored.groups),
+            restored.invites,
+        );
+        if (!operationIsCurrent()) return;
+        activeUndoTokenRef.current = null;
+        toast.success("삭제 취소됨", "학생 명단을 복원했습니다.");
+    };
+
+    const scheduleDeleteUndo = (removed: RosterStudent[]) => {
+        clearDeleteUndoTimer();
+        activeUndoTokenRef.current = null;
+        const sessionIdentity = captureTeacherRosterLoadIdentity(0);
+        if (!sessionIdentity) return;
+        const undoOperation = beginTeacherRosterIdentityOperation(sessionIdentity, rosterOperationEpochRef.current);
+        const undoId = ++undoTokenSequenceRef.current;
+        const pending = { id: undoId, students: removed, operation: undoOperation };
+        pendingDeleteUndoRef.current = pending;
         undoTimeoutRef.current = setTimeout(() => {
-            setPendingDeleteUndo(prev => (prev?.id === undoId ? null : prev));
+            if (pendingDeleteUndoRef.current?.id === undoId) pendingDeleteUndoRef.current = null;
             undoTimeoutRef.current = null;
         }, DELETE_UNDO_WINDOW_MS);
-        // T3: the delete + undo affordance now lives in the toast host (the
-        // bespoke fixed bar was removed). The action runs the latest undo
-        // handler via a ref so it reads current roster state, and its window
-        // matches the pendingDeleteUndo timer above.
-        toast.action("info", `${label} 삭제됨`, undefined, {
+        toast.action("info", "학생 삭제됨", undefined, {
             actionLabel: "실행 취소",
-            onAction: () => undoDeleteRef.current(),
+            onAction: () => { void handleUndoDelete(undoId, undoOperation); },
             durationMs: DELETE_UNDO_WINDOW_MS,
         });
     };
@@ -995,40 +1244,18 @@ function ManageUsersInner() {
     // an id reappears in a saved snapshot (see "clears tombstones when the
     // same roster row is intentionally re-added" in rosterPersistence.test.ts),
     // so a plain persistRoster() re-add is enough — no special mutation needed.
-    const removeStudentsWithUndo = (ids: string[], label: string) => {
+    const removeStudentsWithUndo = (ids: string[]) => {
         const idSet = new Set(ids);
         const removed = students.filter(s => idSet.has(s.id));
         if (removed.length === 0) return;
         const next = students.filter(s => !idSet.has(s.id));
         persistRoster(next, recomputeGroups(next, groups), invites);
         purgeIssuedCredentialMarkers(ids);
-        scheduleDeleteUndo(removed, label);
+        scheduleDeleteUndo(removed);
     };
-
-    const handleUndoDelete = async () => {
-        if (!pendingDeleteUndo) return;
-        clearDeleteUndoTimer();
-        const restored = pendingDeleteUndo;
-        setPendingDeleteUndo(null);
-        const restoredIds = new Set(restored.students.map(s => s.id));
-        const merged = [...restored.students, ...students.filter(s => !restoredIds.has(s.id))];
-        if (!await authorizeRosterMutation(merged)) {
-            setPendingDeleteUndo(restored);
-            return;
-        }
-        persistRoster(merged, recomputeGroups(merged, groups), invites);
-        toast.success("삭제 취소됨", `${restored.label} 복원했습니다.`);
-    };
-
-    // Keep the ref pointed at the freshest undo handler so the undo toast's
-    // action never runs against stale roster state.
-    useEffect(() => {
-        undoDeleteRef.current = handleUndoDelete;
-    });
 
     const deleteStudent = (id: string) => {
-        const target = students.find(s => s.id === id);
-        removeStudentsWithUndo([id], target?.name || "학생");
+        removeStudentsWithUndo([id]);
         if (selectedId === id) setSelectedId(null);
         setSelectedIds(prev => {
             if (!prev.has(id)) return prev;
@@ -1111,13 +1338,17 @@ function ManageUsersInner() {
 
     const deleteSelectedStudents = () => {
         const ids = [...selectedIds];
-        removeStudentsWithUndo(ids, `${ids.length}명`);
+        removeStudentsWithUndo(ids);
         if (selectedId && selectedIds.has(selectedId)) setSelectedId(null);
         clearSelection();
     };
 
     // ===== CSV export =====
     const handleExportCsv = () => {
+        if (rosterMutationsDisabled) {
+            toast.info("읽기 전용 명단", "최신 서버 명단을 확인한 뒤 분석 CSV를 내보낼 수 있습니다.");
+            return;
+        }
         if (isDemoRoster) {
             toast.info("데모 명단은 내보내지 않음", "실제 학생을 추가하거나 CSV로 업로드한 명단만 내보낼 수 있습니다.");
             return;
@@ -1353,10 +1584,19 @@ function ManageUsersInner() {
             toast.info("읽기 전용 명단", "최신 서버 명단을 확인한 뒤 CSV를 가져올 수 있습니다.");
             return;
         }
+        const sessionIdentity = captureTeacherRosterLoadIdentity(0);
+        if (!sessionIdentity) return;
+        const csvOperation = beginTeacherRosterIdentityOperation(sessionIdentity, rosterOperationEpochRef.current);
+        const csvIsCurrent = () => canContinueTeacherRosterIdentityOperation(
+            csvOperation,
+            captureTeacherRosterLoadIdentity(0),
+            rosterOperationEpochRef.current,
+        );
         try {
             // Read raw bytes so legacy Korean Excel exports (CP949/EUC-KR) don't become
             // mojibake — File.text() would force UTF-8.
             const text = decodeCsvBytes(await file.arrayBuffer());
+            if (!csvIsCurrent()) return;
             const rows = parseCsvRows(text);
             const plan = buildRosterCsvImportPlan(rows, students, groups);
             if (!plan.ok) {
@@ -1368,14 +1608,22 @@ function ManageUsersInner() {
                 return;
             }
             // Show the dry-run preview; nothing is committed until the teacher confirms.
-            setCsvPreview(plan);
+            if (csvIsCurrent()) setCsvPreview(plan);
         } catch {
-            toast.error("CSV 파싱 실패", "파일 형식을 확인해주세요 (name,email,group,region).");
+            if (csvIsCurrent()) toast.error("CSV 파싱 실패", "파일 형식을 확인해주세요 (name,email,group,region).");
         }
     };
 
     const handleConfirmCsvImport = async (dispositions: Record<number, RosterCsvConflictDisposition>) => {
         if (!csvPreview) return;
+        const sessionIdentity = captureTeacherRosterLoadIdentity(0);
+        if (!sessionIdentity) return;
+        const csvOperation = beginTeacherRosterIdentityOperation(sessionIdentity, rosterOperationEpochRef.current);
+        const csvIsCurrent = () => canContinueTeacherRosterIdentityOperation(
+            csvOperation,
+            captureTeacherRosterLoadIdentity(0),
+            rosterOperationEpochRef.current,
+        );
         const plan = csvPreview;
         setCsvPreview(null);
         // Fold the per-row conflict choices (신규 추가/기존 덮어쓰기/건너뛰기) into the
@@ -1392,10 +1640,12 @@ function ManageUsersInner() {
         }
         const recomputedGroups = recomputeGroups(resolution.nextStudents, plan.nextGroups);
         if (!await authorizeRosterMutation(resolution.nextStudents)) {
-            setCsvPreview(plan);
+            if (csvIsCurrent()) setCsvPreview(plan);
             return;
         }
+        if (!csvIsCurrent()) return;
         persistRoster(resolution.nextStudents, recomputedGroups, invites);
+        if (!csvIsCurrent()) return;
         const addedTotal = plan.adds.length + resolution.addedCount;
         const updatedTotal = plan.updates.filter(update => update.changes.length > 0).length + resolution.overwrittenCount;
         toast.success(
@@ -1409,6 +1659,16 @@ function ManageUsersInner() {
     };
 
     const handleCanonicalRosterRetry = () => {
+        rosterOperationEpochRef.current += 1;
+        analyticsLoadGenerationRef.current += 1;
+        detailedAttemptGenerationRef.current += 1;
+        detailedAttemptLoadRef.current = null;
+        setAllAttempts([]);
+        setExams([]);
+        setDetailedAttempts(null);
+        setAttemptAnalyticsStatus("loading");
+        setShowProfileModal(false);
+        setShowGroupProfileModal(false);
         setRosterLoadState({ state: "loading" });
         setRosterRetryGeneration(generation => generation + 1);
     };
@@ -1798,7 +2058,7 @@ function ManageUsersInner() {
                                                 <CheckCircle2 size={13} /> 필터 전체 {filtered.length}명 선택
                                             </button>
                                         )}
-                                        <button onClick={handleExportCsv} style={{
+                                        <button onClick={handleExportCsv} disabled={rosterMutationsDisabled} style={{
                                             padding: '0.4rem 0.85rem', background: 'var(--surface)', color: 'var(--foreground)',
                                             border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
                                             fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem'
@@ -1828,7 +2088,7 @@ function ManageUsersInner() {
                                 </div>
                             ) : (
                                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
-                                    <button onClick={handleExportCsv} style={{
+                                    <button onClick={handleExportCsv} disabled={rosterMutationsDisabled} style={{
                                         padding: '0.45rem 0.9rem', background: 'var(--surface)', color: 'var(--muted)',
                                         border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
                                         fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem'
@@ -2040,7 +2300,7 @@ function ManageUsersInner() {
                                                 >
                                                     상세 보기
                                                 </button>
-                                                {!isDemoRoster && (
+                                                {!isDemoRoster && !rosterMutationsDisabled && (
                                                     <div data-teacher-user-popover-root className="teacher-users-mobile-menu-root">
                                                         <button
                                                             type="button"
@@ -2368,7 +2628,7 @@ function ManageUsersInner() {
                                     {!rosterMutationsDisabled && <button onClick={handleSendMessage} style={{ flex: '1 1 120px', minHeight: 44, padding: '0.7rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
                                         <MessageCircle size={14} /> 메시지
                                     </button>}
-                                    {latestStableAttempt ? (
+                                     {!rosterMutationsDisabled && latestStableAttempt ? (
                                         <NextLink
                                             href={buildStudentResultHref(latestStableAttempt.id, "report")}
                                             aria-label={`${selected.name} 최근 응시 리포트 상세 보기`}
@@ -2389,7 +2649,7 @@ function ManageUsersInner() {
                                         >
                                             상세 보기
                                         </NextLink>
-                                    ) : studentGrowthReportsEnabled ? (
+                                    ) : !rosterMutationsDisabled && studentGrowthReportsEnabled ? (
                                         <button onClick={handleOpenDetail} style={{ flex: '1 1 120px', minHeight: 44, padding: '0.7rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem' }}>
                                             상세 보기
                                         </button>
@@ -2417,7 +2677,7 @@ function ManageUsersInner() {
                                             성장 리포트 Pro
                                         </NextLink>
                                     ) : null}
-                                    {latestStableAttempt && studentGrowthReportsEnabled && (
+                                     {!rosterMutationsDisabled && latestStableAttempt && studentGrowthReportsEnabled && (
                                         <button
                                             type="button"
                                             onClick={handleOpenDetail}
@@ -2443,36 +2703,52 @@ function ManageUsersInner() {
                 )}
 
                 {tab === "groups" && (
-                    <GroupsTab
-                        displayGroups={displayGroups}
-                        displayStudents={displayStudents}
-                        analyticsAvailable={attemptAnalyticsAvailable}
-                        isDemoRoster={isDemoRoster}
-                        readOnly={rosterMutationsDisabled}
-                        advancedAnalyticsEnabled={advancedAnalyticsEnabled}
-                        handleOpenGroupProfile={handleOpenGroupProfile}
-                        handleAddStudentToGroup={handleAddStudentToGroup}
-                        handleOpenEditGroup={handleOpenEditGroup}
-                        handleDeleteGroup={handleDeleteGroup}
-                        setSelectedRegionKey={setSelectedRegionKey}
-                        setQuery={setQuery}
-                        setTab={setTab}
-                        setEditingGroup={setEditingGroup}
-                        setShowGroupModal={setShowGroupModal}
-                    />
+                    rosterMutationsDisabled ? (
+                        <GroupsTab
+                            capability="degraded_read_only"
+                            displayGroups={displayGroups}
+                            displayStudents={displayStudents}
+                        />
+                    ) : (
+                        <GroupsTab
+                            capability="fresh_mutable"
+                            displayGroups={displayGroups}
+                            displayStudents={displayStudents}
+                            analyticsAvailable={attemptAnalyticsAvailable}
+                            isDemoRoster={isDemoRoster}
+                            advancedAnalyticsEnabled={advancedAnalyticsEnabled}
+                            handleOpenGroupProfile={handleOpenGroupProfile}
+                            handleAddStudentToGroup={handleAddStudentToGroup}
+                            handleOpenEditGroup={handleOpenEditGroup}
+                            handleDeleteGroup={handleDeleteGroup}
+                            setSelectedRegionKey={setSelectedRegionKey}
+                            setQuery={setQuery}
+                            setTab={setTab}
+                            setEditingGroup={setEditingGroup}
+                            setShowGroupModal={setShowGroupModal}
+                        />
+                    )
                 )}
 
                 {tab === "invites" && (
-                    <InvitesTab
-                        copyFlash={copyFlash}
-                        hydrated={hydrated}
-                        rosterInvites={rosterInvites}
-                        readOnly={rosterMutationsDisabled}
-                        handleCopyInvite={handleCopyInvite}
-                        handleResendInvite={handleResendInvite}
-                        handleCancelInvite={handleCancelInvite}
-                        setShowInviteModal={setShowInviteModal}
-                    />
+                    rosterMutationsDisabled ? (
+                        <InvitesTab
+                            capability="degraded_read_only"
+                            hydrated={hydrated}
+                            rosterInvites={rosterInvites}
+                        />
+                    ) : (
+                        <InvitesTab
+                            capability="fresh_mutable"
+                            copyFlash={copyFlash}
+                            hydrated={hydrated}
+                            rosterInvites={rosterInvites}
+                            handleCopyInvite={handleCopyInvite}
+                            handleResendInvite={handleResendInvite}
+                            handleCancelInvite={handleCancelInvite}
+                            setShowInviteModal={setShowInviteModal}
+                        />
+                    )
                 )}
             </main>
 
@@ -2595,10 +2871,7 @@ function ManageUsersInner() {
                 />
             )}
 
-            {/* T3: the delete/undo affordance now lives in the toast host
-                (ToastHost renders the "실행 취소" action button), so the
-                bespoke fixed undo bar was removed. pendingDeleteUndo still
-                drives the 6s restore window + the toast's action handler. */}
+             {/* T3: the identity-bound delete/undo affordance lives in the toast host. */}
 
         </div>
     );

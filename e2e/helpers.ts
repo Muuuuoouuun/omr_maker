@@ -1,4 +1,21 @@
 import { expect, type BrowserContext, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+export function exactNextActionId(filename: string, exportedName: string, worker: string): string {
+    const manifestPath = join(process.cwd(), ".next/dev/server/server-reference-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        node?: Record<string, { filename?: string; exportedName?: string; workers?: Record<string, unknown> }>;
+    };
+    const matches = Object.entries(manifest.node || {}).filter(([, entry]) => (
+        entry.filename === filename && entry.exportedName === exportedName
+    ));
+    expect(matches, `exact Next action mapping for ${filename}#${exportedName}`).toHaveLength(1);
+    const [actionId, entry] = matches[0];
+    expect(entry.workers, `${exportedName} worker registration`).toHaveProperty(worker);
+    expect(actionId).toMatch(/^[0-9a-f]{42}$/);
+    return actionId;
+}
 
 export async function resetBrowserState(page: Page, context: BrowserContext) {
     await context.clearCookies();

@@ -49,9 +49,14 @@ describe("canonical load-state surfaces", () => {
         expect(teacherUsers).toContain("rosterMutationsDisabled");
         expect(teacherUsers).toMatch(/rosterAllowsMutations\s*=\s*[^;]*loaded_empty[^;]*loaded_data/);
         expect(teacherUsers).toContain("rosterMutationsDisabled = !rosterAllowsMutations");
-        expect(teacherUsers).toContain("readOnly={rosterMutationsDisabled}");
+        expect(teacherUsers).toContain('capability="degraded_read_only"');
+        expect(teacherUsers).toContain('capability="fresh_mutable"');
         expect(teacherUsers).toContain("읽기 전용");
         expect(teacherUsers).toContain("응시 분석 데이터 미표시");
+        expect(teacherUsers).toMatch(/handleExportCsv[\s\S]*rosterMutationsDisabled/);
+        expect(teacherUsers.match(/onClick=\{handleExportCsv\} disabled=\{rosterMutationsDisabled\}/g)?.length).toBe(2);
+        expect(teacherUsers).toContain("readTeacherRosterDegradedCache");
+        expect(teacherUsers).not.toContain("omr_teacher_roster_cache_stale_at_v1");
         const studentViewControl = groupsTab.indexOf('aria-label={`${g.name} 학생 보기`}');
         expect(studentViewControl).toBeGreaterThan(0);
         const studentViewButton = groupsTab.lastIndexOf("<button", studentViewControl);
@@ -69,6 +74,8 @@ describe("canonical load-state surfaces", () => {
         expect(distributeModal).toContain("inviteLifecycleBlocksIssuance");
         expect(distributeModal).toMatch(/canonical-degraded-cache[\s\S]*!visibleShareUrl/);
         expect(distributeModal).toContain("disabled={isInviteRevoking || distributionRosterReadOnly}");
+        expect(distributeModal).toContain("readTeacherRosterDegradedCache");
+        expect(distributeModal).not.toContain("omr_teacher_roster_cache_stale_at_v1");
     });
 
     it("keeps degraded student cache review-only without solve or onboarding actions", () => {
