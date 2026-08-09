@@ -1,5 +1,4 @@
 import { PAYMENT_PROVIDER_ROADMAP } from "@/lib/serviceRoadmap";
-import type { PlanKey } from "@/types/omr";
 
 export type PaymentProviderKey = typeof PAYMENT_PROVIDER_ROADMAP[number]["key"];
 export type PaymentProviderMode = "disabled" | "simulation" | "live";
@@ -30,70 +29,6 @@ export interface PaymentProviderRolloutReadiness {
     publicKeyPresent: boolean;
     missing: string[];
     label: string;
-}
-
-/**
- * Provider-neutral server contracts. A checkout session records purchase
- * intent only; the organization's authoritative plan can change only after a
- * provider adapter verifies and normalizes a webhook event.
- */
-export type PaidPlanKey = Exclude<PlanKey, "free">;
-export type BillingCycle = "monthly" | "annual";
-
-export interface CheckoutSessionRequest {
-    organizationId: string;
-    requestedByUserId: string;
-    requestedPlan: PaidPlanKey;
-    billingCycle: BillingCycle;
-    successUrl: string;
-    cancelUrl: string;
-    idempotencyKey: string;
-}
-
-export type CheckoutSessionResult =
-    | {
-        status: "created";
-        provider: PaymentProviderKey;
-        checkoutSessionId: string;
-        redirectUrl: string;
-        expiresAt?: string;
-    }
-    | { status: "unavailable"; error: "provider_adapter_not_configured" }
-    | { status: "rejected"; error: "invalid_request" | "invalid_provider_response" | "provider_error" };
-
-export interface RawPaymentWebhookRequest {
-    headers: Readonly<Record<string, string | undefined>>;
-    body: string;
-}
-
-export type SubscriptionLifecycleStatus = "trialing" | "active" | "past_due" | "canceled" | "expired";
-export type SubscriptionWebhookEventType = "subscription.created" | "subscription.updated" | "subscription.canceled";
-
-export interface NormalizedSubscriptionWebhookEvent {
-    eventId: string;
-    eventType: SubscriptionWebhookEventType;
-    occurredAt: string;
-    organizationId: string;
-    subscriptionId: string;
-    subscriptionStatus: SubscriptionLifecycleStatus;
-    targetPlan: PlanKey;
-}
-
-/** Produced only by a trusted server adapter after provider signature checks. */
-export interface VerifiedPaymentWebhookEventEnvelope {
-    signatureVerified: true;
-    provider: PaymentProviderKey;
-    event: NormalizedSubscriptionWebhookEvent;
-}
-
-export type PaymentWebhookVerificationResult =
-    | { ok: true; envelope: VerifiedPaymentWebhookEventEnvelope }
-    | { ok: false; error: "invalid_signature" | "malformed_event" | "unsupported_event" };
-
-export interface PaymentProviderAdapter {
-    readonly key: PaymentProviderKey;
-    createCheckoutSession(request: CheckoutSessionRequest): Promise<CheckoutSessionResult>;
-    verifyWebhook(request: RawPaymentWebhookRequest): Promise<PaymentWebhookVerificationResult>;
 }
 
 type Env = Record<string, string | undefined>;
