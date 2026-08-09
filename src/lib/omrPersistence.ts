@@ -25,8 +25,16 @@ import {
     INITIAL_CAPACITY_EXCEEDED_ERROR,
     INITIAL_OPERATIONS_LIMITS,
 } from "@/lib/initialOperationsPolicy";
-
 type Env = Record<string, string | undefined>;
+
+export type CanonicalQuestionResultEvidenceAttester = (
+    scope: Attempt & Required<Pick<Attempt,
+        | "questionResultsQuestionCount"
+        | "questionResultsDefinitionManifestHash"
+        | "questionResultsFullEvidenceHash"
+    >>,
+    questionResults: readonly QuestionResult[],
+) => unknown;
 
 export interface SupabaseConfig {
     url: string;
@@ -95,6 +103,9 @@ export interface SupabaseAttemptRow {
     class_id?: string | null;
     assignment_id?: string | null;
     assignment_revision?: number | null;
+    question_results_question_count?: number | null;
+    question_results_definition_manifest_hash?: string | null;
+    question_results_full_evidence_hash?: string | null;
     student_profile_id?: string | null;
     exam_id: string;
     student_name: string;
@@ -123,6 +134,7 @@ export interface SupabaseQuestionResultRow {
     organization_id?: string | null;
     class_id?: string | null;
     assignment_id?: string | null;
+    assignment_revision?: number | null;
     student_profile_id?: string | null;
     attempt_id: string;
     exam_id: string;
@@ -523,6 +535,16 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
         assignment_revision: Number.isSafeInteger(attempt.assignmentRevision) && Number(attempt.assignmentRevision) > 0
             ? Number(attempt.assignmentRevision)
             : null,
+        question_results_question_count: Number.isSafeInteger(attempt.questionResultsQuestionCount)
+            && Number(attempt.questionResultsQuestionCount) > 0
+            ? Number(attempt.questionResultsQuestionCount)
+            : null,
+        question_results_definition_manifest_hash: typeof attempt.questionResultsDefinitionManifestHash === "string"
+            ? attempt.questionResultsDefinitionManifestHash
+            : null,
+        question_results_full_evidence_hash: typeof attempt.questionResultsFullEvidenceHash === "string"
+            ? attempt.questionResultsFullEvidenceHash
+            : null,
         student_profile_id: studentProfileId,
         exam_id: attempt.examId,
         student_name: attempt.studentName,
@@ -547,7 +569,10 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
     };
 }
 
-export function attemptFromSupabaseRow(row: SupabaseAttemptRow | { payload: Attempt }): Attempt {
+export function attemptFromSupabaseRow(
+    row: SupabaseAttemptRow | { payload: Attempt },
+    attestEvidence?: CanonicalQuestionResultEvidenceAttester,
+): Attempt {
     const attempt = sanitizeAttemptPayload(row.payload);
     if (!attempt) throw new Error("Invalid attempt payload");
     if ("organization_id" in row || "class_id" in row || "assignment_id" in row || "student_profile_id" in row) {
@@ -557,6 +582,35 @@ export function attemptFromSupabaseRow(row: SupabaseAttemptRow | { payload: Atte
         const assignmentRevision = Number.isSafeInteger(row.assignment_revision) && Number(row.assignment_revision) > 0
             ? Number(row.assignment_revision)
             : null;
+        const questionResultsQuestionCount = Number.isSafeInteger(row.question_results_question_count)
+            && Number(row.question_results_question_count) > 0
+            ? Number(row.question_results_question_count)
+            : null;
+        const definitionHash = typeof row.question_results_definition_manifest_hash === "string"
+            && /^sha256:[a-f0-9]{64}$/.test(row.question_results_definition_manifest_hash)
+            ? row.question_results_definition_manifest_hash
+            : null;
+        const evidenceHash = typeof row.question_results_full_evidence_hash === "string"
+            && /^sha256:[a-f0-9]{64}$/.test(row.question_results_full_evidence_hash)
+            ? row.question_results_full_evidence_hash
+            : null;
+        const scalarEvidencePresent = questionResultsQuestionCount !== null
+            || definitionHash !== null
+            || evidenceHash !== null;
+        const scalarEvidenceComplete = questionResultsQuestionCount !== null
+            && definitionHash !== null
+            && evidenceHash !== null;
+        if (scalarEvidencePresent !== scalarEvidenceComplete) {
+            throw new Error("Attempt grading evidence columns are incomplete");
+        }
+        const payloadEvidencePresent = attempt.questionResultsQuestionCount !== undefined
+            || attempt.questionResultsDefinitionManifestHash !== undefined
+            || attempt.questionResultsFullEvidenceHash !== undefined;
+        if (payloadEvidencePresent && (
+            questionResultsQuestionCount !== attempt.questionResultsQuestionCount
+            || definitionHash !== attempt.questionResultsDefinitionManifestHash
+            || evidenceHash !== attempt.questionResultsFullEvidenceHash
+        )) throw new Error("Attempt grading evidence columns do not match payload");
         const rowIdentityType = identityTypeValue(row.identity_type);
         const guestIdentity = rowIdentityType === "guest" || (
             !rowIdentityType
@@ -594,15 +648,37 @@ export function attemptFromSupabaseRow(row: SupabaseAttemptRow | { payload: Atte
                     : {}),
             }
             : normalizedAttempt;
-        return {
+        const hydratedAttempt: Attempt = {
             ...canonicalAttempt,
             ...(identityType ? { identityType } : {}),
             ...(organizationId ? { organizationId } : {}),
             ...(classId && classId !== attempt.groupId ? { classId } : {}),
             ...(assignmentId ? { assignmentId } : {}),
             ...(assignmentId && assignmentRevision ? { assignmentRevision } : {}),
+            ...(scalarEvidenceComplete ? {
+                questionResultsQuestionCount,
+                questionResultsDefinitionManifestHash: definitionHash,
+                questionResultsFullEvidenceHash: evidenceHash,
+            } : {}),
             ...(studentProfileId ? { studentProfileId } : {}),
         };
+        if (scalarEvidenceComplete) {
+            if (!hydratedAttempt.questionResults) {
+                throw new Error("Attempt grading evidence rows are missing");
+            }
+            if (!attestEvidence) {
+                throw new Error("Attempt grading evidence verifier is required");
+            }
+            attestEvidence(
+                hydratedAttempt as Attempt & {
+                    questionResultsQuestionCount: number;
+                    questionResultsDefinitionManifestHash: string;
+                    questionResultsFullEvidenceHash: string;
+                },
+                hydratedAttempt.questionResults,
+            );
+        }
+        return hydratedAttempt;
     }
     return attempt;
 }
@@ -659,6 +735,11 @@ export function questionResultToSupabaseRow(
     const groupName = nullableString(result.groupName) || nullableString(attempt?.groupName);
     const classId = scopedValue(result.classId) || scopedValue(attempt?.classId) || groupId;
     const assignmentId = scopedValue(result.assignmentId) || scopedValue(attempt?.assignmentId);
+    const assignmentRevision = Number.isSafeInteger(result.assignmentRevision) && Number(result.assignmentRevision) > 0
+        ? Number(result.assignmentRevision)
+        : Number.isSafeInteger(attempt?.assignmentRevision) && Number(attempt?.assignmentRevision) > 0
+            ? Number(attempt?.assignmentRevision)
+            : null;
     const explicitIdentityType = identityTypeValue(result.identityType) || identityTypeValue(attempt?.identityType);
     const guestIdentity = isGuestIdentitySnapshot(
         explicitIdentityType,
@@ -685,6 +766,7 @@ export function questionResultToSupabaseRow(
         organizationId: organizationId || undefined,
         classId: classId || undefined,
         assignmentId: assignmentId || undefined,
+        assignmentRevision: assignmentId && assignmentRevision ? assignmentRevision : undefined,
         studentProfileId: studentProfileId || undefined,
         studentName,
         studentId: studentId || undefined,
@@ -711,6 +793,7 @@ export function questionResultToSupabaseRow(
         organization_id: organizationId,
         class_id: classId,
         assignment_id: assignmentId,
+        assignment_revision: assignmentId ? assignmentRevision : null,
         student_profile_id: studentProfileId,
         attempt_id: attemptId,
         exam_id: examId,

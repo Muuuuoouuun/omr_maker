@@ -8,7 +8,7 @@ const GROUP_ID = "e2e-drawing-group";
 const STUDENT_ID = "e2e-drawing-group::student-1";
 
 function pdfDataUrl(): string {
-    const bytes = readFileSync(path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf"));
+    const bytes = readFileSync(path.join(process.cwd(), "e2e/fixtures/sample-problem-2pages.pdf"));
     return `data:application/pdf;base64,${bytes.toString("base64")}`;
 }
 
@@ -80,6 +80,21 @@ test.describe("PDF drawing toolbar + eraser 부분/획 toggle", () => {
         // The drawing toolbar (incl. eraser) appears as soon as pdfFile is set
         // (before the PDF paints), so the eraser button is visible right away.
         await expect(page.getByLabel("지우개")).toBeVisible({ timeout: 20000 });
+    });
+
+    test("renders selectable text across two pages before accepting drawings", async ({ page }) => {
+        const overlay = page.getByTestId("pdf-draw-overlay");
+        await expect(overlay).toHaveAttribute("data-pdf-ready", "true");
+        await expect(page.locator(".react-pdf__Page__textContent")).toContainText("OMR Drawing Test Page");
+
+        const pageInput = page.locator(".pdf-viewer-controls input[type='text']");
+        await expect(pageInput).toHaveValue("1");
+        await pageInput.fill("2");
+        await pageInput.press("Enter");
+        await expect(pageInput).toHaveValue("2");
+        await expect(page.locator(".react-pdf__Page__canvas")).toBeVisible();
+        await expect(page.locator(".react-pdf__Page__textContent")).toContainText("OMR Drawing Test Page");
+        await expect(overlay).toHaveAttribute("data-pdf-ready", "true");
     });
 
     test("eraser reveals 부분/획 toggle, 획 active by default", async ({ page }) => {

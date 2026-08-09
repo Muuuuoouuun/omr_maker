@@ -1,9 +1,9 @@
 import {
     attemptOwnedBy,
-    buildServerAttempt,
     ownerStudentId,
     type SubmitAttemptInput,
 } from "@/lib/studentExamCore";
+import { buildServerAttempt } from "@/lib/studentExamServerGrading";
 import { resolveStudentSessionSecret, type StudentServerIdentity } from "@/lib/studentServerSession";
 import { attemptIdForStudentSubmission } from "@/lib/studentSubmissionId";
 import {

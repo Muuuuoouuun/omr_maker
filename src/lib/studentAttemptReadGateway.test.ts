@@ -3,11 +3,13 @@ import { INITIAL_OPERATIONS_LIMITS } from "@/lib/initialOperationsPolicy";
 import { attemptToSupabaseRow, examToSupabaseRow } from "@/lib/omrPersistence";
 import type { StudentServerSession } from "@/lib/studentServerSession";
 import type { Attempt, Exam } from "@/types/omr";
+import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 import {
     listStudentAttemptsWithGateway,
     loadStudentAttemptWithGateway,
     type StudentAttemptReadGatewayClient,
 } from "./studentAttemptReadGateway";
+import { studentTrustedOfficialReviewFromUnknown } from "@/lib/studentAttemptHistoryContract";
 
 const session: StudentServerSession = {
     audience: "omr-student",
@@ -100,7 +102,7 @@ const exam: Exam = {
     createdAt: "2026-07-13T00:00:00.000Z",
     answerKeyPdf: "data:application/pdf;base64,secret-answer-key",
     questions: [
-        { id: 1, number: 1, answer: 3, score: 5, choices: 5, explanation: "비밀 해설" },
+        { id: 1, number: 1, answer: 3, score: 5, choices: 4, explanation: "비밀 해설", tags: { concept: "교사용 비밀 개념" } },
         { id: 2, number: 2, answer: 1, score: 5, choices: 4 },
     ],
 };
@@ -280,7 +282,17 @@ describe("student attempt read gateway", () => {
     });
 
     it("returns post-submit answers, explanations, and the owned remote handwriting ref only in detail", async () => {
-        const { client, calls } = mockClient();
+        const exactRows = (attempt.questionResults || []).map(result => ({
+            ...result,
+            organizationId: attempt.organizationId,
+            studentProfileId: attempt.studentProfileId,
+        }));
+        const sealedAttempt = {
+            ...attempt,
+            questionResults: exactRows,
+            ...buildCanonicalQuestionResultEvidence(attempt, exactRows),
+        };
+        const { client, calls } = mockClient({ singleAttempt: attemptToSupabaseRow(sealedAttempt) });
         const result = await loadStudentAttemptWithGateway(client, "attempt-1", session);
         expect(result).toMatchObject({
             status: "loaded",
@@ -306,6 +318,7 @@ describe("student attempt read gateway", () => {
                     kind: "attempt_handwriting",
                     attemptId: "attempt-1",
                 },
+                retakeEligibleQuestionIds: [2],
             },
         });
         expect(calls[0].filters).toContainEqual(["id", "attempt-1"]);
@@ -317,6 +330,155 @@ describe("student attempt read gateway", () => {
         expect(serialized).toContain('"answer":3');
         expect(serialized).toContain("비밀 해설");
         expect(serialized).not.toContain("secret-answer-key");
+        expect(serialized).not.toMatch(/questionResults(?:DefinitionManifest|FullEvidence)Hash/);
+    });
+
+    it("does not merge an explanation from an edited incompatible current definition", async () => {
+        const editedExam = examToSupabaseRow({
+            ...exam,
+            questions: [
+                { ...exam.questions[0], answer: 4, explanation: "현재 해설" },
+            ],
+        });
+        const { client } = mockClient({ examRow: editedExam });
+
+        const result = await loadStudentAttemptWithGateway(client, "attempt-1", session);
+
+        expect(result).toMatchObject({
+            status: "loaded",
+            detail: {
+                exam: {
+                    questions: [
+                        { id: 1, number: 1, answer: 3 },
+                        { id: 2, number: 2, answer: 1 },
+                    ],
+                },
+            },
+        });
+        if (result.status === "loaded") {
+            expect(result.detail.exam.questions[0]).not.toHaveProperty("explanation");
+        }
+    });
+
+    it("suppresses a current explanation when any immutable submitted PDF definition field changed", async () => {
+        const submittedRows = (attempt.questionResults || []).map((result, index) => ({
+            ...result,
+            organizationId: attempt.organizationId,
+            studentProfileId: attempt.studentProfileId,
+            ...(index === 0 ? {
+                pdfLocation: { page: 1, x: 0.1, y: 0.2 },
+                pdfRegion: { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+                passagePdfRegions: [{ page: 2, x: 0.2, y: 0.3, width: 0.4, height: 0.5 }],
+            } : {}),
+        }));
+        const submittedAttempt: Attempt = {
+            ...attempt,
+            questionResults: submittedRows,
+            ...buildCanonicalQuestionResultEvidence(attempt, submittedRows),
+        };
+        const current = {
+            ...exam,
+            questions: exam.questions.map((question, index) => index === 0 ? {
+                ...question,
+                pdfLocation: { page: 1, x: 0.1, y: 0.2 },
+                pdfRegion: { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+                passagePdfRegions: [{ page: 2, x: 0.2, y: 0.3, width: 0.4, height: 0.6 }],
+                explanation: "편집 후 해설",
+            } : question),
+        };
+        const { client } = mockClient({
+            singleAttempt: attemptToSupabaseRow(submittedAttempt),
+            examRow: examToSupabaseRow(current),
+        });
+
+        const result = await loadStudentAttemptWithGateway(client, "attempt-1", session);
+
+        expect(result.status).toBe("loaded");
+        if (result.status === "loaded") {
+            expect(result.detail.exam.questions[0]).not.toHaveProperty("explanation");
+            expect(result.detail.trustedReview).toBeDefined();
+            expect(result.detail.trustedReview!.questions[0]).not.toHaveProperty("explanation");
+        }
+    });
+
+    it("suppresses a current explanation when the displayed choice-count definition changed", async () => {
+        const exactRows = (attempt.questionResults || []).map(result => ({
+            ...result,
+            organizationId: attempt.organizationId,
+            studentProfileId: attempt.studentProfileId,
+        }));
+        const sealedAttempt: Attempt = {
+            ...attempt,
+            questionResults: exactRows,
+            ...buildCanonicalQuestionResultEvidence(attempt, exactRows),
+        };
+        const editedChoices: Exam = {
+            ...exam,
+            questions: exam.questions.map((question, index) => index === 0
+                ? { ...question, choices: 5, explanation: "선택지 편집 후 해설" }
+                : question),
+        };
+        const { client } = mockClient({
+            singleAttempt: attemptToSupabaseRow(sealedAttempt),
+            examRow: examToSupabaseRow(editedChoices),
+        });
+
+        const result = await loadStudentAttemptWithGateway(client, attempt.id, session);
+
+        expect(result.status).toBe("loaded");
+        if (result.status === "loaded") {
+            expect(result.detail.trustedReview).toBeDefined();
+            expect(result.detail.trustedReview!.questions[0]).not.toHaveProperty("explanation");
+        }
+    });
+
+    it("returns a trusted hash-free review projection that the page can render directly", async () => {
+        const exactRows = (attempt.questionResults || []).map(result => ({
+            ...result,
+            organizationId: attempt.organizationId,
+            studentProfileId: attempt.studentProfileId,
+        }));
+        const sealedAttempt = {
+            ...attempt,
+            questionResults: exactRows,
+            ...buildCanonicalQuestionResultEvidence(attempt, exactRows),
+        };
+        const { client } = mockClient({ singleAttempt: attemptToSupabaseRow(sealedAttempt) });
+
+        const result = await loadStudentAttemptWithGateway(client, attempt.id, session);
+
+        expect(result).toMatchObject({
+            status: "loaded",
+            detail: {
+                trustedReview: {
+                    gradingSource: "canonical_submission",
+                    questions: [
+                        { id: 1, answer: 3, explanation: "비밀 해설" },
+                        { id: 2, answer: 1 },
+                    ],
+                    questionResults: [
+                        { questionId: 1, correctAnswer: 3, status: "correct" },
+                        { questionId: 2, correctAnswer: 1, status: "wrong" },
+                    ],
+                },
+            },
+        });
+        expect(JSON.stringify(result)).not.toMatch(/questionResults(?:DefinitionManifest|FullEvidence)Hash/);
+        if (result.status === "loaded" && result.detail.trustedReview) {
+            expect(studentTrustedOfficialReviewFromUnknown(result.detail.trustedReview)).not.toBeNull();
+            expect(studentTrustedOfficialReviewFromUnknown({
+                ...result.detail.trustedReview,
+                questionResults: result.detail.trustedReview.questionResults.map((row, index) => index === 0
+                    ? { ...row, difficulty: "secret-difficulty" }
+                    : row),
+            })).toBeNull();
+            expect(studentTrustedOfficialReviewFromUnknown({
+                ...result.detail.trustedReview,
+                questionResults: result.detail.trustedReview.questionResults.map((row, index) => index === 0
+                    ? { ...row, expectedTimeSec: Number.NaN }
+                    : row),
+            })).toBeNull();
+        }
     });
 
     it("rejects a remote handwriting ref whose organization or attempt scope was forged", async () => {

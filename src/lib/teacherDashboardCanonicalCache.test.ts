@@ -437,16 +437,17 @@ describe("teacher dashboard canonical cache", () => {
         expect(storage.data[buildCanonicalSurfaceCacheKey(cacheIdentity)]).toBeDefined();
     });
 
-    it("feeds complete fresh attempts into rich state while projecting only redacted cache data", () => {
+    it("feeds summary-only fresh attempts into dashboard state and keeps rich rows detail-on-demand", () => {
         const loadStart = dashboardPageSource.indexOf("const loadDashboardData = useCallback");
         const loadEnd = dashboardPageSource.indexOf("// Initial dashboard load", loadStart);
         const loadSource = dashboardPageSource.slice(loadStart, loadEnd);
 
-        expect(loadSource).toContain("loadTeacherAttempts(),");
-        expect(loadSource).not.toContain("loadTeacherAttemptSummaries()");
+        expect(loadSource).toContain("loadTeacherAttemptSummaries(),");
+        expect(loadSource).not.toContain("loadTeacherAttempts(),");
         expect(loadSource).toContain("applyDashboardSnapshot(nextState.data)");
         expect(loadSource).toContain("successfulSnapshot.attempts");
         expect(loadSource).toContain("cacheFreshTeacherDashboardOptional(");
+        expect(loadSource).not.toContain("seedDetailedAttemptsFromFresh(detailSeed)");
 
         const projection = JSON.stringify(toTeacherDashboardCacheProjection([exam()], [attempt()]));
         expect(projection).not.toContain("private question body");
@@ -468,7 +469,7 @@ describe("teacher dashboard canonical cache", () => {
         expect(repairSource).toMatch(/finally \{[\s\S]*if \(canReleaseTeacherDashboardRepairOperation\([\s\S]*repairOperation[\s\S]*teacherDashboardRepairOperationRef\.current[\s\S]*&& repairOwnerIsCurrent\(\)\)[\s\S]*setIsRepairingAnalyticsData\(false\)/);
     });
 
-    it("seeds ready full attempts after fresh publication and rejects incomplete remote sources", () => {
+    it("does not seed rich detail from summaries and still fences explicit detail-on-demand", () => {
         const loadStart = dashboardPageSource.indexOf("const loadDashboardData = useCallback");
         const loadEnd = dashboardPageSource.indexOf("// Initial dashboard load", loadStart);
         const loadSource = dashboardPageSource.slice(loadStart, loadEnd);
@@ -476,8 +477,8 @@ describe("teacher dashboard canonical cache", () => {
         expect(loadSource).toContain("isTeacherDashboardRemoteCollectionReady(examResult");
         expect(loadSource).toContain("isTeacherDashboardRemoteCollectionReady(attemptResult");
         expect(loadSource).toContain("isTeacherDashboardRemoteCollectionReady(rosterResult");
-        expect(loadSource).toContain("buildTeacherDashboardReadyDetailSeed(");
-        expect(loadSource).toContain("seedDetailedAttemptsFromFresh(detailSeed)");
+        expect(loadSource).not.toContain("buildTeacherDashboardReadyDetailSeed(");
+        expect(loadSource).not.toContain("seedDetailedAttemptsFromFresh(detailSeed)");
         expect(dashboardPageSource).toContain("resetDetailedAttemptsForDashboardRequest(");
         const detailStart = dashboardPageSource.indexOf("const loadDetailedAttempts = useCallback");
         const detailEnd = dashboardPageSource.indexOf("useEffect(() =>", detailStart);

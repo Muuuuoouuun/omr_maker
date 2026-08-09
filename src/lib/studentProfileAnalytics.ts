@@ -3,17 +3,17 @@ import type { RosterStudent } from "@/lib/rosterStorage";
 import {
     baseAttemptsOnly,
     completedAttemptsOnly,
-    resolveAttemptScore,
     retakeAttemptsOnly,
 } from "@/lib/attemptScores";
 import { resolveAwayCount } from "@/lib/examAwayTracker";
 import {
     attemptElapsedTimeSec,
+    buildCanonicalAttemptAnalyticsIndex,
     buildMostMissedQuestionStats,
     buildLearningRecommendations,
     buildQuestionResultTagStats,
-    getAttemptQuestionResults,
     hasGradableAttemptScore,
+    summarizeAttemptScore,
     summarizeAttemptBehavior,
     type LearningRecommendationSeverity,
     type QuestionResultTagStat,
@@ -241,18 +241,24 @@ export function buildStudentProfileInsight(
     const matchedAttempts = completedAttemptsOnly(attempts)
         .filter(attempt => attemptMatchesStudentProfile(attempt, student))
         .sort((a, b) => activityTime(b) - activityTime(a));
-    const resolvedScoreByAttempt = new Map(matchedAttempts.map(attempt => [
-        attempt,
-        resolveAttemptScore(attempt, examById.get(attempt.examId)),
-    ]));
     const baseMatchedAttempts = baseAttemptsOnly(matchedAttempts);
     const retakeMatchedAttempts = retakeAttemptsOnly(matchedAttempts);
     const baseAttemptIds = new Set(baseMatchedAttempts.map(attempt => attempt.id));
+    const analyticsIndexByExamId = new Map([...examById.entries()].map(([examId, exam]) => [
+        examId,
+        buildCanonicalAttemptAnalyticsIndex(exam, matchedAttempts.filter(attempt => attempt.examId === examId)),
+    ]));
+    const resolvedScoreByAttempt = new Map(matchedAttempts.map(attempt => {
+        const exam = examById.get(attempt.examId);
+        return [attempt, exam
+            ? summarizeAttemptScore(exam, attempt, analyticsIndexByExamId.get(exam.id))
+            : null] as const;
+    }));
 
     const attemptInsights = matchedAttempts.map(attempt => {
         const exam = examById.get(attempt.examId);
-        const resolvedScore = resolvedScoreByAttempt.get(attempt)!;
-        const results = exam ? getAttemptQuestionResults(exam, attempt) : [];
+        const resolvedScore = resolvedScoreByAttempt.get(attempt);
+        const results = exam ? analyticsIndexByExamId.get(exam.id)?.resolutionFor(attempt).questionResults || [] : [];
         const behavior = summarizeAttemptBehavior(attempt);
         const wrongQuestionNumbers = sortedUniqueQuestionNumbers(
             results
@@ -270,7 +276,7 @@ export function buildStudentProfileInsight(
             examId: attempt.examId,
             examTitle: attempt.examTitle || exam?.title || "시험",
             finishedAt: attempt.finishedAt,
-            scorePercent: hasGradableAttemptScore(resolvedScore) ? resolvedScore.scorePercent : null,
+            scorePercent: resolvedScore && hasGradableAttemptScore(resolvedScore) ? resolvedScore.scorePercent : null,
             elapsedTimeSec: behavior.elapsedTimeSec,
             totalTrackedTimeSec: behavior.totalTrackedTimeSec,
             averageQuestionTimeSec: behavior.averageTimeSec,
@@ -314,11 +320,12 @@ export function buildStudentProfileInsight(
     for (const [examId, examAttempts] of attemptsByExam.entries()) {
         const exam = examById.get(examId);
         if (!exam) continue;
-        const results = examAttempts.flatMap(attempt => getAttemptQuestionResults(exam, attempt));
+        const analyticsIndex = analyticsIndexByExamId.get(examId)!;
+        const results = examAttempts.flatMap(attempt => analyticsIndex.resolutionFor(attempt).questionResults);
         baseQuestionResults.push(...results);
         wrongQuestionCount += results.filter(result => result.status === "wrong" || result.isWrong).length;
         unansweredQuestionCount += results.filter(result => result.status === "unanswered" || result.isUnanswered).length;
-        mostMissedQuestions.push(...buildMostMissedQuestionStats(exam, examAttempts, weaknessLimit).map(stat => ({
+        mostMissedQuestions.push(...buildMostMissedQuestionStats(exam, examAttempts, weaknessLimit, analyticsIndex).map(stat => ({
             key: `${exam.id}:${stat.questionId}`,
             examId: exam.id,
             examTitle: exam.title,
@@ -337,7 +344,7 @@ export function buildStudentProfileInsight(
             scope: "student",
             attempt: sourceAttempt,
             kinds: weaknessKinds,
-        })) {
+        }, analyticsIndex)) {
             weaknessGroups.push({
                 key: `${exam.id}:${recommendation.key}`,
                 examId: exam.id,

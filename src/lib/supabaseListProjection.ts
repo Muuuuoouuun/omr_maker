@@ -1,6 +1,7 @@
 import {
     attemptFromSupabaseRow,
     examFromSupabaseRow,
+    type CanonicalQuestionResultEvidenceAttester,
     type SupabaseAttemptRow,
     type SupabaseExamRow,
 } from "@/lib/omrPersistence";
@@ -40,6 +41,31 @@ function withOptionalString(value: unknown, key: string): Record<string, unknown
 function withOptionalNumber(value: unknown, key: string): Record<string, unknown> {
     const parsed = typeof value === "number" ? value : Number(value);
     return Number.isFinite(parsed) ? { [key]: parsed } : {};
+}
+
+function projectedQuestionResultsSource(value: unknown): Attempt["questionResultsSource"] {
+    if (value === undefined || value === null || value === "") return undefined;
+    return value === "legacy_derived_current_exam"
+        ? "legacy_derived_current_exam"
+        : "incomplete_or_invalid";
+}
+
+function projectedAssignmentGeneration(row: ListRow): Pick<Attempt, "assignmentId" | "assignmentRevision"> {
+    const assignmentId = clean(row.assignment_id);
+    if (!assignmentId) {
+        if (row.assignment_revision !== undefined && row.assignment_revision !== null) {
+            throw new Error("Invalid assignment generation");
+        }
+        return {};
+    }
+    if (
+        typeof row.assignment_revision !== "number"
+        || !Number.isSafeInteger(row.assignment_revision)
+        || row.assignment_revision <= 0
+    ) {
+        throw new Error("Invalid assignment generation");
+    }
+    return { assignmentId, assignmentRevision: row.assignment_revision };
 }
 
 export function studentAssignmentPreviewFromSupabaseListRow(
@@ -148,8 +174,22 @@ export function examFromSupabaseListRow(value: unknown): Exam {
     };
 }
 
-export function attemptFromSupabaseListRow(value: unknown): Attempt {
+export function attemptFromSupabaseListRow(
+    value: unknown,
+    attestEvidence?: CanonicalQuestionResultEvidenceAttester,
+): Attempt {
     const row = value as ListRow;
+    const questionResultsSource = projectedQuestionResultsSource(row.question_results_source);
+    const assignmentGeneration = projectedAssignmentGeneration(row);
+    const questionResultsQuestionCount = row.question_results_question_count === undefined
+        || row.question_results_question_count === null
+        ? undefined
+        : finiteNumber(row.question_results_question_count, Number.NaN);
+    if (questionResultsQuestionCount !== undefined && (
+        !Number.isSafeInteger(questionResultsQuestionCount)
+        || questionResultsQuestionCount <= 0
+        || questionResultsQuestionCount > 500
+    )) throw new Error("Invalid attempt evidence count");
     const payload: Attempt = {
         id: clean(row.id),
         examId: clean(row.exam_id),
@@ -161,6 +201,11 @@ export function attemptFromSupabaseListRow(value: unknown): Attempt {
         totalScore: finiteNumber(row.total_score),
         answers: optionalObject<Attempt["answers"]>(row.answers) || {},
         status: row.status === "in_progress" ? "in_progress" : "completed",
+        ...withOptionalString(row.organization_id, "organizationId"),
+        ...withOptionalString(row.class_id, "classId"),
+        ...withOptionalString(row.student_profile_id, "studentProfileId"),
+        ...assignmentGeneration,
+        ...(questionResultsQuestionCount === undefined ? {} : { questionResultsQuestionCount }),
         ...withOptionalString(row.guest_id, "guestId"),
         ...withOptionalString(row.student_id, "studentId"),
         ...withOptionalString(row.group_id, "groupId"),
@@ -169,6 +214,12 @@ export function attemptFromSupabaseListRow(value: unknown): Attempt {
         ...withOptionalString(row.region_name, "regionName"),
         ...withOptionalString(row.identity_type, "identityType"),
         ...withOptional(optionalArray<NonNullable<Attempt["questionResults"]>[number]>(row.question_results), "questionResults"),
+        ...(typeof row.question_results_question_count === "number"
+            ? { questionResultsQuestionCount: row.question_results_question_count }
+            : {}),
+        ...withOptionalString(row.question_results_definition_manifest_hash, "questionResultsDefinitionManifestHash"),
+        ...withOptionalString(row.question_results_full_evidence_hash, "questionResultsFullEvidenceHash"),
+        ...(questionResultsSource ? { questionResultsSource } : {}),
         ...withOptional(optionalArray<NonNullable<Attempt["questionTimings"]>[number]>(row.question_timings), "questionTimings"),
         ...withOptional(optionalArray<NonNullable<Attempt["focusLossEvents"]>[number]>(row.focus_loss_events), "focusLossEvents"),
         ...withOptional(optionalArray<NonNullable<Attempt["studentQuestions"]>[number]>(row.student_questions), "studentQuestions"),
@@ -191,6 +242,12 @@ export function attemptFromSupabaseListRow(value: unknown): Attempt {
         organization_id: clean(row.organization_id) || null,
         class_id: clean(row.class_id) || null,
         assignment_id: clean(row.assignment_id) || null,
+        assignment_revision: assignmentGeneration.assignmentRevision || null,
+        question_results_question_count: typeof row.question_results_question_count === "number"
+            ? row.question_results_question_count
+            : null,
+        question_results_definition_manifest_hash: clean(row.question_results_definition_manifest_hash) || null,
+        question_results_full_evidence_hash: clean(row.question_results_full_evidence_hash) || null,
         student_profile_id: clean(row.student_profile_id) || null,
         exam_id: payload.examId,
         student_name: payload.studentName,
@@ -218,17 +275,18 @@ export function attemptFromSupabaseListRow(value: unknown): Attempt {
         payload,
         started_at: payload.startedAt,
         finished_at: payload.finishedAt,
-    } as SupabaseAttemptRow);
-    return {
+    } as SupabaseAttemptRow, attestEvidence);
+    const projectedAttempt: Attempt = {
         ...attempt,
         studentQuestions: optionalArray<NonNullable<Attempt["studentQuestions"]>[number]>(row.student_questions),
         drawingsRef: optionalObject<NonNullable<Attempt["drawingsRef"]>>(row.drawings_ref),
         handwriting: optionalObject<NonNullable<Attempt["handwriting"]>>(row.handwriting),
         questionDrawings: optionalArray<NonNullable<Attempt["questionDrawings"]>[number]>(row.question_drawings),
-        retake: optionalObject<NonNullable<Attempt["retake"]>>(row.retake),
+        retake: attempt.retake,
         autoSubmitted: row.auto_submitted === true,
         handwritingArchived: row.handwriting_archived === true,
     };
+    return projectedAttempt;
 }
 
 export function teacherAttemptSummaryFromSupabaseListRow(value: unknown): TeacherAttemptSummary {
@@ -252,6 +310,16 @@ export function teacherAttemptSummaryFromSupabaseListRow(value: unknown): Teache
             .map(item => finiteNumber(item, Number.NaN))
             .filter(Number.isFinite)
         : [];
+    const assignmentGeneration = projectedAssignmentGeneration(row);
+    const questionResultsQuestionCount = row.question_results_question_count === undefined
+        || row.question_results_question_count === null
+        ? undefined
+        : finiteNumber(row.question_results_question_count, Number.NaN);
+    if (questionResultsQuestionCount !== undefined && (
+        !Number.isSafeInteger(questionResultsQuestionCount)
+        || questionResultsQuestionCount <= 0
+        || questionResultsQuestionCount > 500
+    )) throw new Error("Invalid teacher attempt summary evidence count");
 
     return {
         id,
@@ -268,7 +336,8 @@ export function teacherAttemptSummaryFromSupabaseListRow(value: unknown): Teache
         status: row.status === "in_progress" ? "in_progress" : "completed",
         ...withOptionalString(row.organization_id, "organizationId"),
         ...withOptionalString(row.class_id, "classId"),
-        ...withOptionalString(row.assignment_id, "assignmentId"),
+        ...assignmentGeneration,
+        ...(questionResultsQuestionCount === undefined ? {} : { questionResultsQuestionCount }),
         ...withOptionalString(row.student_profile_id, "studentProfileId"),
         ...withOptionalString(row.student_id, "studentId"),
         ...withOptionalString(row.group_id, "groupId"),

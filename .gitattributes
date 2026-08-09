@@ -2,3 +2,4 @@
 # checkout (Windows autocrlf would otherwise rewrite them to CRLF).
 *.sql text eol=lf
 src/app/globals.css text eol=lf
+*.pdf binary

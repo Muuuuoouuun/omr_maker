@@ -4,7 +4,7 @@
 // from silently increasing dashboard/history response size.
 export const SUPABASE_EXAM_READ_COLUMNS = "id, organization_id, class_id, title, payload, created_by_user_id, created_at, updated_at, archived, revision";
 
-export const SUPABASE_ATTEMPT_READ_COLUMNS = "organization_id, class_id, assignment_id, student_profile_id, payload";
+export const SUPABASE_ATTEMPT_READ_COLUMNS = "organization_id, class_id, assignment_id, assignment_revision, question_results_question_count, question_results_definition_manifest_hash, question_results_full_evidence_hash, student_profile_id, payload";
 
 /**
  * List-only projections. JSON paths deliberately select only fields consumed
@@ -53,6 +53,7 @@ export const SUPABASE_STUDENT_ATTEMPT_SUMMARY_READ_COLUMNS = [
     "exam_id",
     "assignment_id",
     "assignment_revision",
+    "question_results_question_count",
     "status",
     "score",
     "total_score",
@@ -72,6 +73,8 @@ export const SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS = [
     "organization_id",
     "class_id",
     "assignment_id",
+    "assignment_revision",
+    "question_results_question_count",
     "student_profile_id",
     "exam_id",
     "student_name",
@@ -112,6 +115,10 @@ export const SUPABASE_ATTEMPT_LIST_READ_COLUMNS = [
     "organization_id",
     "class_id",
     "assignment_id",
+    "assignment_revision",
+    "question_results_question_count",
+    "question_results_definition_manifest_hash",
+    "question_results_full_evidence_hash",
     "student_profile_id",
     "exam_id",
     "student_name",
@@ -136,6 +143,7 @@ export const SUPABASE_ATTEMPT_LIST_READ_COLUMNS = [
     "guest_id:payload->>guestId",
     "answers:payload->answers",
     "question_results:payload->questionResults",
+    "question_results_source:payload->>questionResultsSource",
     "question_timings:payload->questionTimings",
     "focus_loss_events:payload->focusLossEvents",
     "student_questions:student_question_summaries",

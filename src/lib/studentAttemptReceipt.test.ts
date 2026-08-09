@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAttemptQuestionResults } from "@/lib/premiumAnalytics";
+import { getAttemptQuestionResults, resolveAttemptGrading } from "@/lib/premiumAnalytics";
 import type { ServerGradedAttemptReceipt } from "@/lib/studentExamContract";
 import type { Attempt, Exam } from "@/types/omr";
 import {
@@ -1850,7 +1850,7 @@ describe("student attempt receipt cache", () => {
         expect(JSON.stringify(cached)).not.toContain("correctAnswer");
     });
 
-    it("keeps official statuses when review uses an answer-key-free student exam", async () => {
+    it("keeps answer-key-free receipts totals-only instead of manufacturing canonical evidence", async () => {
         const safeExam: Exam = {
             id: "exam-1",
             title: "학생용 시험",
@@ -1882,14 +1882,11 @@ describe("student attempt receipt cache", () => {
             status: "completed",
         };
 
-        expect(getAttemptQuestionResults(safeExam, attempt).map(result => ({
-            status: result.status,
-            score: result.score,
-            earnedScore: result.earnedScore,
-            correctAnswer: result.correctAnswer,
-        }))).toEqual([
-            { status: "correct", score: 5, earnedScore: 5, correctAnswer: undefined },
-            { status: "wrong", score: 5, earnedScore: 0, correctAnswer: undefined },
-        ]);
+        expect(resolveAttemptGrading(safeExam, attempt)).toMatchObject({
+            source: "stored_totals_only",
+            questionResults: [],
+            scoreSummary: { earnedScore: receipt.score, totalScore: receipt.totalScore },
+        });
+        expect(getAttemptQuestionResults(safeExam, attempt)).toEqual([]);
     });
 });

@@ -1,4 +1,5 @@
 import { CSSProperties, ReactNode } from "react";
+import type { AttemptGradingSource } from "@/lib/premiumAnalytics";
 
 /**
  * Shared pill/chip primitive for short status labels — sync state, exam
@@ -44,15 +45,36 @@ interface StatusPillProps {
   style?: CSSProperties;
 }
 
-const TONE_STYLES: Record<StatusPillTone, { color: string; background: string; border: string }> = {
-  primary: { color: "var(--primary)", background: "rgba(99,102,241,0.1)", border: "rgba(99,102,241,0.24)" },
-  success: { color: "var(--success)", background: "rgba(16,185,129,0.1)", border: "rgba(16,185,129,0.22)" },
-  warning: { color: "var(--warning)", background: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.28)" },
-  error: { color: "var(--error)", background: "rgba(239,68,68,0.1)", border: "rgba(239,68,68,0.24)" },
-  grade: { color: "var(--grade-red)", background: "var(--grade-red-soft)", border: "var(--grade-red-line)" },
-  retake: { color: "var(--retake)", background: "var(--retake-soft)", border: "var(--retake-line)" },
-  muted: { color: "var(--muted)", background: "rgba(100,116,139,0.1)", border: "rgba(100,116,139,0.22)" },
+const GRADING_EVIDENCE_COPY: Partial<Record<AttemptGradingSource, { label: string; detail: string }>> = {
+  legacy_derived_current_exam: {
+    label: "과거 기록 · 현재 시험지 기준 참고 채점",
+    detail: "문항별 제출 채점 결과가 저장되기 전 기록으로, 현재 시험지에서 산출한 참고값입니다.",
+  },
+  stored_totals_only: {
+    label: "문항별 채점 근거 불완전",
+    detail: "문항별 결과 없이 제출 당시 저장된 총점만 표시합니다.",
+  },
+  incomplete_or_invalid: {
+    label: "채점 근거 확인 필요",
+    detail: "불완전한 문항 결과는 현재 시험지와 섞지 않고 미채점으로 표시합니다.",
+  },
 };
+
+export function GradingEvidenceNote({ source }: { source?: AttemptGradingSource }) {
+  const notice = source ? GRADING_EVIDENCE_COPY[source] : undefined;
+  if (!notice) return null;
+
+  return (
+    <div
+      role="note"
+      aria-label="채점 근거 안내"
+      className="grading-evidence-note"
+    >
+      <strong>{notice.label}</strong>
+      <span>{notice.detail}</span>
+    </div>
+  );
+}
 
 export default function StatusPill({
   tone = "primary",
@@ -64,50 +86,25 @@ export default function StatusPill({
   className,
   style,
 }: StatusPillProps) {
-  const { color, background, border } = TONE_STYLES[tone];
   const isTwoLine = Boolean(detail);
 
   return (
     <span
-      className={className}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: size === "sm" ? "0.3rem" : "0.4rem",
-        padding: size === "sm" ? "0.24rem 0.6rem" : "0.35rem 0.55rem",
-        borderRadius: "var(--radius-full)",
-        border: `1px solid ${border}`,
-        background: variant === "outline" ? "transparent" : background,
-        color,
-        minWidth: 0,
-        whiteSpace: "nowrap",
-        ...style,
-      }}
+      className={`status-pill is-${tone} is-${variant} is-${size}${className ? ` ${className}` : ""}`}
+      style={style}
     >
       {icon && (
-        <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}>
+        <span className="status-pill-icon">
           {icon}
         </span>
       )}
       {isTwoLine ? (
-        <span style={{ display: "grid", gap: 0, minWidth: 0 }}>
-          <span style={{ fontSize: "0.7rem", fontWeight: 800, lineHeight: 1.05, whiteSpace: "nowrap" }}>
-            {label}
-          </span>
-          <span style={{ fontSize: "0.63rem", color: "var(--muted)", lineHeight: 1.1, whiteSpace: "nowrap" }}>
-            {detail}
-          </span>
+        <span className="status-pill-copy">
+          <span className="status-pill-label">{label}</span>
+          <span className="status-pill-detail">{detail}</span>
         </span>
       ) : (
-        <span
-          style={{
-            fontSize: size === "sm" ? "0.72rem" : "0.7rem",
-            fontWeight: size === "sm" ? 900 : 800,
-            lineHeight: size === "sm" ? 1 : 1.05,
-          }}
-        >
-          {label}
-        </span>
+        <span className="status-pill-label">{label}</span>
       )}
     </span>
   );

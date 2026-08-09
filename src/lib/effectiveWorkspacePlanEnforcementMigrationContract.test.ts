@@ -262,6 +262,7 @@ describe("effective workspace plan enforcement migration", () => {
         expect(productionBoundary).toContain("'statement_timeout=5s'");
         expect(productionBoundary).toContain("'lock_timeout=2s'");
         expect(productionBoundary).toMatch(/extensions\.digest\([\s\S]*phase-c-effective-plan-enforcement:202608080008/);
+        expect(productionBoundary).toContain("e7d60f32babc3f278fa673fcb8707e530fab4d42307f853bc271d5371bc17148");
         expect(productionBoundary).toContain("omr_save_exam_effective_worker_v3");
         expect(productionBoundary).toContain("omr_set_effective_plan_transaction_proof_v1");
         expect(productionBoundary).toContain("omr_claim_remote_asset_cleanup_v8_snapshot");
@@ -321,7 +322,7 @@ describe("effective workspace plan enforcement migration", () => {
         expect(migration).toContain("'rpc:omr_finalize_teacher_asset_upload_v2'");
         expect(productionBoundary).toContain("omr_initial_ops_fixture_v26_snapshot");
         expect(productionBoundary).toContain("phase-c-initial-ops-identity-and-v2-paths:202608080008");
-        expect(productionBoundary).toContain("6ad9f1959ccff29a114ec1d1a05b27df53ebabfd7adccaebe29ef80f1b208346");
+        expect(productionBoundary).toContain("ac8aef94e7e0edd577a4077c4727f44e8af4db6c421796bed385fcc9d48ff576");
         expect(rollbackBoundary.slice(rollbackBoundary.lastIndexOf("Final Stage 3 Phase C ACL fence")))
             .toContain("omr_initial_ops_fixture_v26_snapshot");
     });

@@ -1207,8 +1207,8 @@ describe("service UI surface", () => {
         expect(examAnalyticsTab).toContain("고급 분석 잠금");
         expect(examAnalyticsTab).toContain("PremiumActionLink");
         expect(studentAnalyticsTab).toContain("학생 분석 지역 필터");
-        expect(studentAnalyticsTab).toContain("filterAttemptsByRegion");
-        expect(studentAnalyticsTab).toContain("regionNameForAttempt");
+        expect(studentAnalyticsTab).toContain("filterStudentAnalyticsAttemptsByRegion");
+        expect(studentAnalyticsTab).toContain("studentAnalyticsRegionName");
         expect(studentAnalyticsTab).toContain("resolveScopedSelection");
         expect(studentAnalyticsTab).toContain("setSelectedStudentKey(\"\")");
         expect(studentAnalyticsTab).toContain("학생별 액션 잠금");
@@ -1241,7 +1241,7 @@ describe("service UI surface", () => {
     it("renders dedicated answer and analytics panels only for their active result views", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 
-        expect(teacherAttemptPage).toContain('import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";');
+        expect(teacherAttemptPage).toContain('const AnswersPanel = dynamic(() => import("@/components/teacher/student-results/AnswersPanel"));');
         expect(teacherAttemptPage).toContain('import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";');
         expect(teacherAttemptPage).toMatch(/activeView === ["']answers["'][\s\S]*?<AnswersPanel/);
         expect(teacherAttemptPage).toMatch(/activeView === ["']analytics["'][\s\S]*?<AnalyticsPanel/);
@@ -1484,7 +1484,7 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("studentProfileId: student.id.trim()");
         expect(identityBlock.indexOf("rosterStudent?.id")).toBeGreaterThan(-1);
         expect(identityBlock.indexOf("rosterStudent?.id")).toBeLessThan(identityBlock.indexOf("attempt.studentName"));
-        expect(identityBlock).toContain("selectedClassKey: growthClassKeyForAttempt(selectedGrowthAttempt)");
+        expect(identityBlock).toContain("selectedClassKey: analyticsBuilders.growthClassKeyForAttempt(selectedGrowthAttempt)");
         expect(identityBlock).toContain("attempts: growthAttempts");
         expect(identityBlock).not.toContain("attempts: cumulativeAttempts");
     });
@@ -1693,6 +1693,8 @@ describe("service UI surface", () => {
 
     it("keeps student result panel inputs and small status text readable in both themes", () => {
         const answersPanel = readProjectFile("src/components/teacher/student-results/AnswersPanel.tsx");
+        const gradingEvidenceNote = readProjectFile("src/components/dashboard/StatusPill.tsx");
+        const globals = readProjectFile("src/app/globals.css");
         const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
         const studentResultCss = readProjectFile("src/components/teacher/student-results/StudentResultHub.module.css");
 
@@ -1701,8 +1703,9 @@ describe("service UI surface", () => {
         expect(studentResultCss).toMatch(/\.replyTextarea::placeholder\s*\{[^}]*color:\s*#64748b;/);
         expect(answersPanel).toContain('correct: { label: "정답", color: "var(--text-success)" }');
         expect(answersPanel).toContain('wrong: { label: "오답", color: "var(--text-error)" }');
-        expect(answersPanel).toContain('tone="warning"');
-        expect(answersPanel).toContain('"var(--text-warning)"');
+        expect(gradingEvidenceNote).toContain('className="grading-evidence-note"');
+        expect(globals).toMatch(/\.grading-evidence-note\s*\{[^}]*font-size:\s*var\(--type-caption-min\)/);
+        expect(globals).toMatch(/\.grading-evidence-note strong\s*\{[^}]*color:\s*var\(--text-warning\)/);
         expect(answersPanel).toContain('textColor="var(--text-success)"');
         expect(answersPanel).toContain('textColor="var(--text-error)"');
         expect(answersPanel).toContain('fontSize: "0.72rem", color: "var(--foreground)"');
@@ -2031,6 +2034,73 @@ describe("service UI surface", () => {
         expect(css).toContain(".student-review-stat-grid {\n  align-self: start;");
         expect(pwaMobileE2e).toContain("reviewStatSizing.gridHeight");
         expect(pwaMobileE2e).toContain("reviewStatSizing.cardHeight + 2");
+    });
+
+    it("surfaces grading provenance without silently regrading historical submissions", () => {
+        const studentReview = readProjectFile("src/app/student/review/[attemptId]/page.tsx");
+        const teacherAttempt = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const answersPanel = readProjectFile("src/components/teacher/student-results/AnswersPanel.tsx");
+        const gradingEvidenceNote = readProjectFile("src/components/dashboard/StatusPill.tsx");
+        const globals = readProjectFile("src/app/globals.css");
+        const examAnalytics = readProjectFile("src/components/dashboard/tabs/ExamAnalyticsTab.tsx");
+        const teacherExam = readProjectFile("src/app/teacher/exam/[id]/page.tsx");
+        const studentAnalytics = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
+        const affectedSurfaces = `${studentReview}\n${teacherAttempt}\n${answersPanel}\n${examAnalytics}\n${teacherExam}\n${studentAnalytics}`;
+
+        expect(studentReview).toContain("resolveAttemptGrading(reviewExam, attempt)");
+        expect(studentReview).toContain('gradingResolution.source === "legacy_derived_current_exam"');
+        expect(studentReview).toContain("summarizeCanonicalQuestionSubset(exam, sourceAttempt, allReviewQuestionIds)");
+        expect(teacherAttempt).toContain("const gradingResolution = analyticsBuilders.premium.resolveAttemptGrading(exam, attempt)");
+        expect(teacherAttempt).toContain("gradingSource={answerGradingSource}");
+        expect(teacherAttempt).toContain("const answerQuestionResults = analytics?.questionResults ?? []");
+        expect(teacherAttempt).not.toContain("analytics?.questionResults ?? attempt.questionResults");
+        expect(examAnalytics).toContain("resolveAttemptGrading(selectedExam, attempt)");
+        expect(examAnalytics).not.toContain("resolveAttemptGrading(selectedExam, student.attempt)");
+        expect(examAnalytics).toContain("[...input.questionResults]");
+        expect(examAnalytics).toContain("left.questionNumber - right.questionNumber");
+        expect(examAnalytics).not.toContain("new Map(student.questionResults.map");
+        expect(teacherExam).toContain("const gradingResolution = resolveAttemptGrading(exam, attempt)");
+        expect(teacherExam).toContain("const counts = gradingResolution.questionResults.reduce");
+        expect(studentAnalytics).toContain("const gradingResolution = !requiresCanonicalSnapshot && exam && localRuntime");
+        expect(studentAnalytics).toContain("localRuntime.resolveAttemptGrading(exam, attempt)");
+        expect(studentAnalytics).toContain("canonicalStudentRowsByAttemptId.get(attempt.id)");
+        expect(studentAnalytics).toContain("gradingResolution.questionResults.forEach");
+        expect(affectedSurfaces).not.toContain("getAttemptQuestionResults");
+        expect(gradingEvidenceNote).toContain("과거 기록 · 현재 시험지 기준 참고 채점");
+        expect(examAnalytics).toContain("과거 기록 · 현재 시험지 기준 참고 채점");
+        expect(examAnalytics).toContain("과거 기록 기반 참고 분석");
+        expect(studentAnalytics).toContain("과거 기록 기반 참고 분석");
+        expect(studentReview).toContain("<GradingEvidenceNote source={gradingResolution.source}");
+        expect(answersPanel).toContain("<GradingEvidenceNote source={gradingSource}");
+        expect(gradingEvidenceNote).toContain('role="note"');
+        expect(gradingEvidenceNote).toContain('aria-label="채점 근거 안내"');
+        expect(gradingEvidenceNote).toContain("문항별 결과 없이 제출 당시 저장된 총점만 표시합니다.");
+        expect(gradingEvidenceNote).toContain("불완전한 문항 결과는 현재 시험지와 섞지 않고 미채점으로 표시합니다.");
+        expect(gradingEvidenceNote).toContain('className="grading-evidence-note"');
+        expect(globals).toContain(".grading-evidence-note strong");
+        expect(globals).toContain("font-size: var(--type-caption-min)");
+        expect(globals).toContain(".status-pill.is-warning");
+        expect(globals).toContain("--status-pill-color: var(--text-warning)");
+        expect(affectedSurfaces).not.toContain("현재 정답 기준 재채점됨");
+    });
+
+    it("keeps the roster recent-attempt percentage on immutable submitted totals", () => {
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+
+        expect(usersPage).toContain("safeScorePercent(a.score, a.totalScore)");
+        expect(usersPage).not.toContain("resolveAttemptScore(a, examById.get(a.examId))");
+    });
+
+    it("uses a scoped ARIA tabs pattern for student review question navigation", () => {
+        const studentReview = readProjectFile("src/app/student/review/[attemptId]/page.tsx");
+
+        expect(studentReview).toContain('role="tablist"');
+        expect(studentReview).toContain('role="tab"');
+        expect(studentReview).toContain('role="tabpanel"');
+        expect(studentReview).toContain("aria-selected={isActive}");
+        expect(studentReview).toContain("aria-pressed={!filterWrong}");
+        expect(studentReview).toContain("aria-pressed={filterWrong}");
+        expect(studentReview).not.toContain('window.addEventListener("keydown"');
     });
 
     it("keeps student review reading order aligned without CSS reordering on phones", () => {

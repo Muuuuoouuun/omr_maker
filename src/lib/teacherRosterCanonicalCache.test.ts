@@ -78,6 +78,48 @@ function candidate(roster = snapshot(), organizationId = identity.organizationId
 }
 
 describe("teacher roster canonical cache", () => {
+    it("drops a delayed profile DTO after request, capability, or exact tenant identity changes", async () => {
+        const captured: TeacherRosterLoadIdentity = { ...identity, requestGeneration: 11 };
+        const operation = beginTeacherRosterIdentityOperation(captured, 7);
+        const publish = vi.fn();
+        let current: TeacherRosterLoadIdentity | null = captured;
+        let capabilityEpoch = 7;
+        let capability: "fresh" | "degraded" = "fresh";
+        const complete = async (release: Promise<void>) => {
+            await release;
+            if (capability !== "fresh") return;
+            if (!current || !sameTeacherRosterLoadIdentity(captured, current)) return;
+            if (!canContinueTeacherRosterIdentityOperation(operation, current, capabilityEpoch)) return;
+            publish();
+        };
+
+        let releaseRequest!: () => void;
+        const delayedRequest = new Promise<void>(resolve => { releaseRequest = resolve; });
+        const requestCompletion = complete(delayedRequest);
+        current = { ...captured, requestGeneration: 12 };
+        releaseRequest();
+        await requestCompletion;
+
+        let releaseTenant!: () => void;
+        const delayedTenant = new Promise<void>(resolve => { releaseTenant = resolve; });
+        current = captured;
+        const tenantCompletion = complete(delayedTenant);
+        current = { ...captured, organizationId: "pilot_org_fedcba9876543210fedcba98" };
+        releaseTenant();
+        await tenantCompletion;
+
+        let releaseCapability!: () => void;
+        const delayedCapability = new Promise<void>(resolve => { releaseCapability = resolve; });
+        current = captured;
+        const capabilityCompletion = complete(delayedCapability);
+        capability = "degraded";
+        capabilityEpoch += 1;
+        releaseCapability();
+        await capabilityCompletion;
+
+        expect(publish).not.toHaveBeenCalled();
+    });
+
     it("permanently invalidates delayed share, revoke, metadata, assignment, and undo continuations", () => {
         const session: TeacherRosterSessionIdentity = identity;
         const operation = beginTeacherRosterIdentityOperation(session, 4);

@@ -12,11 +12,8 @@ import type {
     StoredPlanKey,
     SubQuestionAnswers,
 } from "@/types/omr";
-import { gradeAttempt } from "@/types/omr";
-import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import type { ExamAccessSession } from "@/lib/examAccess";
 import type { StudentServerIdentity } from "@/lib/studentServerSession";
-import { findMissingRequiredSubQuestions, sanitizeSubQuestionAnswersForQuestions } from "@/lib/subQuestions";
 
 export interface SubmitAttemptInput {
     examId: string;
@@ -143,78 +140,4 @@ export function remainingSecondsWithinWindow(
     if (!Number.isFinite(endAtMs)) return safeDuration;
     const untilEnd = Math.floor((endAtMs - now) / 1000);
     return Math.max(0, Math.min(safeDuration, untilEnd));
-}
-
-/** Clamp a client-supplied startedAt into a sane window ending at the server finish time. */
-function clampStartedAt(startedAtInput: string, finishedAtIso: string, exam: Exam): string {
-    const finishedMs = Date.parse(finishedAtIso);
-    const startedMs = Date.parse(startedAtInput);
-    if (!Number.isFinite(finishedMs)) return finishedAtIso;
-    if (!Number.isFinite(startedMs) || startedMs > finishedMs) return finishedAtIso;
-    const windowMs = ((exam.durationMin ?? 50) + 5) * 60 * 1000; // exam duration + 5min grace
-    const floorMs = finishedMs - windowMs;
-    return startedMs < floorMs ? new Date(floorMs).toISOString() : startedAtInput;
-}
-
-/**
- * Build a fully server-authoritative attempt: score, totalScore, questionResults are
- * computed here from the trusted exam; owner/org/identity come from the signed cookie.
- * Client-supplied score is never read.
- */
-export function buildServerAttempt(
-    input: SubmitAttemptInput,
-    exam: Exam,
-    identity: StudentServerIdentity,
-    attemptId: string,
-    finishedAtIso: string,
-    premium: { handwritingArchive?: boolean; handwritingPlan?: StoredPlanKey } = {},
-): Attempt {
-    const scope = resolveRetakeScope(exam, input.retake);
-    const graded = gradeAttempt(scope.questions, input.answers);
-    const subQuestionAnswers = sanitizeSubQuestionAnswersForQuestions(scope.questions, input.subQuestionAnswers, finishedAtIso);
-    const missingRequiredSubQuestions = findMissingRequiredSubQuestions(scope.questions, subQuestionAnswers);
-    if (!input.autoSubmitted && missingRequiredSubQuestions.length > 0) {
-        throw new Error("REQUIRED_SUB_QUESTIONS_MISSING");
-    }
-    const attempt: Attempt = {
-        id: attemptId,
-        examId: exam.id,
-        examTitle: exam.title,
-        organizationId: exam.organizationId,
-        studentName: identity.name,
-        studentId: ownerStudentId(identity),
-        guestId: identity.kind === "guest" ? identity.guestId : undefined,
-        groupId: identity.groupId,
-        groupName: identity.groupName,
-        regionId: identity.regionId,
-        regionName: identity.regionName,
-        identityType: identity.identityType,
-        startedAt: clampStartedAt(input.startedAt, finishedAtIso, exam),
-        finishedAt: finishedAtIso,
-        score: graded.earnedScore,
-        totalScore: graded.totalScore,
-        answers: input.answers,
-        subQuestionAnswers: Object.keys(subQuestionAnswers).length > 0 ? subQuestionAnswers : undefined,
-        missingRequiredSubQuestions: input.autoSubmitted && missingRequiredSubQuestions.length > 0
-            ? missingRequiredSubQuestions
-            : undefined,
-        status: "completed",
-        autoSubmitted: input.autoSubmitted,
-        tabFociLostCount: input.tabFociLostCount,
-        questionTimings: input.questionTimings,
-        focusLossEvents: input.focusLossEvents,
-        // Handwriting is a paid storage capability of the exam owner's server
-        // plan. Every client-provided plan/archive flag is ignored.
-        drawings: premium.handwritingArchive ? input.drawings : undefined,
-        drawingsRef: premium.handwritingArchive ? input.drawingsRef : undefined,
-        handwriting: premium.handwritingArchive ? input.handwriting : undefined,
-        handwritingArchived: !!premium.handwritingArchive && !!(input.drawingsRef || input.drawings),
-        handwritingPlan: premium.handwritingArchive ? premium.handwritingPlan : "free",
-        drawingPageCount: premium.handwritingArchive ? input.drawingPageCount : undefined,
-        drawingStrokeCount: premium.handwritingArchive ? input.drawingStrokeCount : undefined,
-        questionDrawings: premium.handwritingArchive ? input.questionDrawings : undefined,
-        retake: scope.retake,
-    };
-    attempt.questionResults = buildQuestionResults({ ...exam, questions: scope.questions }, attempt);
-    return attempt;
 }

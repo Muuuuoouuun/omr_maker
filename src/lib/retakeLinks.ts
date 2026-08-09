@@ -13,6 +13,8 @@ export function supportedReviewRetakeModes(
 export interface RetakeLinkMetadata {
     labels?: string[];
     concepts?: string[];
+    /** Exact immutable submitted-definition cohorts; absent links are non-official/local only. */
+    cohortKeys?: string[];
 }
 
 function joinedMetadata(values: string[] | undefined): string {
@@ -41,5 +43,8 @@ export function buildRetakeHref(
     const concepts = joinedMetadata(metadata.concepts);
     if (labels) params.set("labels", labels);
     if (concepts) params.set("concepts", concepts);
+    if (metadata.cohortKeys?.length) {
+        params.set("cohorts", [...new Set(metadata.cohortKeys)].sort().join(","));
+    }
     return `/solve/${examId}?${params.toString()}`;
 }

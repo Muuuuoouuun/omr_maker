@@ -25,6 +25,9 @@ describe("demo data gating", () => {
             groupId: "class-2-1",
             groupName: "2학년 1반",
             identityType: "registered",
+            questionResults: expect.arrayContaining([
+                expect.objectContaining({ attemptId: attempts[0].id, examId: exams[0].id }),
+            ]),
         });
 
         const matrixRows = buildClassExamWeaknessMatrix(

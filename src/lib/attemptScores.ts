@@ -1,12 +1,12 @@
 import type { Attempt, Exam } from "@/types/omr";
-import { summarizeAttemptScore } from "@/lib/premiumAnalytics";
+import { resolveAttemptGrading, type AttemptGradingSource } from "@/lib/premiumAnalytics";
 import { safeScorePercent } from "@/lib/scoreUtils";
 
 export interface ResolvedAttemptScore {
     earnedScore: number;
     totalScore: number;
     scorePercent: number;
-    source: "questionResults" | "storedScore";
+    source: AttemptGradingSource | "storedScore";
     gradedQuestionCount: number;
     ungradedQuestionCount: number;
 }
@@ -14,10 +14,10 @@ export interface ResolvedAttemptScore {
 export function resolveAttemptScore(attempt: Attempt, exam?: Exam | null): ResolvedAttemptScore {
     const isSummary = (attempt as Attempt & { detailLevel?: unknown }).detailLevel === "summary";
     if (!isSummary && exam && exam.id === attempt.examId) {
-        const summary = summarizeAttemptScore(exam, attempt);
+        const grading = resolveAttemptGrading(exam, attempt);
         return {
-            ...summary,
-            source: "questionResults",
+            ...grading.scoreSummary,
+            source: grading.source,
         };
     }
 

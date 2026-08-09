@@ -2,6 +2,8 @@ import type { Attempt, Exam, Question } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
 import type { TeacherSessionIdentity } from "@/lib/teacherSession";
+import { buildQuestionResults } from "@/lib/premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
@@ -274,7 +276,7 @@ export function buildDemoDashboardData(now = Date.now()): DemoDashboardData {
 
             const finishedAt = now - Math.max(1, spec.daysAgo - 2) * DAY_MS + rosterIndex * 90_000;
             const elapsedMinutes = 34 + ((studentIndex * 3 + examIndex) % 16);
-            return {
+            const attempt: Attempt = {
                 id: `mock-attempt-${exam.id}-${student.id.replace(/[^a-z0-9-]/gi, "-")}`,
                 examId: exam.id,
                 examTitle: exam.title,
@@ -302,6 +304,12 @@ export function buildDemoDashboardData(now = Date.now()): DemoDashboardData {
                     revisitCount: questionIndex % 6 === 0 ? 1 : 0,
                     answerChangeCount: (studentIndex + questionIndex) % 9 === 0 ? 1 : 0,
                 })),
+            };
+            const questionResults = buildQuestionResults(exam, attempt);
+            return {
+                ...attempt,
+                questionResults,
+                ...buildCanonicalQuestionResultEvidence(attempt, questionResults),
             };
         });
     });

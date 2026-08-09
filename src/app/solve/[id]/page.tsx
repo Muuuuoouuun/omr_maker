@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState, type CSSProperties } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
@@ -28,7 +28,7 @@ import { saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/li
 import { attemptBelongsToSession, getOrCreateGuestId, getSession, getStudentSessionGeneration, getStudentSharedIdentityEpoch, guestLoginIdFor, saveSession, STORAGE_KEYS, STUDENT_SESSION_CHANGED_EVENT, STUDENT_SESSION_KEY, STUDENT_SHARED_IDENTITY_EPOCH_KEY, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
-import { buildQuestionResults } from "@/lib/premiumAnalytics";
+import { buildQuestionResults } from "@/lib/questionResultBuilder";
 import { summarizeQuestionDrawings } from "@/lib/handwritingAnalytics";
 import { evaluateExamAccess, examRequiresPin, normalizeExamPin, verifyExamPin, type ExamAccessDecision } from "@/lib/examAccess";
 import {
@@ -1440,7 +1440,7 @@ export default function SolvePage() {
         setFocusWarningMessage(message);
         setShowFocusWarning(true);
         return nextCount;
-    }, []);
+    }, [setShowFocusWarning]);
 
     // Window focus and document visibility are two signals for one away session.
     useEffect(() => {
@@ -1573,16 +1573,21 @@ export default function SolvePage() {
     }, [DRAFT_KEY, solveAllowed]);
 
     useEffect(() => {
-        if (typeof window === "undefined" || !OMR_PANEL_KEY) {
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (cancelled) return;
+            if (typeof window === "undefined" || !OMR_PANEL_KEY) {
+                setHydratedOMRPanelKey("");
+                return;
+            }
             setHydratedOMRPanelKey("");
-            return;
-        }
-        setHydratedOMRPanelKey("");
-        const stored = window.localStorage.getItem(OMR_PANEL_KEY);
-        const hasStoredPreference = stored === "collapsed" || stored === "expanded";
-        const shouldStartCollapsed = window.matchMedia("(min-width: 600px)").matches;
-        setIsOMRCollapsed(hasStoredPreference ? stored === "collapsed" : shouldStartCollapsed);
-        setHydratedOMRPanelKey(OMR_PANEL_KEY);
+            const stored = window.localStorage.getItem(OMR_PANEL_KEY);
+            const hasStoredPreference = stored === "collapsed" || stored === "expanded";
+            const shouldStartCollapsed = window.matchMedia("(min-width: 600px)").matches;
+            setIsOMRCollapsed(hasStoredPreference ? stored === "collapsed" : shouldStartCollapsed);
+            setHydratedOMRPanelKey(OMR_PANEL_KEY);
+        });
+        return () => { cancelled = true; };
     }, [OMR_PANEL_KEY]);
 
     useEffect(() => {
@@ -1849,6 +1854,9 @@ export default function SolvePage() {
     }, []);
 
     useEffect(() => {
+        let cancelled = false;
+        queueMicrotask(() => {
+        if (cancelled) return;
         setLegacyDraftRecoveryExport(null);
         const currentSession = getSession();
         if (currentSession) setUser(currentSession);
@@ -2040,6 +2048,8 @@ export default function SolvePage() {
         };
 
         hydrateExam();
+        });
+        return () => { cancelled = true; };
     }, [applyLoadedExam, id, router]);
 
     // Show resume banner once after initial load
@@ -2048,19 +2058,6 @@ export default function SolvePage() {
             toast.info("임시저장 복원됨", "이전에 풀던 답안을 불러왔습니다.");
         }
     }, [hasResumed]);
-
-    // Tick timer every second when examData has duration. Auto-submit at 0.
-    useEffect(() => {
-        if (timeRemaining === null || submittedRef.current) return;
-        if (!solveAllowed) return;
-        if (timeRemaining <= 0) {
-            handleSubmitInternal(true);
-            return;
-        }
-        const id = setTimeout(() => setTimeRemaining(t => (t === null ? null : t - 1)), 1000);
-        return () => clearTimeout(id);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [timeRemaining, solveAllowed]);
 
     useEffect(() => {
         studentAnswersRef.current = studentAnswers;
@@ -2325,9 +2322,8 @@ export default function SolvePage() {
         return () => window.removeEventListener("beforeunload", onBeforeUnload);
     }, [studentAnswers, subQuestionAnswers, drawings]);
 
-    const handleAnswerClick = (qId: number, optionIndex: number) => {
+    const handleAnswerClick = (qId: number, optionIndex: number, nowMs: number) => {
         if (submittedRef.current) return;
-        const nowMs = Date.now();
         beginQuestionVisit(qId, nowMs);
         const previousAnswers = studentAnswersRef.current;
         // Clicking the already-selected option clears it, so a mis-tap can be
@@ -2496,7 +2492,11 @@ export default function SolvePage() {
         const sourceAttempt = readLocalAttempts().find(candidate => candidate.id === retakeFrom);
         if (!sourceAttempt || !attemptBelongsToSession(sourceAttempt, user)) return;
         autoRetakeEntryRef.current = true;
-        beginConfirmedEntry();
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (!cancelled) beginConfirmedEntry();
+        });
+        return () => { cancelled = true; };
     }, [beginConfirmedEntry, entryConfirmed, examData, secureRemoteMode, solveAccess, user]);
 
     const applyDurableAttempt = useCallback((
@@ -3309,6 +3309,29 @@ export default function SolvePage() {
         router.push(`/student/review/${res.attempt.id}`);
     };
 
+    const handleAutoSubmit = useEffectEvent(() => {
+        void handleSubmitInternal(true);
+    });
+
+    // Tick timer every second when examData has duration. Keeping this effect
+    // after the submit implementation gives every expiry callback the current
+    // authorization/submission closure without a forward-reference escape hatch.
+    useEffect(() => {
+        if (timeRemaining === null || submittedRef.current) return;
+        if (!solveAllowed) return;
+        if (timeRemaining <= 0) {
+            let cancelled = false;
+            queueMicrotask(() => {
+                if (!cancelled) handleAutoSubmit();
+            });
+            return () => { cancelled = true; };
+        }
+        const timerId = setTimeout(() => setTimeRemaining(value => (
+            value === null ? null : value - 1
+        )), 1000);
+        return () => clearTimeout(timerId);
+    }, [timeRemaining, solveAllowed]);
+
     const handleSubmit = () => {
         if (!examData) return;
         const activeExamQuestions = getActiveExamQuestions();
@@ -3953,7 +3976,11 @@ export default function SolvePage() {
                                         onClick: () => handleQuestionClick(q.id),
                                         questionId: q.id,
                                         currentAnswer: studentAnswers[q.id],
-                                        onAnswer: (opt: number) => handleAnswerClick(q.id, opt),
+                                        onAnswer: (opt: number) => handleAnswerClick(
+                                            q.id,
+                                            opt,
+                                            performance.timeOrigin + performance.now(),
+                                        ),
                                         optionsCount: questionChoiceCount(q, DEFAULT_CHOICE_COUNT),
                                     };
                                 })
@@ -4004,7 +4031,11 @@ export default function SolvePage() {
                                             key={optionNumber}
                                             type="button"
                                             className={`solve-omr-quick-bubble ${isMarked ? 'is-marked' : ''}`}
-                                            onClick={() => handleAnswerClick(quickAnswerQuestion.id, optionNumber)}
+                                            onClick={(event) => handleAnswerClick(
+                                                quickAnswerQuestion.id,
+                                                optionNumber,
+                                                performance.timeOrigin + event.timeStamp,
+                                            )}
                                             aria-label={`${quickAnswerQuestion.number}번 보기 ${optionNumber}`}
                                             aria-pressed={isMarked}
                                         >
@@ -4118,7 +4149,11 @@ export default function SolvePage() {
                             questions={activeExamQuestions}
                             userAnswers={studentAnswers}
                             selectedQuestionId={currentQuestionId}
-                            onAnswerClick={handleAnswerClick}
+                            onAnswerClick={(questionId, optionIndex) => handleAnswerClick(
+                                questionId,
+                                optionIndex,
+                                performance.timeOrigin + performance.now(),
+                            )}
                             onQuestionClick={handleQuestionClick}
                             mode="solve"
                             questionDrawings={activeQuestionDrawings}

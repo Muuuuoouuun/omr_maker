@@ -207,6 +207,25 @@ describe("teacher attempt gateway", () => {
         expect(filters).toContainEqual(["organization_id", "org-a"]);
     });
 
+    it("round-trips the exact targeted assignment generation through the remote teacher list", async () => {
+        const targeted = {
+            ...attempt,
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+        };
+        const { client } = clientWithRows([attemptListRow(targeted)]);
+
+        const result = await listTeacherAttemptsWithGateway(client, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+        });
+
+        expect(result).toMatchObject({
+            status: "loaded",
+            attempts: [{ assignmentId: "assignment-reused", assignmentRevision: 8 }],
+        });
+    });
+
     it.each([
         ["a blank id", { ...attemptListRow({ ...attempt, id: "attempt-0" }), id: "   " }],
         ["a missing organization", { ...attemptListRow({ ...attempt, id: "attempt-0" }), organization_id: undefined }],

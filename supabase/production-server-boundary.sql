@@ -598,6 +598,7 @@ declare
     v_effective_workspace_plan_enforcement_ready boolean;
     v_student_session_generation_ready boolean;
     v_student_credential_batch_ready boolean;
+    v_canonical_question_result_evidence_ready boolean;
     v_assignment_generation_scope_ready boolean;
     v_ready boolean;
 begin
@@ -957,9 +958,9 @@ begin
               join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
              where namespace.nspname = 'public'
                and routine.proname in (
-                   'omr_open_attempt_session_v2', 'omr_checkpoint_attempt_session_v1',
-                   'omr_heartbeat_attempt_session_v1', 'omr_takeover_attempt_session_v1',
-                   'omr_prepare_attempt_session_submit_v1', 'omr_commit_attempt_session_submit_v1',
+                   'omr_open_attempt_session_v3', 'omr_checkpoint_attempt_session_v2',
+                   'omr_heartbeat_attempt_session_v2', 'omr_takeover_attempt_session_v2',
+                   'omr_prepare_attempt_session_submit_v2', 'omr_commit_attempt_session_submit_v2',
                    'omr_prepare_attempt_handwriting_asset_v2', 'omr_discard_attempt_handwriting_asset_v1'
                )
                and (
@@ -973,9 +974,9 @@ begin
              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
             where namespace.nspname = 'public'
               and routine.proname in (
-                  'omr_open_attempt_session_v2', 'omr_checkpoint_attempt_session_v1',
-                  'omr_heartbeat_attempt_session_v1', 'omr_takeover_attempt_session_v1',
-                  'omr_prepare_attempt_session_submit_v1', 'omr_commit_attempt_session_submit_v1',
+                  'omr_open_attempt_session_v3', 'omr_checkpoint_attempt_session_v2',
+                  'omr_heartbeat_attempt_session_v2', 'omr_takeover_attempt_session_v2',
+                  'omr_prepare_attempt_session_submit_v2', 'omr_commit_attempt_session_submit_v2',
                   'omr_prepare_attempt_handwriting_asset_v2', 'omr_discard_attempt_handwriting_asset_v1'
               )
         ) = 8;
@@ -1845,7 +1846,7 @@ begin
             ))
         ) > 0
         and position(
-            'omr_open_attempt_session_v2' in lower(pg_catalog.pg_get_functiondef(
+            'omr_open_attempt_session_v3' in lower(pg_catalog.pg_get_functiondef(
                 'public.omr_initial_ops_database_snapshot_v1(text,text,text,text,text)'::pg_catalog.regprocedure
             ))
         ) > 0
@@ -1902,7 +1903,7 @@ begin
                         pg_catalog.chr(10) order by routine.proname
                     ),
                     'sha256'
-                ), 'hex') = '6ad9f1959ccff29a114ec1d1a05b27df53ebabfd7adccaebe29ef80f1b208346'
+                ), 'hex') = 'ac8aef94e7e0edd577a4077c4727f44e8af4db6c421796bed385fcc9d48ff576'
               from pg_catalog.pg_proc routine
               join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
              where namespace.nspname = 'public'
@@ -2191,7 +2192,7 @@ begin
         ('omr_return_feedback_v4', 'text, text, bigint, text, text, text, bigint, text', 'jsonb', 'public'),
         ('omr_assign_students_v2', 'text, text, bigint, text, text, text, text, text[], text, bigint, text', 'jsonb', 'public'),
         ('omr_clear_student_assignment_v2', 'text, text, bigint, text, text, text, text, bigint, text, text[], text', 'jsonb', 'public'),
-        ('omr_open_attempt_session_v2', 'text, text, text, text, text, text, text, text, text, text, text, integer[], integer[], timestamp with time zone, jsonb, integer, timestamp with time zone, text, text, integer', 'TABLE(session_id text, status text, revision bigint, lease_epoch bigint, started_at timestamp with time zone, deadline_at timestamp with time zone, server_now timestamp with time zone, answers jsonb, sub_question_answers jsonb, progress_payload jsonb, allowed_question_ids integer[], grading_snapshot jsonb, submitted_attempt_id text, lease_acquired boolean, lease_token_rotated boolean)', 'public'),
+        ('omr_open_attempt_session_v3', 'text, text, text, text, bigint, text, text, text, text, text, text, text, integer[], integer[], timestamp with time zone, jsonb, integer, timestamp with time zone, text, text, integer', 'jsonb', 'public'),
         ('omr_prepare_teacher_asset_upload_v2', 'text, text, bigint, text, text, jsonb', 'jsonb', 'public'),
         ('omr_authorize_teacher_asset_finalize_v2', 'text, text, bigint, text, text, text, jsonb', 'jsonb', 'public'),
         ('omr_finalize_teacher_asset_upload_v2', 'text, text, bigint, text, text, text, jsonb', 'jsonb', 'public'),
@@ -2265,7 +2266,7 @@ begin
                E'\n-- phase-c-routine --\n' order by name, args
                ), 'sha256'), 'hex')
              from actual
-       ) = 'ef65d771150ecf2f7e744cfb9d10072cb59ecb84fa09268f3db274e304dccfba'
+       ) = 'e7d60f32babc3f278fa673fcb8707e530fab4d42307f853bc271d5371bc17148'
        and not exists (
            select 1 from (values
                ('omr_remote_assets'), ('omr_remote_asset_upload_intents'),
@@ -2848,10 +2849,15 @@ begin
                or pg_catalog.has_function_privilege('authenticated',pg_catalog.to_regprocedure(signature),'EXECUTE')
         );
 
+    v_canonical_question_result_evidence_ready :=
+        pg_catalog.to_regprocedure('public.omr_canonical_question_result_evidence_ready_v1()') is not null
+        and public.omr_canonical_question_result_evidence_ready_v1();
+
     v_server_gateway_capabilities_ready := v_legacy_gateway_catalog_ready
         and v_assignment_generation_scope_ready
         and v_student_session_generation_ready
         and v_student_credential_batch_ready
+        and v_canonical_question_result_evidence_ready
         and v_effective_workspace_plan_enforcement_ready
         and v_roster_snapshot_cas_ready
         and v_cleanup_epoch_ready
@@ -2895,6 +2901,7 @@ begin
                   - 'rosterSnapshotCasReady' - 'sessionCleanupFencingReady'
                   - 'directUploadIntentLifecycleReady'
                   - 'teacherAssetFinalizePreauthorizationReady'
+                  - 'canonicalQuestionResultEvidenceReady'
               ) item
              where item.value is distinct from 'true'::jsonb
         );
@@ -2905,6 +2912,7 @@ begin
             - 'rosterSnapshotCasReady' - 'sessionCleanupFencingReady'
             - 'directUploadIntentLifecycleReady'
             - 'teacherAssetFinalizePreauthorizationReady'
+            - 'canonicalQuestionResultEvidenceReady'
         || pg_catalog.jsonb_build_object(
             'version', '202608090001',
             'canonicalTablesForceRls', v_canonical_tables_force_rls,
@@ -2913,6 +2921,7 @@ begin
             'effectiveWorkspacePlanEnforcementReady', v_effective_workspace_plan_enforcement_ready,
             'studentSessionGenerationReady', v_student_session_generation_ready,
             'studentCredentialBatchReady', v_student_credential_batch_ready,
+            'canonicalQuestionResultEvidenceReady', v_canonical_question_result_evidence_ready,
             'operationalJobStatusReady', v_operational_job_status_ready,
             'operatorPilotProvisioningReady', v_operator_pilot_provisioning_ready,
             'provisionedTeacherLoginReady', v_provisioned_teacher_login_ready,
@@ -3041,8 +3050,9 @@ revoke all on function public.omr_assign_students_v2(text,text,bigint,text,text,
 grant execute on function public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text) to service_role;
 revoke all on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) from public, anon, authenticated;
 grant execute on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) to service_role;
-revoke all on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated;
-grant execute on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) to service_role;
+revoke all on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated;
+grant execute on function public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) to service_role;
 revoke all on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) from public, anon, authenticated;
 grant execute on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) to service_role;
 revoke all on function public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb) from public, anon, authenticated;

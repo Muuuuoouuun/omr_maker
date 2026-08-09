@@ -10,6 +10,7 @@ const CACHE_FIRST_PATHS = new Set([
   "/apple-touch-icon.png",
   "/browserconfig.xml",
   "/pdf.worker.min.mjs",
+  "/react-pdf.worker.min.mjs",
   "/screenshots/omr-mobile-home.jpg",
   "/screenshots/omr-wide-home.jpg",
 ]);

@@ -77,11 +77,11 @@ describe("teacher dashboard detailed attempt cache", () => {
 
         expect(dashboard).toContain("requestedGeneration !== detailedAttemptGenerationRef.current");
         expect(dashboard).toContain("detailedAttemptGeneration");
-        expect(dashboard).toMatch(/useEffect\(\(\) => \{[\s\S]*activeTab === "overview"[\s\S]*loadDetailedAttempts\(\)[\s\S]*detailedAttemptGeneration/);
+        expect(dashboard).toMatch(/useEffect\(\(\) => \{[\s\S]*activeTab === "overview"[\s\S]*loadTeacherAnalyticsSnapshots\(\)[\s\S]*detailedAttemptGeneration/);
         expect(dashboard).toContain("sameTeacherLoadIdentity");
         expect(dashboard).toContain("requestedLoadIdentity");
         expect(dashboard).toContain("resetDetailedAttemptsForDashboardRequest");
-        expect(dashboard).toMatch(/detailedAttemptStatus === "idle"[\s\S]*return/);
+        expect(dashboard).toContain('setAnalyticsSnapshotStatus("loading")');
     });
 
     it("clears visible and detailed state immediately when the complete teacher identity changes", () => {
@@ -123,18 +123,12 @@ describe("teacher dashboard detailed attempt cache", () => {
         expect(loaderBlock).toMatch(/if \(!detailedAttemptCacheRef\.current\) \{\s*setDetailedAttemptStatus\("loading"\);\s*\}/);
     });
 
-    it("offers an actionable retry for stale or partial detail rows and hides it for ready data", () => {
+    it("retains background detail retry state and exposes an actionable snapshot retry", () => {
         const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
-        const retryStart = dashboard.indexOf("const retryDetailedAttempts = useCallback");
-        const retryEnd = dashboard.indexOf("const loadDetailedAttempts = useCallback", retryStart);
-        const retryBlock = dashboard.slice(retryStart, retryEnd);
         const invalidationStart = dashboard.indexOf("const invalidateDetailedAttempts = useCallback");
-        const invalidationBlock = dashboard.slice(invalidationStart, retryStart);
+        const invalidationEnd = dashboard.indexOf("const resetDetailedAttemptsForDashboardRequest", invalidationStart);
+        const invalidationBlock = dashboard.slice(invalidationStart, invalidationEnd);
 
-        expect(retryStart).toBeGreaterThan(-1);
-        expect(retryBlock).toContain("beginDashboardDetailBackgroundRetry");
-        expect(retryBlock).toContain("snapshot: detailedAttemptCacheRef.current");
-        expect(retryBlock).not.toContain("setDetailedAttempts(null)");
         expect(invalidationBlock).toContain("detailedAttemptGenerationRef.current + 1");
         expect(invalidationBlock).toContain("detailedAttemptCacheRef.current = null");
         expect(invalidationBlock).toContain("setDetailedAttempts(null)");
@@ -142,10 +136,9 @@ describe("teacher dashboard detailed attempt cache", () => {
         expect(dashboard).toContain("resolveDashboardDetailRetryFailure");
         expect(dashboard).toContain('failure.kind === "cached"');
         expect(dashboard).toContain("setDetailedAttemptWarning(failure.warning)");
-        expect(dashboard).toContain('detailedAttemptSampleStatus !== "ready"');
-        expect(dashboard).toContain("onClick={retryDetailedAttempts}");
-        expect(dashboard).toContain("최신 데이터 다시 불러오기");
-        expect(dashboard).toMatch(/detailedAttemptSampleStatus !== "ready"[\s\S]*onClick=\{retryDetailedAttempts\}/);
+        expect(dashboard).toContain('analyticsSnapshotStatus === "error"');
+        expect(dashboard).toContain("onClick={() => setDetailedAttemptGeneration(value => value + 1)}");
+        expect(dashboard).toContain("다시 불러오기");
     });
 
     it("turns a failed CSV detail load into a retryable user-visible error", () => {

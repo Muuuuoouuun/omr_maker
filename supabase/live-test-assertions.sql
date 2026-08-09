@@ -309,6 +309,7 @@ begin
                'omr_assign_students_v1(text, text, text, text, text[], text, bigint, text)',
                'omr_clear_student_assignment_v1(text, text, text, text, bigint, text, text[], text)',
                'omr_open_attempt_session_v1(text, text, text, text, text, text, text, text, text, text, text, integer[], integer[], timestamp with time zone, jsonb, integer, timestamp with time zone, text, text, integer)',
+               'omr_open_attempt_session_v2(text, text, text, text, text, text, text, text, text, text, text, integer[], integer[], timestamp with time zone, jsonb, integer, timestamp with time zone, text, text, integer)',
                'omr_prepare_teacher_asset_upload_v1(jsonb)',
                'omr_authorize_teacher_asset_finalize_v1(text, text, text, jsonb)',
                'omr_finalize_teacher_asset_upload_v1(text, text, text, jsonb)',
@@ -318,6 +319,16 @@ begin
                'omr_reserve_plan_usage(text, text, date, text, integer, integer, integer)',
                'omr_release_plan_usage(text, text, date, text)',
                'omr_sync_student_plan_usage(text, text[], integer, integer)'
+               ,'omr_assert_canonical_question_result_json_v1(jsonb, integer)'
+               ,'omr_canonical_json_text_v1(jsonb)'
+               ,'omr_bind_attempt_evidence_generation_v1()'
+               ,'omr_guard_canonical_question_result_evidence_v1()'
+               ,'omr_question_result_assignment_generation_guard_v2()'
+               ,'omr_canonical_attempt_child_evidence_matches_v1(text)'
+               ,'omr_assert_canonical_attempt_child_evidence_v1(text)'
+               ,'omr_mark_canonical_attempt_evidence_dirty_v1()'
+               ,'omr_finalize_canonical_attempt_evidence_dirty_v1()'
+               ,'omr_guard_completed_question_result_grading_immutability_v1()'
                ,'omr_guard_student_profile_generation_v1()'
                ,'omr_guard_student_credential_mutation_v1()'
                ,'omr_guard_student_credential_mutation_v8_snapshot()'
@@ -9805,5 +9816,24 @@ begin
     end loop;
 end
 $assignment_generation_scope$;
+
+do $canonical_question_result_digest$
+declare
+    v_result record;
+begin
+    select * into v_result
+      from public.omr_compute_canonical_question_result_evidence_v1(
+        '{"id":"attempt-digest-fixture","examId":"exam-digest","organizationId":"org-digest","classId":"group-digest","assignmentId":"assignment-digest","assignmentRevision":7,"studentProfileId":"student-digest","studentId":"student-digest","identityType":"registered","studentName":"Digest Student","groupId":"group-digest","groupName":"Digest Group","regionId":"region-digest","regionName":"Digest Region","startedAt":"2026-08-10T00:00:00.000Z","finishedAt":"2026-08-10T00:01:00.000Z","score":1,"totalScore":2,"status":"completed"}'::jsonb,
+        '[{"schemaVersion":1,"attemptId":"attempt-digest-fixture","examId":"exam-digest","examTitle":"Digest Exam","organizationId":"org-digest","classId":"group-digest","assignmentId":"assignment-digest","assignmentRevision":7,"studentProfileId":"student-digest","studentName":"Digest Student","studentId":"student-digest","groupId":"group-digest","groupName":"Digest Group","regionId":"region-digest","regionName":"Digest Region","identityType":"registered","questionId":1,"questionNumber":1,"canonicalQuestionId":"exam-digest:1","label":"Q1","score":2.00,"earnedScore":1.00,"selectedAnswer":2,"correctAnswer":3,"status":"wrong","isCorrect":false,"isWrong":true,"isUnanswered":false,"finishedAt":"2026-08-10T00:01:00.000Z"}]'::jsonb
+      );
+    if v_result.question_count <> 1
+       or v_result.definition_manifest_hash is distinct from
+            'sha256:0ecce1e233466821e9193919acc3daf7da4eeac45e89492358aec4cbc57f3ed9'
+       or v_result.full_evidence_hash is distinct from
+            'sha256:ce358c4ecfd4c37c06b41160ade55fae9173a6f3db943d81d90818b05fb58653' then
+        raise exception 'cross-runtime canonical question-result digest drifted: %',v_result;
+    end if;
+end
+$canonical_question_result_digest$;
 
 select 'OMR live PostgreSQL verification passed' as result;

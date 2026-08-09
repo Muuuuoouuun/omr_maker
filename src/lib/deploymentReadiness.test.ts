@@ -70,6 +70,7 @@ const readyDatabaseProbe = {
     effectiveWorkspacePlanEnforcementReady: true,
     studentSessionGenerationReady: true,
     studentCredentialBatchReady: true,
+    canonicalQuestionResultEvidenceReady: true,
     failedChecks: [],
 };
 

@@ -9,6 +9,9 @@ import {
     type StudentExamGatewayClient,
 } from "./studentExamServerGateway";
 import * as studentExamGatewayModule from "./studentExamServerGateway";
+import { buildQuestionResults } from "@/lib/questionResultBuilder";
+import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
+import { buildRetakeHref } from "@/lib/retakeLinks";
 
 const env = {
     NODE_ENV: "production",
@@ -501,16 +504,18 @@ describe("student exam server gateway", () => {
 
     it("binds retake question subsets into both the DTO and signed ticket", async () => {
         const { client } = mockClient();
-        const sourceAttempt: Attempt = {
+        const sourceBase: Attempt = {
             id: "source-1", examId: exam.id, examTitle: exam.title,
             organizationId: "org-1", studentId: "student-1", studentName: "학생 1",
             identityType: "registered", startedAt: "2026-08-05T00:00:00.000Z",
             finishedAt: "2026-08-05T00:10:00.000Z", score: 5, totalScore: 10,
             answers: { 1: 3, 2: 2 }, status: "completed",
-            questionResults: [
-                { schemaVersion: 1, attemptId: "source-1", examId: exam.id, examTitle: exam.title, studentId: "student-1", studentName: "학생 1", questionId: 1, questionNumber: 1, score: 5, earnedScore: 5, status: "correct", isCorrect: true, isWrong: false, isUnanswered: false, finishedAt: "2026-08-05T00:10:00.000Z" },
-                { schemaVersion: 1, attemptId: "source-1", examId: exam.id, examTitle: exam.title, studentId: "student-1", studentName: "학생 1", questionId: 2, questionNumber: 2, score: 5, earnedScore: 0, status: "wrong", isCorrect: false, isWrong: true, isUnanswered: false, finishedAt: "2026-08-05T00:10:00.000Z" },
-            ],
+        };
+        const questionResults = buildQuestionResults(exam, sourceBase);
+        const sourceAttempt: Attempt = {
+            ...sourceBase,
+            questionResults,
+            ...buildCanonicalQuestionResultEvidence(sourceBase, questionResults),
         };
         const retakeClient: StudentExamGatewayClient = {
             ...client,
@@ -523,10 +528,20 @@ describe("student exam server gateway", () => {
                 return { select: () => query };
             },
         };
+        const retakeHref = buildRetakeHref(exam.id, sourceAttempt.id, [2], "wrong", {
+            cohortKeys: [`${sourceAttempt.questionResultsDefinitionManifestHash}\u001f2`],
+        });
+        const retakeUrl = new URL(retakeHref, "https://omr.example");
+        expect(retakeUrl.searchParams.get("mode")).toBe("wrong");
+        expect(retakeUrl.searchParams.get("cohorts")).toContain(sourceAttempt.questionResultsDefinitionManifestHash);
         const opened = await openStudentExamWithGateway(retakeClient, {
             examId: exam.id,
             pin: "4321",
-            retake: { sourceAttemptId: "source-1", mode: "wrong", questionIds: [2] },
+            retake: {
+                sourceAttemptId: retakeUrl.searchParams.get("retakeFrom") || "",
+                mode: retakeUrl.searchParams.get("mode") === "wrong" ? "wrong" : "custom",
+                questionIds: (retakeUrl.searchParams.get("questions") || "").split(",").map(Number),
+            },
             student: { studentId: "student-1", studentName: "학생 1", identityType: "registered" },
         }, env, 1_000, {
             organizationId: "org-1", studentId: "student-1", studentName: "학생 1", identityType: "registered",
@@ -537,6 +552,34 @@ describe("student exam server gateway", () => {
         expect(parseStudentAttemptTicket(opened.ticket, env, 1_000)).toMatchObject({
             allowedQuestionIds: [2], retakeSourceAttemptId: "source-1", retakeMode: "wrong",
         });
+
+        const historicalExam: Exam = {
+            ...exam,
+            questions: exam.questions.map(question => question.id === 2 ? { ...question, answer: 2 } : question),
+        };
+        const historicalBase = { ...sourceBase, answers: { 1: 3, 2: 1 } };
+        const historicalRows = buildQuestionResults(historicalExam, historicalBase);
+        const historicalAttempt = {
+            ...historicalBase,
+            questionResults: historicalRows,
+            ...buildCanonicalQuestionResultEvidence(historicalBase, historicalRows),
+        };
+        const historicalClient: StudentExamGatewayClient = {
+            ...client,
+            from(table) {
+                if (table !== "omr_attempts") return client.from(table);
+                const query = { eq() { return query; }, async maybeSingle() { return { data: { payload: historicalAttempt }, error: null }; } };
+                return { select: () => query };
+            },
+        };
+        await expect(openStudentExamWithGateway(historicalClient, {
+            examId: exam.id,
+            pin: "4321",
+            retake: { sourceAttemptId: "source-1", mode: "wrong", questionIds: [2] },
+            student: { studentId: "student-1", studentName: "학생 1", identityType: "registered" },
+        }, env, 1_000, {
+            organizationId: "org-1", studentId: "student-1", studentName: "학생 1", identityType: "registered",
+        })).resolves.toEqual({ status: "invalid_questions" });
 
         await expect(openStudentExamWithGateway(client, {
             examId: exam.id,

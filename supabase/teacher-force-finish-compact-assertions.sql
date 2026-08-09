@@ -16,6 +16,12 @@ insert into public.omr_student_profiles (
 insert into public.omr_classes (id, organization_id, name)
 values ('compact-force-class', 'compact-force-org', 'Compact Class');
 
+insert into public.omr_class_students(
+    class_id,organization_id,student_profile_id,enrollment_status
+) values (
+    'compact-force-class','compact-force-org','compact-force-student-2','active'
+);
+
 insert into public.omr_exams (
     id, organization_id, title, payload, created_at, updated_at
 ) values (
@@ -40,20 +46,30 @@ insert into public.omr_exams (
 -- payload.classId. Assigning it to a class must not make the locked exam
 -- snapshot invalid; assignment class controls attempt ownership only.
 insert into public.omr_assignments (
-    id, organization_id, exam_id, class_id, title, status
+    id, organization_id, exam_id, class_id, title, access_mode, status, revision
 ) values (
     'compact-force-assignment', 'compact-force-org', 'compact-force-exam',
-    'compact-force-class', 'Compact Class Assignment', 'open'
+    'compact-force-class', 'Compact Class Assignment', 'targeted', 'open', 1
+);
+
+insert into public.omr_assignment_targets(
+    id,assignment_id,organization_id,target_type,target_id,
+    student_profile_id,status
+) values (
+    'compact-force-assignment:student', 'compact-force-assignment',
+    'compact-force-org','student','compact-force-student-2',
+    'compact-force-student-2','active'
 );
 
 insert into public.omr_attempt_sessions (
-    id, organization_id, exam_id, owner_student_id, student_name,
+    id, organization_id, exam_id, assignment_id, assignment_revision,
+    owner_student_id, student_name,
     identity_type, scope_key, submission_id, attempt_id,
     allowed_question_ids, grading_snapshot, answers, sub_question_answers,
     status, started_at, deadline_at, last_heartbeat_at, revision,
     lease_epoch, lease_token_hash, lease_expires_at
 ) values (
-    'compact-force-session', 'compact-force-org', 'compact-force-exam',
+    'compact-force-session', 'compact-force-org', 'compact-force-exam', null, null,
     'compact-force-student', 'Compact Student', 'registered', 'base',
     'compact-force-ticket', 'compact-force-attempt', array[1,2,3,4],
     (select payload from public.omr_exams where id = 'compact-force-exam'),
@@ -63,6 +79,7 @@ insert into public.omr_attempt_sessions (
     now(), 7, 1, 'compact-force-lease', now() + interval '1 minute'
 ), (
     'compact-force-session-2', 'compact-force-org', 'compact-force-exam',
+    'compact-force-assignment', 1,
     'compact-force-student-2', 'Compact Student 2', 'registered', 'base',
     'compact-force-ticket-2', 'compact-force-attempt-2', array[1,2,3,4],
     (select payload from public.omr_exams where id = 'compact-force-exam'),
@@ -70,10 +87,6 @@ insert into public.omr_attempt_sessions (
     'in_progress', now() - interval '10 minutes', now() + interval '1 hour',
     now(), 3, 1, 'compact-force-lease-2', now() + interval '1 minute'
 );
-
-update public.omr_attempt_sessions
-   set assignment_id = 'compact-force-assignment'
- where id = 'compact-force-session-2';
 
 do $$
 declare

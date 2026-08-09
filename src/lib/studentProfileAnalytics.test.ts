@@ -4,6 +4,8 @@ import type { RosterStudent } from "@/lib/rosterStorage";
 import type { TeacherAttemptSummary } from "@/lib/teacherAttemptSummary";
 import { buildStudentProfileInsight } from "./studentProfileAnalytics";
 import { buildStudentReportHeadline } from "./studentReportHeadline";
+import { buildQuestionResults, summarizeQuestionResults } from "./premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 
 const exam: Exam = {
     id: "exam-1",
@@ -30,7 +32,7 @@ const student: RosterStudent = {
 };
 
 function attempt(partial: Partial<Attempt>): Attempt {
-    return {
+    const candidate: Attempt = {
         id: partial.id || "attempt-1",
         examId: partial.examId || exam.id,
         examTitle: partial.examTitle || exam.title,
@@ -53,6 +55,18 @@ function attempt(partial: Partial<Attempt>): Attempt {
         retake: partial.retake,
         status: partial.status || "completed",
     };
+    if (candidate.examId !== exam.id) return candidate;
+    const questionResults = buildQuestionResults(exam, candidate);
+    const summary = summarizeQuestionResults(questionResults);
+    const canonical = { ...candidate, score: summary.earnedScore, totalScore: summary.totalScore, questionResults };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
+}
+
+function canonicalAttemptFor(currentExam: Exam, candidate: Attempt): Attempt {
+    const questionResults = buildQuestionResults(currentExam, candidate);
+    const summary = summarizeQuestionResults(questionResults);
+    const canonical = { ...candidate, score: summary.earnedScore, totalScore: summary.totalScore, questionResults };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
 }
 
 describe("student profile analytics", () => {
@@ -188,7 +202,7 @@ describe("student profile analytics", () => {
                 })),
             ],
         }));
-        const attempts = exams.map((currentExam, examIndex) => attempt({
+        const attempts = exams.map((currentExam, examIndex) => canonicalAttemptFor(currentExam, attempt({
             id: `attempt-${examIndex + 1}`,
             examId: currentExam.id,
             examTitle: currentExam.title,
@@ -200,7 +214,7 @@ describe("student profile analytics", () => {
                 question.id,
                 question.id === 2 ? 1 : 2,
             ])),
-        }));
+        })));
 
         const insight = buildStudentProfileInsight(
             student,

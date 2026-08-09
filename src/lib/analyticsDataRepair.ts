@@ -1,5 +1,9 @@
 import type { Attempt, Exam } from "@/types/omr";
-import { getAttemptQuestionResults, getEffectiveExamQuestionsForAttempt, summarizeAttemptScore } from "@/lib/premiumAnalytics";
+import {
+    buildQuestionResults,
+    getEffectiveExamQuestionsForAttempt,
+    summarizeQuestionResults,
+} from "@/lib/premiumAnalytics";
 
 export interface QuestionResultRepairItem {
     attemptId: string;
@@ -26,23 +30,21 @@ function isCompletedAttempt(attempt: Attempt): boolean {
 
 export function repairAttemptQuestionResults(exam: Exam, attempt: Attempt): QuestionResultRepairItem | null {
     if (exam.id !== attempt.examId || !isCompletedAttempt(attempt)) return null;
+    if (attempt.questionResults !== undefined) return null;
     const effectiveQuestions = getEffectiveExamQuestionsForAttempt(exam, attempt);
     const expectedQuestionCount = effectiveQuestions.length;
     if (expectedQuestionCount === 0) return null;
 
-    const effectiveQuestionIds = new Set(effectiveQuestions.map(question => question.id));
-    const existingQuestionResultCount = attempt.questionResults?.filter(result => (
-        result.examId === exam.id && effectiveQuestionIds.has(result.questionId)
-    )).length || 0;
-    if (existingQuestionResultCount >= expectedQuestionCount) return null;
+    const existingQuestionResultCount = 0;
 
-    const questionResults = getAttemptQuestionResults(exam, attempt);
+    const questionResults = buildQuestionResults(exam, attempt);
     if (questionResults.length < expectedQuestionCount) return null;
 
-    const scoreSummary = summarizeAttemptScore(exam, { ...attempt, questionResults });
+    const scoreSummary = summarizeQuestionResults(questionResults);
     const repairedAttempt: Attempt = {
         ...attempt,
         questionResults,
+        questionResultsSource: "legacy_derived_current_exam",
         score: scoreSummary.earnedScore,
         totalScore: scoreSummary.totalScore,
     };

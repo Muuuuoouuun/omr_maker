@@ -40,6 +40,11 @@ const conditionalWebKitProjects = enableWebKitPwa ? [
         },
     },
     {
+        name: "pdf-webkit",
+        testMatch: /pdf-drawing-toolbar\.spec\.ts/,
+        use: { ...devices["Desktop Safari"], browserName: "webkit" as const },
+    },
+    {
         name: "ios-max-webkit",
         testMatch: /ios-mobile-layout\.spec\.ts/,
         use: {

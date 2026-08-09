@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import useCometReveal from "@/components/dashboard/useCometReveal";
 import StatusPill from "@/components/dashboard/StatusPill";
@@ -12,26 +12,27 @@ import {
 import { Bell, Lock, MapPin, Target, TrendingUp } from "lucide-react";
 import { PremiumActionLink, PremiumFeatureCard } from "@/components/PremiumFeatureGate";
 import { formatKoreanDate } from "@/lib/pure";
-import {
-    buildLearningRecommendations,
-    buildRetakeQuestionIds,
-    getAttemptQuestionResults,
-    studentScopeKeyForAttempt,
-    summarizeAttemptBehavior,
-} from "@/lib/premiumAnalytics";
-import { baseAttemptsOnly, buildAttemptScoreLookup, completedAttemptsOnly, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { computeRankPercentile } from "@/lib/scoreDistribution";
 import {
-    buildRegionalLearningScopes,
-    filterAttemptsByRegion,
-    regionNameForAttempt,
-    type RegionalLearningScope,
-} from "@/lib/regionalAnalytics";
+    buildStudentAnalyticsRegionalScopes,
+    filterStudentAnalyticsAttemptsByRegion,
+    studentAnalyticsRegionName,
+    studentAnalyticsStudentKey,
+    type StudentAnalyticsRegionalScope,
+} from "@/lib/studentAnalyticsScopeProjection";
+import { safeScorePercent } from "@/lib/scoreUtils";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { resolveScopedSelection } from "@/lib/dashboardSelection";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
+import {
+    currentTeacherCanonicalAnalyticsSnapshot,
+    exactTeacherCanonicalWrongRetakeCohorts,
+    type TeacherCanonicalAnalyticsSnapshot,
+    type TeacherCanonicalAnalyticsSnapshotMap,
+    type TeacherCanonicalStudentAnalyticsRow,
+} from "@/lib/teacherCanonicalAnalyticsSnapshotContract";
 
 interface StudentAnalyticsTabProps {
     exams: Exam[];
@@ -39,9 +40,21 @@ interface StudentAnalyticsTabProps {
     rosterStudents?: RosterStudent[];
     rosterGroups?: RosterGroup[];
     currentPlan?: PlanKey;
+    canonicalAnalyticsSnapshots?: TeacherCanonicalAnalyticsSnapshotMap;
 }
 
 const ALL_REGION_KEY = "__all_regions__";
+const EMPTY_BEHAVIOR = {
+    elapsedTimeSec: 0,
+    totalTrackedTimeSec: 0,
+    averageTimeSec: 0,
+    slowQuestionNumbers: [],
+    rushedQuestionNumbers: [],
+    revisitedQuestionNumbers: [],
+    answerChangedQuestionNumbers: [],
+    focusLossCount: 0,
+    focusLossQuestionNumbers: [],
+};
 
 // Shared card surface so student-analytics sections match the exam tab's coherent
 // grammar (rounded, subtly elevated, consistently bordered). The `.card` class has no
@@ -53,8 +66,21 @@ const CARD_SURFACE_STYLE: CSSProperties = {
     boxShadow: 'var(--shadow-md)',
 };
 
-function regionalScopeLabel(scope: RegionalLearningScope | undefined): string {
+type StudentAnalyticsLocalRuntime = typeof import("@/lib/studentAnalyticsLocalRuntime");
+
+function regionalScopeLabel(scope: StudentAnalyticsRegionalScope | undefined): string {
     return scope?.regionName || "전체 지역";
+}
+
+function storedAttemptScore(attempt: Attempt) {
+    return {
+        earnedScore: attempt.score,
+        totalScore: attempt.totalScore,
+        scorePercent: safeScorePercent(attempt.score, attempt.totalScore),
+        source: "storedScore" as const,
+        gradedQuestionCount: 0,
+        ungradedQuestionCount: 0,
+    };
 }
 
 function formatSeconds(totalSec: number): string {
@@ -75,17 +101,27 @@ export default function StudentAnalyticsTab({
     rosterStudents = [],
     rosterGroups = [],
     currentPlan = "free",
+    canonicalAnalyticsSnapshots,
 }: StudentAnalyticsTabProps) {
+    const requiresCanonicalSnapshot = canonicalAnalyticsSnapshots !== undefined;
+    const [localRuntime, setLocalRuntime] = useState<StudentAnalyticsLocalRuntime | null>(null);
+    useEffect(() => {
+        if (requiresCanonicalSnapshot) return;
+        let current = true;
+        void import("@/lib/studentAnalyticsLocalRuntime").then(runtime => {
+            if (current) setLocalRuntime(runtime);
+        });
+        return () => { current = false; };
+    }, [requiresCanonicalSnapshot]);
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
-    const analyticsAttempts = useMemo(() => completedAttemptsOnly(attempts), [attempts]);
+    const analyticsAttempts = useMemo(() => attempts.filter(attempt => attempt.status === "completed"), [attempts]);
     const regionScopeOptions = useMemo(() => (
-        buildRegionalLearningScopes({
+        buildStudentAnalyticsRegionalScopes({
             students: rosterStudents,
             groups: rosterGroups,
             attempts: analyticsAttempts,
-            exams,
         }).filter(scope => scope.attemptCount > 0)
-    ), [analyticsAttempts, exams, rosterGroups, rosterStudents]);
+    ), [analyticsAttempts, rosterGroups, rosterStudents]);
     const activeRegionKey = selectedRegionKey === ALL_REGION_KEY || regionScopeOptions.some(scope => scope.regionKey === selectedRegionKey)
         ? selectedRegionKey
         : ALL_REGION_KEY;
@@ -94,10 +130,10 @@ export default function StudentAnalyticsTab({
     const scopedAttempts = useMemo(() => (
         activeRegionKey === ALL_REGION_KEY
             ? analyticsAttempts
-            : filterAttemptsByRegion(analyticsAttempts, activeRegionKey, rosterStudents, rosterGroups)
+            : filterStudentAnalyticsAttemptsByRegion(analyticsAttempts, activeRegionKey, rosterStudents, rosterGroups)
     ), [activeRegionKey, analyticsAttempts, rosterGroups, rosterStudents]);
-    const baseScopedAttempts = useMemo(() => baseAttemptsOnly(scopedAttempts), [scopedAttempts]);
-    const retakeScopedAttempts = useMemo(() => retakeAttemptsOnly(scopedAttempts), [scopedAttempts]);
+    const baseScopedAttempts = useMemo(() => scopedAttempts.filter(attempt => !attempt.retake), [scopedAttempts]);
+    const retakeScopedAttempts = useMemo(() => scopedAttempts.filter(attempt => !!attempt.retake), [scopedAttempts]);
 
     const students = useMemo(() => {
         const studentMap = new Map<string, {
@@ -112,9 +148,9 @@ export default function StudentAnalyticsTab({
             latestFinishedAt: string;
         }>();
         scopedAttempts.forEach(a => {
-            const key = studentScopeKeyForAttempt(a);
+            const key = studentAnalyticsStudentKey(a);
             const current = studentMap.get(key);
-            const regionName = regionNameForAttempt(a, rosterStudents, rosterGroups);
+            const regionName = studentAnalyticsRegionName(a, rosterStudents, rosterGroups);
             const isLatest = !current || new Date(a.finishedAt).getTime() > new Date(current.latestFinishedAt).getTime();
             const nextName = isLatest ? a.studentName : current?.name || a.studentName;
             const nextGroupName = isLatest ? a.groupName : current?.groupName;
@@ -177,11 +213,11 @@ export default function StudentAnalyticsTab({
     const studentAttempts = useMemo(() => {
         if (!activeStudentKey) return [];
         return scopedAttempts
-            .filter(a => studentScopeKeyForAttempt(a) === activeStudentKey)
+            .filter(a => studentAnalyticsStudentKey(a) === activeStudentKey)
             .sort((a, b) => new Date(a.finishedAt).getTime() - new Date(b.finishedAt).getTime());
     }, [activeStudentKey, scopedAttempts]);
-    const studentBaseAttempts = useMemo(() => baseAttemptsOnly(studentAttempts), [studentAttempts]);
-    const studentRetakeAttempts = useMemo(() => retakeAttemptsOnly(studentAttempts), [studentAttempts]);
+    const studentBaseAttempts = useMemo(() => studentAttempts.filter(attempt => !attempt.retake), [studentAttempts]);
+    const studentRetakeAttempts = useMemo(() => studentAttempts.filter(attempt => !!attempt.retake), [studentAttempts]);
 
     const unattemptedExams = useMemo(() => {
         const attemptedExamIds = new Set(studentBaseAttempts.map(attempt => attempt.examId));
@@ -189,10 +225,51 @@ export default function StudentAnalyticsTab({
     }, [exams, studentBaseAttempts]);
 
     const examsById = useMemo(() => new Map(exams.map(exam => [exam.id, exam])), [exams]);
+    const canonicalSnapshotsByExamId = useMemo(() => {
+        const snapshots = new Map<string, TeacherCanonicalAnalyticsSnapshot>();
+        if (!canonicalAnalyticsSnapshots) return snapshots;
+        for (const exam of exams) {
+            const examAttempts = analyticsAttempts.filter(attempt => attempt.examId === exam.id);
+            const snapshot = currentTeacherCanonicalAnalyticsSnapshot(canonicalAnalyticsSnapshots[exam.id], exam.id, examAttempts);
+            if (snapshot?.status === "ready") snapshots.set(exam.id, snapshot);
+        }
+        return snapshots;
+    }, [analyticsAttempts, canonicalAnalyticsSnapshots, exams]);
+    const canonicalStudentRowsByAttemptId = useMemo(() => {
+        const rows = new Map<string, TeacherCanonicalStudentAnalyticsRow>();
+        if (!canonicalAnalyticsSnapshots) return rows;
+        for (const exam of exams) {
+            const examAttempts = analyticsAttempts.filter(attempt => attempt.examId === exam.id);
+            const snapshot = currentTeacherCanonicalAnalyticsSnapshot(
+                canonicalAnalyticsSnapshots[exam.id],
+                exam.id,
+                examAttempts,
+            );
+            if (snapshot?.status !== "ready" || !snapshot.studentAggregatesComplete) continue;
+            for (const row of snapshot.studentRows) rows.set(row.attemptId, row);
+        }
+        return rows;
+    }, [analyticsAttempts, canonicalAnalyticsSnapshots, exams]);
 
     const attemptScoreById = useMemo(() => {
-        return buildAttemptScoreLookup(scopedAttempts, examsById);
-    }, [scopedAttempts, examsById]);
+        if (requiresCanonicalSnapshot) {
+            return new Map(scopedAttempts.map(attempt => {
+                const canonicalRow = canonicalStudentRowsByAttemptId.get(attempt.id);
+                return [attempt.id, canonicalRow
+                    ? {
+                        earnedScore: canonicalRow.totalScore,
+                        totalScore: attempt.totalScore,
+                        scorePercent: canonicalRow.scorePercentage,
+                        source: canonicalRow.gradingSource,
+                        gradedQuestionCount: 0,
+                        ungradedQuestionCount: 0,
+                    }
+                    : storedAttemptScore(attempt)];
+            }));
+        }
+        return localRuntime?.buildAttemptScoreLookup(scopedAttempts, examsById)
+            ?? new Map(scopedAttempts.map(attempt => [attempt.id, storedAttemptScore(attempt)]));
+    }, [canonicalStudentRowsByAttemptId, examsById, localRuntime, requiresCanonicalSnapshot, scopedAttempts]);
 
     const attemptsByExamId = useMemo(() => {
         const map = new Map<string, Attempt[]>();
@@ -225,10 +302,9 @@ export default function StudentAnalyticsTab({
             .filter(attempt => !attempt.retake)
             .filter(a => !excludedExamIds.has(a.examId))
             .map(attempt => {
-                const exam = examsById.get(attempt.examId);
                 const avgScore = averageScoreByExamId.get(attempt.examId) ?? 0;
                 const studentScore = attemptScoreById.get(attempt.id)?.scorePercent
-                    ?? resolveAttemptScore(attempt, exam).scorePercent;
+                    ?? storedAttemptScore(attempt).scorePercent;
 
                 return {
                     date: formatKoreanDate(attempt.finishedAt),
@@ -238,7 +314,7 @@ export default function StudentAnalyticsTab({
                     avgScore,
                 };
             });
-    }, [studentAttempts, excludedExamIds, examsById, attemptScoreById, averageScoreByExamId]);
+    }, [studentAttempts, excludedExamIds, attemptScoreById, averageScoreByExamId]);
 
     // 시안 B — comet head leads the "내 점수" line draw (soft-light variant).
     const trendChartRef = useRef<HTMLDivElement | null>(null);
@@ -251,23 +327,40 @@ export default function StudentAnalyticsTab({
     const detailedAnalysis = useMemo(() => {
         const getScoreRate = (candidate: Attempt) => (
             attemptScoreById.get(candidate.id)?.scorePercent
-            ?? resolveAttemptScore(candidate, examsById.get(candidate.examId)).scorePercent
+            ?? storedAttemptScore(candidate).scorePercent
         );
 
         return studentBaseAttempts.map(attempt => {
             const exam = examsById.get(attempt.examId);
+            const canonicalRow = requiresCanonicalSnapshot
+                ? canonicalStudentRowsByAttemptId.get(attempt.id)
+                : undefined;
             const examAttempts = [...(attemptsByExamId.get(attempt.examId) || [])]
                 .sort((a, b) => getScoreRate(b) - getScoreRate(a));
             const totalStudents = examAttempts.length;
-            const scoreSummary = attemptScoreById.get(attempt.id) ?? resolveAttemptScore(attempt, exam);
+            const gradingResolution = !requiresCanonicalSnapshot && exam && localRuntime
+                ? localRuntime.resolveAttemptGrading(exam, attempt)
+                : null;
+            const scoreSummary = canonicalRow
+                ? {
+                    earnedScore: canonicalRow.totalScore,
+                    totalScore: attempt.totalScore,
+                    scorePercent: canonicalRow.scorePercentage,
+                    source: canonicalRow.gradingSource,
+                }
+                : gradingResolution
+                ? { ...gradingResolution.scoreSummary, source: gradingResolution.source }
+                : storedAttemptScore(attempt);
             const studentScoreRate = scoreSummary.scorePercent;
             const rank = examAttempts.findIndex(a => getScoreRate(a) === studentScoreRate) + 1 || totalStudents;
 
             // Calculate strengths and weaknesses based on labels
             const labelStats: Record<string, { correct: number, total: number }> = {};
 
-            if (exam) {
-                getAttemptQuestionResults(exam, attempt).forEach(result => {
+            if (canonicalRow) {
+                Object.assign(labelStats, canonicalRow.labelOutcomes);
+            } else if (gradingResolution) {
+                gradingResolution.questionResults.forEach(result => {
                     if (result.status === "ungraded") return;
                     const label = result.label || '일반/종합';
                     if (!labelStats[label]) labelStats[label] = { correct: 0, total: 0 };
@@ -307,16 +400,23 @@ export default function StudentAnalyticsTab({
                 }
             }
 
-            const recommendations = exam
-                ? buildLearningRecommendations(exam, [attempt], {
+            const recommendations = !requiresCanonicalSnapshot && exam && localRuntime
+                ? localRuntime.buildLearningRecommendations(exam, [attempt], {
                     scope: "attempt",
                     attempt,
                     limit: 5,
                 })
                 : [];
-            const topWeakness = recommendations[0];
-            const retakeIds = exam ? buildRetakeQuestionIds(exam, attempt) : [];
-            const behavior = summarizeAttemptBehavior(attempt);
+            const topWeakness = canonicalRow?.topWeakness || recommendations[0];
+            const retakeIds = canonicalRow?.retakeQuestionIds
+                || (!requiresCanonicalSnapshot && exam && localRuntime ? localRuntime.buildRetakeQuestionIds(exam, attempt) : []);
+            const behavior = canonicalRow?.behavior
+                || (!requiresCanonicalSnapshot && localRuntime ? localRuntime.summarizeAttemptBehavior(attempt) : EMPTY_BEHAVIOR);
+            const officialSnapshot = canonicalSnapshotsByExamId.get(attempt.examId);
+            const localRequestedRetakeIds = topWeakness?.retakeQuestionIds.length ? topWeakness.retakeQuestionIds : retakeIds;
+            const officialCohortKeys = officialSnapshot
+                ? exactTeacherCanonicalWrongRetakeCohorts(officialSnapshot, attempt.id, retakeIds)
+                : null;
 
             return {
                 attemptId: attempt.id,
@@ -327,6 +427,7 @@ export default function StudentAnalyticsTab({
                 scoreRate: studentScoreRate,
                 rank,
                 totalStudents,
+                gradingSource: canonicalRow?.gradingSource || gradingResolution?.source || "stored_totals_only",
                 // null for solo submissions (totalStudents < 2) — "상위 100%" is meaningless
                 // (and reads as last place) when there's no one else to compare against.
                 percentile: computeRankPercentile(rank, totalStudents),
@@ -338,17 +439,38 @@ export default function StudentAnalyticsTab({
                 weakReason: topWeakness?.reason,
                 retakeIds,
                 retakeHref: exam && retakeIds.length > 0
-                    ? buildRetakeHref(attempt.examId, topWeakness?.sourceAttemptId || attempt.id, topWeakness?.retakeQuestionIds.length ? topWeakness.retakeQuestionIds : retakeIds, topWeakness?.retakeMode || "wrong", {
-                        labels: topWeakness?.retakeLabels || [],
-                        concepts: topWeakness?.retakeConcepts || [],
-                    })
+                    ? requiresCanonicalSnapshot
+                        ? officialCohortKeys
+                            ? buildRetakeHref(attempt.examId, attempt.id, retakeIds, "wrong", { cohortKeys: officialCohortKeys })
+                            : ""
+                        : buildRetakeHref(attempt.examId, topWeakness?.sourceAttemptId || attempt.id, localRequestedRetakeIds, topWeakness?.retakeMode || "wrong", {
+                            labels: topWeakness?.retakeLabels || [],
+                            concepts: topWeakness?.retakeConcepts || [],
+                        })
                     : "",
+                retakeDefinitionUnavailable: requiresCanonicalSnapshot && retakeIds.length > 0 && !officialCohortKeys,
                 behavior,
                 elapsedTimeSec: behavior.elapsedTimeSec,
                 date: formatKoreanDate(attempt.finishedAt)
             };
         }).reverse(); // Latest at the top
-    }, [studentBaseAttempts, attemptsByExamId, examsById, attemptScoreById]);
+    }, [
+        studentBaseAttempts,
+        attemptsByExamId,
+        examsById,
+        attemptScoreById,
+        canonicalStudentRowsByAttemptId,
+        canonicalSnapshotsByExamId,
+        localRuntime,
+        requiresCanonicalSnapshot,
+    ]);
+    const excludedGradingEvidence = useMemo(() => detailedAnalysis.reduce((summary, detail) => {
+        if (detail.gradingSource === "legacy_derived_current_exam") summary.legacy += 1;
+        if (detail.gradingSource === "stored_totals_only" || detail.gradingSource === "incomplete_or_invalid") {
+            summary.incomplete += 1;
+        }
+        return summary;
+    }, { legacy: 0, incomplete: 0 }), [detailedAnalysis]);
 
     const learningQueue = useMemo(() => {
         return detailedAnalysis
@@ -366,6 +488,23 @@ export default function StudentAnalyticsTab({
 
     return (
         <div className="fade-in-up" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            {(excludedGradingEvidence.legacy > 0 || excludedGradingEvidence.incomplete > 0) && (
+                <p
+                    role="status"
+                    style={{
+                        margin: 0,
+                        padding: '0.65rem 0.8rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid color-mix(in srgb, var(--warning) 45%, var(--border))',
+                        background: 'color-mix(in srgb, var(--warning) 10%, var(--surface))',
+                        color: 'var(--text-warning)',
+                        fontSize: '0.78rem',
+                        fontWeight: 800,
+                    }}
+                >
+                    과거 기록 기반 참고 분석 {excludedGradingEvidence.legacy}건과 근거 불완전 기록 {excludedGradingEvidence.incomplete}건은 공식 누적 문항·유형 집계에서 제외했습니다.
+                </p>
+            )}
             {/* Filter Section */}
             <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
                 {regionScopeOptions.length > 0 && (
@@ -653,9 +792,8 @@ export default function StudentAnalyticsTab({
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', flex: 1 }}>
                             {studentBaseAttempts.map(attempt => {
                                 const isExcluded = excludedExamIds.has(attempt.examId);
-                                const exam = examsById.get(attempt.examId);
                                 const scoreRate = attemptScoreById.get(attempt.id)?.scorePercent
-                                    ?? resolveAttemptScore(attempt, exam).scorePercent;
+                                    ?? storedAttemptScore(attempt).scorePercent;
 
                                 return (
                                     <label
@@ -703,9 +841,8 @@ export default function StudentAnalyticsTab({
                             </p>
                             <div style={{ display: 'grid', gap: '0.5rem' }}>
                                 {studentRetakeAttempts.slice().reverse().slice(0, 5).map(attempt => {
-                                    const exam = examsById.get(attempt.examId);
                                     const scoreRate = attemptScoreById.get(attempt.id)?.scorePercent
-                                        ?? resolveAttemptScore(attempt, exam).scorePercent;
+                                        ?? storedAttemptScore(attempt).scorePercent;
                                     return (
                                         <Link
                                             key={attempt.id}
@@ -859,6 +996,10 @@ export default function StudentAnalyticsTab({
                                                 >
                                                     유형 {detail.retakeIds.length}문항
                                                 </PremiumActionLink>
+                                            ) : detail.retakeDefinitionUnavailable ? (
+                                                <span role="status" style={{ color: 'var(--warning)', fontSize: '0.76rem', fontWeight: 800 }}>
+                                                    제출 정의 변경 · 재시험 불가
+                                                </span>
                                             ) : (
                                                 <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 800 }}>완료</span>
                                             )}

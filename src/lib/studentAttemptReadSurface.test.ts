@@ -30,15 +30,18 @@ describe("student official attempt read surface", () => {
         expect(dashboard).not.toContain("loadAttemptsForStudent(currentUser)");
         expect(history).toContain("loadStudentOfficialAttempts(currentSession)");
         expect(history).not.toContain("loadAttemptsForStudent(currentSession)");
-        expect(review).toContain("loadMyAttemptClient(id, {");
-        expect(review).toContain("server: (attemptId) => loadMyAttempt(attemptId)");
-        expect(review).toContain("const serverExamPromise = loadExamForReview(id)");
-        expect(review).toContain("loadReviewExamClient(found.id, {");
-        expect(review).toContain("server: () => serverExamPromise");
-        expect(review).toContain("submissionReceiptForAttempt(found, storedReceipt, result.source)");
+        expect(review).toContain("loadStudentOfficialAttempt(id, session)");
+        expect(review).toContain("detail.trustedReview");
+        expect(review).toContain('attemptSource === "server"\n        ? trustedReview!');
+        expect(review).toContain('if (attemptSource === "server" && !trustedReview)');
+        const directRender = review.slice(review.indexOf("const reviewModel ="));
+        expect(directRender).not.toContain("resolveAttemptGrading");
+        expect(review).toContain("const parsedExam = detail.exam");
+        expect(review).toContain("submissionReceiptForAttempt(found, storedReceipt, detail.source)");
         expect(review).toContain("saveLocalServerConfirmedAttempt(found)");
         expect(review).toContain('submissionReceipt.prerequisite === "login"');
-        expect(review).not.toContain("loadStudentOfficialAttempt(id, session)");
+        expect(review).not.toContain("loadMyAttemptClient(id, {");
+        expect(review).not.toContain("loadExamForReview(id)");
         expect(review).not.toContain("loadAttemptForStudent");
     });
 

@@ -1,14 +1,15 @@
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { rosterGroupMatchesStudent } from "@/lib/rosterStorage";
-import { baseAttemptsOnly, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
+import { baseAttemptsOnly, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { resolveAwayCount } from "@/lib/examAwayTracker";
 import {
     attemptElapsedTimeSec,
+    buildCanonicalAttemptAnalyticsIndex,
     buildMostMissedQuestionStats,
     buildLearningRecommendations,
     buildQuestionResultTagStats,
-    getAttemptQuestionResults,
+    summarizeAttemptScore,
     studentScopeKeyForAttempt,
     type LearningRecommendationSeverity,
     type QuestionResultTagStat,
@@ -132,35 +133,6 @@ function matchedRosterStudent(attempt: Attempt, rosterStudents: RosterStudent[])
     return rosterStudents.find(student => attemptMatchesStudentProfile(attempt, student));
 }
 
-function normalizeAttemptForGroup(
-    attempt: Attempt,
-    group: RosterGroup,
-    rosterStudents: RosterStudent[],
-): Attempt {
-    const student = matchedRosterStudent(attempt, rosterStudents);
-    const nextStudentId = student?.id || attempt.studentId;
-    const nextStudentName = student?.name || attempt.studentName;
-    const nextGroupId = attempt.groupId || group.id;
-    const nextGroupName = attempt.groupName || group.name;
-
-    if (
-        nextStudentId === attempt.studentId
-        && nextStudentName === attempt.studentName
-        && nextGroupId === attempt.groupId
-        && nextGroupName === attempt.groupName
-    ) {
-        return attempt;
-    }
-
-    return {
-        ...attempt,
-        studentId: nextStudentId,
-        studentName: nextStudentName,
-        groupId: nextGroupId,
-        groupName: nextGroupName,
-    };
-}
-
 function matchesGroup(attempt: Attempt, group: RosterGroup, rosterStudents: RosterStudent[]): boolean {
     const student = matchedRosterStudent(attempt, rosterStudents);
     return (!!student && studentBelongsToGroup(student, group)) || matchesGroupSnapshot(attempt, group);
@@ -195,13 +167,17 @@ function buildWeaknessInsights(
     exam: Exam,
     attempts: Attempt[],
     weaknessKinds: QuestionResultGroupKind[],
+    groupKey: string,
+    analyticsIndex: ReturnType<typeof buildCanonicalAttemptAnalyticsIndex>,
 ): GroupProfileWeaknessInsight[] {
     const sourceAttempt = attempts[0];
     return sortWeaknessGroups(buildLearningRecommendations(exam, attempts, {
         scope: "class",
         attempt: sourceAttempt,
+        groupKey,
+        prefiltered: true,
         kinds: weaknessKinds,
-    }).map(recommendation => ({
+    }, analyticsIndex).map(recommendation => ({
         key: `${exam.id}:${recommendation.key}`,
         examId: exam.id,
         examTitle: exam.title,
@@ -240,12 +216,21 @@ export function buildGroupProfileInsight(
     const rosterStudents = students.filter(student => studentBelongsToGroup(student, group));
     const groupAttempts = attempts
         .filter(attempt => matchesGroup(attempt, group, rosterStudents))
-        .map(attempt => normalizeAttemptForGroup(attempt, group, rosterStudents))
         .sort((a, b) => activityTime(b) - activityTime(a));
     const baseGroupAttempts = baseAttemptsOnly(groupAttempts);
     const retakeGroupAttempts = retakeAttemptsOnly(groupAttempts);
-    const scores = baseGroupAttempts.map(attempt => resolveAttemptScore(attempt, examById.get(attempt.examId)).scorePercent);
-    const activeStudentKeys = new Set(baseGroupAttempts.map(studentScopeKeyForAttempt).filter(Boolean));
+    const studentScopeKey = (attempt: Attempt): string => matchedRosterStudent(attempt, rosterStudents)?.id
+        || studentScopeKeyForAttempt(attempt);
+    const activeStudentKeys = new Set(baseGroupAttempts.map(studentScopeKey).filter(Boolean));
+    const analyticsIndexByExamId = new Map([...examById.entries()].map(([examId, exam]) => [
+        examId,
+        buildCanonicalAttemptAnalyticsIndex(exam, groupAttempts.filter(attempt => attempt.examId === examId)),
+    ]));
+    const scorePercentForAttempt = (attempt: Attempt): number => {
+        const exam = examById.get(attempt.examId);
+        return exam ? summarizeAttemptScore(exam, attempt, analyticsIndexByExamId.get(exam.id)).scorePercent : 0;
+    };
+    const scores = baseGroupAttempts.map(scorePercentForAttempt);
 
     const attemptsByExam = new Map<string, Attempt[]>();
     for (const attempt of baseGroupAttempts) {
@@ -263,23 +248,24 @@ export function buildGroupProfileInsight(
     for (const [examId, examAttempts] of attemptsByExam.entries()) {
         const exam = examById.get(examId);
         if (!exam) continue;
-        const results = examAttempts.flatMap(attempt => getAttemptQuestionResults(exam, attempt));
-        const examScores = examAttempts.map(attempt => resolveAttemptScore(attempt, exam).scorePercent);
+        const analyticsIndex = analyticsIndexByExamId.get(examId)!;
+        const results = examAttempts.flatMap(attempt => analyticsIndex.resolutionFor(attempt).questionResults);
+        const examScores = examAttempts.map(scorePercentForAttempt);
         const examElapsedTimes = examAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
         const examQuestionTimes = examAttempts
             .flatMap(attempt => attempt.questionTimings || [])
             .map(timing => Math.max(0, timing.totalTimeSec))
             .filter(value => value > 0);
-        const examWeaknesses = buildWeaknessInsights(exam, examAttempts, weaknessKinds);
+        const examWeaknesses = buildWeaknessInsights(exam, examAttempts, weaknessKinds, group.id, analyticsIndex);
         const examWrong = results.filter(result => result.status === "wrong" || result.isWrong).length;
         const examUnanswered = results.filter(result => result.status === "unanswered" || result.isUnanswered).length;
-        const studentKeys = new Set(examAttempts.map(studentScopeKeyForAttempt).filter(Boolean));
+        const studentKeys = new Set(examAttempts.map(studentScopeKey).filter(Boolean));
 
         baseQuestionResults.push(...results);
         wrongQuestionCount += examWrong;
         unansweredQuestionCount += examUnanswered;
         weaknessGroups.push(...examWeaknesses);
-        mostMissedQuestions.push(...buildMostMissedQuestionStats(exam, examAttempts, weaknessLimit).map(stat => ({
+        mostMissedQuestions.push(...buildMostMissedQuestionStats(exam, examAttempts, weaknessLimit, analyticsIndex).map(stat => ({
             key: `${exam.id}:${stat.questionId}`,
             examId: exam.id,
             examTitle: exam.title,
@@ -308,7 +294,7 @@ export function buildGroupProfileInsight(
 
     const attemptsByStudent = new Map<string, Attempt[]>();
     for (const attempt of baseGroupAttempts) {
-        const key = studentScopeKeyForAttempt(attempt);
+        const key = studentScopeKey(attempt);
         if (!key) continue;
         attemptsByStudent.set(key, [...(attemptsByStudent.get(key) || []), attempt]);
     }
@@ -316,7 +302,7 @@ export function buildGroupProfileInsight(
     const studentsNeedingAttention = Array.from(attemptsByStudent.entries())
         .map(([key, studentAttempts]) => {
             const ordered = [...studentAttempts].sort((a, b) => activityTime(b) - activityTime(a));
-            const studentScores = ordered.map(attempt => resolveAttemptScore(attempt, examById.get(attempt.examId)).scorePercent);
+            const studentScores = ordered.map(scorePercentForAttempt);
             const latestScore = studentScores[0] ?? 0;
             const previousScore = studentScores[1] ?? latestScore;
             return {

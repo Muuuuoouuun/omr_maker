@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
+import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 import {
     buildClassTypeWeaknessGroups,
     buildClassExamScoreGroups,
@@ -18,6 +19,9 @@ import {
     collectQuestionResults,
     getAttemptQuestionResults,
     hasGradableAttemptScore,
+    resolveAttemptGrading,
+    summarizeCanonicalQuestionSubset,
+    summarizeQuestionResults,
     studentScopeKeyForAttempt,
     summarizeAttemptScore,
     summarizeAttemptBehavior,
@@ -93,6 +97,20 @@ const attempt: Attempt = {
         { questionId: 2, questionNumber: 2, page: 1, strokeCount: 3 },
     ],
 };
+
+function canonicalAttemptFor(testExam: Exam, candidate: Attempt): Attempt {
+    const questionResults = buildQuestionResults(testExam, candidate);
+    const scoreSummary = summarizeQuestionResults(questionResults);
+    const preservesRoundedAggregate = Math.abs(candidate.score - scoreSummary.earnedScore) <= 0.05
+        && Math.abs(candidate.totalScore - scoreSummary.totalScore) <= 0.05;
+    const canonical = {
+        ...candidate,
+        score: preservesRoundedAggregate ? candidate.score : scoreSummary.earnedScore,
+        totalScore: preservesRoundedAggregate ? candidate.totalScore : scoreSummary.totalScore,
+        questionResults,
+    };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
+}
 
 describe("premium analytics", () => {
     it("excludes denominator-free submissions from class score evidence", () => {
@@ -190,10 +208,10 @@ describe("premium analytics", () => {
     });
 
     it("builds a retake set from wrong and unanswered questions only", () => {
-        expect(buildRetakeQuestionIds(exam, attempt)).toEqual([2, 3, 4]);
+        expect(buildRetakeQuestionIds(exam, canonicalAttemptFor(exam, attempt))).toEqual([2, 3, 4]);
     });
 
-    it("backfills missing question result rows when stored analytics are partial", () => {
+    it("fails closed instead of mixing partial stored grading with the current exam", () => {
         const storedQuestionTwo = buildQuestionResults(exam, attempt).find(row => row.questionId === 2);
         const partialAttempt: Attempt = {
             ...attempt,
@@ -206,66 +224,455 @@ describe("premium analytics", () => {
                 : [],
         };
 
-        const rows = getAttemptQuestionResults(exam, partialAttempt);
-
-        expect(rows).toHaveLength(4);
-        expect(rows.map(row => ({ questionId: row.questionId, status: row.status }))).toEqual([
-            { questionId: 1, status: "correct" },
-            { questionId: 2, status: "wrong" },
-            { questionId: 3, status: "unanswered" },
-            { questionId: 4, status: "unanswered" },
-        ]);
-        expect(rows.find(row => row.questionId === 2)).toMatchObject({
-            handwritingStrokeCount: 8,
-            timeSec: 140,
-            studentId: "student-1",
-            groupId: "class-a",
-            regionId: "서울",
-            regionName: "서울",
+        expect(resolveAttemptGrading(exam, partialAttempt)).toMatchObject({
+            source: "stored_totals_only",
+            questionResults: [],
         });
-        expect(buildRetakeQuestionIds(exam, partialAttempt)).toEqual([2, 3, 4]);
-        expect(buildExamQuestionResultStats(exam, [partialAttempt]).find(stat => stat.questionId === 3)).toMatchObject({
-            totalCount: 1,
-            wrongCount: 1,
-            unansweredCount: 1,
+        expect(getAttemptQuestionResults(exam, partialAttempt)).toEqual([]);
+        expect(buildRetakeQuestionIds(exam, partialAttempt)).toEqual([]);
+        expect(buildExamQuestionResultStats(exam, [partialAttempt]).every(stat => stat.totalCount === 0)).toBe(true);
+        expect(summarizeAttemptScore(exam, partialAttempt)).toMatchObject({
+            earnedScore: 50,
+            totalScore: 100,
+            scorePercent: 50,
         });
     });
 
-    it("keeps current exam answers and metadata authoritative over stale stored result rows", () => {
-        const staleQuestionTwo = buildQuestionResults(exam, attempt).find(row => row.questionId === 2);
-        const staleAttempt: Attempt = {
-            ...attempt,
-            questionResults: staleQuestionTwo
-                ? [{
-                    ...staleQuestionTwo,
-                    selectedAnswer: 4,
-                    status: "correct",
-                    isCorrect: true,
-                    isWrong: false,
-                    earnedScore: staleQuestionTwo.score,
-                    label: "이전 라벨",
-                    concept: "이전 개념",
-                }]
-                : [],
+    it("keeps complete stored grading canonical after the exam answer and metadata are edited", () => {
+        const canonicalAttempt = canonicalAttemptFor(exam, attempt);
+        const editedExam: Exam = {
+            ...exam,
+            questions: exam.questions.map(question => question.id === 1
+                ? {
+                    ...question,
+                    answer: 3,
+                    label: "수정된 표시 라벨",
+                    tags: { ...question.tags, concept: "수정된 표시 개념" },
+                }
+                : question),
         };
 
-        const row = getAttemptQuestionResults(exam, staleAttempt).find(result => result.questionId === 2);
+        const resolution = resolveAttemptGrading(editedExam, canonicalAttempt);
+        const row = resolution.questionResults.find(result => result.questionId === 1);
 
+        expect(resolution.source).toBe("canonical_submission");
         expect(row).toMatchObject({
-            selectedAnswer: 1,
-            correctAnswer: 4,
-            status: "wrong",
-            isCorrect: false,
-            isWrong: true,
-            earnedScore: 0,
-            label: "문학",
-            concept: "화자의 정서",
+            selectedAnswer: 2,
+            correctAnswer: 2,
+            status: "correct",
+            isCorrect: true,
+            isWrong: false,
+            score: 25,
+            earnedScore: 25,
+            label: "문법",
+            concept: "높임 표현",
         });
-        expect(buildRetakeQuestionIds(exam, staleAttempt)).toEqual([2, 3, 4]);
-        expect(buildExamQuestionResultStats(exam, [staleAttempt]).find(stat => stat.questionId === 2)).toMatchObject({
+        expect(summarizeAttemptScore(editedExam, canonicalAttempt)).toMatchObject({
+            earnedScore: 25,
+            totalScore: 100,
+            scorePercent: 25,
+        });
+        expect(buildRetakeQuestionIds(editedExam, canonicalAttempt)).toEqual([2, 3, 4]);
+        expect(buildExamQuestionResultStats(editedExam, [canonicalAttempt]).find(stat => stat.questionId === 1)).toMatchObject({
+            wrongCount: 0,
+            correctCount: 1,
+            optionCounts: { 2: 1 },
+            topWrongOption: undefined,
+        });
+        expect(buildExamQuestionResultStats(editedExam, [canonicalAttempt]).find(stat => stat.questionId === 2)).toMatchObject({
             wrongCount: 1,
             correctCount: 0,
             topWrongOption: { option: 1, count: 1, rate: 100 },
+        });
+    });
+
+    it("fails closed for conflicting totals but preserves a submitted question removed from the current exam", () => {
+        const canonical = canonicalAttemptFor(exam, attempt);
+        const conflictingTotals: Attempt = { ...canonical, score: 100 };
+        const removedQuestionExam: Exam = {
+            ...exam,
+            questions: exam.questions.filter(question => question.id !== 4),
+        };
+
+        expect(resolveAttemptGrading(exam, conflictingTotals)).toMatchObject({
+            source: "stored_totals_only",
+            questionResults: [],
+        });
+        expect(resolveAttemptGrading(removedQuestionExam, canonical)).toMatchObject({
+            source: "canonical_submission",
+            questionResults: expect.arrayContaining([
+                expect.objectContaining({ questionId: 4, correctAnswer: 3 }),
+            ]),
+        });
+    });
+
+    it("bounds current-exam derivation to attempts that predate stored question results", () => {
+        expect(resolveAttemptGrading(exam, attempt).source).toBe("legacy_derived_current_exam");
+        const editedExam = {
+            ...exam,
+            questions: exam.questions.map(question => question.id === 1 ? { ...question, answer: 3 } : question),
+        };
+        expect(collectQuestionResults(editedExam, [attempt])).toEqual([]);
+        expect(buildExamQuestionResultStats(editedExam, [attempt]).every(stat => stat.totalCount === 0)).toBe(true);
+        expect(resolveAttemptGrading(exam, { ...attempt, score: 0, totalScore: 0, questionResults: [] })).toMatchObject({
+            source: "incomplete_or_invalid",
+            questionResults: [],
+        });
+        expect(resolveAttemptGrading({ ...exam, questions: [] }, {
+            ...attempt,
+            score: 0,
+            totalScore: 0,
+            questionResults: [],
+        })).toMatchObject({
+            source: "incomplete_or_invalid",
+            questionResults: [],
+        });
+    });
+
+    it("keeps explicit legacy repair provenance after derived rows are stored", () => {
+        const repairedAttempt: Attempt = {
+            ...attempt,
+            score: 25,
+            totalScore: 100,
+            questionResults: buildQuestionResults(exam, attempt),
+            questionResultsSource: "legacy_derived_current_exam",
+        };
+
+        expect(resolveAttemptGrading(exam, repairedAttempt)).toMatchObject({
+            source: "legacy_derived_current_exam",
+            questionResults: expect.arrayContaining([
+                expect.objectContaining({ questionId: 1, status: "correct" }),
+            ]),
+        });
+    });
+
+    it("fails closed for malformed canonical rows and snapshots result evidence once", () => {
+        const canonicalAttempt = canonicalAttemptFor(exam, attempt);
+        const canonicalRows = canonicalAttempt.questionResults!;
+        const malformedAttempts: Attempt[] = [
+            {
+                ...canonicalAttempt,
+                examId: "other-exam",
+            },
+            {
+                ...canonicalAttempt,
+                questionResultsSource: "canonical_submission" as never,
+            },
+            {
+                ...canonicalAttempt,
+                retake: "malformed-retake" as never,
+            },
+            {
+                ...canonicalAttempt,
+                questionResults: [canonicalRows[0], canonicalRows[0], canonicalRows[1], canonicalRows[2]],
+            },
+            {
+                ...canonicalAttempt,
+                questionResults: canonicalRows.map((row, index) => index === 0 ? { ...row, examId: "other-exam" } : row),
+            },
+            {
+                ...canonicalAttempt,
+                questionResults: canonicalRows.map((row, index) => index === 1 ? {
+                    ...row,
+                    correctAnswer: undefined,
+                    status: "invalid" as never,
+                    isCorrect: false,
+                    isWrong: false,
+                    isUnanswered: false,
+                } : row),
+            },
+            {
+                ...canonicalAttempt,
+                questionResults: [null as never, canonicalRows[1], canonicalRows[2], canonicalRows[3]],
+            },
+            {
+                ...canonicalAttempt,
+                questionResults: canonicalRows.map((row, index) => index === 1 ? {
+                    ...row,
+                    correctAnswer: "4" as never,
+                } : row),
+            },
+            {
+                ...canonicalAttempt,
+                questionResults: canonicalRows.map((row, index) => index === 2 ? {
+                    ...row,
+                    correctAnswer: 1,
+                    status: "ungraded",
+                    isUnanswered: false,
+                } : row),
+            },
+            {
+                ...canonicalAttempt,
+                questionResults: canonicalRows.map((row, index) => index === 1 ? {
+                    ...row,
+                    score: 0,
+                } : row),
+            },
+            {
+                ...canonicalAttempt,
+                questionResults: canonicalRows.map((row, index) => index === 0 ? {
+                    ...row,
+                    studentId: "other-student",
+                } : row),
+            },
+            {
+                ...canonicalAttempt,
+                questionResults: canonicalRows.map((row, index) => index === 1 ? {
+                    ...row,
+                    timeSec: Number.NaN,
+                } : row),
+            },
+            ...[-1, Number.NaN, 1.5].map(selectedAnswer => ({
+                ...canonicalAttempt,
+                questionResults: canonicalRows.map((row, index) => index === 1 ? {
+                    ...row,
+                    correctAnswer: undefined,
+                    selectedAnswer,
+                } : row),
+            })),
+        ];
+
+        malformedAttempts.forEach(candidate => {
+            expect(resolveAttemptGrading(exam, candidate)).toMatchObject({
+                source: "stored_totals_only",
+                questionResults: [],
+            });
+        });
+
+        const negativeZeroExam: Exam = {
+            id: "negative-zero",
+            title: "음수 영점",
+            createdAt: exam.createdAt,
+            questions: [{ id: 1, number: 1 }],
+        };
+        const negativeZeroAttempt: Attempt = {
+            ...attempt,
+            id: "negative-zero-attempt",
+            examId: negativeZeroExam.id,
+            examTitle: negativeZeroExam.title,
+            score: 0,
+            totalScore: 0,
+            answers: {},
+            questionResults: [{
+                ...canonicalRows[0],
+                attemptId: "negative-zero-attempt",
+                examId: negativeZeroExam.id,
+                examTitle: negativeZeroExam.title,
+                questionId: 1,
+                questionNumber: 1,
+                score: -0,
+                earnedScore: -0,
+                selectedAnswer: undefined,
+                correctAnswer: undefined,
+                status: "ungraded",
+                isCorrect: false,
+                isWrong: false,
+                isUnanswered: false,
+            }],
+        };
+        expect(resolveAttemptGrading(negativeZeroExam, negativeZeroAttempt).source).toBe("incomplete_or_invalid");
+
+        let reads = 0;
+        const changingAttempt = { ...canonicalAttempt };
+        Object.defineProperty(changingAttempt, "questionResults", {
+            configurable: true,
+            get() {
+                reads += 1;
+                return reads === 1 ? canonicalRows : [];
+            },
+        });
+        expect(resolveAttemptGrading(exam, changingAttempt).source).toBe("canonical_submission");
+        expect(reads).toBe(1);
+    });
+
+    it("materializes grading inputs once before validating or enriching canonical rows", () => {
+        const accessorAttempt = canonicalAttemptFor(exam, attempt);
+        const canonicalRows = accessorAttempt.questionResults!;
+        const reads = new Map<string, number>();
+        const once = <T,>(key: string, value: T) => () => {
+            const nextRead = (reads.get(key) || 0) + 1;
+            reads.set(key, nextRead);
+            if (nextRead > 1) throw new Error(`${key} grading input was re-read`);
+            return value;
+        };
+        Object.defineProperties(accessorAttempt, {
+            questionResults: { configurable: true, get: once("questionResults", canonicalRows) },
+            answers: { configurable: true, get: once("answers", { ...attempt.answers }) },
+            retake: { configurable: true, get: once("retake", undefined) },
+            studentId: { configurable: true, get: once("studentId", attempt.studentId) },
+            finishedAt: { configurable: true, get: once("finishedAt", attempt.finishedAt) },
+            questionTimings: { configurable: true, get: once("questionTimings", attempt.questionTimings) },
+            questionDrawings: { configurable: true, get: once("questionDrawings", attempt.questionDrawings) },
+        });
+
+        let resolution: ReturnType<typeof resolveAttemptGrading> | undefined;
+        expect(() => {
+            resolution = resolveAttemptGrading(exam, accessorAttempt);
+        }).not.toThrow();
+        expect(Object.fromEntries(reads)).toEqual({
+            questionResults: 1,
+            answers: 1,
+            retake: 1,
+            studentId: 1,
+            finishedAt: 1,
+            questionTimings: 1,
+            questionDrawings: 1,
+        });
+        expect(resolution?.source).toBe("canonical_submission");
+    });
+
+    it("does not consult the edited current question set for canonical validation", () => {
+        const canonicalAttempt = canonicalAttemptFor(exam, attempt);
+        let questionReads = 0;
+        const changingExam = { ...exam };
+        Object.defineProperty(changingExam, "questions", {
+            configurable: true,
+            get() {
+                questionReads += 1;
+                if (questionReads > 1) throw new Error("exam questions were re-read");
+                return exam.questions;
+            },
+        });
+
+        let resolution: ReturnType<typeof resolveAttemptGrading> | undefined;
+        expect(() => {
+            resolution = resolveAttemptGrading(changingExam, canonicalAttempt);
+        }).not.toThrow();
+        expect(resolution?.source).toBe("canonical_submission");
+        expect(resolution?.questionResults).toHaveLength(exam.questions.length);
+        expect(questionReads).toBe(0);
+    });
+
+    it("snapshots stored totals with question evidence and exposes one consistent score summary", () => {
+        const sealedAttempt = canonicalAttemptFor(exam, attempt);
+        let scoreReads = 0;
+        let totalReads = 0;
+        const changingAttempt: Attempt = {
+            ...sealedAttempt,
+        };
+        Object.defineProperties(changingAttempt, {
+            score: {
+                configurable: true,
+                get() {
+                    scoreReads += 1;
+                    return scoreReads === 1 ? 25 : 100;
+                },
+            },
+            totalScore: {
+                configurable: true,
+                get() {
+                    totalReads += 1;
+                    return totalReads === 1 ? 100 : 0;
+                },
+            },
+        });
+
+        const resolution = resolveAttemptGrading(exam, changingAttempt);
+        expect(resolution).toMatchObject({
+            source: "canonical_submission",
+            scoreSummary: {
+                earnedScore: 25,
+                totalScore: 100,
+                scorePercent: 25,
+            },
+        });
+        expect(scoreReads).toBe(1);
+        expect(totalReads).toBe(1);
+
+        const throwingAttempt = { ...changingAttempt };
+        Object.defineProperty(throwingAttempt, "score", {
+            configurable: true,
+            get() {
+                throw new Error("corrupt stored score accessor");
+            },
+        });
+        expect(() => resolveAttemptGrading(exam, throwingAttempt)).not.toThrow();
+        expect(resolveAttemptGrading(exam, throwingAttempt)).toMatchObject({
+            source: "incomplete_or_invalid",
+            scoreSummary: { earnedScore: 0, totalScore: 0, scorePercent: 0 },
+        });
+    });
+
+    it("fails closed for malformed retake scopes instead of widening them", () => {
+        const malformedScopes = [[], [2, 99], [99], [2, 2]];
+        malformedScopes.forEach((questionIds, index) => {
+            const candidate: Attempt = {
+                ...attempt,
+                id: `malformed-retake-${index}`,
+                retake: {
+                    sourceAttemptId: attempt.id,
+                    questionIds,
+                    mode: "wrong",
+                    createdAt: "2026-08-09T00:00:00.000Z",
+                },
+            };
+            expect(resolveAttemptGrading(exam, candidate)).toMatchObject({
+                source: "stored_totals_only",
+                questionResults: [],
+            });
+        });
+    });
+
+    it("summarizes a validated canonical source over an exact retake subset", () => {
+        const canonicalAttempt = canonicalAttemptFor(exam, attempt);
+
+        expect(summarizeCanonicalQuestionSubset(exam, canonicalAttempt, [2, 4])).toMatchObject({
+            earnedScore: 0,
+            totalScore: 50,
+            scorePercent: 0,
+            gradedQuestionCount: 2,
+        });
+        expect(summarizeCanonicalQuestionSubset(exam, canonicalAttempt, [2, 99])).toBeNull();
+    });
+
+    it("normalizes invalid fallback totals instead of emitting NaN or negative scores", () => {
+        const invalidTotals: Attempt = {
+            ...attempt,
+            score: Number.NaN,
+            totalScore: Number.NaN,
+            questionResults: [],
+        };
+
+        expect(summarizeAttemptScore(exam, invalidTotals)).toMatchObject({
+            earnedScore: 0,
+            totalScore: 0,
+            scorePercent: 0,
+        });
+    });
+
+    it.each([3, 6, 7])("accepts %i-question canonical rows within aggregate rounding bounds", questionCount => {
+        const equalWeightExam: Exam = {
+            id: `equal-${questionCount}`,
+            title: `${questionCount}문항 균등 배점`,
+            createdAt: "2026-08-09T00:00:00.000Z",
+            questions: Array.from({ length: questionCount }, (_, index) => ({
+                id: index + 1,
+                number: index + 1,
+                answer: 1,
+            })),
+        };
+        const equalWeightAttempt: Attempt = {
+            id: `attempt-equal-${questionCount}`,
+            examId: equalWeightExam.id,
+            examTitle: equalWeightExam.title,
+            studentName: "균등 학생",
+            startedAt: "2026-08-09T00:00:00.000Z",
+            finishedAt: "2026-08-09T00:10:00.000Z",
+            score: 100,
+            totalScore: 100,
+            answers: Object.fromEntries(equalWeightExam.questions.map(question => [question.id, 1])),
+            status: "completed",
+        };
+        const canonicalEqualWeightAttempt = canonicalAttemptFor(equalWeightExam, equalWeightAttempt);
+
+        expect(resolveAttemptGrading(equalWeightExam, canonicalEqualWeightAttempt)).toMatchObject({
+            source: "canonical_submission",
+        });
+        expect(summarizeAttemptScore(equalWeightExam, canonicalEqualWeightAttempt)).toMatchObject({
+            earnedScore: 100,
+            totalScore: 100,
+            scorePercent: 100,
+            gradedQuestionCount: questionCount,
         });
     });
 
@@ -302,23 +709,24 @@ describe("premium analytics", () => {
             questionDrawings: [],
         };
 
-        const rows = getAttemptQuestionResults(exam, retakeAttempt);
+        const canonicalRetakeAttempt = canonicalAttemptFor(exam, retakeAttempt);
+        const rows = getAttemptQuestionResults(exam, canonicalRetakeAttempt);
 
         expect(rows.map(row => ({ questionId: row.questionId, status: row.status }))).toEqual([
             { questionId: 2, status: "correct" },
             { questionId: 4, status: "unanswered" },
         ]);
-        expect(summarizeAttemptScore(exam, retakeAttempt)).toMatchObject({
+        expect(summarizeAttemptScore(exam, canonicalRetakeAttempt)).toMatchObject({
             earnedScore: 50,
             totalScore: 100,
             scorePercent: 50,
             gradedQuestionCount: 2,
         });
-        expect(buildRetakeQuestionIds(exam, retakeAttempt)).toEqual([4]);
+        expect(buildRetakeQuestionIds(exam, canonicalRetakeAttempt)).toEqual([4]);
     });
 
     it("groups a student's wrong questions by teacher labels and deep tags", () => {
-        expect(buildStudentWeaknessGroups(exam, attempt)).toEqual([
+        expect(buildStudentWeaknessGroups(exam, canonicalAttemptFor(exam, attempt))).toEqual([
             {
                 key: "source:님의 침묵",
                 title: "님의 침묵",
@@ -360,7 +768,7 @@ describe("premium analytics", () => {
             questionDrawings: [],
         };
 
-        expect(buildSimilarQuestionGroups(exam, [attempt, secondAttempt]).slice(0, 2)).toMatchObject([
+        expect(buildSimilarQuestionGroups(exam, [attempt, secondAttempt].map(candidate => canonicalAttemptFor(exam, candidate))).slice(0, 2)).toMatchObject([
             {
                 title: "님의 침묵",
                 basis: "같은 지문/작품",
@@ -380,6 +788,24 @@ describe("premium analytics", () => {
         ]);
     });
 
+    it("excludes retake attempts from official similar-question pressure", () => {
+        const base = canonicalAttemptFor(exam, attempt);
+        const retake = canonicalAttemptFor(exam, {
+            ...attempt,
+            id: "attempt-retake",
+            retake: {
+                sourceAttemptId: attempt.id,
+                questionIds: [2, 3],
+                mode: "wrong",
+                createdAt: "2026-08-10T01:00:00.000Z",
+            },
+        });
+
+        expect(buildSimilarQuestionGroups(exam, [base, retake])).toEqual(
+            buildSimilarQuestionGroups(exam, [base]),
+        );
+    });
+
     it("cuts weakness groups by student, class, exam, and type metadata", () => {
         const secondAttempt: Attempt = {
             ...attempt,
@@ -391,8 +817,9 @@ describe("premium analytics", () => {
             questionTimings: [],
             questionDrawings: [],
         };
+        const aggregateAttempts = [canonicalAttemptFor(exam, attempt), canonicalAttemptFor(exam, secondAttempt)];
 
-        expect(buildStudentTypeWeaknessGroups(exam, [attempt, secondAttempt], "student-1", "concept")[0]).toMatchObject({
+        expect(buildStudentTypeWeaknessGroups(exam, aggregateAttempts, "student-1", "concept")[0]).toMatchObject({
             title: "화자의 정서",
             basis: "같은 개념",
             questionIds: [2, 3],
@@ -403,7 +830,7 @@ describe("premium analytics", () => {
             recommendedQuestionIds: [2, 3],
         });
 
-        expect(buildClassTypeWeaknessGroups(exam, [attempt, secondAttempt], "class-a", "source")[0]).toMatchObject({
+        expect(buildClassTypeWeaknessGroups(exam, aggregateAttempts, "class-a", "source")[0]).toMatchObject({
             title: "님의 침묵",
             basis: "같은 지문/작품",
             questionIds: [2, 3],
@@ -436,7 +863,7 @@ describe("premium analytics", () => {
             questionDrawings: [],
         };
 
-        const rows = buildClassExamWeaknessMatrix(exam, [attempt, secondAttempt, classBAttempt], {
+        const rows = buildClassExamWeaknessMatrix(exam, [attempt, secondAttempt, classBAttempt].map(candidate => canonicalAttemptFor(exam, candidate)), {
             kinds: ["concept"],
             recommendationLimit: 2,
         });
@@ -495,7 +922,7 @@ describe("premium analytics", () => {
             groupName: undefined,
         };
 
-        const rows = buildClassExamWeaknessMatrix(restrictedExam, [rosterMatchedAttempt], {
+        const rows = buildClassExamWeaknessMatrix(restrictedExam, [canonicalAttemptFor(restrictedExam, rosterMatchedAttempt)], {
             kinds: ["concept"],
             rosterGroups,
             rosterStudents,
@@ -541,9 +968,9 @@ describe("premium analytics", () => {
             accessConfig: { type: "group", groupIds: ["seoul-a", "busan-a"] },
         };
         const rows = buildClassExamWeaknessMatrix(restrictedExam, [
-            { ...attempt, id: "seoul", studentId: "seoul-a::김학생", groupName: "A반", regionName: "서울", answers: { 1: 2, 2: 1, 3: 0, 4: 3 } },
-            { ...attempt, id: "busan", studentId: "busan-a::김학생", groupName: "A반", regionName: "부산", answers: { 1: 2, 2: 4, 3: 1, 4: 3 } },
-        ], {
+            { ...attempt, id: "seoul", studentId: "seoul-a::김학생", groupId: "seoul-a", groupName: "A반", regionName: "서울", answers: { 1: 2, 2: 1, 3: 0, 4: 3 } },
+            { ...attempt, id: "busan", studentId: "busan-a::김학생", groupId: "busan-a", groupName: "A반", regionName: "부산", answers: { 1: 2, 2: 4, 3: 1, 4: 3 } },
+        ].map(candidate => canonicalAttemptFor(restrictedExam, candidate)), {
             kinds: ["concept"],
             rosterGroups: regionalGroups,
             rosterStudents: regionalStudents,
@@ -591,15 +1018,16 @@ describe("premium analytics", () => {
         expect(studentScopeKeyForAttempt(legacyClassA)).toBe("class-a::김학생");
         expect(studentScopeKeyForAttempt(legacyClassB)).toBe("class-b::김학생");
 
-        const classARows = collectQuestionResults(exam, [legacyClassA, legacyClassB], {
+        const canonicalClassAttempts = [legacyClassA, legacyClassB].map(candidate => canonicalAttemptFor(exam, candidate));
+        const classARows = collectQuestionResults(exam, canonicalClassAttempts, {
             studentKey: "class-a::김학생",
         });
         expect(Array.from(new Set(classARows.map(row => row.attemptId)))).toEqual(["legacy-a"]);
-        expect(collectQuestionResults(exam, [legacyClassA, legacyClassB], {
+        expect(collectQuestionResults(exam, canonicalClassAttempts, {
             studentKey: "김학생",
         })).toHaveLength(0);
 
-        expect(buildLearningRecommendations(exam, [legacyClassA, legacyClassB], {
+        expect(buildLearningRecommendations(exam, canonicalClassAttempts, {
             scope: "student",
             studentKey: "class-a::김학생",
             kinds: ["concept"],
@@ -609,7 +1037,7 @@ describe("premium analytics", () => {
             studentCount: 1,
             attemptCount: 1,
         });
-        expect(buildLearningRecommendations(exam, [legacyClassA, legacyClassB], {
+        expect(buildLearningRecommendations(exam, canonicalClassAttempts, {
             scope: "student",
             studentKey: "class-b::김학생",
             kinds: ["concept"],
@@ -650,12 +1078,13 @@ describe("premium analytics", () => {
         expect(studentScopeKeyForAttempt(legacySeoul)).toBe("서울::A반::김학생");
         expect(studentScopeKeyForAttempt(legacyBusan)).toBe("부산::A반::김학생");
 
-        const seoulRows = collectQuestionResults(exam, [legacySeoul, legacyBusan], {
+        const canonicalRegionalAttempts = [legacySeoul, legacyBusan].map(candidate => canonicalAttemptFor(exam, candidate));
+        const seoulRows = collectQuestionResults(exam, canonicalRegionalAttempts, {
             studentKey: "서울::A반::김학생",
         });
         expect(Array.from(new Set(seoulRows.map(row => row.attemptId)))).toEqual(["legacy-seoul"]);
 
-        expect(buildLearningRecommendations(exam, [legacySeoul, legacyBusan], {
+        expect(buildLearningRecommendations(exam, canonicalRegionalAttempts, {
             scope: "student",
             studentKey: "부산::A반::김학생",
             kinds: ["concept"],
@@ -667,7 +1096,7 @@ describe("premium analytics", () => {
         });
     });
 
-    it("filters class analytics from merged question-result identity when attempt snapshot is incomplete", () => {
+    it("rejects stored row identity that is missing from the outer immutable submission scope", () => {
         const storedRows = buildQuestionResults(exam, attempt).map(row => ({
             ...row,
             attemptId: "stored-group",
@@ -678,25 +1107,22 @@ describe("premium analytics", () => {
         const storedIdentityAttempt: Attempt = {
             ...attempt,
             id: "stored-group",
+            score: 25,
             studentId: undefined,
             groupId: undefined,
             groupName: undefined,
             questionResults: storedRows,
         };
+        Object.assign(storedIdentityAttempt, buildCanonicalQuestionResultEvidence(storedIdentityAttempt, storedRows));
 
         const rows = collectQuestionResults(exam, [storedIdentityAttempt], { groupKey: "class-a" });
 
-        expect(rows).toHaveLength(4);
-        expect(Array.from(new Set(rows.map(row => row.groupId)))).toEqual(["class-a"]);
+        expect(rows).toEqual([]);
         expect(buildLearningRecommendations(exam, [storedIdentityAttempt], {
             scope: "class",
             groupKey: "class-a",
             kinds: ["concept"],
-        })[0]).toMatchObject({
-            sourceAttemptId: "class:class-a",
-            studentCount: 1,
-            attemptCount: 1,
-        });
+        })).toEqual([]);
     });
 
     it("aggregates exam-level question result stats from result rows", () => {
@@ -711,7 +1137,8 @@ describe("premium analytics", () => {
             questionDrawings: [],
         };
 
-        const stats = buildExamQuestionResultStats(exam, [attempt, secondAttempt]);
+        const aggregateAttempts = [canonicalAttemptFor(exam, attempt), canonicalAttemptFor(exam, secondAttempt)];
+        const stats = buildExamQuestionResultStats(exam, aggregateAttempts);
 
         expect(stats.find(stat => stat.questionId === 2)).toMatchObject({
             questionNumber: 2,
@@ -740,7 +1167,7 @@ describe("premium analytics", () => {
             unansweredCount: 1,
             unansweredRate: 50,
         });
-        expect(buildMostMissedQuestionStats(exam, [attempt, secondAttempt], 2).map(stat => stat.questionNumber)).toEqual([3, 2]);
+        expect(buildMostMissedQuestionStats(exam, aggregateAttempts, 2).map(stat => stat.questionNumber)).toEqual([3, 2]);
     });
 
     it("keeps revisit rate within 100% by dividing revisits over graded responses (B3)", () => {
@@ -759,7 +1186,7 @@ describe("premium analytics", () => {
             startedAt: "2026-06-14T10:00:00.000Z",
             finishedAt: "2026-06-14T10:05:00.000Z",
             score: 0,
-            totalScore: 10,
+            totalScore: 100,
             answers: { 1: 2 }, // wrong → graded
             status: "completed",
             questionTimings: [
@@ -767,6 +1194,8 @@ describe("premium analytics", () => {
             ],
         };
         const base = buildQuestionResults(oneQuestionExam, timedRevisited).find(row => row.questionId === 1)!;
+        timedRevisited.questionResults = [base];
+        Object.assign(timedRevisited, buildCanonicalQuestionResultEvidence(timedRevisited, timedRevisited.questionResults));
         // Second respondent revisited the question but has no timing, so it is NOT timed.
         const untimedRevisited: Attempt = {
             ...timedRevisited,
@@ -774,8 +1203,9 @@ describe("premium analytics", () => {
             studentId: "s2",
             studentName: "학생2",
             questionTimings: [],
-            questionResults: [{ ...base, attemptId: "r2", studentId: "s2", timeSec: undefined, visitCount: 4, revisitCount: 3 }],
+            questionResults: [{ ...base, attemptId: "r2", studentId: "s2", studentName: "학생2", timeSec: undefined, visitCount: 4, revisitCount: 3 }],
         };
+        Object.assign(untimedRevisited, buildCanonicalQuestionResultEvidence(untimedRevisited, untimedRevisited.questionResults!));
 
         const stat = buildExamQuestionResultStats(oneQuestionExam, [timedRevisited, untimedRevisited]).find(s => s.questionId === 1)!;
         // 2 graded responses, both revisited, only 1 timed. Old code did 2/1 = 200%.
@@ -787,12 +1217,14 @@ describe("premium analytics", () => {
     it("returns null point-biserial for small respondent pools and a perfect correlation for cleanly separated groups", () => {
         // Fewer than DISCRIMINATION_MIN_RESPONDENTS respondents → unreliable (B5 guard,
         // formerly enforced by the removed upper/lower-third index).
-        expect(buildExamQuestionPointBiserial(exam, [attempt]).get(2)).toBeNull();
+        const small = canonicalAttemptFor(exam, attempt);
+        const smallQuestionTwo = buildExamQuestionResultStats(exam, [small]).find(stat => stat.questionId === 2)!;
+        expect(buildExamQuestionPointBiserial(exam, [small]).get(smallQuestionTwo.cohortKey)).toBeNull();
 
         // The 2 respondents who answer q2 correctly (4) also ace every other question
         // (100%), and the 4 who miss q2 also miss everything else (0%) — a perfect
         // correctness/score split, so r_pb = 1.
-        const many: Attempt[] = Array.from({ length: 6 }, (_, i) => ({
+        const many: Attempt[] = Array.from({ length: 6 }, (_, i) => canonicalAttemptFor(exam, {
             ...attempt,
             id: `pb-${i}`,
             studentId: `pb-s${i}`,
@@ -800,7 +1232,8 @@ describe("premium analytics", () => {
             questionTimings: [],
             questionDrawings: [],
         }));
-        expect(buildExamQuestionPointBiserial(exam, many).get(2)).toBe(1);
+        const manyQuestionTwo = buildExamQuestionResultStats(exam, many).find(stat => stat.questionId === 2)!;
+        expect(buildExamQuestionPointBiserial(exam, many).get(manyQuestionTwo.cohortKey)).toBe(1);
     });
 
     it("groups per-class score percentages the same way as buildClassExamWeaknessMatrix", () => {
@@ -856,7 +1289,7 @@ describe("premium analytics", () => {
     });
 
     it("summarizes label/tag statistics with correct, missed, and timing counts", () => {
-        const stats = buildQuestionResultTagStats(getAttemptQuestionResults(exam, attempt), "label");
+        const stats = buildQuestionResultTagStats(getAttemptQuestionResults(exam, canonicalAttemptFor(exam, attempt)), "label");
 
         expect(stats.find(stat => stat.title === "문학")).toMatchObject({
             kind: "label",
@@ -891,10 +1324,12 @@ describe("premium analytics", () => {
             questionTimings: [],
             questionDrawings: [],
         };
+        const aggregateAttempts = [canonicalAttemptFor(exam, attempt), canonicalAttemptFor(exam, secondAttempt)];
 
-        const attemptRecommendations = buildLearningRecommendations(exam, [attempt], {
+        const canonicalAttempt = canonicalAttemptFor(exam, attempt);
+        const attemptRecommendations = buildLearningRecommendations(exam, [canonicalAttempt], {
             scope: "attempt",
-            attempt,
+            attempt: canonicalAttempt,
             limit: 2,
         });
 
@@ -913,7 +1348,7 @@ describe("premium analytics", () => {
         expect(attemptRecommendations[0].priorityScore).toBeGreaterThan(0);
         expect(attemptRecommendations[1].kind).toBe("mistakeType");
 
-        expect(buildLearningRecommendations(exam, [attempt, secondAttempt], {
+        expect(buildLearningRecommendations(exam, aggregateAttempts, {
             scope: "student",
             studentKey: "student-1",
             kinds: ["concept"],
@@ -924,7 +1359,7 @@ describe("premium analytics", () => {
             attemptCount: 1,
         });
 
-        expect(buildLearningRecommendations(exam, [attempt, secondAttempt], {
+        expect(buildLearningRecommendations(exam, aggregateAttempts, {
             scope: "class",
             groupKey: "class-a",
             kinds: ["concept"],
@@ -936,7 +1371,7 @@ describe("premium analytics", () => {
             studentCount: 2,
         });
 
-        expect(buildLearningRecommendations(exam, [attempt, secondAttempt], {
+        expect(buildLearningRecommendations(exam, aggregateAttempts, {
             scope: "exam",
             kinds: ["mistakeType"],
         })[0]).toMatchObject({
@@ -998,13 +1433,13 @@ describe("slow-but-correct (불안정 개념) recommendation signal", () => {
     }
 
     it("surfaces an all-correct concept when questions repeatedly blow the time budget", () => {
-        const attemptAllCorrectButSlow = slowAttempt({
+        const attemptAllCorrectButSlow = canonicalAttemptFor(slowExam, slowAttempt({
             questionTimings: [
                 { questionId: 1, questionNumber: 1, totalTimeSec: 150, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
                 { questionId: 2, questionNumber: 2, totalTimeSec: 120, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
                 { questionId: 3, questionNumber: 3, totalTimeSec: 50, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
             ],
-        });
+        }));
 
         const recommendations = buildLearningRecommendations(slowExam, [attemptAllCorrectButSlow], {
             scope: "attempt",
@@ -1027,11 +1462,11 @@ describe("slow-but-correct (불안정 개념) recommendation signal", () => {
     });
 
     it("keeps a single slow question silent (noise gate)", () => {
-        const oneSlow = slowAttempt({
+        const oneSlow = canonicalAttemptFor(slowExam, slowAttempt({
             questionTimings: [
                 { questionId: 1, questionNumber: 1, totalTimeSec: 150, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
             ],
-        });
+        }));
         const recommendations = buildLearningRecommendations(slowExam, [oneSlow], {
             scope: "attempt",
             attempt: oneSlow,
@@ -1053,9 +1488,10 @@ describe("slow-but-correct (불안정 개념) recommendation signal", () => {
             ...slowExam,
             questions: slowExam.questions.map(q => ({ ...q, tags: { ...q.tags, concept: "접선의 기울기" } })),
         };
-        const recommendations = buildLearningRecommendations(mixedExam, [mixed], {
+        const canonicalMixed = canonicalAttemptFor(mixedExam, mixed);
+        const recommendations = buildLearningRecommendations(mixedExam, [canonicalMixed], {
             scope: "attempt",
-            attempt: mixed,
+            attempt: canonicalMixed,
             kinds: ["concept"],
             includeSlowCorrect: true,
         });
@@ -1084,7 +1520,7 @@ describe("slow-but-correct (불안정 개념) recommendation signal", () => {
                 tags: { concept: n <= 2 ? "접선의 기울기" : "적분 기초" },
             })),
         };
-        const attemptNoExpectation = slowAttempt({
+        const attemptNoExpectation = canonicalAttemptFor(noExpectationExam, slowAttempt({
             examId: "exam-noexp",
             answers: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1 },
             questionTimings: [1, 2, 3, 4, 5, 6].map(n => ({
@@ -1095,7 +1531,7 @@ describe("slow-but-correct (불안정 개념) recommendation signal", () => {
                 revisitCount: 0,
                 answerChangeCount: 0,
             })),
-        });
+        }));
         const recommendations = buildLearningRecommendations(noExpectationExam, [attemptNoExpectation], {
             scope: "attempt",
             attempt: attemptNoExpectation,

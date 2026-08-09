@@ -132,14 +132,14 @@ begin
     end if;
 
     insert into public.omr_attempt_sessions (
-        id, organization_id, exam_id, assignment_id, owner_student_id,
+        id, organization_id, exam_id, assignment_id, assignment_revision, owner_student_id,
         student_name, identity_type, scope_key, submission_id, attempt_id,
         allowed_question_ids, exam_updated_at, grading_snapshot, status,
         started_at, deadline_at, last_heartbeat_at, revision, lease_epoch,
         lease_token_hash, lease_expires_at
     )
     select
-        'individual-test-edit-session', 'individual-test-org', exam.id, v_assignment_id,
+        'individual-test-edit-session', 'individual-test-org', exam.id, v_assignment_id, 1,
         'individual-test-student', 'Target student', 'registered', 'base',
         'individual-test-edit-submission', 'individual-test-edit-attempt',
         array[1], exam.updated_at, '{}'::jsonb, 'in_progress', now(),
@@ -349,10 +349,10 @@ begin
     if not exists (
         select 1 from public.omr_attempts attempt
          where attempt.id = 'individual-test-base-attempt'
-           and attempt.assignment_id = v_assignment_id
-           and attempt.payload ->> 'assignmentId' = v_assignment_id
+           and attempt.assignment_id is null
+           and not (attempt.payload ? 'assignmentId')
     ) then
-        raise exception 'historical base attempt was not atomically adopted';
+        raise exception 'historical base attempt was adopted into a later generation';
     end if;
 
     v_result := public.omr_resolve_student_assignment_v1(

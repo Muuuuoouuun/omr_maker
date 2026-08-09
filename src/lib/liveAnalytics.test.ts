@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import { buildLiveQuestionHeatmap, buildRealQuestionHeatmap, dedupeLiveAttempts } from "./liveAnalytics";
+import { buildQuestionResults, summarizeQuestionResults } from "./premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 
 const exam: Exam = {
     id: "exam-1",
@@ -13,8 +15,8 @@ const exam: Exam = {
     ],
 };
 
-function attempt(id: string, answers: Record<number, number>): Attempt {
-    return {
+function attempt(id: string, answers: Record<number, number>, overrides: Partial<Attempt> = {}): Attempt {
+    const candidate: Attempt = {
         id,
         examId: exam.id,
         examTitle: exam.title,
@@ -25,7 +27,12 @@ function attempt(id: string, answers: Record<number, number>): Attempt {
         totalScore: 100,
         answers,
         status: "completed",
+        ...overrides,
     };
+    const questionResults = buildQuestionResults(exam, candidate);
+    const summary = summarizeQuestionResults(questionResults);
+    const canonical = { ...candidate, score: summary.earnedScore, totalScore: summary.totalScore, questionResults };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
 }
 
 describe("live analytics", () => {
@@ -113,7 +120,7 @@ describe("live analytics", () => {
     });
 
     it("keeps a submitted heatmap free of retake answer subsets", () => {
-        const submitted: Attempt = { ...attempt("full", { 1: 1, 2: 2 }), studentId: "s-1" };
+        const submitted = attempt("full", { 1: 1, 2: 2 }, { studentId: "s-1" });
         const retake: Attempt = {
             ...attempt("partial", { 1: 2 }),
             studentId: "s-1",

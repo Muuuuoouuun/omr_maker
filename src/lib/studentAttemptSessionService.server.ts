@@ -1,5 +1,6 @@
 import { evaluateExamAccess, verifyExamPin } from "@/lib/examAccess";
-import { attemptOwnedBy, buildServerAttempt, ownerStudentId } from "@/lib/studentExamCore";
+import { attemptOwnedBy, ownerStudentId } from "@/lib/studentExamCore";
+import { buildServerAttempt } from "@/lib/studentExamServerGrading";
 import { leaseTokenHash } from "@/lib/studentAttemptSessionCrypto.server";
 import type {
     OpenStudentAttemptSessionGatewayInput,
@@ -194,9 +195,10 @@ export async function submitStudentAttemptSessionService(
         focusLossEvents: params.focusLossEvents,
         tabFociLostCount: params.tabFociLostCount,
         retake,
-    }, session.gradingSnapshot, params.identity, session.attemptId, finishedAt);
-    attempt.assignmentId = session.assignmentId;
-    attempt.assignmentRevision = session.assignmentRevision;
+    }, session.gradingSnapshot, params.identity, session.attemptId, finishedAt, {}, {
+        assignmentId: session.assignmentId,
+        assignmentRevision: session.assignmentRevision,
+    });
     return params.commitGateway({
         sessionId: params.sessionId,
         organizationId,

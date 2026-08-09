@@ -9,10 +9,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import ExamAnalyticsReportOverview, {
     type ExamAnalyticsReportOverviewProps,
 } from "./ExamAnalyticsReportOverview";
-import ExamAnalyticsTab, { QuestionCorrectRateTooltip } from "./ExamAnalyticsTab";
+import ExamAnalyticsTab, {
+    buildStudentQuestionAnalysisCsvRows,
+    QuestionCorrectRateTooltip,
+} from "./ExamAnalyticsTab";
 import OverviewTab from "./OverviewTab";
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import type { TeacherDashboardDegradedData } from "@/lib/teacherDashboardCanonicalCache";
+import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
+import { buildTeacherCanonicalAnalyticsSnapshot } from "@/lib/teacherCanonicalAnalyticsSnapshot.server";
 
 const overviewTestMocks = vi.hoisted(() => ({
     loadExportDataset: vi.fn(),
@@ -50,6 +55,30 @@ afterEach(() => {
     document.documentElement.removeAttribute("data-motion");
 });
 
+function sealFixtureAttempt(candidate: Attempt): Attempt {
+    const questionResults = (candidate.questionResults ?? []).map(result => ({
+        ...result,
+        attemptId: candidate.id,
+        examId: candidate.examId,
+        examTitle: candidate.examTitle,
+        organizationId: candidate.organizationId,
+        classId: candidate.classId,
+        assignmentId: candidate.assignmentId,
+        assignmentRevision: candidate.assignmentRevision,
+        studentProfileId: candidate.studentProfileId,
+        studentName: candidate.studentName,
+        studentId: candidate.studentId,
+        groupId: candidate.groupId,
+        groupName: candidate.groupName,
+        regionId: candidate.regionId,
+        regionName: candidate.regionName,
+        identityType: candidate.identityType,
+        finishedAt: candidate.finishedAt,
+    }));
+    const canonical = { ...candidate, questionResults };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
+}
+
 function buildUngradedExamAnalyticsFixture(): { exam: Exam; attempts: Attempt[] } {
     const exam: Exam = {
         id: "exam-ungraded",
@@ -86,7 +115,7 @@ function buildUngradedExamAnalyticsFixture(): { exam: Exam; attempts: Attempt[] 
             finishedAt,
         };
 
-        return {
+        return sealFixtureAttempt({
             id,
             examId: exam.id,
             examTitle: exam.title,
@@ -98,10 +127,37 @@ function buildUngradedExamAnalyticsFixture(): { exam: Exam; attempts: Attempt[] 
             answers: {},
             questionResults: [result],
             status: "completed" as const,
-        };
+        });
     });
 
     return { exam, attempts };
+}
+
+function buildReadyCanonicalAnalyticsFixture(): { exam: Exam; attempt: Attempt } {
+    const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+    const source = attempts[0];
+    const attempt = sealFixtureAttempt({
+        ...source,
+        organizationId: "org-analytics",
+        classId: "class-analytics",
+        studentProfileId: "profile-analytics",
+        studentId: "student-analytics",
+        identityType: "registered",
+        score: 10,
+        totalScore: 10,
+        questionResults: (source.questionResults || []).map(result => ({
+            ...result,
+            score: 10,
+            earnedScore: 10,
+            selectedAnswer: 2,
+            correctAnswer: 2,
+            status: "correct",
+            isCorrect: true,
+            isWrong: false,
+            isUnanswered: false,
+        })),
+    });
+    return { exam, attempt };
 }
 
 function buildProps(
@@ -401,6 +457,159 @@ describe("OverviewTab teacher data capability", () => {
 });
 
 describe("ExamAnalyticsReportOverview", () => {
+    it("exports deleted submitted questions from canonical rows instead of the edited exam", () => {
+        const rows = buildStudentQuestionAnalysisCsvRows({
+            gradingSource: "canonical_submission",
+            questionResults: [{
+                schemaVersion: 1,
+                attemptId: "attempt-deleted-question",
+                examId: "exam-edited",
+                examTitle: "수정된 시험",
+                studentName: "학생",
+                questionId: 99,
+                questionNumber: 7,
+                label: "삭제된 제출 문항",
+                score: 5,
+                earnedScore: 5,
+                selectedAnswer: 2,
+                correctAnswer: 2,
+                status: "correct",
+                isCorrect: true,
+                isWrong: false,
+                isUnanswered: false,
+                finishedAt: "2026-08-10T00:10:00.000Z",
+            }],
+            labelScores: { "삭제된 제출 문항": { earned: 5, total: 5 } },
+        });
+
+        expect(rows).toContainEqual([7, "삭제된 제출 문항", 5, 2, 2, "O"]);
+    });
+
+    it("fails closed when the remote official snapshot is missing and labels bounded advanced omission honestly", () => {
+        const { exam, attempt: canonicalAttempt } = buildReadyCanonicalAnalyticsFixture();
+
+        const view = render(
+            <ExamAnalyticsTab
+                exams={[exam]}
+                attempts={[canonicalAttempt]}
+                currentPlan="pro"
+                canonicalAnalyticsSnapshots={{}}
+            />,
+        );
+        expect(screen.getByRole("alert")).toHaveTextContent("공식 문항 분석 근거를 확인하지 못했습니다");
+        expect(screen.queryByRole("button", { name: "제출 정의 CSV" })).not.toBeInTheDocument();
+
+        const snapshot = buildTeacherCanonicalAnalyticsSnapshot(exam, [canonicalAttempt]);
+        view.rerender(
+            <ExamAnalyticsTab
+                exams={[exam]}
+                attempts={[canonicalAttempt]}
+                currentPlan="pro"
+                canonicalAnalyticsSnapshots={{
+                    [exam.id]: {
+                        ...snapshot,
+                        advancedAggregatesComplete: false,
+                        pointBiserial: [],
+                        similarQuestionGroups: [],
+                        recommendations: [],
+                        classMatrix: [],
+                    },
+                }}
+            />,
+        );
+        expect(screen.getByText(/고급 추천 분석은 사용할 수 없습니다/)).toBeInTheDocument();
+    });
+
+    it("does not invoke the client grading verifier or index for an exact remote snapshot", async () => {
+        const { exam, attempt: canonicalAttempt } = buildReadyCanonicalAnalyticsFixture();
+        const snapshot = buildTeacherCanonicalAnalyticsSnapshot(exam, [canonicalAttempt]);
+        const premium = await import("@/lib/premiumAnalytics");
+        const indexSpy = vi.spyOn(premium, "buildCanonicalAttemptAnalyticsIndex");
+        const resolveSpy = vi.spyOn(premium, "resolveAttemptGrading");
+
+        render(
+            <ExamAnalyticsTab
+                exams={[exam]}
+                attempts={[canonicalAttempt]}
+                currentPlan="pro"
+                canonicalAnalyticsSnapshots={{ [exam.id]: structuredClone(snapshot) }}
+            />,
+        );
+
+        expect(indexSpy).not.toHaveBeenCalled();
+        expect(resolveSpy).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("tab", { name: "문항 분석" }));
+        expect(screen.getByRole("button", { name: "제출 정의 CSV" })).toBeEnabled();
+    });
+
+    it("emits only the gateway-supported exact complete wrong-answer retake link for official snapshots", () => {
+        const fixture = buildUngradedExamAnalyticsFixture();
+        const exactExam: Exam = {
+            ...fixture.exam,
+            questions: fixture.exam.questions.map(question => ({ ...question, answer: 2 })),
+        };
+        const source = fixture.attempts[0];
+        const exactAttempt = sealFixtureAttempt({
+            ...source,
+            organizationId: "org-analytics",
+            classId: "class-analytics",
+            studentProfileId: "profile-analytics",
+            studentId: "student-analytics",
+            identityType: "registered",
+            score: 0,
+            totalScore: 10,
+            questionResults: (source.questionResults || []).map(result => ({
+                ...result,
+                score: 10,
+                earnedScore: 0,
+                selectedAnswer: 1,
+                correctAnswer: 2,
+                status: "wrong" as const,
+                isCorrect: false,
+                isWrong: true,
+                isUnanswered: false,
+            })),
+        });
+        const snapshot = buildTeacherCanonicalAnalyticsSnapshot(exactExam, [exactAttempt]);
+
+        render(
+            <ExamAnalyticsTab
+                exams={[exactExam]}
+                attempts={[exactAttempt]}
+                currentPlan="pro"
+                canonicalAnalyticsSnapshots={{ [exactExam.id]: structuredClone(snapshot) }}
+            />,
+        );
+
+        expect(screen.queryByRole("link", { name: /보강 세트 만들기/ })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("tab", { name: "학생·반" }));
+        const retake = screen.getByRole("link", { name: "오답 1문항" });
+        expect(retake).toHaveAttribute("href", expect.stringContaining(`retakeFrom=${encodeURIComponent(exactAttempt.id)}`));
+        expect(retake).toHaveAttribute("href", expect.stringContaining("questions=1"));
+        expect(retake).toHaveAttribute("href", expect.stringContaining("mode=wrong"));
+        expect(retake).toHaveAttribute("href", expect.stringContaining("cohorts="));
+        expect(screen.queryByRole("link", { name: /유사|재추천|반별 세트|세트 재시험/ })).not.toBeInTheDocument();
+    });
+
+    it("does not invoke the raw grading resolver for remote student analytics", async () => {
+        const { exam, attempt: canonicalAttempt } = buildReadyCanonicalAnalyticsFixture();
+        const snapshot = buildTeacherCanonicalAnalyticsSnapshot(exam, [canonicalAttempt]);
+        const premium = await import("@/lib/premiumAnalytics");
+        const resolveSpy = vi.spyOn(premium, "resolveAttemptGrading");
+        const StudentAnalyticsTab = (await import("./StudentAnalyticsTab")).default;
+        resolveSpy.mockClear();
+
+        render(
+            <StudentAnalyticsTab
+                exams={[exam]}
+                attempts={[canonicalAttempt]}
+                currentPlan="pro"
+                canonicalAnalyticsSnapshots={{ [exam.id]: structuredClone(snapshot) }}
+            />,
+        );
+
+        expect(resolveSpy).not.toHaveBeenCalled();
+    });
     it("supports active-option keyboard navigation and selection in the exam combobox", () => {
         const { exam } = buildUngradedExamAnalyticsFixture();
         const secondExam: Exam = {
@@ -644,7 +853,8 @@ describe("ExamAnalyticsReportOverview", () => {
 
     it("keeps premium class aggregates and ungraded student rows neutral", () => {
         const { exam, attempts } = buildUngradedExamAnalyticsFixture();
-        const mixedAttempts = attempts.map((attempt, index) => ({
+        exam.questions[0] = { ...exam.questions[0], answer: 2 };
+        const mixedAttempts = attempts.map((attempt, index) => sealFixtureAttempt({
             ...attempt,
             studentId: `student-${index + 1}`,
             groupId: "class-a",
@@ -656,6 +866,7 @@ describe("ExamAnalyticsReportOverview", () => {
                 score: 10,
                 earnedScore: 10,
                 selectedAnswer: 2,
+                correctAnswer: 2,
                 status: "correct" as const,
                 isCorrect: true,
             } : result),
@@ -775,7 +986,7 @@ describe("ExamAnalyticsReportOverview", () => {
     it("keeps graded question diagnostics and percentages unchanged", () => {
         const { exam, attempts } = buildUngradedExamAnalyticsFixture();
         exam.questions[0] = { ...exam.questions[0], answer: 2 };
-        const gradedAttempts = attempts.map(attempt => ({
+        const gradedAttempts = attempts.map(attempt => sealFixtureAttempt({
             ...attempt,
             score: 10,
             totalScore: 10,

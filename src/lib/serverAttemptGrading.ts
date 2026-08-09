@@ -1,6 +1,7 @@
 import {
     buildQuestionResults,
 } from "@/lib/premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 import type { StudentAttemptTicketClaims } from "@/lib/studentAttemptTicket";
 import type {
     ServerGradedAttemptReceipt,
@@ -20,6 +21,7 @@ export const SERVER_ATTEMPT_SUBMISSION_GRACE_MS = 30 * 1000;
 export type ServerAttemptGradeError =
     | "ticket_exam_mismatch"
     | "ticket_organization_mismatch"
+    | "ticket_assignment_generation_invalid"
     | "exam_archived"
     | "exam_not_started"
     | "exam_ended"
@@ -127,6 +129,13 @@ export function gradeStudentAttemptOnServer(
     if (!clean(exam.organizationId) || clean(exam.organizationId) !== clean(ticket.organizationId)) {
         return { ok: false, error: "ticket_organization_mismatch" };
     }
+    const assignmentId = clean(ticket.assignmentId);
+    const assignmentRevision = Number.isSafeInteger(ticket.assignmentRevision) && Number(ticket.assignmentRevision) > 0
+        ? Number(ticket.assignmentRevision)
+        : undefined;
+    if (Boolean(assignmentId) !== Boolean(assignmentRevision)) {
+        return { ok: false, error: "ticket_assignment_generation_invalid" };
+    }
     if (exam.archived) return { ok: false, error: "exam_archived" };
 
     const startsAt = validDateMs(exam.startAt);
@@ -170,7 +179,7 @@ export function gradeStudentAttemptOnServer(
         examTitle: exam.title,
         organizationId: ticket.organizationId,
         classId: ticket.groupId,
-        assignmentId: ticket.assignmentId,
+        ...(assignmentId && assignmentRevision ? { assignmentId, assignmentRevision } : {}),
         studentProfileId: ticket.identityType === "registered" ? ticket.studentId : undefined,
         studentName: ticket.studentName,
         studentId: ticket.studentId,
@@ -195,6 +204,7 @@ export function gradeStudentAttemptOnServer(
         { ...exam, questions: activeQuestions },
         attempt,
     );
+    Object.assign(attempt, buildCanonicalQuestionResultEvidence(attempt, attempt.questionResults));
 
     return {
         ok: true,
@@ -285,5 +295,6 @@ export function gradeTeacherForcedAttemptOnServer(
         totalScore: graded.totalScore,
     };
     completed.questionResults = buildQuestionResults(exam, completed);
+    Object.assign(completed, buildCanonicalQuestionResultEvidence(completed, completed.questionResults));
     return { ok: true, attempt: completed };
 }

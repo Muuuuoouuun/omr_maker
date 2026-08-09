@@ -39,6 +39,7 @@ import {
 import { serverGradedAttemptReceiptFromAttempt } from "@/lib/serverAttemptGrading";
 import { stripExamForSolving } from "@/lib/examSolvePayload";
 import { isRemoteAssetStoredDataRef } from "@/lib/remoteAssetContract.server";
+import { attestCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 import {
     createStudentProblemPdfSignedUrlWithGateway,
     type RemoteAssetSupabaseGatewayClient,
@@ -107,7 +108,10 @@ async function ownStoredAttempt(context: AttemptSessionContext, attemptId: strin
     }, attemptId);
     if (!row) return null;
     try {
-        return attemptFromSupabaseRow(row as Parameters<typeof attemptFromSupabaseRow>[0]);
+        return attemptFromSupabaseRow(
+            row as Parameters<typeof attemptFromSupabaseRow>[0],
+            attestCanonicalQuestionResultEvidence,
+        );
     } catch {
         return null;
     }

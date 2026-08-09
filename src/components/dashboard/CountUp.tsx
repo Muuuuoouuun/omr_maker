@@ -100,6 +100,13 @@ export default function CountUp({
     const rafRef = useRef<number | null>(null);
     const rafActiveRef = useRef(false);
     const reduceMotion = useReducedCountUpMotion();
+    const readinessKey = [
+        reduceMotion ? "reduced" : "animated",
+        Object.is(value, -0) ? "-0" : String(value),
+        String(durationMs),
+        String(delayMs),
+    ].join(":");
+    const [readyKey, setReadyKey] = useState<string | null>(null);
 
     useEffect(() => {
         // requestAnimationFrame is throttled/paused while the tab is hidden, so a
@@ -110,6 +117,7 @@ export default function CountUp({
             const timeoutId = window.setTimeout(() => {
                 setDisplay(value);
                 setRafActive(false);
+                setReadyKey(readinessKey);
             }, 0);
             return () => window.clearTimeout(timeoutId);
         }
@@ -119,6 +127,7 @@ export default function CountUp({
             if (!rafActiveRef.current) {
                 rafActiveRef.current = true;
                 setRafActive(true);
+                setReadyKey(readinessKey);
             }
             if (now < startTime) {
                 rafRef.current = requestAnimationFrame(tick);
@@ -143,7 +152,7 @@ export default function CountUp({
             rafRef.current = null;
             rafActiveRef.current = false;
         };
-    }, [value, durationMs, delayMs, reduceMotion]);
+    }, [value, durationMs, delayMs, reduceMotion, readinessKey]);
 
     const visibleValue = reduceMotion ? value : display;
     const formatted = visibleValue.toLocaleString(undefined, {
@@ -156,6 +165,7 @@ export default function CountUp({
             data-count-up-value={value}
             data-count-up-motion={reduceMotion ? "reduced" : "animated"}
             data-count-up-raf={reduceMotion || !rafActive ? "idle" : "active"}
+            data-count-up-ready={readyKey === readinessKey ? "true" : undefined}
         >
             {prefix}
             {formatted}

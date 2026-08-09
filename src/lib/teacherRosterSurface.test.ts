@@ -57,7 +57,8 @@ describe("teacher roster server surface", () => {
         expect(users).toContain("}, [rosterLoadState.state]);");
         expect(users).toContain("if (!selected || rosterMutationsDisabled) return []");
         expect(users).toContain("if (rosterMutationsDisabled) return;");
-        expect(users).toContain("setDetailedAttempts(null)");
+        expect(users).toContain("setStudentProfileResult(null)");
+        expect(users).toContain("setGroupProfileResult(null)");
         expect(groups).toContain('capability: "degraded_read_only"');
         expect(groups).toContain('capability: "fresh_mutable"');
         expect(groups).toContain('if (props.capability === "degraded_read_only")');

@@ -39,6 +39,10 @@ import {
     type StudentQuestionInput,
 } from "@/lib/studentQuestions";
 import { resolveStudentTargetedAssignmentWithGateway } from "@/lib/studentTargetedAssignmentGateway.server";
+import {
+    attestCanonicalQuestionResultEvidence,
+    buildCanonicalExamDefinitionManifest,
+} from "@/lib/canonicalQuestionResultManifest";
 
 type Env = Record<string, string | undefined>;
 
@@ -396,11 +400,23 @@ export async function openStudentExamWithGateway(
         if (sourceRead.error || !sourceRead.data) return { status: "invalid_questions" };
         let sourceAttempt: Attempt;
         try {
-            sourceAttempt = attemptFromSupabaseRow(sourceRead.data as Parameters<typeof attemptFromSupabaseRow>[0]);
+            sourceAttempt = attemptFromSupabaseRow(
+                sourceRead.data as Parameters<typeof attemptFromSupabaseRow>[0],
+                attestCanonicalQuestionResultEvidence,
+            );
         } catch {
             return { status: "invalid_questions" };
         }
         if (sourceAttempt.status !== "completed") return { status: "invalid_questions" };
+        let currentDefinitionManifestHash: string;
+        try {
+            currentDefinitionManifestHash = buildCanonicalExamDefinitionManifest(exam).questionResultsDefinitionManifestHash;
+        } catch {
+            return { status: "invalid_questions" };
+        }
+        if (sourceAttempt.questionResultsDefinitionManifestHash !== currentDefinitionManifestHash) {
+            return { status: "invalid_questions" };
+        }
         const eligibleQuestionIds = [...new Set((sourceAttempt.questionResults || [])
             .filter(result => result.status === "wrong" || result.status === "unanswered")
             .map(result => result.questionId)

@@ -1,5 +1,5 @@
 import type { Attempt, Exam } from "@/types/omr";
-import { buildQuestionResults, summarizeAttemptScore } from "@/lib/premiumAnalytics";
+import { buildQuestionResults, summarizeQuestionResults } from "@/lib/premiumAnalytics";
 
 export function forceCompleteLiveAttempt(
     attempt: Attempt,
@@ -14,7 +14,7 @@ export function forceCompleteLiveAttempt(
             autoSubmitted: true,
         };
         const questionResults = buildQuestionResults(exam, completedAttempt);
-        const scoreSummary = summarizeAttemptScore(exam, { ...completedAttempt, questionResults });
+        const scoreSummary = summarizeQuestionResults(questionResults);
 
         return {
             ...completedAttempt,

@@ -125,6 +125,7 @@ function runSqlMatrix(psqlFile, psqlQuery) {
     assertUnsupportedLiveRelationProbe(psqlQuery);
     assertLiveCanonicalTables(psqlQuery);
 
+    psqlFile("supabase/canonical-question-result-evidence-assertions.sql");
     psqlFile("supabase/individual-student-assignments-assertions.sql");
     psqlFile("supabase/teacher-force-finish-compact-assertions.sql");
     psqlFile("supabase/teacher-session-revocation-assertions.sql");

@@ -13,6 +13,7 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "public/pdf.worker.min.mjs",
+    "public/react-pdf.worker.min.mjs",
     "playwright-report/**",
     "test-results/**",
     // Capacitor native shell (generated Android/Gradle project + web-dir fallback).

@@ -22,7 +22,11 @@ import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
 import { buildDashboardStatsCsv, type DashboardExportQuestionStat } from "@/lib/dashboardStatsExport";
 import { groupBaseAttemptsByExam } from "@/lib/attemptScores";
-import { buildExamQuestionResultStats, buildExamQuestionPointBiserial } from "@/lib/premiumAnalytics";
+import {
+    buildCanonicalAttemptAnalyticsIndex,
+    buildExamQuestionResultStats,
+    buildExamQuestionPointBiserial,
+} from "@/lib/premiumAnalytics";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { loadTeacherAttemptExportDataset } from "@/lib/teacherAttemptReportingClient";
 import { buildTeacherAttemptReportingProjection } from "@/lib/teacherAttemptReportingProjection";
@@ -186,7 +190,13 @@ function FreshOverviewTab({ capability, exams: examsProp, attempts, stats, trend
     const [exportStatsError, setExportStatsError] = useState<string | null>(null);
 
     // Sync when parent reloads data (initial mount / navigation).
-    useEffect(() => { setExams(examsProp); }, [examsProp]);
+    useEffect(() => {
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (!cancelled) setExams(examsProp);
+        });
+        return () => { cancelled = true; };
+    }, [examsProp]);
     useLayoutEffect(() => {
         const mountedMutationIds = mutationExamIdsRef.current;
         isMountedRef.current = true;
@@ -453,14 +463,15 @@ function FreshOverviewTab({ capability, exams: examsProp, attempts, stats, trend
             const exam = exams[i];
             const examAttempts = baseAttemptsByExam.get(exam.id) ?? [];
             if (examAttempts.length > 0) {
-                const pointBiserials = buildExamQuestionPointBiserial(exam, examAttempts);
-                for (const stat of buildExamQuestionResultStats(exam, examAttempts)) {
+                const analyticsIndex = buildCanonicalAttemptAnalyticsIndex(exam, examAttempts);
+                const pointBiserials = buildExamQuestionPointBiserial(exam, examAttempts, analyticsIndex);
+                for (const stat of buildExamQuestionResultStats(exam, examAttempts, analyticsIndex)) {
                     if (stat.totalCount === 0) continue;
                     questionStats.push({
                         examTitle: exam.title,
                         questionNumber: stat.questionNumber,
                         correctRate: stat.correctRate,
-                        pointBiserial: pointBiserials.get(stat.questionId) ?? null,
+                        pointBiserial: pointBiserials.get(stat.cohortKey) ?? null,
                     });
                 }
             }

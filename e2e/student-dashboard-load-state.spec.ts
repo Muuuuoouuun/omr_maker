@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { resetBrowserState } from "./helpers";
 
+test.skip(Boolean(process.env.PLAYWRIGHT_BASE_URL), "local guest fallback failure control must never target an external server");
+
 test("dashboard data failure is not presented as an empty successful dashboard and can recover", async ({ page, context }) => {
     let failCanonicalActions = false;
     let injectedFailureCount = 0;
@@ -53,6 +55,8 @@ test("dashboard data failure is not presented as an empty successful dashboard a
     await expect(errorStatus).toHaveAttribute("role", "status");
     await expect(errorStatus).toHaveAttribute("aria-live", "polite");
     await expect(errorStatus.getByRole("heading", { name: "학습 현황을 불러오지 못했습니다" })).toBeVisible();
+    // This branch fails before a local snapshot can be read or its stale marker
+    // can be evaluated, so it must report the storage/read failure honestly.
     await expect(errorStatus).toContainText("저장공간");
     await expect(page.locator(".student-dashboard-user")).toContainText("Guest Student");
 

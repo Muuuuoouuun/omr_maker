@@ -29,7 +29,7 @@ import {
 } from "@/lib/rosterCsvImport";
 import { type StudentProfileInsight, type StudentProfileWeaknessInsight } from "@/lib/studentProfileAnalytics";
 import { type GroupProfileInsight, type GroupProfileWeaknessInsight } from "@/lib/groupProfileAnalytics";
-import { DEFAULT_REGION_NAME } from "@/lib/regionalAnalytics";
+import { DEFAULT_REGION_NAME } from "@/lib/regionIdentity";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { PremiumActionLink } from "@/components/PremiumFeatureGate";
 import { buildStudentResultHref } from "@/lib/studentResultHub";

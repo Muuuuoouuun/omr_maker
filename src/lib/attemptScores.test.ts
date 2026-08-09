@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
+import { buildQuestionResults } from "./premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 import {
     averageResolvedAttemptPercent,
     baseAttemptsOnly,
@@ -36,14 +38,27 @@ function attempt(overrides: Partial<Attempt> = {}): Attempt {
 }
 
 describe("attempt score resolution", () => {
-    it("uses current exam/question grading before stale stored totals", () => {
+    it("labels current-exam grading as legacy-derived when stored rows are absent", () => {
         const resolved = resolveAttemptScore(attempt({ score: 10, totalScore: 10 }), exam);
 
         expect(resolved).toMatchObject({
             earnedScore: 5,
             totalScore: 10,
             scorePercent: 50,
-            source: "questionResults",
+            source: "legacy_derived_current_exam",
+        });
+    });
+
+    it("reports canonical and stored-total provenance truthfully", () => {
+        const canonicalAttempt = attempt({ score: 5, totalScore: 10 });
+        canonicalAttempt.questionResults = buildQuestionResults(exam, canonicalAttempt);
+        Object.assign(canonicalAttempt, buildCanonicalQuestionResultEvidence(canonicalAttempt, canonicalAttempt.questionResults));
+
+        expect(resolveAttemptScore(canonicalAttempt, exam).source).toBe("canonical_submission");
+        expect(resolveAttemptScore(attempt({ questionResults: [] }), exam)).toMatchObject({
+            earnedScore: 10,
+            totalScore: 10,
+            source: "stored_totals_only",
         });
     });
 

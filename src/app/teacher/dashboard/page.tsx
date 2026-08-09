@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import TeacherHeader from "@/components/TeacherHeader";
 import { Exam, Attempt } from "@/types/omr";
-import OverviewTab, { type TeacherDataCapability } from "@/components/dashboard/tabs/OverviewTab";
+import type { TeacherDataCapability } from "@/components/dashboard/tabs/OverviewTab";
 import StatusPill from "@/components/dashboard/StatusPill";
 import { AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw } from "lucide-react";
 import { AnalyticsTabSkeleton, DashboardPageSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
@@ -19,6 +19,10 @@ const ExamAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/ExamA
     loading: () => <AnalyticsTabSkeleton />,
 });
 const StudentAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/StudentAnalyticsTab"), {
+    ssr: false,
+    loading: () => <AnalyticsTabSkeleton />,
+});
+const OverviewTab = dynamic(() => import("@/components/dashboard/tabs/OverviewTab"), {
     ssr: false,
     loading: () => <AnalyticsTabSkeleton />,
 });
@@ -35,6 +39,8 @@ import { buildDemoDashboardData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
 import { readLocalAttempts, readLocalExams, saveLocalAttemptIfCurrent } from "@/lib/omrPersistence";
 import {
+    loadTeacherAnalyticsSnapshots,
+    loadTeacherAttemptSummaries,
     loadTeacherAttempts,
     resolveTeacherAttemptCollectionCompleteness,
 } from "@/lib/teacherAttemptClient";
@@ -43,9 +49,9 @@ import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type Persiste
 import { readLocalRosterSnapshot } from "@/lib/rosterPersistence";
 import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
+import type { TeacherCanonicalAnalyticsSnapshotMap } from "@/lib/teacherCanonicalAnalyticsSnapshotContract";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
 import {
-    beginDashboardDetailBackgroundRetry,
     preferLocalDashboardItems,
     resolveDashboardDetailRetryFailure,
     type DashboardDetailSnapshot,
@@ -65,7 +71,6 @@ import type { ExamAnalyticsSampleStatus } from "@/lib/examAnalyticsReport";
 import { resolveCanonicalLoad, type CanonicalLoadState } from "@/lib/canonicalLoadState";
 import {
     buildTeacherDashboardDetailReset,
-    buildTeacherDashboardReadyDetailSeed,
     beginTeacherDashboardRepairOperation,
     cacheFreshTeacherDashboardOptional,
     canContinueTeacherDashboardDetail,
@@ -84,7 +89,6 @@ import {
     type TeacherDashboardDetailReset,
     type TeacherDashboardLiveOperationState,
     type TeacherDashboardRepairOperationState,
-    type TeacherDashboardReadyDetailSeed,
     type TeacherLoadIdentity,
     type TeacherSessionIdentity,
 } from "@/lib/teacherDashboardCanonicalCache";
@@ -216,14 +220,21 @@ function TeacherDashboard() {
     const [isMockupAccount, setIsMockupAccount] = useState(false);
     const [isAccountModeResolved, setIsAccountModeResolved] = useState(false);
     useEffect(() => {
-        setIsMockupAccount(isMockupTeacherIdentity(readTeacherSession()));
-        setIsAccountModeResolved(true);
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setIsMockupAccount(isMockupTeacherIdentity(readTeacherSession()));
+            setIsAccountModeResolved(true);
+        });
+        return () => { cancelled = true; };
     }, []);
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(initialExamId);
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
-    const [detailedAttempts, setDetailedAttempts] = useState<Attempt[] | null>(null);
-    const [detailedAttemptStatus, setDetailedAttemptStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+    const [, setDetailedAttempts] = useState<Attempt[] | null>(null);
+    const [detailedAnalyticsSnapshots, setDetailedAnalyticsSnapshots] = useState<TeacherCanonicalAnalyticsSnapshotMap>({});
+    const [, setDetailedAttemptStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+    const [analyticsSnapshotStatus, setAnalyticsSnapshotStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
     const [detailedAttemptGeneration, setDetailedAttemptGeneration] = useState(0);
     const detailedAttemptGenerationRef = useRef(0);
     const detailedAttemptCacheRef = useRef<DashboardDetailSnapshot<Attempt> | null>(null);
@@ -276,11 +287,8 @@ function TeacherDashboard() {
     const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
     const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);
     const [detailedAttemptSampleStatus, setDetailedAttemptSampleStatus] = useState<ExamAnalyticsSampleStatus>("ready");
-    const [detailedAttemptWarning, setDetailedAttemptWarning] = useState("");
-    const analyticsAttempts = useMemo(
-        () => dataMode === "demo" ? attempts : detailedAttempts || [],
-        [attempts, dataMode, detailedAttempts],
-    );
+    const [, setDetailedAttemptWarning] = useState("");
+    const analyticsAttempts = attempts;
     const analyticsDataHealth = useMemo(
         () => dataMode === "demo"
             ? summarizeAnalyticsDataHealth([], [])
@@ -300,6 +308,8 @@ function TeacherDashboard() {
         detailedAttemptCacheRef.current = null;
         detailedAttemptLoadRef.current = null;
         setDetailedAttempts(null);
+        setDetailedAnalyticsSnapshots({});
+        setAnalyticsSnapshotStatus("idle");
         setDetailedAttemptStatus("idle");
         setDetailedAttemptSampleStatus("ready");
         setDetailedAttemptWarning("");
@@ -311,6 +321,7 @@ function TeacherDashboard() {
         detailedAttemptCacheRef.current = null;
         detailedAttemptLoadRef.current = null;
         setDetailedAttempts(reset.items);
+        setDetailedAnalyticsSnapshots({});
         setDetailedAttemptStatus(reset.loadStatus);
         setDetailedAttemptSampleStatus(reset.sampleStatus);
         setDetailedAttemptWarning("");
@@ -377,35 +388,6 @@ function TeacherDashboard() {
             && !!sessionScope
             && sameTeacherSessionIdentity(captured, current)
             && sameTeacherSessionIdentity(captured, sessionScope);
-    }, []);
-
-    const retryDetailedAttempts = useCallback(() => {
-        const retry = beginDashboardDetailBackgroundRetry({
-            generation: detailedAttemptGenerationRef.current,
-            snapshot: detailedAttemptCacheRef.current,
-        });
-        detailedAttemptGenerationRef.current = retry.generation;
-        setDetailedAttempts(retry.items);
-        setDetailedAttemptStatus(retry.loadStatus);
-        setDetailedAttemptSampleStatus(retry.sampleStatus);
-        setDetailedAttemptWarning("");
-        setDetailedAttemptGeneration(retry.generation);
-    }, []);
-
-    const seedDetailedAttemptsFromFresh = useCallback((seed: TeacherDashboardReadyDetailSeed<Attempt>) => {
-        const items = [...seed.items];
-        detailedAttemptGenerationRef.current = seed.generation;
-        detailedAttemptLoadRef.current = null;
-        detailedAttemptCacheRef.current = {
-            generation: seed.generation,
-            items,
-            sampleStatus: seed.sampleStatus,
-        };
-        setDetailedAttempts(items);
-        setDetailedAttemptStatus(seed.loadStatus);
-        setDetailedAttemptSampleStatus(seed.sampleStatus);
-        setDetailedAttemptWarning("");
-        setDetailedAttemptGeneration(seed.generation);
     }, []);
 
     const loadDetailedAttempts = useCallback(async (): Promise<Attempt[]> => {
@@ -502,15 +484,27 @@ function TeacherDashboard() {
     }, [attempts, dataMode, isCurrentTeacherLoadIdentity]);
 
     useEffect(() => {
-        const dashboardAllowsDetailedAnalysis = dashboardLoadState.state === "loaded_data";
-        if (activeTab === "overview"
-            || isMockupAccount
-            || !dashboardAllowsDetailedAnalysis
-            || detailedAttemptStatus === "idle") return;
-        void loadDetailedAttempts().catch(() => {
-            toast.error("분석 데이터 로드 실패", "상세 제출 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.");
+        if (activeTab === "overview" || isMockupAccount || dashboardLoadState.state !== "loaded_data") return;
+        const requestedIdentity = teacherLoadIdentityRef.current;
+        if (!requestedIdentity || !isCurrentTeacherLoadIdentity(requestedIdentity)) return;
+        let cancelled = false;
+        setAnalyticsSnapshotStatus("loading");
+        void loadTeacherAnalyticsSnapshots().then(result => {
+            if (cancelled || !isCurrentTeacherLoadIdentity(requestedIdentity)) return;
+            if (result.status !== "loaded" || result.meta.organizationId !== requestedIdentity.organizationId) {
+                setDetailedAnalyticsSnapshots({});
+                setAnalyticsSnapshotStatus("error");
+                return;
+            }
+            setDetailedAnalyticsSnapshots(result.analyticsSnapshots);
+            setAnalyticsSnapshotStatus("ready");
+        }).catch(() => {
+            if (cancelled || !isCurrentTeacherLoadIdentity(requestedIdentity)) return;
+            setDetailedAnalyticsSnapshots({});
+            setAnalyticsSnapshotStatus("error");
         });
-    }, [activeTab, dashboardLoadState.state, detailedAttemptGeneration, detailedAttemptStatus, isMockupAccount, loadDetailedAttempts]);
+        return () => { cancelled = true; };
+    }, [activeTab, dashboardLoadState.state, detailedAttemptGeneration, isCurrentTeacherLoadIdentity, isMockupAccount]);
 
     const applyDashboardSnapshot = useCallback((snapshot: DashboardSnapshot) => {
         setDegradedDashboardData(null);
@@ -626,13 +620,13 @@ function TeacherDashboard() {
         const aggregatePromise = loadTeacherAttemptAggregate().catch(() => ({ status: "service_unavailable" as const }));
         let results: Awaited<ReturnType<typeof Promise.all<[
             ReturnType<typeof loadTeacherExams>,
-            ReturnType<typeof loadTeacherAttempts>,
+            ReturnType<typeof loadTeacherAttemptSummaries>,
             ReturnType<typeof loadTeacherRosterSnapshot>,
         ]>>>;
         try {
             results = await Promise.all([
                 loadTeacherExams(),
-                loadTeacherAttempts(),
+                loadTeacherAttemptSummaries(),
                 loadTeacherRosterSnapshot(localStorage),
             ]);
         } catch (error) {
@@ -719,13 +713,6 @@ function TeacherDashboard() {
                 if ((nextState.state === "loaded_empty" || nextState.state === "loaded_data")
                     && !isTeacherDashboardDegradedData(nextState.data)) {
                     applyDashboardSnapshot(nextState.data);
-                    const detailSeed = buildTeacherDashboardReadyDetailSeed(
-                        loadIdentity,
-                        current,
-                        detailedAttemptGenerationRef.current,
-                        attemptResult,
-                    );
-                    if (detailSeed) seedDetailedAttemptsFromFresh(detailSeed);
                 } else if (nextState.state === "degraded_with_cache"
                     && isTeacherDashboardDegradedData(nextState.data)) {
                     applyDegradedDashboardSnapshot(nextState.data);
@@ -763,7 +750,6 @@ function TeacherDashboard() {
         clearDashboardVisibleState,
         isCurrentTeacherLoadIdentity,
         isMockupAccount,
-        seedDetailedAttemptsFromFresh,
         setDashboardLoadState,
     ]);
 
@@ -826,35 +812,41 @@ function TeacherDashboard() {
                 rosterGroups: [],
                 forceDemoData: true,
             };
-            applyDashboardSnapshot(snapshot);
-            setDashboardLoadState(resolveCanonicalLoad({
-                remote: { ok: true, data: snapshot },
-                cache: null,
-                now: new Date().toISOString(),
-            }, isDashboardSnapshotEmpty));
+            queueMicrotask(() => {
+                if (cancelled) return;
+                applyDashboardSnapshot(snapshot);
+                setDashboardLoadState(resolveCanonicalLoad({
+                    remote: { ok: true, data: snapshot },
+                    cache: null,
+                    now: new Date().toISOString(),
+                }, isDashboardSnapshotEmpty));
+            });
         } else {
-            const loadIdentity = beginTeacherDashboardIdentityLoad();
-            if (loadIdentity) {
-                const degradedCache = readTeacherDashboardDegradedCache(localStorage, loadIdentity, new Date());
-                if (degradedCache && isCurrentTeacherLoadIdentity(loadIdentity)) {
-                    const cachedState = resolveCanonicalLoad<DashboardLoadData>({
-                    remote: { ok: false },
-                    cache: {
+            queueMicrotask(() => {
+                if (cancelled) return;
+                const loadIdentity = beginTeacherDashboardIdentityLoad();
+                if (loadIdentity) {
+                    const degradedCache = readTeacherDashboardDegradedCache(localStorage, loadIdentity, new Date());
+                    if (degradedCache && isCurrentTeacherLoadIdentity(loadIdentity)) {
+                        const cachedState = resolveCanonicalLoad<DashboardLoadData>({
+                            remote: { ok: false },
+                            cache: {
                             data: degradedCache,
                             staleAt: degradedCache.staleAt,
-                    },
-                    now: new Date().toISOString(),
-                    }, isDashboardLoadDataEmpty);
-                    setDashboardLoadState(cachedState);
-                    if (cachedState.state === "degraded_with_cache"
-                        && isTeacherDashboardDegradedData(cachedState.data)) {
-                        applyDegradedDashboardSnapshot(cachedState.data);
+                            },
+                            now: new Date().toISOString(),
+                        }, isDashboardLoadDataEmpty);
+                        setDashboardLoadState(cachedState);
+                        if (cachedState.state === "degraded_with_cache"
+                            && isTeacherDashboardDegradedData(cachedState.data)) {
+                            applyDegradedDashboardSnapshot(cachedState.data);
+                        }
                     }
+                } else {
+                    clearDashboardVisibleState();
+                    setDashboardLoadState({ state: "error_without_cache", error: "dependency_unavailable" });
                 }
-            } else {
-                clearDashboardVisibleState();
-                setDashboardLoadState({ state: "error_without_cache", error: "dependency_unavailable" });
-            }
+            });
         }
         const refreshTimer = window.setTimeout(() => {
             void loadDashboardData({ isCancelled: () => cancelled });
@@ -937,8 +929,13 @@ function TeacherDashboard() {
     useEffect(() => {
         const nextTab = normalizeDashboardTab(searchParams.get('tab'));
         const nextExamId = searchParams.get('examId') || undefined;
-        setActiveTab(nextTab);
-        setSelectedExamIdForAnalytics(nextExamId);
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setActiveTab(nextTab);
+            setSelectedExamIdForAnalytics(nextExamId);
+        });
+        return () => { cancelled = true; };
     }, [searchParams]);
 
     // Switch tabs AND mirror the selection into the URL so refresh / browser-back /
@@ -1759,48 +1756,18 @@ function TeacherDashboard() {
                             onLoadDetailedAttempts={loadDetailedAttempts}
                         />
                     )}
-                    {teacherDataCapability === "fresh_mutable" && activeTab !== 'overview'
-                        && dataMode === "real"
-                        && detailedAttemptStatus === "ready"
-                        && detailedAttemptSampleStatus !== "ready" && (
-                        <section
-                            className="bento-card"
-                            role="status"
-                            style={{
-                                marginBottom: '1rem',
-                                padding: '0.9rem 1rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: '1rem',
-                                flexWrap: 'wrap',
-                            }}
-                        >
-                            <div>
-                                <strong style={{ fontSize: '0.92rem' }}>
-                                    {detailedAttemptSampleStatus === "partial" ? "일부 제출 기준 분석" : "저장된 제출 기준 분석"}
-                                </strong>
-                                <p style={{ margin: '0.2rem 0 0', color: 'var(--muted)', fontSize: '0.8rem' }}>
-                                    {detailedAttemptWarning || "최신 서버 데이터와 차이가 있을 수 있습니다."}
-                                </p>
-                            </div>
-                            <button type="button" className="btn btn-secondary" onClick={retryDetailedAttempts}>
-                                최신 데이터 다시 불러오기
-                            </button>
-                        </section>
-                    )}
-                    {teacherDataCapability === "fresh_mutable" && activeTab !== 'overview' && dataMode === "real" && detailedAttemptStatus !== "ready" && (
-                        detailedAttemptStatus === "error" ? (
+                    {teacherDataCapability === "fresh_mutable" && activeTab !== 'overview' && dataMode === "real" && analyticsSnapshotStatus !== "ready" && (
+                        analyticsSnapshotStatus === "error" ? (
                             <section className="bento-card" role="alert" style={{ padding: '2rem', textAlign: 'center' }}>
-                                <h2 style={{ fontSize: '1.1rem', fontWeight: 850, marginBottom: '0.5rem' }}>분석 데이터를 불러오지 못했습니다</h2>
-                                <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>상세 제출 데이터를 불러오지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.</p>
-                                <button type="button" className="btn btn-primary" onClick={() => void loadDetailedAttempts()}>
+                                <h2 style={{ fontSize: '1.1rem', fontWeight: 850, marginBottom: '0.5rem' }}>공식 분석 데이터를 불러오지 못했습니다</h2>
+                                <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>요약 분석 데이터를 확인하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.</p>
+                                <button type="button" className="btn btn-primary" onClick={() => setDetailedAttemptGeneration(value => value + 1)}>
                                     다시 불러오기
                                 </button>
                             </section>
                         ) : <AnalyticsTabSkeleton />
                     )}
-                    {teacherDataCapability === "fresh_mutable" && activeTab === 'exam' && (dataMode === "demo" || detailedAttemptStatus === "ready") && (
+                    {teacherDataCapability === "fresh_mutable" && activeTab === 'exam' && (dataMode === "demo" || analyticsSnapshotStatus === "ready") && (
                         <ExamAnalyticsTab
                             exams={exams}
                             attempts={analyticsAttempts}
@@ -1809,15 +1776,17 @@ function TeacherDashboard() {
                             initialExamId={selectedExamIdForAnalytics}
                             currentPlan={isMockupAccount ? "academy" : currentPlan}
                             sampleStatus={detailedAttemptSampleStatus}
+                            canonicalAnalyticsSnapshots={dataMode === "real" ? detailedAnalyticsSnapshots : undefined}
                         />
                     )}
-                    {teacherDataCapability === "fresh_mutable" && activeTab === 'student' && (dataMode === "demo" || detailedAttemptStatus === "ready") && (
+                    {teacherDataCapability === "fresh_mutable" && activeTab === 'student' && (dataMode === "demo" || analyticsSnapshotStatus === "ready") && (
                         <StudentAnalyticsTab
                             exams={exams}
                             attempts={analyticsAttempts}
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
                             currentPlan={isMockupAccount ? "academy" : currentPlan}
+                            canonicalAnalyticsSnapshots={dataMode === "real" ? detailedAnalyticsSnapshots : undefined}
                         />
                     )}
                         </div>

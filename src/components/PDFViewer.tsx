@@ -35,7 +35,7 @@ import {
 // Worker setup for Next.js — version the URL so a pdfjs-dist upgrade is a cache
 // miss (avoids the "API version X does not match Worker version Y" hard-fail for
 // returning PWA users still holding the old cache-first worker).
-pdfjs.GlobalWorkerOptions.workerSrc = `/pdf.worker.min.mjs?v=${pdfjs.version}`;
+pdfjs.GlobalWorkerOptions.workerSrc = `/react-pdf.worker.min.mjs?v=${pdfjs.version}`;
 
 interface MarkerData {
     page: number;

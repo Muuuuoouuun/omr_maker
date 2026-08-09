@@ -536,6 +536,7 @@ describe("PWA assets", () => {
             "/apple-touch-icon.png",
             "/browserconfig.xml",
             "/pdf.worker.min.mjs",
+            "/react-pdf.worker.min.mjs",
             "/screenshots/omr-mobile-home.jpg",
             "/screenshots/omr-wide-home.jpg",
         ].forEach(asset => {
@@ -580,14 +581,19 @@ describe("PWA assets", () => {
 
     it("service worker caches the PDF worker only after its first use", async () => {
         const harness = createServiceWorkerHarness();
+        const workerUrl = "/react-pdf.worker.min.mjs?v=6.2.108";
 
         await harness.dispatchInstall();
-        await expect(harness.caches.match("/pdf.worker.min.mjs")).resolves.toBeUndefined();
+        await expect(harness.caches.match(workerUrl)).resolves.toBeUndefined();
 
-        const response = await harness.dispatchFetch("/pdf.worker.min.mjs");
+        const response = await harness.dispatchFetch(workerUrl);
 
-        await expect(response?.text()).resolves.toBe("network:/pdf.worker.min.mjs");
-        await expect(harness.caches.match("/pdf.worker.min.mjs")).resolves.toBeInstanceOf(Response);
+        await expect(response?.text()).resolves.toBe("network:/react-pdf.worker.min.mjs");
+        await expect(harness.caches.match(workerUrl)).resolves.toBeInstanceOf(Response);
+
+        harness.setNetworkFetch(async () => { throw new Error("offline"); });
+        await expect((await harness.dispatchFetch(workerUrl))?.text()).resolves.toBe("network:/react-pdf.worker.min.mjs");
+        await expect(harness.dispatchFetch("/react-pdf.worker.min.mjs?v=6.2.109")).rejects.toThrow("offline");
     });
 
     it("service worker removes older PWA caches when the app shell version changes", async () => {

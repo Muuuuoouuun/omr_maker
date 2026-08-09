@@ -85,7 +85,7 @@ describe("initial-operations production workload coverage", () => {
         const core = source("scripts/initial-operations-core.mjs");
 
         for (const path of requiredProductionPaths) {
-            expect(effectiveSnapshotBody).toContain(path);
+        expect(effectiveSnapshotBody).toContain(path);
         }
         expect(migration).not.toMatch(/query\s+ilike\s+'%omr_initial_ops_%'/i);
         expect(migration).toContain("p_phase text");
@@ -98,6 +98,9 @@ describe("initial-operations production workload coverage", () => {
         expect(bundle).toContain("callsDelta");
         expect(bundle).toContain("workloadPath");
         expect(core).toContain('fail("database_workload_coverage"');
+        expect(source("supabase/production-server-boundary.sql")).toContain(
+            "'omr_open_attempt_session_v3' in lower(pg_catalog.pg_get_functiondef(",
+        );
     });
 
     it("overrides initial-operations fixture and database evidence for v2 identity-bound workload paths", () => {

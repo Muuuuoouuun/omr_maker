@@ -477,8 +477,9 @@ revoke all on function public.omr_assign_students_v2(text,text,bigint,text,text,
 grant execute on function public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text) to service_role;
 revoke all on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) from public, anon, authenticated;
 grant execute on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) to service_role;
-revoke all on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated;
-grant execute on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) to service_role;
+revoke all on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated;
+grant execute on function public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) to service_role;
 revoke all on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) from public, anon, authenticated;
 grant execute on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) to service_role;
 revoke all on function public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb) from public, anon, authenticated;
@@ -859,8 +860,28 @@ revoke all on function public.omr_assign_students_v2(text,text,bigint,text,text,
 grant execute on function public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text) to service_role;
 revoke all on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) from public, anon, authenticated;
 grant execute on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) to service_role;
-revoke all on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated;
-grant execute on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) to service_role;
+revoke all on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated;
+grant execute on function public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) to service_role;
+
+-- The full browser-access rollback intentionally grants every public function
+-- before rebuilding the guarded server boundary. Keep the canonical digest
+-- primitives and trigger workers private; only the exact server verifier and
+-- readiness probe remain executable by service_role.
+revoke all on function public.omr_assert_canonical_question_result_json_v1(jsonb,integer) from public,anon,authenticated,service_role;
+revoke all on function public.omr_canonical_json_text_v1(jsonb) from public,anon,authenticated,service_role;
+revoke all on function public.omr_compute_canonical_question_result_evidence_v1(jsonb,jsonb) from public,anon,authenticated;
+grant execute on function public.omr_compute_canonical_question_result_evidence_v1(jsonb,jsonb) to service_role;
+revoke all on function public.omr_bind_attempt_evidence_generation_v1() from public,anon,authenticated,service_role;
+revoke all on function public.omr_guard_canonical_question_result_evidence_v1() from public,anon,authenticated,service_role;
+revoke all on function public.omr_question_result_assignment_generation_guard_v2() from public,anon,authenticated,service_role;
+revoke all on function public.omr_canonical_attempt_child_evidence_matches_v1(text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_assert_canonical_attempt_child_evidence_v1(text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_mark_canonical_attempt_evidence_dirty_v1() from public,anon,authenticated,service_role;
+revoke all on function public.omr_finalize_canonical_attempt_evidence_dirty_v1() from public,anon,authenticated,service_role;
+revoke all on function public.omr_guard_completed_question_result_grading_immutability_v1() from public,anon,authenticated,service_role;
+revoke all on function public.omr_canonical_question_result_evidence_ready_v1() from public,anon,authenticated;
+grant execute on function public.omr_canonical_question_result_evidence_ready_v1() to service_role;
 revoke all on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) from public, anon, authenticated;
 grant execute on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) to service_role;
 revoke all on function public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb) from public, anon, authenticated;

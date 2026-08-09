@@ -17,8 +17,9 @@ import {
     type QuestionResultGroupKind,
 } from "@/lib/premiumAnalytics";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
+import { DEFAULT_REGION_NAME, regionKeyFor } from "@/lib/regionIdentity";
 
-export const DEFAULT_REGION_NAME = "미분류 지역";
+export { DEFAULT_REGION_NAME, regionKeyFor } from "@/lib/regionIdentity";
 
 export interface RegionalLearningScope {
     regionKey: string;
@@ -92,11 +93,6 @@ interface RegionAccumulator {
 
 function clean(value: string | undefined): string {
     return typeof value === "string" ? value.trim() : "";
-}
-
-export function regionKeyFor(value: string | undefined): string {
-    const name = clean(value) || DEFAULT_REGION_NAME;
-    return name.toLocaleLowerCase("ko-KR");
 }
 
 export function regionNameForStudent(student: Pick<RosterStudent, "region">): string {

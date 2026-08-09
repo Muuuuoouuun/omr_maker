@@ -313,6 +313,7 @@ function productionRlsCheck(
             examReservationLeaseReady: "시험 한도 예약 lease",
             teacherAssetCleanupBacklogHealthy: "원격 자산 정리 backlog",
             studentAttemptSessionsReady: "학생 다중 기기 응시 세션",
+            canonicalQuestionResultEvidenceReady: "공식 문항 채점 근거 이중 봉인",
             durableRateLimitsReady: "공유 요청 제한 저장소",
             examRevisionReady: "시험 revision 무결성",
             teacherExamCasReady: "시험 CAS 저장 gateway",

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
     attemptOwnedBy,
-    buildServerAttempt,
     hasArchiveableHandwriting,
     identityAccessSession,
     loadSubmissionBaseInParallel,
@@ -9,6 +8,7 @@ import {
     resolveRetakeScope,
     type SubmitAttemptInput,
 } from "./studentExamCore";
+import { buildServerAttempt } from "./studentExamServerGrading";
 import type { Exam } from "@/types/omr";
 import type { StudentServerIdentity } from "./studentServerSession";
 

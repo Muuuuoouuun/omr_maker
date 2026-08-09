@@ -69,6 +69,34 @@ describe("server attempt grading", () => {
         expect(retry.ok && retry.attempt.id).toBe("attempt_ticket-1");
     });
 
+    it("binds targeted grading evidence to the ticket assignment generation", () => {
+        const targetedTicket: StudentAttemptTicketClaims = {
+            ...ticket,
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+        };
+        const result = gradeStudentAttemptOnServer(
+            exam,
+            targetedTicket,
+            { ticket: "signed-ticket", answers: { 1: 3 } },
+            2_000,
+        );
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.attempt).toMatchObject({
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+        });
+        expect(result.attempt.questionResults).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                assignmentId: "assignment-reused",
+                assignmentRevision: 8,
+            }),
+        ]));
+        expect(result.attempt.questionResultsFullEvidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    });
+
     it("rejects answers for unissued questions and invalid choices", () => {
         expect(gradeStudentAttemptOnServer(exam, ticket, {
             ticket: "signed-ticket",

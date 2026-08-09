@@ -16,6 +16,15 @@ import {
 import { buildStudentProfileInsight } from "./studentProfileAnalytics";
 import { buildStudentReportHeadline } from "./studentReportHeadline";
 import { buildStudentGrowthReport } from "./studentGrowthReport";
+import { buildQuestionResults, summarizeQuestionResults } from "./premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
+
+function canonicalAttemptFor(exam: Exam, candidate: Attempt): Attempt {
+    const questionResults = buildQuestionResults(exam, candidate);
+    const summary = summarizeQuestionResults(questionResults);
+    const canonical = { ...candidate, score: summary.earnedScore, totalScore: summary.totalScore, questionResults };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
+}
 
 function student(partial: Partial<RosterStudent>): RosterStudent {
     return {
@@ -220,9 +229,11 @@ describe("student result hub", () => {
             organizationId: "org-b",
             questions: [{ id: 1, number: 1, answer: 2, score: 1, tags: { concept: "B 개념" } }],
         };
+        const canonicalSelected = canonicalAttemptFor(orgAExam, selected);
+        const canonicalOrgAHistory = canonicalAttemptFor(orgAExam, orgAHistory);
         const personalAttempts = filterCumulativeAttemptsForStudent(
-            selected,
-            [orgBHistory, selected, orgAHistory],
+            canonicalSelected,
+            [orgBHistory, canonicalSelected, canonicalOrgAHistory],
             [selectedStudent],
             selectedStudent,
             "org-a",

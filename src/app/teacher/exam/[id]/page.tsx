@@ -13,7 +13,7 @@ import { loadTeacherExamDetail } from "@/lib/teacherExamClient";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { resolveAttemptScore, type ResolvedAttemptScore } from "@/lib/attemptScores";
 import { serializeCsvRows } from "@/lib/csv";
-import { getAttemptQuestionResults } from "@/lib/premiumAnalytics";
+import { resolveAttemptGrading } from "@/lib/premiumAnalytics";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
 import { awaySeverity, resolveAwayCount } from "@/lib/examAwayTracker";
 import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
@@ -160,8 +160,12 @@ export default function ExamDetailPage() {
         if (!exam) return summaries;
 
         for (const attempt of attempts) {
-            const score = resolveAttemptScore(attempt, exam);
-            const counts = getAttemptQuestionResults(exam, attempt).reduce((acc, result) => {
+            const gradingResolution = resolveAttemptGrading(exam, attempt);
+            const score: ResolvedAttemptScore = {
+                ...gradingResolution.scoreSummary,
+                source: gradingResolution.source,
+            };
+            const counts = gradingResolution.questionResults.reduce((acc, result) => {
                 if (result.status === "correct") acc.correctCount += 1;
                 if (result.status === "wrong") acc.wrongCount += 1;
                 if (result.status === "unanswered") acc.unansweredCount += 1;

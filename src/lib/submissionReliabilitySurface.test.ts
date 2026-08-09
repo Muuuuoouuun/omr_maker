@@ -77,7 +77,8 @@ describe("solve submission reliability integration", () => {
         expect(source).toContain('setSubmissionProgress("confirmation_required")');
         expect(source).toContain("runSubmissionWithConfirmationRetry(");
         expect(source).toContain("onRetry={retryUncertainSubmission}");
-        expect(source).toContain("if (submittedRef.current) return;\n        const nowMs = Date.now();");
+        expect(source).toContain("const handleAnswerClick = (qId: number, optionIndex: number, nowMs: number) => {\n        if (submittedRef.current) return;");
+        expect(source).toContain("performance.timeOrigin + event.timeStamp");
         expect(source).toContain("const handleSubQuestionAnswer = (questionId: number, subQuestionId: string, body: string, maxLength: number) => {\n        if (submittedRef.current) return;");
         expect(source).toContain("const handleDrawingsChange = (page: number, newPaths: string[]) => {\n        if (submittedRef.current) return;");
     });

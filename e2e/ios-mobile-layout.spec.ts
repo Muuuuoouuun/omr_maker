@@ -10,7 +10,6 @@ const STUDENT_ATTEMPT_ID = "iphone-student-attempt";
 const TEACHER_EXAM_ID = "iphone-teacher-detail-exam";
 const TEACHER_EXAM_TITLE = "아이폰에서도 긴 시험 제목과 운영 상태를 놓치지 않는 국어 독해 종합 진단 평가";
 const TEACHER_STUDENT_NAME = "김모바일레이아웃확인학생";
-const CREATE_EXAM_ID = "iphone-create-actions-exam";
 const SOLVE_EXAM_ID = "iphone-solve-controls-exam";
 const SOLVE_STUDENT_ID = "iphone-solve-student";
 
@@ -256,6 +255,7 @@ async function seedStudentTaskFlow(page: Page) {
             score: 50,
             totalScore: 100,
             answers: { 11: 2, 12: 1 },
+            questionResultsSource: "legacy_derived_current_exam",
             questionTimings: [
                 { questionId: 11, questionNumber: 1, totalTimeSec: 125, visitCount: 1 },
                 { questionId: 12, questionNumber: 2, totalTimeSec: 310, visitCount: 2 },
@@ -317,30 +317,6 @@ async function seedTeacherExamDetail(page: Page) {
     });
 }
 
-async function seedCreateExam(page: Page) {
-    await page.addInitScript(({ examId }) => {
-        const questions = Array.from({ length: 10 }, (_, index) => ({
-            id: index + 1,
-            number: index + 1,
-            answer: (index % 4) + 1,
-            choices: 4,
-            score: 10,
-            label: `긴 국어 독해 개념 확인 ${index + 1}`,
-            tags: { concept: `핵심 개념 ${index + 1}` },
-        }));
-        window.localStorage.setItem(`omr_exam_${examId}`, JSON.stringify({
-            id: examId,
-            title: "아이폰 안전영역과 키보드에서도 작업을 마칠 수 있는 국어 종합 평가",
-            organizationId: "default",
-            createdAt: "2026-08-05T00:00:00.000Z",
-            updatedAt: "2026-08-05T00:00:00.000Z",
-            durationMin: 40,
-            accessConfig: { type: "public", groupIds: [] },
-            questions,
-        }));
-    }, { examId: CREATE_EXAM_ID });
-}
-
 async function seedSolveExam(page: Page) {
     await page.addInitScript(({ examId, pdfData, studentId }) => {
         const session = {
@@ -384,8 +360,12 @@ async function seedSolveExam(page: Page) {
 
 test.describe("iPhone WebKit mobile layout", () => {
     test("create completion actions and panel tabs respect safe bounds and keyboard flow", async ({ page }) => {
-        await seedCreateExam(page);
-        await loginAsTeacher(page, `/create?edit=${CREATE_EXAM_ID}`);
+        await loginAsTeacher(page, "/create");
+        await page.getByRole("tab", { name: "설정" }).click();
+        await page.getByLabel("시험 제목").fill("아이폰 안전영역과 키보드에서도 작업을 마칠 수 있는 국어 종합 평가");
+        await page.getByLabel("문항 수 직접 입력").fill("10");
+        await page.getByLabel("문항 수 직접 입력").press("Enter");
+        await page.getByLabel("빠른 정답 입력").fill("1234123412");
 
         const actions = page.getByRole("group", { name: "출제 완료 작업" });
         const primaryAction = actions.getByRole("button", { name: "저장하고 배포하기" });
@@ -453,8 +433,12 @@ test.describe("iPhone WebKit mobile layout", () => {
     });
 
     test("distribution overlay fits the synchronized viewport and preserves dialog focus semantics", async ({ page }) => {
-        await seedCreateExam(page);
-        await loginAsTeacher(page, `/create?edit=${CREATE_EXAM_ID}`);
+        await loginAsTeacher(page, "/create");
+        await page.getByRole("tab", { name: "설정" }).click();
+        await page.getByLabel("시험 제목").fill("아이폰 안전영역과 키보드에서도 작업을 마칠 수 있는 국어 종합 평가");
+        await page.getByLabel("문항 수 직접 입력").fill("10");
+        await page.getByLabel("문항 수 직접 입력").press("Enter");
+        await page.getByLabel("빠른 정답 입력").fill("1234123412");
 
         const trigger = page.getByRole("group", { name: "출제 완료 작업" })
             .getByRole("button", { name: "저장하고 배포하기" });
@@ -959,10 +943,14 @@ test.describe("iPhone WebKit mobile layout", () => {
 
         const title = page.getByRole("heading", { name: COMPLETED_EXAM_TITLE });
         const status = page.getByText("50 / 100점", { exact: true });
-        const primaryAction = page.getByRole("link", { name: "오답만" });
+        const primaryAction = page.getByRole("link", { name: "전체", exact: true });
         const supportDisclosure = page.getByText("질문/해설", { exact: true });
         const longQuestionCopy = page.getByText("#내용 이해와 중심 생각 찾기", { exact: true });
         const answerWorkbench = page.locator(".student-review-content");
+        const gradingNote = page.getByRole("note", { name: "채점 근거 안내" });
+        const questionTabs = page.getByRole("tablist", { name: "문항 바로가기" }).getByRole("tab");
+        const allFilter = page.getByRole("button", { name: "전체 2" });
+        const wrongFilter = page.getByRole("button", { name: "오답 1" });
 
         for (const element of [title, status, primaryAction, longQuestionCopy]) {
             await expectWithinViewport(element, page);
@@ -974,5 +962,38 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expectAbove(primaryAction, supportDisclosure);
         await expectMinimumTouchTarget(primaryAction);
         await expectNoDocumentHorizontalOverflow(page);
+
+        await expect(gradingNote).toContainText("과거 기록 · 현재 시험지 기준 참고 채점");
+        await expect(gradingNote).toContainText("문항별 제출 채점 결과가 저장되기 전 기록으로, 현재 시험지에서 산출한 참고값입니다.");
+        await expect(allFilter).toHaveAttribute("aria-pressed", "true");
+        await expect(wrongFilter).toHaveAttribute("aria-pressed", "false");
+        await expect(questionTabs).toHaveCount(2);
+        expect(await questionTabs.evaluateAll(tabs => tabs.every(tab => {
+            const controlledId = tab.getAttribute("aria-controls");
+            return !!controlledId && !!document.getElementById(controlledId);
+        }))).toBe(true);
+        await expect(questionTabs.nth(0)).toHaveAccessibleName("문항 1 정답");
+        await expect(questionTabs.nth(1)).toHaveAccessibleName("문항 2 오답");
+        await expect(questionTabs.nth(0)).toHaveAttribute("aria-selected", "true");
+        await questionTabs.nth(0).focus();
+        await questionTabs.nth(0).press("ArrowRight");
+        await expect(questionTabs.nth(1)).toBeFocused();
+        await expect(questionTabs.nth(1)).toHaveAttribute("aria-selected", "true");
+        await expect(page.getByRole("tabpanel", { name: "문항 2 오답" })).toBeVisible();
+        await questionTabs.nth(1).press("ArrowRight");
+        await expect(questionTabs.nth(0)).toBeFocused();
+        await expect(questionTabs.nth(0)).toHaveAttribute("aria-selected", "true");
+        await questionTabs.nth(0).press("ArrowLeft");
+        await expect(questionTabs.nth(1)).toBeFocused();
+        await expect(questionTabs.nth(1)).toHaveAttribute("aria-selected", "true");
+
+        await allFilter.focus();
+        await allFilter.press("ArrowLeft");
+        await expect(allFilter).toBeFocused();
+        await expect(questionTabs.nth(1)).toHaveAttribute("aria-selected", "true");
+
+        await wrongFilter.click();
+        await expect(allFilter).toHaveAttribute("aria-pressed", "false");
+        await expect(wrongFilter).toHaveAttribute("aria-pressed", "true");
     });
 });

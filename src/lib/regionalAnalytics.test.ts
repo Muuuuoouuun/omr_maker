@@ -9,6 +9,8 @@ import {
     regionKeyFor,
     regionNameForAttempt,
 } from "./regionalAnalytics";
+import { buildQuestionResults, summarizeQuestionResults } from "./premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 
 const baseStudent = {
     email: "",
@@ -68,20 +70,27 @@ function attempt(overrides: Partial<Attempt>): Attempt {
     };
 }
 
+function canonicalAttemptFor(currentExam: Exam, candidate: Attempt): Attempt {
+    const questionResults = buildQuestionResults(currentExam, candidate);
+    const summary = summarizeQuestionResults(questionResults);
+    const canonical = { ...candidate, score: summary.earnedScore, totalScore: summary.totalScore, questionResults };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
+}
+
 describe("regional analytics", () => {
     it("excludes in-progress attempts from submitted performance and action evidence", () => {
         const scopes = buildRegionalLearningScopes({
             students,
             groups,
             attempts: [
-                attempt({
+                canonicalAttemptFor(algebraExam, attempt({
                     id: "submitted",
                     studentId: students[0].id,
                     groupId: groups[0].id,
                     groupName: groups[0].name,
                     score: 60,
-                }),
-                attempt({
+                })),
+                canonicalAttemptFor(algebraExam, attempt({
                     id: "draft",
                     studentId: students[0].id,
                     groupId: groups[0].id,
@@ -90,7 +99,7 @@ describe("regional analytics", () => {
                     answers: { 1: 1, 2: 2 },
                     status: "in_progress",
                     finishedAt: "2026-06-15T10:00:00.000Z",
-                }),
+                })),
             ],
             exams: [algebraExam],
         });
@@ -194,7 +203,7 @@ describe("regional analytics", () => {
             exams: [algebraExam],
             options: { weaknessKinds: ["concept"] },
             attempts: [
-                attempt({
+                canonicalAttemptFor(algebraExam, attempt({
                     id: "seoul-1",
                     studentId: "seoul-a::김학생",
                     groupId: "seoul-a",
@@ -203,8 +212,8 @@ describe("regional analytics", () => {
                     score: 40,
                     answers: { 1: 2, 2: 3 },
                     finishedAt: "2026-06-15T09:30:00.000Z",
-                }),
-                attempt({
+                })),
+                canonicalAttemptFor(algebraExam, attempt({
                     id: "seoul-2",
                     studentId: "seoul-a::이학생",
                     studentName: "이학생",
@@ -214,8 +223,8 @@ describe("regional analytics", () => {
                     score: 55,
                     answers: { 1: 2, 2: 2 },
                     finishedAt: "2026-06-15T09:40:00.000Z",
-                }),
-                attempt({
+                })),
+                canonicalAttemptFor(algebraExam, attempt({
                     id: "busan-1",
                     studentId: "busan-b::김학생",
                     groupId: "busan-b",
@@ -224,7 +233,7 @@ describe("regional analytics", () => {
                     score: 100,
                     answers: { 1: 1, 2: 2 },
                     finishedAt: "2026-06-15T09:45:00.000Z",
-                }),
+                })),
             ],
         });
 
@@ -312,14 +321,20 @@ describe("regional analytics", () => {
             students,
             groups,
             exams: [algebraExam],
-            attempts: [original, retake],
+            attempts: [
+                canonicalAttemptFor(algebraExam, original),
+                canonicalAttemptFor(algebraExam, retake),
+            ],
             options: { regionLimit: 1, weaknessKinds: ["concept"] },
         })[0];
         const withRetakePlan = buildRegionalActionPlans({
             students,
             groups,
             exams: [algebraExam],
-            attempts: [original, retake],
+            attempts: [
+                canonicalAttemptFor(algebraExam, original),
+                canonicalAttemptFor(algebraExam, retake),
+            ],
             options: { includeRetakes: true, regionLimit: 1, weaknessKinds: ["concept"] },
         })[0];
 

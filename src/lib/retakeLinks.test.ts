@@ -16,7 +16,7 @@ describe("retake links", () => {
             "utf8",
         );
 
-        expect(review).toContain("setAttemptSource(result.source)");
+        expect(review).toContain("setAttemptSource(detail.source)");
         expect(review).toContain('supportedReviewRetakeModes(attemptSource).includes("custom")');
         expect(review).not.toContain("오답과 같은 유형을 바로 다시 풉니다.");
         expect(review).toContain("retakeHref={canUseScopedRetakes ? buildRetakeHref");

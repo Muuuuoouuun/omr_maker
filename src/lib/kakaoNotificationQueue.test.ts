@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildKakaoNotificationCandidates } from "./kakaoNotificationQueue";
+import { buildQuestionResults, summarizeQuestionResults } from "./premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 
 const baseStudent = {
     email: "",
@@ -48,7 +50,7 @@ const exam: Exam = {
 };
 
 function attempt(overrides: Partial<Attempt>): Attempt {
-    return {
+    const candidate: Attempt = {
         id: "attempt-1",
         examId: "exam-1",
         examTitle: "6월 중간",
@@ -65,6 +67,15 @@ function attempt(overrides: Partial<Attempt>): Attempt {
         status: "completed",
         ...overrides,
     };
+    const questionResults = buildQuestionResults(exam, candidate);
+    const summary = summarizeQuestionResults(questionResults);
+    const canonical = {
+        ...candidate,
+        score: summary.earnedScore,
+        totalScore: summary.totalScore,
+        questionResults,
+    };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
 }
 
 describe("kakao notification queue", () => {

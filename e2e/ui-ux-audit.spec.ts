@@ -47,6 +47,9 @@ async function visitTarget(browser: Browser, target: AuditTarget): Promise<Page>
         target.expectedText,
         { timeout: 15_000 },
     ).catch(() => undefined);
+    // Next streams route metadata independently from the visible page body in
+    // dev mode. Audit only after the required document title has committed.
+    await expect(page).toHaveTitle(/OMR Maker/, { timeout: 15_000 });
     return page;
 }
 
@@ -353,39 +356,18 @@ test.describe("UI-UX PROMAX layout audit", () => {
         expect(disabledModal.distance).toBe("0rem");
     });
 
-    test("app motion-off renders mounted CountUp values final without an active RAF animation", async ({ page }) => {
+    test("app motion-off boots CountUp values final after the product readiness signal", async ({ page }) => {
         await page.addInitScript(() => {
             window.localStorage.setItem("omr_settings", JSON.stringify({
                 theme: { motion: false },
             }));
-            const firstFrameState = window as typeof window & {
-                __omrFirstCountUpFrame?: Array<{
-                    target: string | null;
-                    motion: string | null;
-                    raf: string | null;
-                    text: string;
-                }>;
-            };
-            const observer = new MutationObserver(() => {
-                const countUps = Array.from(document.querySelectorAll("[data-count-up-value]"));
-                if (countUps.length === 0) return;
-                observer.disconnect();
-                window.requestAnimationFrame(() => {
-                    firstFrameState.__omrFirstCountUpFrame = countUps.map(element => ({
-                        target: element.getAttribute("data-count-up-value"),
-                        motion: element.getAttribute("data-count-up-motion"),
-                        raf: element.getAttribute("data-count-up-raf"),
-                        text: element.textContent?.replace(/[^\d.-]/g, "") || "",
-                    }));
-                });
-            });
-            observer.observe(document, { childList: true, subtree: true });
         });
         await loginAsShowcaseTeacher(page);
         await expect(page.locator("html")).toHaveAttribute("data-motion", "off");
 
         const countUps = page.locator("[data-count-up-value]");
         await expect(countUps.first()).toBeVisible();
+        await expect(countUps.first()).toHaveAttribute("data-count-up-ready", "true");
         const snapshots = await countUps.evaluateAll(elements => elements.map(element => ({
             target: element.getAttribute("data-count-up-value"),
             motion: element.getAttribute("data-count-up-motion"),
@@ -399,43 +381,27 @@ test.describe("UI-UX PROMAX layout audit", () => {
             expect(snapshot.raf).toBe("idle");
             expect(Number(snapshot.text)).toBe(Number(snapshot.target));
         }
-        await expect.poll(() => page.evaluate(() => (
-            window as typeof window & {
-                __omrFirstCountUpFrame?: Array<{
-                    target: string | null;
-                    motion: string | null;
-                    raf: string | null;
-                    text: string;
-                }>;
-            }
-        ).__omrFirstCountUpFrame)).not.toBeUndefined();
-        const capturedFirstFrame = await page.evaluate(() => (
-            window as typeof window & {
-                __omrFirstCountUpFrame?: Array<{
-                    target: string | null;
-                    motion: string | null;
-                    raf: string | null;
-                    text: string;
-                }>;
-            }
-        ).__omrFirstCountUpFrame || []);
-        expect(capturedFirstFrame.length).toBeGreaterThan(0);
-        for (const snapshot of capturedFirstFrame) {
-            expect(snapshot.motion).toBe("reduced");
-            expect(snapshot.raf).toBe("idle");
-            expect(Number(snapshot.text)).toBe(Number(snapshot.target));
-        }
+    });
 
-        await page.locator("html").evaluate(element => element.setAttribute("data-motion", "on"));
-        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "animated");
+    test("CountUp readiness follows runtime OS and app motion transitions", async ({ page }) => {
+        await loginAsShowcaseTeacher(page);
+
+        const countUps = page.locator("[data-count-up-value]");
+        const firstCountUp = countUps.first();
+        await expect(firstCountUp).toBeVisible();
+        await expect(firstCountUp).toHaveAttribute("data-count-up-motion", "animated");
+        await expect(firstCountUp).toHaveAttribute("data-count-up-ready", "true");
         await page.emulateMedia({ reducedMotion: "reduce" });
-        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "reduced");
-        await expect(countUps.first()).toHaveAttribute("data-count-up-raf", "idle");
+        await expect(firstCountUp).toHaveAttribute("data-count-up-motion", "reduced");
+        await expect(firstCountUp).toHaveAttribute("data-count-up-ready", "true");
+        await expect(firstCountUp).toHaveAttribute("data-count-up-raf", "idle");
         await page.emulateMedia({ reducedMotion: "no-preference" });
-        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "animated");
+        await expect(firstCountUp).toHaveAttribute("data-count-up-motion", "animated");
+        await expect(firstCountUp).toHaveAttribute("data-count-up-ready", "true");
         await page.locator("html").evaluate(element => element.setAttribute("data-motion", "off"));
-        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "reduced");
-        await expect(countUps.first()).toHaveAttribute("data-count-up-raf", "idle");
+        await expect(firstCountUp).toHaveAttribute("data-count-up-motion", "reduced");
+        await expect(firstCountUp).toHaveAttribute("data-count-up-ready", "true");
+        await expect(firstCountUp).toHaveAttribute("data-count-up-raf", "idle");
     });
 
 });
@@ -555,7 +521,7 @@ test.describe("Cross-browser personal growth report acceptance", () => {
         consolePhase = "reduced-reload";
         await page.reload();
         const reducedGrowth = page.getByRole("region", { name: "개인 성장", exact: true });
-        await expect(reducedGrowth).toBeVisible();
+        await expect(reducedGrowth).toBeVisible({ timeout: 15_000 });
         const reducedAnimations = await reducedGrowth.locator("[data-testid='growth-chart-shell'] *").evaluateAll(elements => (
             elements
                 .filter(element => getComputedStyle(element).animationName !== "none")

@@ -32,7 +32,7 @@ import {
     mergeTeacherLiveExamAttempts,
     selectTeacherLiveExamId,
     selectTeacherLiveAssignedRosterStudents,
-    teacherLiveCatalogHasRemoteError,
+    teacherLiveCatalogShouldFail,
     teacherLiveExamPresentation,
     type TeacherLiveExamPhase,
 } from "@/lib/teacherLiveExamState";
@@ -369,11 +369,12 @@ export default function LiveResultsPage() {
                 loadTeacherAttemptSummaries(),
                 loadTeacherRosterSnapshot(window.localStorage),
             ]);
-            if (teacherLiveCatalogHasRemoteError(examResult, attemptResult, rosterResult)) {
+            const allowDemo = shouldUseDemoData(readTeacherSession());
+            if (teacherLiveCatalogShouldFail(allowDemo, examResult, attemptResult, rosterResult)) {
                 setCatalogLoadStatus("failed");
                 return;
             }
-            const liveData = resolveLiveExamData(examResult.items, shouldUseDemoData(readTeacherSession()));
+            const liveData = resolveLiveExamData(examResult.items, allowDemo);
             setExams(liveData.exams);
             setLiveDataMode(liveData.mode);
             if (liveData.mode === "real") setSyntheticByExam({});
@@ -418,11 +419,12 @@ export default function LiveResultsPage() {
                     loadTeacherRosterSnapshot(window.localStorage),
                 ]);
                 if (cancelled) return;
-                if (teacherLiveCatalogHasRemoteError(examResult, attemptResult, rosterResult)) {
+                const allowDemo = shouldUseDemoData(readTeacherSession());
+                if (teacherLiveCatalogShouldFail(allowDemo, examResult, attemptResult, rosterResult)) {
                     setCatalogLoadStatus("failed");
                     return;
                 }
-                const liveData = resolveLiveExamData(examResult.items, shouldUseDemoData(readTeacherSession()));
+                const liveData = resolveLiveExamData(examResult.items, allowDemo);
                 setExams(liveData.exams);
                 setLiveDataMode(liveData.mode);
                 if (liveData.mode === "real") setSyntheticByExam({});

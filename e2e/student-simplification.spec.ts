@@ -52,6 +52,15 @@ async function seedStudentSurface(page: Page, options: { completed?: boolean; gu
                 templateId: "custom",
             }],
         };
+        const secondQuestion = {
+            id: 2,
+            number: 2,
+            label: "접근성 키보드 이동 확인",
+            score: 10,
+            answer: 2,
+            choices: 5,
+            explanation: "두 번째 문항의 키보드 이동 상태를 확인합니다.",
+        };
         const exam = {
             id: examId,
             title: `${longToken}시험`,
@@ -59,7 +68,7 @@ async function seedStudentSurface(page: Page, options: { completed?: boolean; gu
             durationMin: 45,
             pdfData,
             accessConfig: { type: "public", groupIds: [] },
-            questions: [question],
+            questions: completed ? [question, secondQuestion] : [question],
         };
         const attempt = {
             id: attemptId,
@@ -73,9 +82,10 @@ async function seedStudentSurface(page: Page, options: { completed?: boolean; gu
             identityType: session.identityType,
             startedAt: "2026-08-05T00:00:00.000Z",
             finishedAt: "2026-08-05T00:20:00.000Z",
-            score: 0,
-            totalScore: 10,
-            answers: { 1: 1 },
+            score: 10,
+            totalScore: 20,
+            answers: { 1: 1, 2: 2 },
+            questionResultsSource: "legacy_derived_current_exam",
             subQuestionAnswers: {
                 1: {
                     "long-prompt": {
@@ -304,6 +314,39 @@ test.describe("student UI simplification regressions", () => {
         await page.goto(`/student/review/${ATTEMPT_ID}`);
 
         await expect(page.locator(".student-review-question-card")).toBeVisible({ timeout: 15_000 });
+        const gradingNote = page.getByRole("note", { name: "채점 근거 안내" });
+        const questionTabs = page.getByRole("tablist", { name: "문항 바로가기" }).getByRole("tab");
+        const allFilter = page.getByRole("button", { name: "전체 2" });
+        const wrongFilter = page.getByRole("button", { name: "오답 1" });
+
+        await expect(gradingNote).toContainText("과거 기록 · 현재 시험지 기준 참고 채점");
+        await expect(gradingNote).toContainText("문항별 제출 채점 결과가 저장되기 전 기록으로, 현재 시험지에서 산출한 참고값입니다.");
+        await expect(questionTabs).toHaveCount(2);
+        expect(await questionTabs.evaluateAll(tabs => tabs.every(tab => {
+            const controlledId = tab.getAttribute("aria-controls");
+            return !!controlledId && !!document.getElementById(controlledId);
+        }))).toBe(true);
+        await expect(questionTabs.nth(0)).toHaveAccessibleName("문항 1 오답");
+        await expect(questionTabs.nth(1)).toHaveAccessibleName("문항 2 정답");
+        await expect(questionTabs.nth(0)).toHaveAttribute("aria-selected", "true");
+        await questionTabs.nth(0).focus();
+        await questionTabs.nth(0).press("ArrowRight");
+        await expect(questionTabs.nth(1)).toBeFocused();
+        await expect(questionTabs.nth(1)).toHaveAttribute("aria-selected", "true");
+        await expect(page.getByRole("tabpanel", { name: "문항 2 정답" })).toBeVisible();
+
+        await allFilter.focus();
+        await allFilter.press("ArrowLeft");
+        await expect(allFilter).toBeFocused();
+        await expect(questionTabs.nth(1)).toHaveAttribute("aria-selected", "true");
+        await expect(allFilter).toHaveAttribute("aria-pressed", "true");
+        await expect(wrongFilter).toHaveAttribute("aria-pressed", "false");
+        await wrongFilter.click();
+        await expect(allFilter).toHaveAttribute("aria-pressed", "false");
+        await expect(wrongFilter).toHaveAttribute("aria-pressed", "true");
+
+        await allFilter.click();
+        await questionTabs.nth(0).click();
         const explanationButton = page.getByRole("button", { name: /^해설/ });
         if (await explanationButton.isVisible()) await explanationButton.click();
         await expect(page.locator(".student-review-explanation")).toBeVisible();

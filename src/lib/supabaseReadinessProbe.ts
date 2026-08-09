@@ -73,6 +73,7 @@ export const SUPABASE_READINESS_CHECK_KEYS = [
     "effectiveWorkspacePlanEnforcementReady",
     "studentSessionGenerationReady",
     "studentCredentialBatchReady",
+    "canonicalQuestionResultEvidenceReady",
 ] as const;
 
 export type SupabaseReadinessCheckKey = typeof SUPABASE_READINESS_CHECK_KEYS[number];

@@ -27,20 +27,8 @@ import {
     type RosterGroup,
     type RosterStudent,
 } from "@/lib/rosterStorage";
-import { buildStudentProfileInsight } from "@/lib/studentProfileAnalytics";
-import {
-    buildStudentGrowthReport,
-    growthClassKeyForAttempt,
-} from "@/lib/studentGrowthReport";
 import { toast } from "@/components/Toast";
-import {
-    buildLearningRecommendations,
-    buildRetakeQuestionIds,
-    buildStudentWeaknessGroups,
-    getAttemptQuestionResults,
-    summarizeAttemptBehavior,
-    summarizeAttemptScore,
-} from "@/lib/premiumAnalytics";
+import type { AttemptGradingSource } from "@/lib/premiumAnalytics";
 import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
 import { buildDemoDashboardData, resolveDemoAttemptDetail } from "@/lib/demoData";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -67,16 +55,22 @@ import {
 } from "@/lib/studentResultHub";
 import StudentResultHeader from "@/components/teacher/student-results/StudentResultHeader";
 import StudentResultTabs from "@/components/teacher/student-results/StudentResultTabs";
-import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";
 import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";
 import HandwritingPanel from "@/components/teacher/student-results/HandwritingPanel";
 import type { StudentGrowthReportState } from "@/components/teacher/student-results/StudentGrowthReport";
 import styles from "@/components/teacher/student-results/StudentResultHub.module.css";
 
 const ReportPanel = dynamic(() => import("@/components/teacher/student-results/ReportPanel"));
+const AnswersPanel = dynamic(() => import("@/components/teacher/student-results/AnswersPanel"));
 
 type AttemptDetailLoadStatus = "loading" | "ready" | "not_found" | "error";
 type CumulativeLoadStatus = "idle" | "loading" | "ready" | "partial" | "stale" | "error";
+type AttemptAnalyticsBuilders = {
+    premium: typeof import("@/lib/premiumAnalytics");
+    buildStudentProfileInsight: typeof import("@/lib/studentProfileAnalytics").buildStudentProfileInsight;
+    buildStudentGrowthReport: typeof import("@/lib/studentGrowthReport").buildStudentGrowthReport;
+    growthClassKeyForAttempt: typeof import("@/lib/studentGrowthReport").growthClassKeyForAttempt;
+};
 
 function hasTeacherAccess(): boolean {
     return hasTeacherSession();
@@ -193,6 +187,24 @@ export default function TeacherAttemptPage() {
     const handwritingArchiveEnabled = hasPlanEntitlement(currentPlan, "handwritingArchive");
     const feedbackMarkupEnabled = hasPlanEntitlement(currentPlan, "feedbackMarkup");
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
+    const [analyticsBuilders, setAnalyticsBuilders] = useState<AttemptAnalyticsBuilders | null>(null);
+    useEffect(() => {
+        if (!attempt || !exam) return;
+        let current = true;
+        void Promise.all([
+            import("@/lib/premiumAnalytics"),
+            import("@/lib/studentProfileAnalytics"),
+            import("@/lib/studentGrowthReport"),
+        ]).then(([premium, profile, growth]) => {
+            if (current) setAnalyticsBuilders({
+                premium,
+                buildStudentProfileInsight: profile.buildStudentProfileInsight,
+                buildStudentGrowthReport: growth.buildStudentGrowthReport,
+                growthClassKeyForAttempt: growth.growthClassKeyForAttempt,
+            });
+        });
+        return () => { current = false; };
+    }, [attempt, exam]);
 
     useEffect(() => {
         let cancelled = false;
@@ -457,9 +469,10 @@ export default function TeacherAttemptPage() {
     }, [activeView, attempt, cumulativeLoadRequest, detailLoadStatus, studentGrowthReportsEnabled]);
 
     const analytics = useMemo(() => {
-        if (!attempt || !exam) return null;
-        const questionResults = getAttemptQuestionResults(exam, attempt);
-        const score = summarizeAttemptScore(exam, attempt);
+        if (!attempt || !exam || !analyticsBuilders) return null;
+        const gradingResolution = analyticsBuilders.premium.resolveAttemptGrading(exam, attempt);
+        const questionResults = gradingResolution.questionResults;
+        const score = gradingResolution.scoreSummary;
         const counts = questionResults.reduce((acc, result) => {
             if (result.status === "correct") acc.correctCount += 1;
             if (result.status === "wrong") acc.incorrectCount += 1;
@@ -468,16 +481,17 @@ export default function TeacherAttemptPage() {
             return acc;
         }, { correctCount: 0, incorrectCount: 0, unansweredCount: 0, ungradedCount: 0 });
         const wrongResults = questionResults.filter(result => result.status === "wrong" || result.status === "unanswered");
-        const retakeQuestionIds = buildRetakeQuestionIds(exam, attempt);
-        const weaknessGroups = buildStudentWeaknessGroups(exam, attempt).slice(0, 3);
-        const recommendations = buildLearningRecommendations(exam, [attempt], {
+        const retakeQuestionIds = analyticsBuilders.premium.buildRetakeQuestionIds(exam, attempt);
+        const weaknessGroups = analyticsBuilders.premium.buildStudentWeaknessGroups(exam, attempt).slice(0, 3);
+        const recommendations = analyticsBuilders.premium.buildLearningRecommendations(exam, [attempt], {
             scope: "attempt",
             attempt,
             limit: 3,
         });
-        const behavior = summarizeAttemptBehavior(attempt);
+        const behavior = analyticsBuilders.premium.summarizeAttemptBehavior(attempt);
 
         return {
+            gradingSource: gradingResolution.source,
             questionResults,
             score,
             counts,
@@ -487,7 +501,7 @@ export default function TeacherAttemptPage() {
             recommendations,
             behavior,
         };
-    }, [attempt, exam]);
+    }, [analyticsBuilders, attempt, exam]);
 
     const attemptSeries = useMemo(() => {
         if (!attempt) return [];
@@ -498,7 +512,7 @@ export default function TeacherAttemptPage() {
     }, [attempt, exam, peerAttempts]);
 
     const cumulativeInsight = useMemo(() => {
-        if (!attempt || cumulativeAttemptId !== attempt.id || !rosterStudent) return null;
+        if (!attempt || !analyticsBuilders || cumulativeAttemptId !== attempt.id || !rosterStudent) return null;
         const selectedOrganizationId = activeOrganizationId || attempt.organizationId;
         const personalAttempts = filterCumulativeAttemptsForStudent(
             attempt,
@@ -507,13 +521,13 @@ export default function TeacherAttemptPage() {
             rosterStudent,
             selectedOrganizationId,
         );
-        return buildStudentProfileInsight(
+        return analyticsBuilders.buildStudentProfileInsight(
             rosterStudent,
             personalAttempts,
             buildCumulativeExamMap(cumulativeExams, selectedOrganizationId),
             { recentLimit: 8, weaknessLimit: 6 },
         );
-    }, [activeOrganizationId, attempt, cumulativeAttemptId, cumulativeAttempts, cumulativeExams, cumulativeRoster.students, rosterStudent]);
+    }, [activeOrganizationId, analyticsBuilders, attempt, cumulativeAttemptId, cumulativeAttempts, cumulativeExams, cumulativeRoster.students, rosterStudent]);
 
     const growthAttempts = useMemo(() => cumulativeAttempts
         .map(candidate => {
@@ -537,16 +551,17 @@ export default function TeacherAttemptPage() {
             || attempt.studentId?.trim()
             || rosterStudent?.id?.trim()
             || attempt.studentName;
-        return buildStudentGrowthReport({
+        if (!analyticsBuilders) return null;
+        return analyticsBuilders.buildStudentGrowthReport({
             selectedStudentId,
             selectedAttemptId: attempt.id,
-            selectedClassKey: growthClassKeyForAttempt(selectedGrowthAttempt),
+            selectedClassKey: analyticsBuilders.growthClassKeyForAttempt(selectedGrowthAttempt),
             selectedOrganizationId: activeOrganizationId || attempt.organizationId,
             dataStatus: cumulativeStatus,
             attempts: growthAttempts,
             exams: cumulativeExams,
         });
-    }, [activeOrganizationId, attempt, cumulativeAttemptId, cumulativeExams, cumulativeStatus, growthAttempts, rosterStudent?.id, selectedGrowthAttempt]);
+    }, [activeOrganizationId, analyticsBuilders, attempt, cumulativeAttemptId, cumulativeExams, cumulativeStatus, growthAttempts, rosterStudent?.id, selectedGrowthAttempt]);
 
     const growthReportState = useMemo<StudentGrowthReportState>(() => {
         if (!attempt || cumulativeAttemptId !== attempt.id) return { status: "idle" };
@@ -624,8 +639,8 @@ export default function TeacherAttemptPage() {
             ? exam
             : cumulativeExams.find(item => item.id === sourceAttempt.examId);
         const sourceCanonicalSummary = sourceSeriesItem?.scoreSummary
-            ?? (sourceExam
-                ? summarizeAttemptScore(sourceExam, sourceAttempt)
+            ?? (sourceExam && analyticsBuilders
+                ? analyticsBuilders.premium.summarizeAttemptScore(sourceExam, sourceAttempt)
                 : {
                     totalScore: sourceAttempt.totalScore,
                     scorePercent: safeScorePercent(sourceAttempt.score, sourceAttempt.totalScore),
@@ -633,7 +648,7 @@ export default function TeacherAttemptPage() {
         const sourceSummary = sourceSeriesItem?.comparisonScore
             ?? resolveStudentResultComparisonScore(sourceAttempt, sourceCanonicalSummary);
         return buildStudentRetakeScoreDelta(currentSummary, sourceSummary);
-    }, [analytics, attempt, attemptSeries, cumulativeAttempts, cumulativeExams, exam]);
+    }, [analytics, analyticsBuilders, attempt, attemptSeries, cumulativeAttempts, cumulativeExams, exam]);
 
     const handleTeacherMarkupChange = (page: number, newPaths: string[]) => {
         setTeacherMarkupDrawings(prev => ({ ...prev, [page]: newPaths }));
@@ -776,7 +791,9 @@ export default function TeacherAttemptPage() {
     // F2: when the exam payload can't be loaded, analytics is null. Fall back to
     // the score stored on the attempt so the header percent matches the score
     // line below instead of contradicting it with a hard 0%.
-    const answerQuestionResults = analytics?.questionResults ?? attempt.questionResults ?? [];
+    const answerQuestionResults = analytics?.questionResults ?? [];
+    const answerGradingSource: AttemptGradingSource = analytics?.gradingSource
+        ?? "incomplete_or_invalid";
     const answerCounts = analytics?.counts ?? answerQuestionResults.reduce((acc, result) => {
         if (result.status === "correct") acc.correctCount += 1;
         if (result.status === "wrong") acc.incorrectCount += 1;
@@ -785,7 +802,9 @@ export default function TeacherAttemptPage() {
         return acc;
     }, { correctCount: 0, incorrectCount: 0, unansweredCount: 0, ungradedCount: 0 });
     const awayCount = analytics?.behavior.focusLossCount
-        ?? summarizeAttemptBehavior(attempt).focusLossCount;
+        ?? attempt.tabFociLostCount
+        ?? attempt.focusLossEvents?.at(-1)?.count
+        ?? 0;
     const setSubQuestionReviewed = async (questionId: number, subQuestionId: string, reviewed: boolean) => {
         const currentAnswer = attempt.subQuestionAnswers?.[questionId]?.[subQuestionId];
         if (!currentAnswer) return;
@@ -935,6 +954,7 @@ export default function TeacherAttemptPage() {
                             <AnswersPanel
                                 attempt={attempt}
                                 exam={exam ?? undefined}
+                                gradingSource={answerGradingSource}
                                 questionResults={answerQuestionResults}
                                 counts={answerCounts}
                                 score={analytics?.score}

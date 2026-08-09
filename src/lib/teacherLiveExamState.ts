@@ -52,6 +52,13 @@ export function teacherLiveCatalogHasRemoteError(
     return results.some(result => !!result.remoteError);
 }
 
+export function teacherLiveCatalogShouldFail(
+    allowExactDemo: boolean,
+    ...results: ReadonlyArray<{ remoteError?: string }>
+): boolean {
+    return !allowExactDemo && teacherLiveCatalogHasRemoteError(...results);
+}
+
 function validTime(value: string | undefined): number | null {
     if (!value) return null;
     const parsed = Date.parse(value);

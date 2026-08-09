@@ -1174,6 +1174,8 @@ export function localResultCacheFromServerReceipt(
             attemptId: receipt.attemptId,
             examId: receipt.examId,
             examTitle: identity.examTitle,
+            assignmentId: receipt.assignmentId,
+            assignmentRevision: receipt.assignmentRevision,
             studentName: identity.studentName,
             studentId: identity.studentId,
             groupId: identity.groupId,

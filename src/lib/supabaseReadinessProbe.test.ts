@@ -58,6 +58,7 @@ const readyV22Payload = {
     effectiveWorkspacePlanEnforcementReady: true,
     studentSessionGenerationReady: true,
     studentCredentialBatchReady: true,
+    canonicalQuestionResultEvidenceReady: true,
 };
 
 describe("Supabase deployment readiness probe", () => {
@@ -115,6 +116,7 @@ describe("Supabase deployment readiness probe", () => {
             effectiveWorkspacePlanEnforcementReady: true,
             studentSessionGenerationReady: true,
             studentCredentialBatchReady: true,
+            canonicalQuestionResultEvidenceReady: true,
             failedChecks: [],
         });
     });

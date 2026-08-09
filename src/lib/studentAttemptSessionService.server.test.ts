@@ -187,8 +187,67 @@ describe("student attempt session service", () => {
                 answers: { 2: 2 },
                 assignmentId: "assignment-reused",
                 assignmentRevision: 8,
+                questionResults: [expect.objectContaining({
+                    assignmentId: "assignment-reused",
+                    assignmentRevision: 8,
+                })],
             }),
+            questionResults: [expect.objectContaining({
+                assignmentId: "assignment-reused",
+                assignmentRevision: 8,
+            })],
         }));
+    });
+
+    it("binds nested grading evidence to each reused assignment generation N and N+1", async () => {
+        const committed: import("@/types/omr").Attempt[] = [];
+        for (const assignmentRevision of [8, 9]) {
+            const result = await submitStudentAttemptSessionService({
+                identity,
+                leaseToken: `lease-${assignmentRevision}`,
+                expectedRevision: assignmentRevision,
+                expectedLeaseEpoch: 2,
+                sessionId: `session-${assignmentRevision}`,
+                examId: "exam-1",
+                secret: "server-secret",
+                prepareGateway: async () => ({
+                    status: "prepared" as const,
+                    session: {
+                        sessionId: `session-${assignmentRevision}`,
+                        examId: "exam-1",
+                        status: "in_progress" as const,
+                        revision: assignmentRevision,
+                        leaseEpoch: 2,
+                        startedAt: "2026-08-06T00:00:00.000Z",
+                        deadlineAt: "2026-08-06T00:30:00.000Z",
+                        serverNow: "2026-08-06T00:10:00.000Z",
+                        answers: { 1: 3 },
+                        subQuestionAnswers: {},
+                        allowedQuestionIds: [1],
+                        gradingSnapshot: exam,
+                        submissionId: `submission-${assignmentRevision}`,
+                        attemptId: `attempt-${assignmentRevision}`,
+                        assignmentId: "assignment-reused",
+                        assignmentRevision,
+                        progressPayload: {},
+                    },
+                }),
+                commitGateway: async ({ attempt }) => {
+                    committed.push(attempt);
+                    return { status: "submitted" as const, attempt };
+                },
+                finishedAt: "2026-08-06T00:10:00.000Z",
+            });
+            expect(result.status).toBe("submitted");
+        }
+
+        expect(committed.map(attempt => ({
+            revision: attempt.assignmentRevision,
+            nested: [...new Set(attempt.questionResults?.map(result => result.assignmentRevision))],
+        }))).toEqual([
+            { revision: 8, nested: [8] },
+            { revision: 9, nested: [9] },
+        ]);
     });
 
     it("returns the stored attempt after a lost submit response", async () => {

@@ -5,6 +5,7 @@ import {
     listTeacherCanonicalActiveAttemptSessions,
     listTeacherCanonicalAttemptSummaries,
     listTeacherCanonicalAttempts,
+    loadTeacherCanonicalAnalyticsSnapshots,
     loadTeacherCanonicalAttempt,
     setTeacherCanonicalSubquestionReview,
 } from "@/app/actions/teacherAttempts";
@@ -19,6 +20,7 @@ import { withBrowserStorageLock } from "@/lib/browserStorageLock";
 import type { Attempt } from "@/types/omr";
 import type { TeacherActiveAttemptSession } from "@/lib/teacherAttemptGateway";
 import type { CanonicalCollectionMeta } from "@/lib/canonicalCollectionContract";
+import type { TeacherCanonicalAnalyticsSnapshotMap } from "@/lib/teacherCanonicalAnalyticsSnapshotContract";
 
 export type TeacherAttemptDetailLoadResult =
     | { status: "loaded"; attempt: Attempt; source: "server" | "local" }
@@ -40,6 +42,22 @@ export interface TeacherAttemptCollectionLoadResult {
         id: string;
     };
     meta?: CanonicalCollectionMeta;
+    analyticsSnapshots?: TeacherCanonicalAnalyticsSnapshotMap;
+}
+
+export type TeacherCanonicalAnalyticsLoadResult =
+    | { status: "loaded"; analyticsSnapshots: TeacherCanonicalAnalyticsSnapshotMap; meta: CanonicalCollectionMeta }
+    | { status: "service_unavailable"; error: string };
+
+export async function loadTeacherAnalyticsSnapshots(examId?: string): Promise<TeacherCanonicalAnalyticsLoadResult> {
+    const result = await loadTeacherCanonicalAnalyticsSnapshots(examId);
+    if (result.status === "loaded") return result;
+    return {
+        status: "service_unavailable",
+        error: result.status === "unauthorized"
+            ? "Teacher server session is missing"
+            : result.error || "Canonical analytics snapshot gateway unavailable",
+    };
 }
 
 export type TeacherAttemptCollectionCompleteness = "ready" | "partial" | "stale" | "error";

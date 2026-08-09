@@ -87,6 +87,18 @@ describe("teacher live exam state", () => {
         expect(page).toContain("다시 시도");
     });
 
+    it("lets an exact mockup session reach deterministic demo readiness without remote catalog authority", () => {
+        const shouldFail = (teacherLiveExamState as Record<string, unknown>)
+            .teacherLiveCatalogShouldFail;
+        expect(shouldFail).toBeTypeOf("function");
+        if (typeof shouldFail !== "function") return;
+
+        const failed = { items: [], remoteError: "offline" };
+        const empty = { items: [] };
+        expect(shouldFail(false, failed, empty, empty)).toBe(true);
+        expect(shouldFail(true, failed, failed, failed)).toBe(false);
+    });
+
     const now = Date.parse("2026-08-05T09:00:00.000Z");
 
     it("marks only an open schedule or an in-progress attempt as live", () => {

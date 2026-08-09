@@ -96,6 +96,7 @@ begin
        or readiness ->> 'studentCredentialBatchReady' <> 'true'
        or readiness ->> 'teacherUploadCleanupQueueReady' <> 'true'
        or readiness ->> 'studentAttemptSessionsReady' <> 'true'
+       or readiness ->> 'canonicalQuestionResultEvidenceReady' <> 'true'
        or readiness ->> 'durableRateLimitsReady' <> 'true'
        or readiness ->> 'examRevisionReady' <> 'true'
        or readiness ->> 'teacherExamCasReady' <> 'true'
@@ -124,6 +125,19 @@ begin
        or readiness ->> 'effectiveWorkspacePlanEnforcementReady' <> 'true'
        or readiness ->> 'studentSessionGenerationReady' <> 'true' then
         raise exception 'production boundary readiness failed: %', readiness;
+    end if;
+    if not public.omr_canonical_question_result_evidence_ready_v1()
+       or not pg_catalog.has_function_privilege(
+           'service_role',
+           'public.omr_compute_canonical_question_result_evidence_v1(jsonb,jsonb)',
+           'EXECUTE'
+       )
+       or pg_catalog.has_function_privilege(
+           'authenticated',
+           'public.omr_compute_canonical_question_result_evidence_v1(jsonb,jsonb)',
+           'EXECUTE'
+       ) then
+        raise exception 'canonical question-result evidence boundary failed';
     end if;
     if pg_catalog.has_table_privilege(
         'service_role', 'public.omr_rate_limit_buckets', 'SELECT,INSERT,UPDATE,DELETE'
@@ -286,7 +300,7 @@ begin
             'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)',
             'public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text)',
             'public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text)',
-            'public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer)',
+            'public.omr_open_attempt_session_v3(text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer)',
             'public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb)',
             'public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb)',
             'public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb)',

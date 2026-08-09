@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -24,15 +24,13 @@ import type { Attempt, AttemptFeedback, Exam, PdfDrawings, Question, QuestionRes
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
 import {
-    loadAttempt,
-    loadExam,
     readLocalAttempts,
     saveLocalAttempt,
     saveLocalServerConfirmedAttempt,
 } from "@/lib/omrPersistence";
-import { askAttemptQuestion, loadExamForReview, loadMyAttempt, loadMyAttemptHandwriting, submitAttempt } from "@/app/actions/studentExam";
-import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
-import { stripTeacherOnlySubQuestionFields } from "@/lib/examSolvePayload";
+import { askAttemptQuestion, loadMyAttemptHandwriting, submitAttempt } from "@/app/actions/studentExam";
+import { loadStudentOfficialAttempt } from "@/lib/studentAttemptClient";
+import type { StudentTrustedOfficialReview } from "@/lib/studentAttemptHistoryContract";
 import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
 import {
     flushPendingStudentQuestions,
@@ -45,17 +43,19 @@ import { toast } from "@/components/Toast";
 import ThemeToggle from "@/components/ThemeToggle";
 import CountUp from "@/components/dashboard/CountUp";
 import HandwritingUploadRecoveryCard from "@/components/student/HandwritingUploadRecoveryCard";
+import { GradingEvidenceNote } from "@/components/dashboard/StatusPill";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { safeScorePercent } from "@/lib/scoreUtils";
 import { awaySeverity } from "@/lib/examAwayTracker";
 import {
     buildLearningRecommendations,
     buildRetakeQuestionIds,
     buildStudentWeaknessGroups,
-    getAttemptQuestionResults,
-    summarizeAttemptScore,
+    buildStudentReviewQuestionSnapshot,
+    resolveAttemptGrading,
+    summarizeCanonicalQuestionSubset,
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
+import type { AttemptGradingSource } from "@/lib/premiumAnalytics";
 import { buildRetakeHref, supportedReviewRetakeModes, type ReviewAttemptSource } from "@/lib/retakeLinks";
 import { buildAnnotatedPdfBlob } from "@/lib/annotatedPdfExport";
 import {
@@ -85,6 +85,30 @@ import {
 import { downloadRemoteStudentHandwriting } from "@/lib/studentRemoteHandwritingClient";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
+
+type StudentReviewModel = Omit<StudentTrustedOfficialReview, "gradingSource"> & {
+    gradingSource: AttemptGradingSource;
+};
+
+function buildLocalStudentReviewModel(exam: Exam, attempt: Attempt): StudentReviewModel {
+    const questions = buildStudentReviewQuestionSnapshot(exam, attempt);
+    const reviewExam: Exam = { ...exam, questions };
+    const grading = resolveAttemptGrading(reviewExam, attempt);
+    return {
+        gradingSource: grading.source,
+        questions,
+        questionResults: grading.questionResults,
+        scoreSummary: grading.scoreSummary,
+        weaknessGroups: buildStudentWeaknessGroups(reviewExam, attempt).slice(0, 3),
+        recommendations: buildLearningRecommendations(reviewExam, [attempt], {
+            scope: "attempt",
+            attempt,
+            includeSlowCorrect: true,
+            limit: 5,
+        }),
+        behavior: summarizeAttemptBehavior(attempt),
+    };
+}
 
 function hasDrawings(drawings?: PdfDrawings): boolean {
     return !!drawings && Object.values(drawings).some(paths => paths.length > 0);
@@ -426,6 +450,8 @@ export default function ReviewPage() {
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
     const [attemptSource, setAttemptSource] = useState<ReviewAttemptSource>(null);
+    const [serverRetakeEligibleQuestionIds, setServerRetakeEligibleQuestionIds] = useState<number[]>([]);
+    const [trustedReview, setTrustedReview] = useState<StudentTrustedOfficialReview | null>(null);
     const [exam, setExam] = useState<Exam | null>(null);
     const [submissionReceipt, setSubmissionReceipt] = useState<SubmissionReceipt | null>(null);
     const [submissionRetrying, setSubmissionRetrying] = useState(false);
@@ -502,38 +528,6 @@ export default function ReviewPage() {
     // question. A ref + a submission mutex keep local writes serialized.
     const attemptRef = useRef<Attempt | null>(null);
     const questionSaveInFlightRef = useRef(false);
-    // Latest question-navigation state for the keyboard handler. Updated during
-    // render (below, once filteredQuestions/selectedQuestion exist) so the
-    // window-level listener always sees the current, filter-aware list without
-    // re-subscribing on every render.
-    const navStateRef = useRef<{ ids: number[]; selectedId: number | null }>({ ids: [], selectedId: null });
-
-    // D2: ←/→ move the selected question through the (possibly wrong-filtered)
-    // list. Clamped at both ends — no wrap — so the arrows have a clear "start"
-    // and "end". Ignored while a text field is focused so arrows still move the
-    // caret inside the question textarea.
-    useEffect(() => {
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-            if (event.altKey || event.ctrlKey || event.metaKey) return;
-            const target = event.target as HTMLElement | null;
-            const tag = target?.tagName;
-            if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
-            const { ids, selectedId } = navStateRef.current;
-            if (ids.length === 0) return;
-            const currentIndex = selectedId != null ? ids.indexOf(selectedId) : 0;
-            const baseIndex = currentIndex < 0 ? 0 : currentIndex;
-            const nextIndex = event.key === "ArrowLeft"
-                ? Math.max(0, baseIndex - 1)
-                : Math.min(ids.length - 1, baseIndex + 1);
-            if (nextIndex === baseIndex) return;
-            event.preventDefault();
-            setSelectedQuestionId(ids[nextIndex]);
-        };
-        window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
-    }, []);
-
     useEffect(() => {
         let cancelled = false;
         const loadReview = async () => {
@@ -545,33 +539,34 @@ export default function ReviewPage() {
             }
             // Reset the error flag so a retry starts clean.
             setLoadError(false);
-            // Both server round-trips key off the route attemptId, so start the
-            // review-exam fetch in parallel with the attempt load instead of
-            // chaining them — halves the wait on slow networks.
-            const serverExamPromise = loadExamForReview(id).catch(() => ({ status: "error" as const }));
-            // Server-first: the action returns the attempt only when the signed
-            // session cookie owns it. Device-local records fall back to the
-            // existing client-side ownership check.
-            const result = await loadMyAttemptClient(id, {
-                server: (attemptId) => loadMyAttempt(attemptId),
-                localFallback: (attemptId) => loadAttempt(attemptId),
-            });
-            const found = result.status === "ok" ? result.attempt : undefined;
+            const session = getSession();
+            if (!session) {
+                setAccessDenied(true);
+                return;
+            }
+            // One signed owner-detail action returns the immutable submitted
+            // grading rows plus the exact-id current explanation projection.
+            // Digest columns and raw provider rows never cross this Flight edge.
+            const detail = await loadStudentOfficialAttempt(id, session);
+            const found = detail?.attempt;
             if (found && !cancelled) {
-                const session = getSession();
-                if (result.source === "local") {
-                    if (!session || !attemptBelongsToSession(found, session)) {
+                if (detail.source === "local") {
+                    if (!attemptBelongsToSession(found, session)) {
                         setAccessDenied(true);
                         return;
                     }
                 }
                 attemptRef.current = found;
                 setAttempt(found);
-                setAttemptSource(result.source);
+                setAttemptSource(detail.source);
+                setTrustedReview(detail.source === "server" ? detail.trustedReview || null : null);
+                setServerRetakeEligibleQuestionIds(detail.source === "server"
+                    ? detail.retakeEligibleQuestionIds || []
+                    : []);
                 const storedReceipt = readSubmissionReceipt(found.id);
-                const nextReceipt = submissionReceiptForAttempt(found, storedReceipt, result.source);
+                const nextReceipt = submissionReceiptForAttempt(found, storedReceipt, detail.source);
                 try {
-                    if (result.source === "server") await saveLocalServerConfirmedAttempt(found);
+                    if (detail.source === "server") await saveLocalServerConfirmedAttempt(found);
                     await persistSubmissionReceipt(nextReceipt);
                 } catch (error) {
                     console.warn("Review receipt persistence failed", error);
@@ -654,17 +649,7 @@ export default function ReviewPage() {
                     setRestoredDrawings(found.drawings);
                 }
 
-                // Server-first review payload: answers/explanations included
-                // (post-submit), PIN and answer-key PDF withheld server-side.
-                // The server fetch was already started above, in parallel.
-                const examResult = await loadReviewExamClient(found.id, {
-                    server: () => serverExamPromise,
-                    localFallback: async () => {
-                        const localExam = await loadExam(found.examId);
-                        return localExam ? stripTeacherOnlySubQuestionFields(localExam) : null;
-                    },
-                });
-                const parsedExam = examResult.status === "ok" ? examResult.exam ?? null : null;
+                const parsedExam = detail.exam;
                 if (parsedExam && !cancelled) {
                     setExam(parsedExam);
                     setPdfFile(null);
@@ -689,11 +674,8 @@ export default function ReviewPage() {
                 // and self-references are skipped.
                 const sourceId = found.retake?.sourceAttemptId;
                 if (sourceId && !sourceId.includes(":") && sourceId !== found.id) {
-                    const sourceResult = await loadMyAttemptClient(sourceId, {
-                        server: (attemptId) => loadMyAttempt(attemptId),
-                        localFallback: (attemptId) => loadAttempt(attemptId),
-                    });
-                    if (!cancelled && sourceResult.status === "ok" && sourceResult.attempt) {
+                    const sourceResult = await loadStudentOfficialAttempt(sourceId, session);
+                    if (!cancelled && sourceResult) {
                         const src = sourceResult.attempt;
                         if (sourceResult.source === "server") {
                             setSourceAttempt(src);
@@ -704,10 +686,7 @@ export default function ReviewPage() {
                     }
                 }
             } else if (!cancelled) {
-                // No attempt: distinguish an ownership denial from a load
-                // failure so the student sees the right screen (and a retry).
-                if (result.status === "denied") setAccessDenied(true);
-                else setLoadError(true);
+                setLoadError(true);
             }
         };
         void loadReview();
@@ -784,6 +763,15 @@ export default function ReviewPage() {
         );
     }
 
+    if (attemptSource === "server" && !trustedReview) {
+        return (
+            <div style={{ padding: "2rem", textAlign: "center" }}>
+                <h2>공식 채점 근거를 확인할 수 없습니다.</h2>
+                <p style={{ color: "var(--muted)", marginTop: "0.5rem" }}>결과는 보존되어 있으며, 잠시 후 다시 확인해주세요.</p>
+            </div>
+        );
+    }
+
     const handleSubmissionRetry = async () => {
         if (!attempt || submissionRetrying) return;
         setSubmissionRetrying(true);
@@ -810,25 +798,19 @@ export default function ReviewPage() {
         }
     };
 
-    const reviewQuestionIds = attempt.retake?.questionIds?.length
-        ? new Set(attempt.retake.questionIds)
-        : null;
-    const reviewQuestions = reviewQuestionIds
-        ? exam.questions.filter(q => reviewQuestionIds.has(q.id))
-        : exam.questions;
+    const reviewModel = attemptSource === "server"
+        ? trustedReview!
+        : buildLocalStudentReviewModel(exam, attempt);
+    const reviewQuestions = reviewModel.questions;
     const reviewExam: Exam = { ...exam, questions: reviewQuestions };
-    const questionResults = getAttemptQuestionResults(reviewExam, attempt);
+    const gradingResolution = {
+        source: reviewModel.gradingSource,
+        questionResults: reviewModel.questionResults,
+        scoreSummary: reviewModel.scoreSummary,
+    };
+    const questionResults = reviewModel.questionResults;
     const resultByQuestionId = new Map(questionResults.map(result => [result.questionId, result]));
-    const scoreSummary = summarizeAttemptScore(reviewExam, attempt);
-    // F6: getAttemptQuestionResults recomputes each question's status from the
-    // LIVE exam, so a teacher editing the answer key after submission can shift
-    // the review percent away from the score stored at submission time. Detect
-    // that divergence so the report can flag "재채점됨" with the original score.
-    const storedScorePercent = safeScorePercent(attempt.score, attempt.totalScore);
-    const storedEarnedScore = Math.round((attempt.score || 0) * 100) / 100;
-    const scoreRegraded = Number.isFinite(attempt.totalScore)
-        && attempt.totalScore > 0
-        && scoreSummary.scorePercent !== storedScorePercent;
+    const scoreSummary = gradingResolution.scoreSummary;
     const resultCounts = questionResults.reduce((counts, result) => {
         if (result.status === "correct") counts.correctCount += 1;
         if (result.status === "wrong") counts.incorrectCount += 1;
@@ -850,16 +832,15 @@ export default function ReviewPage() {
     const canDownloadMarkupFile = canDownloadReturnedMarkup(returnedFeedback) && hasDrawings(combinedReviewDrawings);
     const canDownloadAnnotatedPdf = canDownloadMarkupFile && !!pdfFile;
     const visibleFeedbackComments = returnedFeedback?.questionComments.filter(comment => comment.visibility === "student_visible") || [];
-    const retakeQuestionIds = buildRetakeQuestionIds(reviewExam, attempt);
-    const weaknessGroups = buildStudentWeaknessGroups(reviewExam, attempt).slice(0, 3);
-    const recommendationGroups = buildLearningRecommendations(reviewExam, [attempt], {
-        scope: "attempt",
-        attempt,
-        // Show the student their own "정답이지만 느린" unstable concepts too.
-        includeSlowCorrect: true,
-        limit: 5,
-    });
-    const behaviorSummary = summarizeAttemptBehavior(attempt);
+    const retakeQuestionIds = attemptSource === "server"
+        ? serverRetakeEligibleQuestionIds
+        : buildRetakeQuestionIds(reviewExam, attempt);
+    const retakeDefinitionUnavailable = attemptSource === "server"
+        && serverRetakeEligibleQuestionIds.length === 0
+        && questionResults.some(result => result.status === "wrong" || result.status === "unanswered");
+    const weaknessGroups = reviewModel.weaknessGroups;
+    const recommendationGroups = reviewModel.recommendations;
+    const behaviorSummary = reviewModel.behavior;
     const retakeRecovery = attempt.retake && sourceAttempt
         ? buildAttemptRetakeRecovery(exam, attempt, sourceAttempt)
         : null;
@@ -868,13 +849,13 @@ export default function ReviewPage() {
         ? buildSourceAttemptRecovery(exam, attempt, readLocalAttempts())
         : null;
     const recoveredQuestionIdSet = new Set(sourceRecovery?.recoveredQuestionIds || []);
+    const allReviewQuestionIds = reviewQuestions.map(question => question.id);
     // Source score over the SAME scoped question set, so the two percentages compare 1:1.
     const sourceScoreSummary = retakeRecovery && sourceAttempt
-        ? summarizeAttemptScore(reviewExam, sourceAttempt)
+        ? summarizeCanonicalQuestionSubset(exam, sourceAttempt, allReviewQuestionIds)
         : null;
     const timingByQuestionId = new Map((attempt.questionTimings || []).map(timing => [timing.questionId, timing]));
     const questionNumberById = new Map(reviewQuestions.map(question => [question.id, question.number]));
-    const allReviewQuestionIds = reviewQuestions.map(question => question.id);
     const explainedCount = reviewQuestions.filter(question => question.explanation?.trim()).length;
     const allQuestionNotes = Object.values(studentQuestions);
     const queuedQuestionCount = allQuestionNotes.filter(note => note.status !== "answered").length;
@@ -883,10 +864,11 @@ export default function ReviewPage() {
     const canUseScopedRetakes = supportedReviewRetakeModes(attemptSource).includes("custom");
     const resolveQuestionState = (question: Question) => {
         const result = resultByQuestionId.get(question.id);
-        const userAnswer = result?.selectedAnswer ?? attempt.answers[question.id];
-        const correctAnswer = result?.correctAnswer ?? question.answer;
+        const isLegacyDerived = gradingResolution.source === "legacy_derived_current_exam";
+        const userAnswer = result?.selectedAnswer ?? (isLegacyDerived ? attempt.answers[question.id] : undefined);
+        const correctAnswer = result?.correctAnswer ?? (isLegacyDerived ? question.answer : undefined);
         const status: QuestionResultStatus = result?.status
-            ?? (correctAnswer === undefined
+            ?? (!isLegacyDerived || correctAnswer === undefined
                 ? "ungraded"
                 : userAnswer === undefined || userAnswer === null || userAnswer === 0
                     ? "unanswered"
@@ -905,13 +887,6 @@ export default function ReviewPage() {
         || filteredQuestions[0]
         || null;
     const selectedQuestionState = selectedQuestion ? resolveQuestionState(selectedQuestion) : null;
-    // Keep the keyboard-nav handler in sync with the current filtered list and
-    // effective selection (D2). Assigning a ref during render is safe — no state
-    // update, just the "latest value" pattern.
-    navStateRef.current = {
-        ids: filteredQuestions.map(question => question.id),
-        selectedId: selectedQuestion?.id ?? null,
-    };
     const formatRetakeNumbers = (questionIds: number[]) => questionIds
         .map(questionId => questionNumberById.get(questionId))
         .filter((questionNumber): questionNumber is number => typeof questionNumber === "number")
@@ -939,6 +914,21 @@ export default function ReviewPage() {
         const next = wrongOrdered.find(questionId => orderedIds.indexOf(questionId) > currentIndex)
             ?? wrongOrdered[0];
         setSelectedQuestionId(next);
+    };
+
+    const moveQuestionTab = (event: ReactKeyboardEvent<HTMLButtonElement>, questionId: number) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        const currentIndex = filteredQuestions.findIndex(question => question.id === questionId);
+        if (currentIndex < 0) return;
+        event.preventDefault();
+        const direction = event.key === "ArrowLeft" ? -1 : 1;
+        const nextIndex = (currentIndex + direction + filteredQuestions.length) % filteredQuestions.length;
+        if (nextIndex === currentIndex) return;
+        const nextQuestion = filteredQuestions[nextIndex];
+        setSelectedQuestionId(nextQuestion.id);
+        const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+        tabs?.[nextIndex]?.focus();
     };
 
     const submitQuestionBody = async (question: Question, rawBody: string) => {
@@ -1129,28 +1119,7 @@ export default function ReviewPage() {
                                 <strong><CountUp value={scoreSummary.scorePercent} delayMs={200} /><span>%</span></strong>
                                 <div>{scoreSummary.earnedScore} / {scoreSummary.totalScore}점</div>
                             </div>
-                            {scoreRegraded && (
-                                <div
-                                    className="student-review-regrade-badge"
-                                    style={{
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '0.3rem',
-                                        alignSelf: 'flex-start',
-                                        padding: '0.3rem 0.55rem',
-                                        borderRadius: 'var(--radius-full)',
-                                        border: '1px solid var(--warning)',
-                                        background: 'color-mix(in srgb, var(--warning) 14%, transparent)',
-                                        color: 'var(--warning)',
-                                        fontSize: '0.68rem',
-                                        fontWeight: 800,
-                                        lineHeight: 1.35,
-                                    }}
-                                    title={`제출 당시 점수는 ${storedEarnedScore}점(${storedScorePercent}%)이었습니다. 현재 정답 기준으로 다시 채점된 점수를 표시합니다.`}
-                                >
-                                    현재 정답 기준 재채점됨 · 제출 당시 {storedEarnedScore}점 ({storedScorePercent}%)
-                                </div>
-                            )}
+                            <GradingEvidenceNote source={gradingResolution.source} />
                             <div className="student-review-pill-row">
                                 {attempt.handwritingArchived && (
                                     <MetaChip tone="primary">필기 보관 {attempt.questionDrawings?.length || attempt.drawingPageCount || 0}문항</MetaChip>
@@ -1296,6 +1265,7 @@ export default function ReviewPage() {
                                             type="button"
                                             onClick={() => setFilterWrong(false)}
                                             className={`btn ${!filterWrong ? "btn-primary" : "btn-secondary"}`}
+                                            aria-pressed={!filterWrong}
                                         >
                                             전체 {reviewQuestions.length}
                                         </button>
@@ -1303,6 +1273,7 @@ export default function ReviewPage() {
                                             type="button"
                                             onClick={() => setFilterWrong(true)}
                                             className={`btn ${filterWrong ? "btn-primary" : "btn-secondary"}`}
+                                            aria-pressed={filterWrong}
                                         >
                                             오답 {wrongAndUnansweredCount}
                                         </button>
@@ -1320,7 +1291,7 @@ export default function ReviewPage() {
 
                                 {filteredQuestions.length > 0 ? (
                                 <div className="student-review-question-dock">
-                                    <div className="student-review-question-map" aria-label="문항 바로가기">
+                                    <div className="student-review-question-map" role="tablist" aria-label="문항 바로가기">
                                         {filteredQuestions.map(question => {
                                             const { status } = resolveQuestionState(question);
                                             const isActive = question.id === selectedQuestion?.id;
@@ -1330,8 +1301,14 @@ export default function ReviewPage() {
                                                     key={question.id}
                                                     type="button"
                                                     onClick={() => setSelectedQuestionId(question.id)}
+                                                    onKeyDown={(event) => moveQuestionTab(event, question.id)}
                                                     className={`student-review-question-dot is-${status} ${isActive ? "is-active" : ""}`}
-                                                    aria-pressed={isActive}
+                                                    id={`student-review-question-tab-${question.id}`}
+                                                    role="tab"
+                                                    aria-label={`문항 ${question.number} ${questionStatusLabel(status)}`}
+                                                    aria-selected={isActive}
+                                                    aria-controls="student-review-question-panel"
+                                                    tabIndex={isActive ? 0 : -1}
                                                     title={`문항 ${question.number} ${questionStatusLabel(status)}`}
                                                 >
                                                     <span>{question.number}</span>
@@ -1342,27 +1319,33 @@ export default function ReviewPage() {
                                     </div>
 
                                     {selectedQuestion && selectedQuestionState && (
-                                        <QuestionCard
-                                            key={selectedQuestion.id}
-                                            question={selectedQuestion}
-                                            userAnswer={selectedQuestionState.userAnswer}
-                                            correctAnswer={selectedQuestionState.correctAnswer}
-                                            status={selectedQuestionState.status}
-                                            recovered={recoveredQuestionIdSet.has(selectedQuestion.id)}
-                                            timing={selectedQuestionState.timing}
-                                            explanationOpen={!!openExplanations[selectedQuestion.id]}
-                                            questionBoxOpen={!!openQuestionBoxes[selectedQuestion.id]}
-                                            draft={questionDrafts[selectedQuestion.id] || ""}
-                                            submittedQuestion={studentQuestions[selectedQuestion.id]}
-                                            subQuestionAnswers={attempt.subQuestionAnswers?.[selectedQuestion.id]}
-                                            retakeHref={canUseScopedRetakes ? buildRetakeHref(attempt.examId, attempt.id, [selectedQuestion.id], "custom") : null}
-                                            explanationRequestArmed={explanationRequestArmedId === selectedQuestion.id}
-                                            onToggleExplanation={() => toggleExplanation(selectedQuestion.id)}
-                                            onToggleQuestionBox={() => toggleQuestionBox(selectedQuestion.id)}
-                                            onDraftChange={(value) => updateQuestionDraft(selectedQuestion.id, value)}
-                                            onSubmitQuestion={() => submitStudentQuestion(selectedQuestion)}
-                                            onRequestExplanation={() => requestExplanation(selectedQuestion)}
-                                        />
+                                        <div
+                                            id="student-review-question-panel"
+                                            role="tabpanel"
+                                            aria-labelledby={`student-review-question-tab-${selectedQuestion.id}`}
+                                        >
+                                            <QuestionCard
+                                                key={selectedQuestion.id}
+                                                question={selectedQuestion}
+                                                userAnswer={selectedQuestionState.userAnswer}
+                                                correctAnswer={selectedQuestionState.correctAnswer}
+                                                status={selectedQuestionState.status}
+                                                recovered={recoveredQuestionIdSet.has(selectedQuestion.id)}
+                                                timing={selectedQuestionState.timing}
+                                                explanationOpen={!!openExplanations[selectedQuestion.id]}
+                                                questionBoxOpen={!!openQuestionBoxes[selectedQuestion.id]}
+                                                draft={questionDrafts[selectedQuestion.id] || ""}
+                                                submittedQuestion={studentQuestions[selectedQuestion.id]}
+                                                subQuestionAnswers={attempt.subQuestionAnswers?.[selectedQuestion.id]}
+                                                retakeHref={canUseScopedRetakes ? buildRetakeHref(attempt.examId, attempt.id, [selectedQuestion.id], "custom") : null}
+                                                explanationRequestArmed={explanationRequestArmedId === selectedQuestion.id}
+                                                onToggleExplanation={() => toggleExplanation(selectedQuestion.id)}
+                                                onToggleQuestionBox={() => toggleQuestionBox(selectedQuestion.id)}
+                                                onDraftChange={(value) => updateQuestionDraft(selectedQuestion.id, value)}
+                                                onSubmitQuestion={() => submitStudentQuestion(selectedQuestion)}
+                                                onRequestExplanation={() => requestExplanation(selectedQuestion)}
+                                            />
+                                        </div>
                                     )}
                                 </div>
                                 ) : (
@@ -1398,6 +1381,10 @@ export default function ReviewPage() {
                                         <Repeat2 size={15} />
                                         오답만
                                     </Link>
+                                ) : retakeDefinitionUnavailable ? (
+                                    <span role="status" className="student-review-muted-note">
+                                        제출 당시 문항 정의가 현재 시험과 달라 자동 재시험을 만들 수 없습니다.
+                                    </span>
                                 ) : (
                                     <span className="student-review-success-note">재시험할 오답이 없습니다</span>
                                 )}

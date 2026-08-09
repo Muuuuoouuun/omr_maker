@@ -602,6 +602,115 @@
   gap: 0.5rem;
 }
 
+.grading-evidence-note {
+  display: grid;
+  align-self: stretch;
+  gap: 0.2rem;
+  padding: 0.6rem 0.7rem;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  border-radius: var(--radius-md);
+  font-size: var(--type-caption-min);
+  line-height: 1.5;
+}
+
+.grading-evidence-note strong {
+  color: var(--text-warning);
+  font-size: var(--type-label);
+  line-height: 1.35;
+}
+
+.status-pill {
+  --status-pill-color: var(--primary);
+  --status-pill-background: rgba(99, 102, 241, 0.1);
+  --status-pill-border: rgba(99, 102, 241, 0.24);
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.4rem;
+  padding: 0.35rem 0.55rem;
+  color: var(--status-pill-color);
+  white-space: nowrap;
+  background: var(--status-pill-background);
+  border: 1px solid var(--status-pill-border);
+  border-radius: var(--radius-full);
+}
+
+.status-pill.is-success {
+  --status-pill-color: var(--success);
+  --status-pill-background: rgba(16, 185, 129, 0.1);
+  --status-pill-border: rgba(16, 185, 129, 0.22);
+}
+
+.status-pill.is-warning {
+  --status-pill-color: var(--text-warning);
+  --status-pill-background: rgba(245, 158, 11, 0.12);
+  --status-pill-border: rgba(245, 158, 11, 0.28);
+}
+
+.status-pill.is-error {
+  --status-pill-color: var(--error);
+  --status-pill-background: rgba(239, 68, 68, 0.1);
+  --status-pill-border: rgba(239, 68, 68, 0.24);
+}
+
+.status-pill.is-grade {
+  --status-pill-color: var(--grade-red);
+  --status-pill-background: var(--grade-red-soft);
+  --status-pill-border: var(--grade-red-line);
+}
+
+.status-pill.is-retake {
+  --status-pill-color: var(--retake);
+  --status-pill-background: var(--retake-soft);
+  --status-pill-border: var(--retake-line);
+}
+
+.status-pill.is-muted {
+  --status-pill-color: var(--muted);
+  --status-pill-background: rgba(100, 116, 139, 0.1);
+  --status-pill-border: rgba(100, 116, 139, 0.22);
+}
+
+.status-pill.is-outline {
+  background: transparent;
+}
+
+.status-pill.is-sm {
+  gap: 0.3rem;
+  padding: 0.24rem 0.6rem;
+}
+
+.status-pill-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.status-pill-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.status-pill-label {
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1.05;
+}
+
+.status-pill.is-sm .status-pill-label {
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.status-pill-detail {
+  color: var(--muted);
+  font-size: 0.63rem;
+  line-height: 1.1;
+}
+
 .student-handwriting-recovery-button {
   min-height: 44px;
   white-space: normal;
@@ -4208,9 +4317,13 @@ html[data-motion="off"] :where(
   align-items: center;
   gap: 0.75rem;
   margin: 1.35rem 0 1rem;
-  color: #94a3b8;
+  color: #52627a;
   font-size: var(--type-caption);
   font-weight: 750;
+}
+
+[data-theme="dark"] .mockup-login-divider {
+  color: var(--muted);
 }
 
 .mockup-login-divider::before,
@@ -4254,7 +4367,7 @@ html[data-motion="off"] :where(
 
 .mockup-login-card-heading p {
   margin-top: 0.18rem;
-  color: #718096;
+  color: #52627a;
   font-size: 0.78rem;
   line-height: 1.35;
 }
@@ -4331,8 +4444,8 @@ html[data-motion="off"] :where(
 
 .mockup-login-note {
   margin-top: 0.65rem;
-  color: #7f8da1;
-  font-size: 0.72rem;
+  color: #52627a;
+  font-size: var(--type-caption-min);
   line-height: 1.45;
   text-align: center;
   word-break: keep-all;

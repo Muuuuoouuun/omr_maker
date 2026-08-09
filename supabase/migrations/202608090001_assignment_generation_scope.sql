@@ -53,7 +53,7 @@ set statement_timeout = '5s'
 set lock_timeout = '2s'
 as $$
 declare
-    assignment public.omr_assignments%rowtype;
+    v_assignment public.omr_assignments%rowtype;
 begin
     if nullif(pg_catalog.btrim(p_organization_id), '') is null
        or nullif(pg_catalog.btrim(p_exam_id), '') is null
@@ -66,17 +66,17 @@ begin
     perform pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtextextended(
         pg_catalog.btrim(p_assignment_id), 608032
     ));
-    select * into assignment
-      from public.omr_assignments assignment
-     where assignment.organization_id = pg_catalog.btrim(p_organization_id)
-       and assignment.exam_id = pg_catalog.btrim(p_exam_id)
-       and assignment.id = pg_catalog.btrim(p_assignment_id)
-       and assignment.access_mode = 'targeted'
+    select assignment_row.* into v_assignment
+      from public.omr_assignments assignment_row
+     where assignment_row.organization_id = pg_catalog.btrim(p_organization_id)
+       and assignment_row.exam_id = pg_catalog.btrim(p_exam_id)
+       and assignment_row.id = pg_catalog.btrim(p_assignment_id)
+       and assignment_row.access_mode = 'targeted'
      for share;
-    if not found or assignment.revision is distinct from p_assignment_revision then
+    if not found or v_assignment.revision is distinct from p_assignment_revision then
         raise exception 'assignment generation stale';
     end if;
-    return assignment;
+    return v_assignment;
 end;
 $$;
 

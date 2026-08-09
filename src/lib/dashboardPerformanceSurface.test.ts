@@ -28,9 +28,9 @@ describe("dashboard loading performance surface", () => {
         expect(examAnalyticsTab).toContain("completedAttemptsOnly(");
         expect(examAnalyticsTab.indexOf("completedAttemptsOnly("))
             .toBeLessThan(examAnalyticsTab.indexOf("buildRegionalLearningScopes({"));
-        expect(studentAnalyticsTab).toContain("completedAttemptsOnly(attempts)");
-        expect(studentAnalyticsTab.indexOf("completedAttemptsOnly(attempts)"))
-            .toBeLessThan(studentAnalyticsTab.indexOf("buildRegionalLearningScopes({"));
+        expect(studentAnalyticsTab).toContain('attempts.filter(attempt => attempt.status === "completed")');
+        expect(studentAnalyticsTab.indexOf('attempts.filter(attempt => attempt.status === "completed")'))
+            .toBeLessThan(studentAnalyticsTab.indexOf("buildStudentAnalyticsRegionalScopes({"));
     });
 
     it("loads the dense attempt report only when its tab is opened", () => {
@@ -57,7 +57,8 @@ describe("dashboard loading performance surface", () => {
 
         expect(usersPage).toContain("isCompleteTeacherAttemptCollection(");
         expect(usersPage).toContain("setAllAttempts(attemptAnalyticsComplete ? attemptResult.items : [])");
-        expect(usersPage).toContain("if (!isCompleteTeacherAttemptCollection(result))");
+        expect(usersPage).toContain("const attemptAnalyticsComplete = isDemoSession || isCompleteTeacherAttemptCollection(attemptResult)");
+        expect(usersPage).toContain('setAttemptAnalyticsStatus(attemptAnalyticsComplete ? "ready" : "unavailable")');
         expect(usersPage).toContain("응시 분석을 일시 중단");
         expect(usersPage).toContain('attemptAnalyticsStatus === "ready"');
         expect(usersPage).toContain("응시 분석 데이터 미표시");

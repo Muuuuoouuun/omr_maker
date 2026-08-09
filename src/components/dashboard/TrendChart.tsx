@@ -2,6 +2,7 @@
 
 import { useId, useMemo, useRef } from "react";
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
+import type { ValueType } from "recharts/types/component/DefaultTooltipContent";
 import useCometReveal from "./useCometReveal";
 
 interface TrendChartProps {
@@ -138,7 +139,10 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
                         labelFormatter={(_label, payload) => (
                             payload && payload.length > 0 ? payload[0].payload.name : ''
                         )}
-                        formatter={(value: number | string | undefined) => [`${value}점`, '평균 점수']}
+                        formatter={(value: ValueType | undefined) => [
+                            `${Array.isArray(value) ? value.join("–") : value}점`,
+                            '평균 점수',
+                        ]}
                     />
                     <Area
                         type="monotone"

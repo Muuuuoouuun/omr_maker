@@ -388,6 +388,15 @@ export interface Attempt {
     questionDrawings?: QuestionDrawingSummary[];
     /** Stable per-question result rows used for student/class/exam/type analytics. */
     questionResults?: QuestionResult[];
+    /** Server-generated immutable question-definition row count. Legacy rows omit it. */
+    questionResultsQuestionCount?: number;
+    /** Server-only SHA-256 over submitted question ids/numbers/scores/answer keys. */
+    questionResultsDefinitionManifestHash?: string;
+    /** Server-only SHA-256 over exact submission scope and all official result evidence. */
+    questionResultsFullEvidenceHash?: string;
+    /** Request-local server projection attestation; stripped from persistence writes. */
+    /** Present only when an explicit repair derived legacy rows from a current exam snapshot. */
+    questionResultsSource?: 'legacy_derived_current_exam' | 'incomplete_or_invalid';
     status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
     /** If true, submitted because the timer hit zero. */

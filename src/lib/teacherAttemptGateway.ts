@@ -25,6 +25,7 @@ import {
 import type { WorkspaceContext } from "@/lib/workspaceContext";
 import type { Attempt, SubQuestionReviewStatus } from "@/types/omr";
 import type { TeacherAttemptSummary } from "@/lib/teacherAttemptSummary";
+import { attestCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 import {
     canonicalUtcTimestampMicrosecondKey,
     normalizeCanonicalUtcTimestamp,
@@ -263,7 +264,7 @@ function isQuestionDrawingSummaryProjection(value: unknown): boolean {
 function isQuestionResultProjection(value: unknown): boolean {
     if (!isPlainRecord(value)
         || !hasOnlyProjectionKeys(value, [
-            "schemaVersion", "attemptId", "examId", "examTitle", "organizationId", "classId", "assignmentId",
+            "schemaVersion", "attemptId", "examId", "examTitle", "organizationId", "classId", "assignmentId", "assignmentRevision",
             "studentProfileId", "studentName", "studentId", "groupId", "groupName", "regionId", "regionName",
             "identityType", "questionId", "questionNumber", "canonicalQuestionId", "label", "score", "earnedScore",
             "selectedAnswer", "correctAnswer", "status", "isCorrect", "isWrong", "isUnanswered", "subject", "unit",
@@ -289,6 +290,8 @@ function isQuestionResultProjection(value: unknown): boolean {
         "concept", "skill", "source", "retakeSourceAttemptId",
     ];
     if (!optionalTexts.every(key => optionalProjectionField(value, key, isBoundedString))) return false;
+    if (!optionalProjectionField(value, "assignmentRevision", isPositiveSafeInteger)
+        || Boolean(value.assignmentId) !== Boolean(value.assignmentRevision)) return false;
     if (!optionalProjectionField(value, "identityType", item => (
         item === "guest" || item === "temporary" || item === "registered"
     ))) return false;
@@ -663,7 +666,7 @@ function attemptFromMutationResult(
     const record = Array.isArray(result.data) ? result.data[0] : result.data;
     if (!record?.payload) return { status: "not_found" };
     try {
-        return { status: "saved", attempt: attemptFromSupabaseRow(record) };
+        return { status: "saved", attempt: attemptFromSupabaseRow(record, attestCanonicalQuestionResultEvidence) };
     } catch {
         return { status: "service_unavailable", error: "Invalid canonical attempt payload" };
     }
@@ -751,7 +754,7 @@ export async function forceFinishTeacherAttemptsWithGateway(
         try {
             const record = row as SupabaseAttemptRow;
             return [{
-                attempt: attemptFromSupabaseRow(record),
+                attempt: attemptFromSupabaseRow(record, attestCanonicalQuestionResultEvidence),
             }];
         } catch {
             return [];
@@ -835,7 +838,7 @@ export async function forceFinishTeacherAttemptsWithGateway(
     const records = Array.isArray(result.data) ? result.data : result.data ? [result.data] : [];
     if (records.length !== attemptIds.length) return { status: "not_found" };
     try {
-        const attempts = records.map(record => attemptFromSupabaseRow(record));
+        const attempts = records.map(record => attemptFromSupabaseRow(record, attestCanonicalQuestionResultEvidence));
         if (
             attempts.some(item => clean(item.organizationId) !== clean(context.organizationId))
             || attempts.some(item => item.status !== "completed")
@@ -940,7 +943,10 @@ export async function forceFinishTeacherAttemptSessionsWithGateway(
     const records = Array.isArray(result.data) ? result.data : [];
     if (records.length !== sessionIds.length) return { status: "not_found" };
     try {
-        const attempts = records.map(record => attemptFromSupabaseRow(record as { payload: Attempt }));
+        const attempts = records.map(record => attemptFromSupabaseRow(
+            record as { payload: Attempt },
+            attestCanonicalQuestionResultEvidence,
+        ));
         if (
             attempts.some(attempt => clean(attempt.organizationId) !== clean(context.organizationId))
             || attempts.some(attempt => attempt.status !== "completed")
@@ -979,7 +985,7 @@ export async function listTeacherAttemptsWithGateway(
                 started_at: safeIso(record.started_at),
                 finished_at: safeIso(record.finished_at),
                 ...(record.updated_at === undefined ? {} : { updated_at: safeIso(record.updated_at) }),
-            });
+            }, attestCanonicalQuestionResultEvidence);
             if (clean(attempt.organizationId) !== clean(context.organizationId)) {
                 return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
             }
@@ -1082,7 +1088,10 @@ export async function loadTeacherAttemptWithGateway(
     if (result.error) return { status: "service_unavailable", error: result.error.message };
     if (!result.data) return { status: "not_found" };
     try {
-        return { status: "loaded", attempt: attemptFromSupabaseRow(result.data as SupabaseAttemptRow) };
+        return {
+            status: "loaded",
+            attempt: attemptFromSupabaseRow(result.data as SupabaseAttemptRow, attestCanonicalQuestionResultEvidence),
+        };
     } catch {
         return { status: "service_unavailable", error: "Invalid canonical attempt payload" };
     }

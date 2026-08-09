@@ -1,5 +1,3 @@
-import { questionWeight } from "@/types/omr";
-import { canonicalQuestionIdFor } from "@/lib/questionBank";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { rosterGroupMatchesStudent } from "@/lib/rosterStorage";
 import { computePointBiserialCorrelation, type PointBiserialSample } from "@/lib/scoreDistribution";
@@ -8,13 +6,19 @@ import type {
     Exam,
     FocusLossEvent,
     Question,
-    QuestionDrawingSummary,
     QuestionResult,
-    QuestionResultStatus,
     QuestionTiming,
 } from "@/types/omr";
+import {
+    buildQuestionResults,
+} from "@/lib/questionResultBuilder";
+export { buildQuestionResults, getEffectiveExamQuestionsForAttempt } from "@/lib/questionResultBuilder";
 import { resolveAwayCount } from "@/lib/examAwayTracker";
 import { hasGradableAttemptScore } from "@/lib/scoreUtils";
+import {
+    buildCanonicalQuestionResultEvidence,
+    hasCanonicalQuestionResultEvidenceAttestation,
+} from "@/lib/canonicalQuestionResultManifest";
 export { hasGradableAttemptScore } from "@/lib/scoreUtils";
 
 export interface WeaknessGroup {
@@ -91,6 +95,8 @@ export interface LearningRecommendationOptions {
     attempt?: Attempt;
     studentKey?: string;
     groupKey?: string;
+    /** Inputs were already roster-classified; do not re-filter immutable row scope. */
+    prefiltered?: boolean;
     kinds?: QuestionResultGroupKind[];
     includeRetakes?: boolean;
     /**
@@ -147,6 +153,8 @@ export interface ClassExamWeaknessMatrixRow {
 }
 
 export interface ExamQuestionResultStat {
+    cohortKey: string;
+    definitionManifestHash: string;
     questionId: number;
     questionNumber: number;
     label?: string;
@@ -155,6 +163,9 @@ export interface ExamQuestionResultStat {
     source?: string;
     expectedTimeSec?: number;
     score: number;
+    correctAnswer?: number;
+    difficulty?: QuestionResult["difficulty"];
+    mistakeTypes?: string[];
     totalCount: number;
     correctCount: number;
     wrongCount: number;
@@ -204,6 +215,18 @@ export interface AttemptScoreSummary {
     ungradedQuestionCount: number;
 }
 
+export type AttemptGradingSource =
+    | "canonical_submission"
+    | "stored_totals_only"
+    | "legacy_derived_current_exam"
+    | "incomplete_or_invalid";
+
+export interface AttemptGradingResolution {
+    source: AttemptGradingSource;
+    questionResults: QuestionResult[];
+    scoreSummary: AttemptScoreSummary;
+}
+
 interface MutableTypeGroup {
     kind: QuestionResultGroupKind;
     title: string;
@@ -223,6 +246,7 @@ interface MutableTypeGroup {
 }
 
 interface MutableQuestionResultStat extends ExamQuestionResultStat {
+    wrongOptionCounts: Record<number, number>;
     timeSumSec: number;
     timedCount: number;
     visitSum: number;
@@ -287,6 +311,31 @@ function groupValue(question: Question, kind: GroupKind): string | undefined {
     if (kind === "concept") return question.tags?.concept?.trim() || question.label?.trim();
     if (kind === "unit") return question.tags?.unit?.trim();
     return question.label?.trim();
+}
+
+function submittedQuestionFromResult(result: QuestionResult): Question {
+    return {
+        id: result.questionId,
+        number: result.questionNumber,
+        label: result.label,
+        score: result.score,
+        answer: result.correctAnswer,
+        tags: {
+            subject: result.subject,
+            unit: result.unit,
+            concept: result.concept,
+            skill: result.skill,
+            difficulty: result.difficulty,
+            cognitiveLevel: result.cognitiveLevel,
+            source: result.source,
+            expectedTimeSec: result.expectedTimeSec,
+            mistakeTypes: result.mistakeTypes,
+            prerequisites: result.prerequisites,
+        },
+        pdfLocation: result.pdfLocation,
+        pdfRegion: result.pdfRegion,
+        passagePdfRegions: result.passagePdfRegions,
+    };
 }
 
 function groupKey(kind: QuestionResultGroupKind, title: string): string {
@@ -405,30 +454,6 @@ function rosterStudentsForGroup(group: Pick<RosterGroup, "id" | "name">, student
     return students.filter(student => rosterStudentBelongsToGroup(student, group));
 }
 
-function normalizeAttemptForMatrixGroup(attempt: Attempt, group: Pick<RosterGroup, "id" | "name">, student?: RosterStudent): Attempt {
-    const nextStudentId = student?.id || attempt.studentId;
-    const nextStudentName = student?.name || attempt.studentName;
-    const nextGroupId = normalizeIdentityKey(group.id) || attempt.groupId;
-    const nextGroupName = normalizeIdentityKey(group.name) || attempt.groupName;
-
-    if (
-        nextStudentId === attempt.studentId
-        && nextStudentName === attempt.studentName
-        && nextGroupId === attempt.groupId
-        && nextGroupName === attempt.groupName
-    ) {
-        return attempt;
-    }
-
-    return {
-        ...attempt,
-        studentId: nextStudentId,
-        studentName: nextStudentName,
-        groupId: nextGroupId,
-        groupName: nextGroupName,
-    };
-}
-
 function resultMatchesStudentKey(result: QuestionResult, studentKey?: string): boolean {
     const requestedKey = normalizeIdentityKey(studentKey);
     if (!requestedKey) return true;
@@ -469,12 +494,6 @@ export function attemptElapsedTimeSec(attempt: Pick<Attempt, "startedAt" | "fini
     const finished = Date.parse(attempt.finishedAt || "");
     if (!Number.isFinite(started) || !Number.isFinite(finished) || finished <= started) return 0;
     return Math.round((finished - started) / 1000);
-}
-
-function resolveQuestionStatus(question: Question, selectedAnswer: number | undefined): QuestionResultStatus {
-    if (question.answer === undefined || question.answer === null) return "ungraded";
-    if (!isAnswered(selectedAnswer)) return "unanswered";
-    return selectedAnswer === question.answer ? "correct" : "wrong";
 }
 
 function makeWeaknessGroup(
@@ -675,44 +694,147 @@ function sortLearningRecommendations(recommendations: LearningRecommendation[]):
     });
 }
 
-function getDrawingForQuestion(questionDrawings: QuestionDrawingSummary[] | undefined, questionId: number): QuestionDrawingSummary | undefined {
-    return questionDrawings?.find(drawing => drawing.questionId === questionId);
+function validStoredTotals(
+    earnedScore: unknown,
+    totalScore: unknown,
+): { earnedScore: number; totalScore: number } | null {
+    if (
+        typeof earnedScore !== "number"
+        || typeof totalScore !== "number"
+        || !Number.isFinite(earnedScore)
+        || !Number.isFinite(totalScore)
+        || Object.is(earnedScore, -0)
+        || Object.is(totalScore, -0)
+        || earnedScore < 0
+        || totalScore < 0
+        || earnedScore > totalScore
+        || (totalScore === 0 && earnedScore !== 0)
+    ) return null;
+    return { earnedScore: roundScore(earnedScore), totalScore: roundScore(totalScore) };
 }
 
-function getTimingForQuestion(questionTimings: QuestionTiming[] | undefined, questionId: number): QuestionTiming | undefined {
-    return questionTimings?.find(timing => timing.questionId === questionId);
+function isOptionalFiniteNonNegative(value: number | undefined): boolean {
+    return value === undefined || (Number.isFinite(value) && value >= 0 && !Object.is(value, -0));
 }
 
-export function getEffectiveExamQuestionsForAttempt(exam: Exam, attempt: Pick<Attempt, "retake">): Question[] {
-    const retakeQuestionIds = attempt.retake?.questionIds;
-    if (!retakeQuestionIds?.length) return exam.questions;
-
-    const activeIds = new Set(retakeQuestionIds);
-    const activeQuestions = exam.questions.filter(question => activeIds.has(question.id));
-    return activeQuestions.length > 0 ? activeQuestions : exam.questions;
+function isOptionalNonNegativeInteger(value: number | undefined): boolean {
+    return value === undefined || (Number.isInteger(value) && value >= 0 && !Object.is(value, -0));
 }
 
-export function buildQuestionResults(exam: Exam, attempt: Attempt): QuestionResult[] {
-    const questions = getEffectiveExamQuestionsForAttempt(exam, attempt);
-    const totalQuestions = questions.length;
+function isInternallyValidStoredResult(result: QuestionResult): boolean {
+    if (!result || typeof result !== "object") return false;
+    if (!(["correct", "wrong", "unanswered", "ungraded"] as const).includes(result.status)) return false;
+    if (
+        result.schemaVersion !== 1
+        || !Number.isInteger(result.questionId)
+        || result.questionId <= 0
+        || !Number.isInteger(result.questionNumber)
+        || result.questionNumber <= 0
+        || !Number.isFinite(result.score)
+        || result.score < 0
+        || Object.is(result.score, -0)
+        || !Number.isFinite(result.earnedScore)
+        || result.earnedScore < 0
+        || Object.is(result.earnedScore, -0)
+        || result.earnedScore > result.score
+        || !isOptionalFiniteNonNegative(result.timeSec)
+        || !isOptionalNonNegativeInteger(result.visitCount)
+        || !isOptionalNonNegativeInteger(result.revisitCount)
+        || !isOptionalNonNegativeInteger(result.answerChangeCount)
+        || !isOptionalNonNegativeInteger(result.handwritingStrokeCount)
+        || !isOptionalNonNegativeInteger(result.handwritingPage)
+    ) return false;
+    if (
+        result.selectedAnswer !== undefined
+        && (!Number.isInteger(result.selectedAnswer) || result.selectedAnswer <= 0 || Object.is(result.selectedAnswer, -0))
+    ) return false;
+    if (
+        result.isCorrect !== (result.status === "correct")
+        || result.isWrong !== (result.status === "wrong")
+        || result.isUnanswered !== (result.status === "unanswered")
+    ) return false;
+    if (result.status === "correct" && roundScore(result.earnedScore) !== roundScore(result.score)) return false;
+    if (result.status !== "correct" && roundScore(result.earnedScore) !== 0) return false;
+    if (result.status !== "ungraded" && result.score <= 0) return false;
+    if ((result.status === "correct" || result.status === "wrong") && !isAnswered(result.selectedAnswer)) return false;
+    if (result.status === "unanswered" && isAnswered(result.selectedAnswer)) return false;
+    if (result.status !== "ungraded" && (
+        !Number.isSafeInteger(result.correctAnswer) || Number(result.correctAnswer) <= 0
+    )) return false;
+    if (result.correctAnswer !== undefined) {
+        if (!Number.isInteger(result.correctAnswer) || result.correctAnswer <= 0 || result.status === "ungraded") return false;
+        if (result.status === "correct" && result.selectedAnswer !== result.correctAnswer) return false;
+        if (result.status === "wrong" && result.selectedAnswer === result.correctAnswer) return false;
+    }
+    return true;
+}
 
-    return questions.map(question => {
-        const selectedAnswer = attempt.answers[question.id];
-        const status = resolveQuestionStatus(question, selectedAnswer);
-        const score = roundScore(questionWeight(question, totalQuestions));
-        const timing = getTimingForQuestion(attempt.questionTimings, question.id);
-        const drawing = getDrawingForQuestion(attempt.questionDrawings, question.id);
-        const pdfPage = question.pdfRegion?.page || question.pdfLocation?.page;
-        const answered = isAnswered(selectedAnswer);
-        const correct = status === "correct";
-        const wrong = status === "wrong";
-        const unanswered = status === "unanswered";
+type GradingIdentityField =
+    | "organizationId"
+    | "classId"
+    | "studentProfileId"
+    | "studentId"
+    | "groupId"
+    | "groupName"
+    | "regionId"
+    | "regionName"
+    | "identityType";
 
-        return {
-            schemaVersion: 1,
-            attemptId: attempt.id,
-            examId: attempt.examId || exam.id,
-            examTitle: attempt.examTitle || exam.title,
+interface AttemptGradingSnapshot {
+    attempt: Attempt;
+    storedResults?: QuestionResult[];
+    storedResultsInvalid: boolean;
+    storedSource: Attempt["questionResultsSource"];
+    storedSourceInvalid: boolean;
+    retakeInvalid: boolean;
+    rawScore: unknown;
+    rawTotalScore: unknown;
+    questionResultsQuestionCount: unknown;
+    questionResultsDefinitionManifestHash: unknown;
+    questionResultsFullEvidenceHash: unknown;
+    evidenceAttested: boolean;
+}
+
+const MAX_CANONICAL_ATTEMPT_QUESTION_RESULTS = 500;
+
+function snapshotAttemptGradingEvidence(attempt: Attempt): AttemptGradingSnapshot | null {
+    try {
+        const rawResults: unknown = attempt.questionResults;
+        const rawSource: unknown = attempt.questionResultsSource;
+        const rawRetake: unknown = attempt.retake;
+        const rawAnswers: unknown = attempt.answers;
+        const rawQuestionTimings: unknown = attempt.questionTimings;
+        const rawQuestionDrawings: unknown = attempt.questionDrawings;
+        const rawScore: unknown = attempt.score;
+        const rawTotalScore: unknown = attempt.totalScore;
+        const questionResultsQuestionCount: unknown = attempt.questionResultsQuestionCount;
+        const questionResultsDefinitionManifestHash: unknown = attempt.questionResultsDefinitionManifestHash;
+        const questionResultsFullEvidenceHash: unknown = attempt.questionResultsFullEvidenceHash;
+        const evidenceAttested = Array.isArray(rawResults)
+            && hasCanonicalQuestionResultEvidenceAttestation(attempt, rawResults);
+        const storedResults = Array.isArray(rawResults) && rawResults.length <= MAX_CANONICAL_ATTEMPT_QUESTION_RESULTS
+            ? rawResults.slice()
+            : undefined;
+        const rawRetakeQuestionIds = rawRetake && typeof rawRetake === "object" && !Array.isArray(rawRetake)
+            ? (rawRetake as NonNullable<Attempt["retake"]>).questionIds
+            : undefined;
+        const retakeQuestionIdsValid = Array.isArray(rawRetakeQuestionIds)
+            && rawRetakeQuestionIds.length <= MAX_CANONICAL_ATTEMPT_QUESTION_RESULTS;
+        const retake = rawRetake && typeof rawRetake === "object" && !Array.isArray(rawRetake) && retakeQuestionIdsValid
+            ? {
+                ...(rawRetake as NonNullable<Attempt["retake"]>),
+                questionIds: [...rawRetakeQuestionIds],
+            }
+            : undefined;
+        const materialized: Attempt = {
+            id: attempt.id,
+            examId: attempt.examId,
+            examTitle: attempt.examTitle,
+            organizationId: attempt.organizationId,
+            classId: attempt.classId,
+            assignmentId: attempt.assignmentId,
+            assignmentRevision: attempt.assignmentRevision,
+            studentProfileId: attempt.studentProfileId,
             studentName: attempt.studentName,
             studentId: attempt.studentId,
             groupId: attempt.groupId,
@@ -720,125 +842,358 @@ export function buildQuestionResults(exam: Exam, attempt: Attempt): QuestionResu
             regionId: attempt.regionId,
             regionName: attempt.regionName,
             identityType: attempt.identityType,
-            questionId: question.id,
-            questionNumber: question.number,
-            canonicalQuestionId: canonicalQuestionIdFor(exam.id, question.id),
-            label: question.label,
-            score,
-            earnedScore: correct ? score : 0,
-            selectedAnswer: answered ? selectedAnswer : undefined,
-            correctAnswer: question.answer,
-            status,
-            isCorrect: correct,
-            isWrong: wrong,
-            isUnanswered: unanswered,
-            subject: question.tags?.subject,
-            unit: question.tags?.unit,
-            concept: question.tags?.concept,
-            skill: question.tags?.skill,
-            source: question.tags?.source,
-            difficulty: question.tags?.difficulty,
-            cognitiveLevel: question.tags?.cognitiveLevel,
-            mistakeTypes: question.tags?.mistakeTypes ? [...question.tags.mistakeTypes] : undefined,
-            prerequisites: question.tags?.prerequisites ? [...question.tags.prerequisites] : undefined,
-            expectedTimeSec: question.tags?.expectedTimeSec,
-            pdfPage,
-            pdfLocation: question.pdfLocation,
-            pdfRegion: question.pdfRegion,
-            passagePdfRegions: question.passagePdfRegions,
-            timeSec: timing?.totalTimeSec,
-            visitCount: timing?.visitCount,
-            revisitCount: timing?.revisitCount,
-            answerChangeCount: timing?.answerChangeCount,
-            handwritingStrokeCount: drawing?.strokeCount,
-            handwritingPage: drawing?.page,
-            retakeSourceAttemptId: attempt.retake?.sourceAttemptId,
-            retakeMode: attempt.retake?.mode,
-            answeredAt: timing?.lastAnsweredAt,
+            startedAt: attempt.startedAt,
             finishedAt: attempt.finishedAt,
+            score: typeof rawScore === "number" ? rawScore : Number.NaN,
+            totalScore: typeof rawTotalScore === "number" ? rawTotalScore : Number.NaN,
+            answers: rawAnswers && typeof rawAnswers === "object" && !Array.isArray(rawAnswers)
+                ? { ...(rawAnswers as Record<number, number>) }
+                : {},
+            status: attempt.status,
+            questionResultsQuestionCount: typeof questionResultsQuestionCount === "number"
+                ? questionResultsQuestionCount
+                : undefined,
+            questionResultsDefinitionManifestHash: typeof questionResultsDefinitionManifestHash === "string"
+                ? questionResultsDefinitionManifestHash
+                : undefined,
+            questionResultsFullEvidenceHash: typeof questionResultsFullEvidenceHash === "string"
+                ? questionResultsFullEvidenceHash
+                : undefined,
+            questionResults: storedResults,
+            questionResultsSource: rawSource === "legacy_derived_current_exam" ? rawSource : undefined,
+            questionTimings: Array.isArray(rawQuestionTimings)
+                ? rawQuestionTimings.map(timing => ({ ...timing }))
+                : undefined,
+            questionDrawings: Array.isArray(rawQuestionDrawings)
+                ? rawQuestionDrawings.map(drawing => ({ ...drawing }))
+                : undefined,
+            retake,
         };
+        return {
+            attempt: materialized,
+            storedResults,
+            storedResultsInvalid: rawResults !== undefined
+                && (!Array.isArray(rawResults) || rawResults.length > MAX_CANONICAL_ATTEMPT_QUESTION_RESULTS),
+            storedSource: rawSource === "legacy_derived_current_exam" ? rawSource : undefined,
+            storedSourceInvalid: rawSource !== undefined && rawSource !== "legacy_derived_current_exam",
+            retakeInvalid: rawRetake !== undefined
+                && (!rawRetake
+                    || typeof rawRetake !== "object"
+                    || Array.isArray(rawRetake)
+                    || !retakeQuestionIdsValid),
+            rawScore,
+            rawTotalScore,
+            questionResultsQuestionCount,
+            questionResultsDefinitionManifestHash,
+            questionResultsFullEvidenceHash,
+            evidenceAttested,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function storedIdentityMatchesAttempt(result: QuestionResult, attempt: Attempt): boolean {
+    if (
+        result.attemptId !== attempt.id
+        || result.examId !== attempt.examId
+        || result.examTitle !== attempt.examTitle
+        || result.studentName !== attempt.studentName
+        || result.finishedAt !== attempt.finishedAt
+    ) return false;
+    const exactFields: GradingIdentityField[] = [
+        "organizationId", "classId", "studentProfileId", "studentId", "identityType",
+        "groupId", "groupName", "regionId", "regionName",
+    ];
+    if (!exactFields.every(field => result[field] === attempt[field])) return false;
+
+    const assignmentId = attempt.assignmentId?.trim();
+    if (assignmentId) {
+        return Number.isInteger(attempt.assignmentRevision)
+            && (attempt.assignmentRevision || 0) > 0
+            && result.assignmentId === assignmentId
+            && result.assignmentRevision === attempt.assignmentRevision;
+    }
+    return result.assignmentId === undefined && result.assignmentRevision === undefined;
+}
+
+function matchesAggregateWithinRowRounding(rowSum: number, aggregate: number, rowCount: number): boolean {
+    return Math.abs(rowSum - roundScore(aggregate)) <= ((Math.max(0, rowCount) + 1) * 0.005) + 1e-9;
+}
+
+function hasCanonicalStoredResults(
+    attempt: Attempt,
+    storedResults: QuestionResult[],
+    totals: { earnedScore: number; totalScore: number },
+    trustServerVerified = false,
+): boolean {
+    if (storedResults.length === 0) return false;
+    if (
+        attempt.questionResultsQuestionCount !== storedResults.length
+        || typeof attempt.questionResultsDefinitionManifestHash !== "string"
+        || !/^sha256:[a-f0-9]{64}$/.test(attempt.questionResultsDefinitionManifestHash)
+        || typeof attempt.questionResultsFullEvidenceHash !== "string"
+        || !/^sha256:[a-f0-9]{64}$/.test(attempt.questionResultsFullEvidenceHash)
+    ) return false;
+    const seen = new Set<number>();
+    for (const result of storedResults) {
+        if (
+            !result
+            || typeof result !== "object"
+            || !storedIdentityMatchesAttempt(result, attempt)
+            || seen.has(result.questionId)
+            || !isInternallyValidStoredResult(result)
+        ) return false;
+        seen.add(result.questionId);
+    }
+    if (attempt.retake) {
+        const requested = attempt.retake.questionIds;
+        const expected = new Set(requested);
+        if (requested.length === 0 || expected.size !== requested.length || expected.size !== seen.size) return false;
+        if (requested.some(questionId => !seen.has(questionId))) return false;
+    }
+    const gradable = storedResults.filter(result => result.status !== "ungraded");
+    const earned = roundScore(gradable.reduce((sum, result) => sum + result.earnedScore, 0));
+    const total = roundScore(gradable.reduce((sum, result) => sum + result.score, 0));
+    if (!(matchesAggregateWithinRowRounding(earned, totals.earnedScore, gradable.length)
+        && matchesAggregateWithinRowRounding(total, totals.totalScore, gradable.length))) return false;
+    if (trustServerVerified) return true;
+    let evidence;
+    try {
+        evidence = buildCanonicalQuestionResultEvidence(attempt, storedResults);
+    } catch {
+        return false;
+    }
+    return attempt.questionResultsQuestionCount === evidence.questionResultsQuestionCount
+        && attempt.questionResultsDefinitionManifestHash === evidence.questionResultsDefinitionManifestHash
+        && attempt.questionResultsFullEvidenceHash === evidence.questionResultsFullEvidenceHash;
+}
+
+function hasValidLegacyRepairResults(
+    attempt: Attempt,
+    storedResults: QuestionResult[],
+    totals: { earnedScore: number; totalScore: number },
+): boolean {
+    const shadow: Attempt = {
+        ...attempt,
+        questionResultsQuestionCount: storedResults.length,
+        questionResultsDefinitionManifestHash: "sha256:" + "0".repeat(64),
+        questionResultsFullEvidenceHash: "sha256:" + "0".repeat(64),
+    };
+    let evidence;
+    try {
+        evidence = buildCanonicalQuestionResultEvidence(shadow, storedResults);
+    } catch {
+        return false;
+    }
+    shadow.questionResultsDefinitionManifestHash = evidence.questionResultsDefinitionManifestHash;
+    shadow.questionResultsFullEvidenceHash = evidence.questionResultsFullEvidenceHash;
+    return hasCanonicalStoredResults(shadow, storedResults, totals);
+}
+
+function canonicalResultForAttempt(attempt: Attempt, stored: QuestionResult): QuestionResult {
+    // Every identity/display field is already exact and the full digest binds
+    // the row. Reuse the immutable evidence reference instead of cloning a
+    // million result objects for the maximum analytics collection.
+    void attempt;
+    return stored;
+}
+
+function resolveAttemptGradingInternal(
+    exam: Exam,
+    attempt: Attempt,
+    trustServerVerified = false,
+): AttemptGradingResolution {
+    const snapshot = snapshotAttemptGradingEvidence(attempt);
+    const totals = snapshot ? validStoredTotals(snapshot.rawScore, snapshot.rawTotalScore) : null;
+    const invalid = (): AttemptGradingResolution => ({
+        source: totals && totals.totalScore > 0 ? "stored_totals_only" : "incomplete_or_invalid",
+        questionResults: [],
+        scoreSummary: {
+            earnedScore: totals?.earnedScore ?? 0,
+            totalScore: totals?.totalScore ?? 0,
+            scorePercent: roundPercent(totals?.earnedScore ?? 0, totals?.totalScore ?? 0),
+            gradedQuestionCount: 0,
+            ungradedQuestionCount: 0,
+        },
+    });
+    if (
+        !snapshot
+        || snapshot.attempt.examId !== exam.id
+        || snapshot.storedSourceInvalid
+        || snapshot.retakeInvalid
+    ) return invalid();
+    if (snapshot.storedResultsInvalid) return invalid();
+    if (snapshot.storedResults === undefined) {
+        if (snapshot.attempt.retake) {
+            const ids = snapshot.attempt.retake.questionIds;
+            const unique = new Set(ids);
+            const examIds = new Set(exam.questions.map(question => question.id));
+            if (
+                ids.length === 0
+                || unique.size !== ids.length
+                || ids.some(questionId => !examIds.has(questionId))
+            ) return invalid();
+        }
+        const derived = buildQuestionResults(exam, snapshot.attempt);
+        if (derived.length === 0 || derived.some(result => !isInternallyValidStoredResult(result))) return invalid();
+        return {
+            source: "legacy_derived_current_exam",
+            questionResults: derived,
+            scoreSummary: summarizeQuestionResults(derived, snapshot.attempt),
+        };
+    }
+    if (!totals) return invalid();
+    const validStoredResults = snapshot.storedSource === "legacy_derived_current_exam"
+        ? hasValidLegacyRepairResults(snapshot.attempt, snapshot.storedResults, totals)
+        : hasCanonicalStoredResults(
+            snapshot.attempt,
+            snapshot.storedResults,
+            totals,
+            trustServerVerified && snapshot.evidenceAttested,
+        );
+    if (!validStoredResults) return invalid();
+    const results = snapshot.storedResults.map(result => canonicalResultForAttempt(snapshot.attempt, result));
+    const rowSummary = summarizeQuestionResults(results);
+    return {
+        source: snapshot.storedSource === "legacy_derived_current_exam"
+            ? "legacy_derived_current_exam"
+            : "canonical_submission",
+        questionResults: results,
+        scoreSummary: {
+            ...rowSummary,
+            earnedScore: totals.earnedScore,
+            totalScore: totals.totalScore,
+            scorePercent: roundPercent(totals.earnedScore, totals.totalScore),
+        },
+    };
+}
+
+export function resolveAttemptGrading(exam: Exam, attempt: Attempt): AttemptGradingResolution {
+    return resolveAttemptGradingInternal(exam, attempt, false);
+}
+
+/**
+ * Builds the student review question set from immutable submitted evidence.
+ * Current exam rows may contribute an explanation only; submitted numbering,
+ * labels, scores, answer keys, tags, and deleted questions come from the
+ * canonical grading rows so later exam edits cannot rewrite history.
+ */
+export function buildStudentReviewQuestionSnapshot(exam: Exam, attempt: Attempt): Question[] {
+    const grading = resolveAttemptGrading(exam, attempt);
+    if (grading.source === "legacy_derived_current_exam") {
+        const retakeIds = attempt.retake?.questionIds?.length
+            ? new Set(attempt.retake.questionIds)
+            : null;
+        return exam.questions.filter(question => !retakeIds || retakeIds.has(question.id));
+    }
+    if (grading.source !== "canonical_submission") return [];
+    return grading.questionResults.map(result => {
+        const largestChoice = Math.max(result.selectedAnswer || 0, result.correctAnswer || 0);
+        return {
+            id: result.questionId,
+            number: result.questionNumber,
+            ...(result.label ? { label: result.label } : {}),
+            score: result.score,
+            ...(result.correctAnswer ? { answer: result.correctAnswer } : {}),
+            choices: largestChoice > 4 ? 5 : 4,
+            tags: {
+                ...(result.subject ? { subject: result.subject } : {}),
+                ...(result.unit ? { unit: result.unit } : {}),
+                ...(result.concept ? { concept: result.concept } : {}),
+                ...(result.skill ? { skill: result.skill } : {}),
+                ...(result.difficulty ? { difficulty: result.difficulty } : {}),
+                ...(result.cognitiveLevel ? { cognitiveLevel: result.cognitiveLevel } : {}),
+                ...(result.source ? { source: result.source } : {}),
+                ...(typeof result.expectedTimeSec === "number" ? { expectedTimeSec: result.expectedTimeSec } : {}),
+                ...(result.mistakeTypes ? { mistakeTypes: result.mistakeTypes } : {}),
+                ...(result.prerequisites ? { prerequisites: result.prerequisites } : {}),
+            },
+            ...(result.pdfLocation ? { pdfLocation: result.pdfLocation } : {}),
+            ...(result.pdfRegion ? { pdfRegion: result.pdfRegion } : {}),
+            ...(result.passagePdfRegions ? { passagePdfRegions: result.passagePdfRegions } : {}),
+        } satisfies Question;
     });
 }
 
 export function getAttemptQuestionResults(exam: Exam, attempt: Attempt): QuestionResult[] {
-    const effectiveQuestions = getEffectiveExamQuestionsForAttempt(exam, attempt);
-    const examQuestionIds = new Set(effectiveQuestions.map(question => question.id));
-    const storedResults = (attempt.questionResults || [])
-        .filter(result => result.examId === exam.id && examQuestionIds.has(result.questionId));
-    const derivedResults = buildQuestionResults(exam, attempt);
+    const grading = resolveAttemptGrading(exam, attempt);
+    return grading.source === "canonical_submission" ? grading.questionResults : [];
+}
 
-    if (storedResults.length === 0) {
-        return derivedResults;
+export interface CanonicalAttemptAnalyticsIndex {
+    readonly examId: string;
+    readonly collectionKey: string;
+    readonly diagnostics: Readonly<{
+        attemptCount: number;
+        resolutionCount: number;
+        canonicalQuestionResultCount: number;
+    }>;
+    resolutionFor(attempt: Attempt): AttemptGradingResolution;
+    resultsFor(attempt: Attempt): readonly QuestionResult[];
+}
+
+/**
+ * Request-scoped immutable grading precompute. It intentionally owns no global
+ * cache: an index can only serve the exact attempt object collection and exact
+ * evidence hashes/generations captured at construction time.
+ */
+export function buildCanonicalAttemptAnalyticsIndex(
+    exam: Exam,
+    attempts: readonly Attempt[],
+): CanonicalAttemptAnalyticsIndex {
+    const exactAttempts = new Set(attempts);
+    const resolutions = new Map<Attempt, AttemptGradingResolution>();
+    let canonicalQuestionResultCount = 0;
+    for (const attempt of attempts) {
+        const resolution = resolveAttemptGradingInternal(exam, attempt, true);
+        resolutions.set(attempt, resolution);
+        if (resolution.source === "canonical_submission") {
+            canonicalQuestionResultCount += resolution.questionResults.length;
+        }
     }
-
-    const storedByQuestionId = new Map(storedResults.map(result => [result.questionId, result]));
-    return derivedResults.map(baseResult => {
-        const storedResult = storedByQuestionId.get(baseResult.questionId);
-        if (!storedResult) return baseResult;
-
-        // Student-safe exam DTOs intentionally omit the answer key (and may omit
-        // teacher-only scoring metadata). In that case the stored server result is
-        // the only authoritative grading source. Full teacher exams still derive
-        // from the current canonical answer key to repair stale historical rows.
-        const useStoredGrading = typeof baseResult.correctAnswer !== "number";
-        const status = useStoredGrading ? storedResult.status : baseResult.status;
-
-        return {
-            ...storedResult,
-            ...baseResult,
-            schemaVersion: 1,
-            attemptId: attempt.id,
-            examId: attempt.examId || exam.id,
-            examTitle: attempt.examTitle || exam.title,
-            studentName: attempt.studentName,
-            studentId: attempt.studentId || storedResult.studentId,
-            groupId: attempt.groupId || storedResult.groupId,
-            groupName: attempt.groupName || storedResult.groupName,
-            regionId: attempt.regionId || storedResult.regionId,
-            regionName: attempt.regionName || storedResult.regionName,
-            identityType: attempt.identityType || storedResult.identityType,
-            questionId: baseResult.questionId,
-            questionNumber: baseResult.questionNumber,
-            canonicalQuestionId: baseResult.canonicalQuestionId,
-            label: baseResult.label,
-            score: useStoredGrading ? storedResult.score : baseResult.score,
-            earnedScore: useStoredGrading ? storedResult.earnedScore : baseResult.earnedScore,
-            selectedAnswer: useStoredGrading ? storedResult.selectedAnswer : baseResult.selectedAnswer,
-            correctAnswer: baseResult.correctAnswer,
-            status,
-            isCorrect: status === "correct",
-            isWrong: status === "wrong",
-            isUnanswered: status === "unanswered",
-            subject: baseResult.subject,
-            unit: baseResult.unit,
-            concept: baseResult.concept,
-            skill: baseResult.skill,
-            source: baseResult.source,
-            difficulty: baseResult.difficulty,
-            cognitiveLevel: baseResult.cognitiveLevel,
-            mistakeTypes: baseResult.mistakeTypes,
-            prerequisites: baseResult.prerequisites,
-            expectedTimeSec: baseResult.expectedTimeSec,
-            pdfPage: baseResult.pdfPage,
-            pdfLocation: baseResult.pdfLocation,
-            pdfRegion: baseResult.pdfRegion,
-            passagePdfRegions: baseResult.passagePdfRegions,
-            timeSec: storedResult.timeSec ?? baseResult.timeSec,
-            visitCount: storedResult.visitCount ?? baseResult.visitCount,
-            revisitCount: storedResult.revisitCount ?? baseResult.revisitCount,
-            answerChangeCount: storedResult.answerChangeCount ?? baseResult.answerChangeCount,
-            handwritingStrokeCount: storedResult.handwritingStrokeCount ?? baseResult.handwritingStrokeCount,
-            handwritingPage: storedResult.handwritingPage ?? baseResult.handwritingPage,
-            retakeSourceAttemptId: baseResult.retakeSourceAttemptId ?? storedResult.retakeSourceAttemptId,
-            retakeMode: baseResult.retakeMode ?? storedResult.retakeMode,
-            answeredAt: storedResult.answeredAt ?? baseResult.answeredAt,
-            finishedAt: attempt.finishedAt || storedResult.finishedAt || baseResult.finishedAt,
-        };
+    const diagnostics = Object.freeze({
+        attemptCount: attempts.length,
+        resolutionCount: resolutions.size,
+        canonicalQuestionResultCount,
+    });
+    const collectionKey = attempts.map(attempt => [
+        attempt.id,
+        attempt.assignmentId || "",
+        attempt.assignmentRevision || 0,
+        attempt.questionResultsQuestionCount || 0,
+        attempt.questionResultsDefinitionManifestHash || "",
+        attempt.questionResultsFullEvidenceHash || "",
+    ].join("\u001f")).join("\u001e");
+    return Object.freeze({
+        examId: exam.id,
+        collectionKey,
+        diagnostics,
+        resolutionFor(attempt: Attempt) {
+            if (!exactAttempts.has(attempt)) return resolveAttemptGrading(exam, attempt);
+            return resolutions.get(attempt) || resolveAttemptGrading(exam, attempt);
+        },
+        resultsFor(attempt: Attempt) {
+            const resolution = exactAttempts.has(attempt)
+                ? resolutions.get(attempt)
+                : undefined;
+            return resolution?.source === "canonical_submission" ? resolution.questionResults : [];
+        },
     });
 }
 
-export function summarizeAttemptScore(exam: Exam, attempt: Attempt): AttemptScoreSummary {
-    const results = getAttemptQuestionResults(exam, attempt);
+function gradingFor(
+    exam: Exam,
+    attempt: Attempt,
+    index?: CanonicalAttemptAnalyticsIndex,
+): AttemptGradingResolution {
+    return index?.examId === exam.id ? index.resolutionFor(attempt) : resolveAttemptGrading(exam, attempt);
+}
+
+export function summarizeQuestionResults(
+    results: QuestionResult[],
+    fallback: Pick<Attempt, "score" | "totalScore"> = { score: 0, totalScore: 0 },
+): AttemptScoreSummary {
     let earnedScore = 0;
     let totalScore = 0;
     let gradedQuestionCount = 0;
@@ -855,8 +1210,9 @@ export function summarizeAttemptScore(exam: Exam, attempt: Attempt): AttemptScor
     }
 
     if (totalScore <= 0) {
-        const fallbackEarned = roundScore(attempt.score || 0);
-        const fallbackTotal = roundScore(attempt.totalScore || 0);
+        const validFallback = validStoredTotals(fallback.score, fallback.totalScore);
+        const fallbackEarned = validFallback?.earnedScore ?? 0;
+        const fallbackTotal = validFallback?.totalScore ?? 0;
         return {
             earnedScore: fallbackEarned,
             totalScore: fallbackTotal,
@@ -877,11 +1233,47 @@ export function summarizeAttemptScore(exam: Exam, attempt: Attempt): AttemptScor
     };
 }
 
-export function collectQuestionResults(exam: Exam, attempts: Attempt[], scope: QuestionResultScope = {}): QuestionResult[] {
+export function summarizeAttemptScore(
+    exam: Exam,
+    attempt: Attempt,
+    index?: CanonicalAttemptAnalyticsIndex,
+): AttemptScoreSummary {
+    return gradingFor(exam, attempt, index).scoreSummary;
+}
+
+export function summarizeCanonicalQuestionSubset(
+    exam: Exam,
+    attempt: Attempt,
+    questionIds: number[],
+): AttemptScoreSummary | null {
+    if (!Array.isArray(questionIds) || questionIds.length === 0) return null;
+    const unique = new Set(questionIds);
+    if (unique.size !== questionIds.length) return null;
+    const grading = resolveAttemptGrading(exam, attempt);
+    if (grading.source !== "canonical_submission") return null;
+    const byId = new Map(grading.questionResults.map(result => [result.questionId, result]));
+    const scoped: QuestionResult[] = [];
+    for (const id of questionIds) {
+        const result = byId.get(id);
+        if (!result) return null;
+        scoped.push(result);
+    }
+    return summarizeQuestionResults(scoped);
+}
+
+export function collectQuestionResults(
+    exam: Exam,
+    attempts: Attempt[],
+    scope: QuestionResultScope = {},
+    index?: CanonicalAttemptAnalyticsIndex,
+): QuestionResult[] {
     return attempts
         .filter(attempt => attempt.examId === exam.id)
         .filter(attempt => scope.includeRetakes || !attempt.retake)
-        .flatMap(attempt => getAttemptQuestionResults(exam, attempt))
+        .flatMap(attempt => {
+            const grading = gradingFor(exam, attempt, index);
+            return grading.source === "canonical_submission" ? grading.questionResults : [];
+        })
         .filter(result => resultMatchesScope(result, scope));
 }
 
@@ -1013,16 +1405,22 @@ export function buildLearningRecommendations(
     exam: Exam,
     attempts: Attempt[],
     options: LearningRecommendationOptions,
+    index?: CanonicalAttemptAnalyticsIndex,
 ): LearningRecommendation[] {
     const kinds: QuestionResultGroupKind[] = options.kinds?.length ? options.kinds : ["concept", "mistakeType"];
     const sourceAttemptId = sourceAttemptIdForRecommendation(exam, options);
     const results = options.scope === "attempt" && options.attempt
-        ? getAttemptQuestionResults(exam, options.attempt)
+        ? (() => {
+            const grading = gradingFor(exam, options.attempt!, index);
+            return grading.source === "canonical_submission" ? grading.questionResults : [];
+        })()
         : collectQuestionResults(exam, attempts, {
             includeRetakes: options.includeRetakes,
             studentKey: options.scope === "student" ? options.studentKey : undefined,
-            groupKey: options.scope === "class" || options.scope === "student" ? options.groupKey : undefined,
-        });
+            groupKey: !options.prefiltered && (options.scope === "class" || options.scope === "student")
+                ? options.groupKey
+                : undefined,
+        }, index);
 
     const seen = new Set<string>();
     const recommendations: LearningRecommendation[] = [];
@@ -1157,11 +1555,9 @@ function buildGroupedAttemptEntries(
             ? rosterStudentsForGroup(rosterGroup, rosterStudents)
             : rosterStudents.filter(student => normalizeIdentityKey(student.group) === groupName || normalizeIdentityKey(student.group) === groupKey);
         const current = ensureGroup(groupKey, groupName, rosterGroup?.region, groupRosterStudents);
-        current?.attempts.push(
-            rosterGroup
-                ? normalizeAttemptForMatrixGroup(attempt, rosterGroup, rosterStudent)
-                : attempt
-        );
+        // Roster membership classifies the matrix row, but it must not rewrite
+        // the immutable submission scope sealed by the evidence digest.
+        current?.attempts.push(attempt);
     }
 
     return Array.from(groupedAttempts.values());
@@ -1185,13 +1581,14 @@ export function buildClassExamScoreGroups(
     exam: Exam,
     attempts: Attempt[],
     options: Pick<ClassExamWeaknessMatrixOptions, "rosterGroups" | "rosterStudents" | "includeRetakes"> = {},
+    index?: CanonicalAttemptAnalyticsIndex,
 ): ClassExamScoreGroup[] {
     return buildGroupedAttemptEntries(exam, attempts, options).map(group => ({
         groupKey: group.groupKey,
         groupName: group.groupName,
         regionName: group.regionName,
         scores: group.attempts
-            .map(attempt => summarizeAttemptScore(exam, attempt))
+            .map(attempt => summarizeAttemptScore(exam, attempt, index))
             .filter(hasGradableAttemptScore)
             .map(summary => summary.scorePercent),
     }));
@@ -1201,12 +1598,13 @@ export function buildClassExamWeaknessMatrix(
     exam: Exam,
     attempts: Attempt[],
     options: ClassExamWeaknessMatrixOptions = {},
+    index?: CanonicalAttemptAnalyticsIndex,
 ): ClassExamWeaknessMatrixRow[] {
     const includeRetakes = !!options.includeRetakes;
     const groupedEntries = buildGroupedAttemptEntries(exam, attempts, options);
 
     const rows = groupedEntries.map(group => {
-        const results = collectQuestionResults(exam, group.attempts, { includeRetakes });
+        const results = collectQuestionResults(exam, group.attempts, { includeRetakes }, index);
         const gradableResults = results.filter(result => result.status !== "ungraded");
         const wrongResults = gradableResults.filter(isWrongOrUnansweredResult);
         const studentKeys = new Set(results.map(studentKeyForResult).filter(Boolean));
@@ -1221,13 +1619,13 @@ export function buildClassExamWeaknessMatrix(
             ? submittedRosterStudents.length
             : studentKeys.size;
         const performanceScores = group.attempts
-            .map(attempt => summarizeAttemptScore(exam, attempt))
+            .map(attempt => summarizeAttemptScore(exam, attempt, index))
             .filter(hasGradableAttemptScore)
             .map(summary => summary.scorePercent);
         const averageScorePercent = performanceScores.length > 0
             ? Math.round(performanceScores.reduce((sum, score) => sum + score, 0) / performanceScores.length)
             : null;
-        const questionStats = buildExamQuestionResultStats(exam, group.attempts)
+        const questionStats = buildExamQuestionResultStats(exam, group.attempts, index)
             .filter(stat => stat.wrongCount > 0)
             .sort((a, b) => {
                 if (b.wrongRate !== a.wrongRate) return b.wrongRate - a.wrongRate;
@@ -1237,10 +1635,11 @@ export function buildClassExamWeaknessMatrix(
         const recommendations = buildLearningRecommendations(exam, group.attempts, {
             scope: "class",
             groupKey: group.groupKey,
+            prefiltered: true,
             kinds: options.kinds || ["concept", "mistakeType"],
             limit: options.recommendationLimit ?? 3,
             includeRetakes,
-        });
+        }, index);
         const retakeQuestionIds = Array.from(new Set(recommendations.flatMap(item => item.retakeQuestionIds))).sort((a, b) => a - b);
 
         return {
@@ -1285,100 +1684,120 @@ export function buildClassExamWeaknessMatrix(
     return typeof options.classLimit === "number" ? sortedRows.slice(0, Math.max(0, options.classLimit)) : sortedRows;
 }
 
-export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): ExamQuestionResultStat[] {
-    const byQuestion = new Map<number, MutableQuestionResultStat>();
-    for (const question of exam.questions) {
-        byQuestion.set(question.id, {
-            questionId: question.id,
-            questionNumber: question.number,
-            label: question.label,
-            concept: question.tags?.concept,
-            unit: question.tags?.unit,
-            source: question.tags?.source,
-            expectedTimeSec: question.tags?.expectedTimeSec,
-            score: roundScore(questionWeight(question, exam.questions.length)),
-            totalCount: 0,
-            correctCount: 0,
-            wrongCount: 0,
-            unansweredCount: 0,
-            ungradedCount: 0,
-            correctRate: 0,
-            wrongRate: 0,
-            unansweredRate: 0,
-            optionCounts: {},
-            handwritingStrokeCount: 0,
-            studentCount: 0,
-            groupCount: 0,
-            timeSumSec: 0,
-            timedCount: 0,
-            visitSum: 0,
-            visitTrackedCount: 0,
-            revisitedCount: 0,
-            revisitRate: 0,
-            answerChangeCount: 0,
-            studentKeys: new Set<string>(),
-            groupKeys: new Set<string>(),
-        });
-    }
+export function buildExamQuestionResultStats(
+    exam: Exam,
+    attempts: Attempt[],
+    index?: CanonicalAttemptAnalyticsIndex,
+): ExamQuestionResultStat[] {
+    const byQuestion = new Map<string, MutableQuestionResultStat>();
+    // Stream the shared verified index once. Materializing a million wrapper
+    // objects here made the server Flight snapshot path both slower and much
+    // more memory hungry at the supported 2,000 x 500 boundary.
+    for (const attempt of attempts) {
+        if (attempt.examId !== exam.id || attempt.retake) continue;
+        const grading = gradingFor(exam, attempt, index);
+        const definitionManifestHash = attempt.questionResultsDefinitionManifestHash;
+        if (grading.source !== "canonical_submission" || !definitionManifestHash) continue;
+        for (const result of grading.questionResults) {
+            const cohortKey = `${definitionManifestHash}\u001f${result.questionId}`;
+            let stat = byQuestion.get(cohortKey);
+            if (!stat) {
+                stat = {
+                    cohortKey,
+                    definitionManifestHash,
+                    questionId: result.questionId,
+                    questionNumber: result.questionNumber,
+                    label: result.label,
+                    concept: result.concept,
+                    unit: result.unit,
+                    source: result.source,
+                    expectedTimeSec: result.expectedTimeSec,
+                    score: result.score,
+                    correctAnswer: result.correctAnswer,
+                    difficulty: result.difficulty,
+                    mistakeTypes: result.mistakeTypes,
+                    totalCount: 0,
+                    correctCount: 0,
+                    wrongCount: 0,
+                    unansweredCount: 0,
+                    ungradedCount: 0,
+                    correctRate: 0,
+                    wrongRate: 0,
+                    unansweredRate: 0,
+                    optionCounts: {},
+                    wrongOptionCounts: {},
+                    handwritingStrokeCount: 0,
+                    studentCount: 0,
+                    groupCount: 0,
+                    timeSumSec: 0,
+                    timedCount: 0,
+                    visitSum: 0,
+                    visitTrackedCount: 0,
+                    revisitedCount: 0,
+                    revisitRate: 0,
+                    answerChangeCount: 0,
+                    studentKeys: new Set<string>(),
+                    groupKeys: new Set<string>(),
+                };
+                byQuestion.set(cohortKey, stat);
+            }
 
-    for (const result of collectQuestionResults(exam, attempts)) {
-        const stat = byQuestion.get(result.questionId);
-        if (!stat) continue;
+            stat.studentKeys.add(studentKeyForResult(result));
+            if (result.groupId || result.groupName) {
+                stat.groupKeys.add(result.groupId || result.groupName || "");
+            }
+            if (typeof result.timeSec === "number") {
+                stat.timeSumSec += Math.max(0, result.timeSec);
+                stat.timedCount += 1;
+            }
+            if (typeof result.visitCount === "number") {
+                stat.visitSum += Math.max(0, result.visitCount);
+                stat.visitTrackedCount += 1;
+            }
+            if ((result.revisitCount || 0) > 0 || (result.visitCount || 0) > 1) {
+                stat.revisitedCount += 1;
+            }
+            if (typeof result.answerChangeCount === "number") {
+                stat.answerChangeCount += Math.max(0, result.answerChangeCount);
+            }
+            if (typeof result.handwritingStrokeCount === "number") {
+                stat.handwritingStrokeCount += Math.max(0, result.handwritingStrokeCount);
+            }
+            if (isAnswered(result.selectedAnswer)) {
+                stat.optionCounts[result.selectedAnswer] = (stat.optionCounts[result.selectedAnswer] || 0) + 1;
+            }
 
-        stat.studentKeys.add(studentKeyForResult(result));
-        if (result.groupId || result.groupName) {
-            stat.groupKeys.add(result.groupId || result.groupName || "");
-        }
-        if (typeof result.timeSec === "number") {
-            stat.timeSumSec += Math.max(0, result.timeSec);
-            stat.timedCount += 1;
-        }
-        if (typeof result.visitCount === "number") {
-            stat.visitSum += Math.max(0, result.visitCount);
-            stat.visitTrackedCount += 1;
-        }
-        if ((result.revisitCount || 0) > 0 || (result.visitCount || 0) > 1) {
-            stat.revisitedCount += 1;
-        }
-        if (typeof result.answerChangeCount === "number") {
-            stat.answerChangeCount += Math.max(0, result.answerChangeCount);
-        }
-        if (typeof result.handwritingStrokeCount === "number") {
-            stat.handwritingStrokeCount += Math.max(0, result.handwritingStrokeCount);
-        }
-        if (isAnswered(result.selectedAnswer)) {
-            stat.optionCounts[result.selectedAnswer] = (stat.optionCounts[result.selectedAnswer] || 0) + 1;
-        }
+            if (result.status === "ungraded") {
+                stat.ungradedCount += 1;
+                continue;
+            }
 
-        if (result.status === "ungraded") {
-            stat.ungradedCount += 1;
-            continue;
-        }
-
-        stat.totalCount += 1;
-        if (result.status === "correct" || result.isCorrect) {
-            stat.correctCount += 1;
-        } else if (result.status === "unanswered" || result.isUnanswered) {
-            stat.unansweredCount += 1;
-            stat.wrongCount += 1;
-        } else if (result.status === "wrong" || result.isWrong) {
-            stat.wrongCount += 1;
+            stat.totalCount += 1;
+            if (result.status === "correct" || result.isCorrect) {
+                stat.correctCount += 1;
+            } else if (result.status === "unanswered" || result.isUnanswered) {
+                stat.unansweredCount += 1;
+                stat.wrongCount += 1;
+            } else if (result.status === "wrong" || result.isWrong) {
+                stat.wrongCount += 1;
+                if (isAnswered(result.selectedAnswer)) {
+                    stat.wrongOptionCounts[result.selectedAnswer] = (stat.wrongOptionCounts[result.selectedAnswer] || 0) + 1;
+                }
+            }
         }
     }
 
     return Array.from(byQuestion.values()).map(stat => {
-        const wrongOptionEntries = Object.entries(stat.optionCounts)
+        const wrongOptionEntries = Object.entries(stat.wrongOptionCounts)
             .map(([option, count]) => ({ option: Number(option), count }))
-            .filter(item => {
-                const question = exam.questions.find(q => q.id === stat.questionId);
-                return item.option !== question?.answer;
-            })
             .sort((a, b) => b.count - a.count);
         const topWrongOption = wrongOptionEntries[0];
         const averageTimeSec = stat.timedCount > 0 ? Math.round(stat.timeSumSec / stat.timedCount) : undefined;
         const averageVisitCount = stat.visitTrackedCount > 0 ? Math.round((stat.visitSum / stat.visitTrackedCount) * 10) / 10 : undefined;
 
         return {
+            cohortKey: stat.cohortKey,
+            definitionManifestHash: stat.definitionManifestHash,
             questionId: stat.questionId,
             questionNumber: stat.questionNumber,
             label: stat.label,
@@ -1387,6 +1806,9 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
             source: stat.source,
             expectedTimeSec: stat.expectedTimeSec,
             score: stat.score,
+            correctAnswer: stat.correctAnswer,
+            difficulty: stat.difficulty,
+            mistakeTypes: stat.mistakeTypes,
             totalCount: stat.totalCount,
             correctCount: stat.correctCount,
             wrongCount: stat.wrongCount,
@@ -1412,7 +1834,8 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
             studentCount: stat.studentKeys.size,
             groupCount: stat.groupKeys.size,
         };
-    }).sort((a, b) => a.questionNumber - b.questionNumber);
+    }).sort((a, b) => a.questionNumber - b.questionNumber
+        || a.definitionManifestHash.localeCompare(b.definitionManifestHash));
 }
 
 /**
@@ -1431,37 +1854,57 @@ export const DISCRIMINATION_MIN_RESPONDENTS = 5;
  * answered by fewer respondents than the exam total — e.g. a retake subset — is gated
  * independently) rather than once for the whole exam.
  */
-export function buildExamQuestionPointBiserial(exam: Exam, attempts: Attempt[]): Map<number, number | null> {
-    const pointBiserials = new Map<number, number | null>();
-    if (attempts.length === 0) {
-        for (const question of exam.questions) pointBiserials.set(question.id, null);
-        return pointBiserials;
+export function buildExamQuestionPointBiserial(
+    exam: Exam,
+    attempts: Attempt[],
+    index?: CanonicalAttemptAnalyticsIndex,
+): Map<string, number | null> {
+    const pointBiserials = new Map<string, number | null>();
+
+    const canonicalAttempts: Array<{
+        scorePercent: number;
+        resultByCohortKey: Map<string, QuestionResult>;
+    }> = [];
+    for (const attempt of attempts) {
+        if (attempt.examId !== exam.id || attempt.retake) continue;
+        const grading = gradingFor(exam, attempt, index);
+        if (grading.source !== "canonical_submission") continue;
+        canonicalAttempts.push({
+            scorePercent: grading.scoreSummary.scorePercent,
+            resultByCohortKey: new Map(grading.questionResults.map(result => [
+                `${attempt.questionResultsDefinitionManifestHash}\u001f${result.questionId}`,
+                result,
+            ])),
+        });
     }
 
-    const scoreByAttemptId = new Map(attempts.map(attempt => [attempt.id, summarizeAttemptScore(exam, attempt).scorePercent]));
-    const resultsByAttemptId = new Map(attempts.map(attempt => [
-        attempt.id,
-        new Map(getAttemptQuestionResults(exam, attempt).map(result => [result.questionId, result])),
-    ]));
-
-    for (const question of exam.questions) {
+    const submittedQuestionIds = new Set<string>();
+    for (const attempt of canonicalAttempts) {
+        for (const questionId of attempt.resultByCohortKey.keys()) submittedQuestionIds.add(questionId);
+    }
+    for (const questionId of submittedQuestionIds) {
         const samples: PointBiserialSample[] = [];
-        for (const attempt of attempts) {
-            const result = resultsByAttemptId.get(attempt.id)?.get(question.id);
+        for (const attempt of canonicalAttempts) {
+            const result = attempt.resultByCohortKey.get(questionId);
             if (!result || result.status === "ungraded") continue;
             samples.push({
                 correct: result.status === "correct" || !!result.isCorrect,
-                score: scoreByAttemptId.get(attempt.id) ?? 0,
+                score: attempt.scorePercent,
             });
         }
-        pointBiserials.set(question.id, computePointBiserialCorrelation(samples, DISCRIMINATION_MIN_RESPONDENTS));
+        pointBiserials.set(questionId, computePointBiserialCorrelation(samples, DISCRIMINATION_MIN_RESPONDENTS));
     }
 
     return pointBiserials;
 }
 
-export function buildMostMissedQuestionStats(exam: Exam, attempts: Attempt[], limit = 5): ExamQuestionResultStat[] {
-    return buildExamQuestionResultStats(exam, attempts)
+export function buildMostMissedQuestionStats(
+    exam: Exam,
+    attempts: Attempt[],
+    limit = 5,
+    index?: CanonicalAttemptAnalyticsIndex,
+): ExamQuestionResultStat[] {
+    return buildExamQuestionResultStats(exam, attempts, index)
         .filter(stat => stat.totalCount > 0 && stat.wrongCount > 0)
         .sort((a, b) => {
             if (b.wrongRate !== a.wrongRate) return b.wrongRate - a.wrongRate;
@@ -1480,11 +1923,11 @@ export function buildRetakeQuestionIds(exam: Exam, attempt: Attempt): number[] {
 }
 
 export function buildStudentWeaknessGroups(exam: Exam, attempt: Attempt): WeaknessGroup[] {
-    const questionById = new Map(exam.questions.map(question => [question.id, question]));
-    const wrongQuestions = getAttemptQuestionResults(exam, attempt)
+    const submittedResults = getAttemptQuestionResults(exam, attempt);
+    const submittedQuestions = submittedResults.map(submittedQuestionFromResult);
+    const wrongQuestions = submittedResults
         .filter(isWrongOrUnansweredResult)
-        .map(result => questionById.get(result.questionId))
-        .filter((question): question is Question => !!question);
+        .map(submittedQuestionFromResult);
     const consumed = new Set<number>();
     const groups: WeaknessGroup[] = [];
 
@@ -1495,7 +1938,7 @@ export function buildStudentWeaknessGroups(exam: Exam, attempt: Attempt): Weakne
             const value = groupValue(question, kind);
             if (!value) continue;
             if (requireRepeatedInExam) {
-                const sameInExam = exam.questions.filter(item => groupValue(item, kind) === value).length;
+                const sameInExam = submittedQuestions.filter(item => groupValue(item, kind) === value).length;
                 if (sameInExam < 2) continue;
             }
             byValue.set(value, [...(byValue.get(value) || []), question]);
@@ -1515,47 +1958,61 @@ export function buildStudentWeaknessGroups(exam: Exam, attempt: Attempt): Weakne
     return sortGroups(groups);
 }
 
-export function buildSimilarQuestionGroups(exam: Exam, attempts: Attempt[]): SimilarQuestionGroup[] {
-    const bySource = new Map<string, Question[]>();
-    for (const question of exam.questions) {
-        const title = groupValue(question, "source")
-            || groupValue(question, "concept")
-            || groupValue(question, "unit")
-            || groupValue(question, "label");
-        if (!title) continue;
-        const kind: GroupKind = groupValue(question, "source") ? "source"
-            : groupValue(question, "concept") ? "concept"
-                : groupValue(question, "unit") ? "unit"
-                    : "label";
-        const key = groupKey(kind, title);
-        bySource.set(key, [...(bySource.get(key) || []), question]);
-    }
-
-    const groups: SimilarQuestionGroup[] = [];
-    for (const [key, questions] of bySource.entries()) {
-        const [kindRaw, ...titleParts] = key.split(":");
-        const kind = kindRaw as GroupKind;
-        const title = titleParts.join(":");
-        let wrongCount = 0;
-        let totalCount = 0;
-
-        for (const attempt of attempts) {
-            const resultByQuestionId = new Map(getAttemptQuestionResults(exam, attempt).map(result => [result.questionId, result]));
-            for (const question of questions) {
-                const result = resultByQuestionId.get(question.id);
-                if (!result || result.status === "ungraded") continue;
-                totalCount++;
-                if (isWrongOrUnansweredResult(result)) wrongCount++;
+export function buildSimilarQuestionGroups(
+    exam: Exam,
+    attempts: Attempt[],
+    index?: CanonicalAttemptAnalyticsIndex,
+): SimilarQuestionGroup[] {
+    const grouped = new Map<string, {
+        kind: GroupKind;
+        title: string;
+        questions: Map<number, Question>;
+        attemptIds: Set<string>;
+        wrongCount: number;
+        totalCount: number;
+    }>();
+    for (const attempt of attempts) {
+        if (attempt.retake) continue;
+        const grading = gradingFor(exam, attempt, index);
+        if (grading.source !== "canonical_submission") continue;
+        for (const result of grading.questionResults) {
+            const question = submittedQuestionFromResult(result);
+            const source = groupValue(question, "source");
+            const concept = groupValue(question, "concept");
+            const unit = groupValue(question, "unit");
+            const label = groupValue(question, "label");
+            const title = source || concept || unit || label;
+            if (!title) continue;
+            const kind: GroupKind = source ? "source" : concept ? "concept" : unit ? "unit" : "label";
+            const key = groupKey(kind, title);
+            const group = grouped.get(key) || {
+                kind,
+                title,
+                questions: new Map<number, Question>(),
+                attemptIds: new Set<string>(),
+                wrongCount: 0,
+                totalCount: 0,
+            };
+            group.questions.set(question.id, question);
+            group.attemptIds.add(attempt.id);
+            if (result.status !== "ungraded") {
+                group.totalCount += 1;
+                if (isWrongOrUnansweredResult(result)) group.wrongCount += 1;
             }
+            grouped.set(key, group);
         }
-
-        groups.push({
-            ...makeWeaknessGroup(kind, title, questions, wrongCount, totalCount),
-            attemptCount: attempts.length,
-        });
     }
 
-    return sortGroups(groups);
+    return sortGroups(Array.from(grouped.values()).map(group => ({
+        ...makeWeaknessGroup(
+            group.kind,
+            group.title,
+            Array.from(group.questions.values()),
+            group.wrongCount,
+            group.totalCount,
+        ),
+        attemptCount: group.attemptIds.size,
+    })));
 }
 
 function uniqueQuestionNumbers(events: FocusLossEvent[]): number[] {

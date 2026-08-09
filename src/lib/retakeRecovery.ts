@@ -1,5 +1,5 @@
 import type { Attempt, Exam, RetakeMetadata } from "@/types/omr";
-import { getAttemptQuestionResults } from "@/lib/premiumAnalytics";
+import { resolveAttemptGrading } from "@/lib/premiumAnalytics";
 
 /**
  * Retake recovery: how much of what a student missed on the source attempt
@@ -72,12 +72,16 @@ export function buildAttemptRetakeRecovery(
     const sourceOwner = attemptOwnerKey(sourceAttempt);
     if (retakeOwner && sourceOwner && retakeOwner !== sourceOwner) return null;
 
-    const examQuestionIds = new Set(exam.questions.map(q => q.id));
-    const scopedIds = [...new Set(retake.questionIds)].filter(id => examQuestionIds.has(id));
-    if (scopedIds.length === 0) return null;
-
-    const sourceById = new Map(getAttemptQuestionResults(exam, sourceAttempt).map(r => [r.questionId, r]));
-    const retakeById = new Map(getAttemptQuestionResults(exam, retakeAttempt).map(r => [r.questionId, r]));
+    const sourceGrading = resolveAttemptGrading(exam, sourceAttempt);
+    const retakeGrading = resolveAttemptGrading(exam, retakeAttempt);
+    if (sourceGrading.source !== "canonical_submission" || retakeGrading.source !== "canonical_submission") return null;
+    const sourceById = new Map(sourceGrading.questionResults.map(r => [r.questionId, r]));
+    const retakeById = new Map(retakeGrading.questionResults.map(r => [r.questionId, r]));
+    const scopedIds = [...new Set(retake.questionIds)];
+    if (
+        scopedIds.length === 0
+        || scopedIds.some(questionId => !sourceById.has(questionId) || !retakeById.has(questionId))
+    ) return null;
 
     let targetCount = 0;
     let recoveredCount = 0;
@@ -153,7 +157,9 @@ export function buildSourceAttemptRecovery(
     exam: Exam,
     sourceAttempt: Attempt,
     candidateAttempts: Attempt[],
-): SourceRecoverySummary {
+): SourceRecoverySummary | null {
+    const sourceGrading = resolveAttemptGrading(exam, sourceAttempt);
+    if (sourceGrading.source !== "canonical_submission") return null;
     const sourceOwner = attemptOwnerKey(sourceAttempt);
     const retakes = candidateAttempts.filter(candidate => {
         if (!candidate.retake || candidate.retake.sourceAttemptId !== sourceAttempt.id) return false;
@@ -162,25 +168,28 @@ export function buildSourceAttemptRecovery(
         return !(owner && sourceOwner && owner !== sourceOwner);
     });
 
-    const sourceById = new Map(getAttemptQuestionResults(exam, sourceAttempt).map(r => [r.questionId, r]));
-    const missedIds = exam.questions
-        .map(question => question.id)
-        .filter(id => isMissed(sourceById.get(id)?.status));
+    const missedIds = sourceGrading.questionResults
+        .filter(result => isMissed(result.status))
+        .map(result => result.questionId);
     if (retakes.length === 0 || missedIds.length === 0) {
         return { retakeCount: retakes.length, recoveredQuestionIds: [], unrecoveredQuestionIds: missedIds };
     }
 
     const recovered = new Set<number>();
+    let canonicalRetakeCount = 0;
     for (const retakeAttempt of retakes) {
+        const retakeGrading = resolveAttemptGrading(exam, retakeAttempt);
+        if (retakeGrading.source !== "canonical_submission") continue;
+        canonicalRetakeCount += 1;
         const scopedIds = new Set(retakeAttempt.retake?.questionIds || []);
-        const retakeById = new Map(getAttemptQuestionResults(exam, retakeAttempt).map(r => [r.questionId, r]));
+        const retakeById = new Map(retakeGrading.questionResults.map(r => [r.questionId, r]));
         for (const id of missedIds) {
             if (!scopedIds.has(id)) continue;
             if (isCorrect(retakeById.get(id)?.status)) recovered.add(id);
         }
     }
     return {
-        retakeCount: retakes.length,
+        retakeCount: canonicalRetakeCount,
         recoveredQuestionIds: missedIds.filter(id => recovered.has(id)),
         unrecoveredQuestionIds: missedIds.filter(id => !recovered.has(id)),
     };

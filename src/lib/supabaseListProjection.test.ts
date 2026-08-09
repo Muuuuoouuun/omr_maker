@@ -22,7 +22,6 @@ describe("canonical list projections", () => {
     it("uses a lightweight teacher attempt summary without answer, analytics, focus, or handwriting payloads", () => {
         const forbidden = [
             "answers",
-            "question_results",
             "question_timings",
             "focus_loss_events",
             "handwriting:payload->handwriting",
@@ -34,7 +33,10 @@ describe("canonical list projections", () => {
                 .not.toContain(field.toLowerCase());
         }
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).not.toContain("payload");
+        expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).not.toContain("question_results");
+        expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).toContain("question_results_question_count");
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).toContain("updated_at");
+        expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).toContain("assignment_revision");
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS).toContain("student_questions:student_question_summaries");
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS).toContain("handwriting_question_count:payload->handwriting->summary->questionCount");
 
@@ -43,6 +45,8 @@ describe("canonical list projections", () => {
             organization_id: "org-1",
             class_id: "class-1",
             assignment_id: "assignment-1",
+            assignment_revision: 8,
+            question_results_question_count: 12,
             student_profile_id: "profile-1",
             exam_id: "exam-1",
             exam_title: "목록 시험",
@@ -80,6 +84,9 @@ describe("canonical list projections", () => {
         expect(summary).toMatchObject({
             id: "attempt-summary",
             organizationId: "org-1",
+            assignmentId: "assignment-1",
+            assignmentRevision: 8,
+            questionResultsQuestionCount: 12,
             examId: "exam-1",
             studentName: "학생",
             score: 8,
@@ -97,7 +104,21 @@ describe("canonical list projections", () => {
                 questionIds: [2, 4],
             },
         });
-        expect(JSON.stringify(summary)).not.toMatch(/questionResults|questionTimings|focusLossEvents|large-body|questionDrawings/);
+        expect(JSON.stringify(summary)).not.toMatch(/"questionResults":|questionTimings|focusLossEvents|large-body|questionDrawings/);
+        expect(() => teacherAttemptSummaryFromSupabaseListRow({
+            id: "attempt-summary-invalid-generation",
+            organization_id: "org-1",
+            assignment_id: "assignment-1",
+            assignment_revision: null,
+            exam_id: "exam-1",
+            exam_title: "목록 시험",
+            student_name: "학생",
+            status: "completed",
+            score: 8,
+            total_score: 10,
+            started_at: "2026-08-06T00:00:00.000Z",
+            finished_at: "2026-08-06T00:10:00.000Z",
+        })).toThrow("Invalid assignment generation");
     });
 
     it("uses a student assignment projection with no question, PDF, answer-key, or access-secret data", () => {
@@ -206,7 +227,6 @@ describe("canonical list projections", () => {
             "student_name",
             "student_id",
             "answers",
-            "question_results",
             "correctAnswer",
             "pdf",
             "tags",
@@ -219,6 +239,8 @@ describe("canonical list projections", () => {
             expect(SUPABASE_STUDENT_ATTEMPT_SUMMARY_READ_COLUMNS.toLowerCase()).not.toContain(field.toLowerCase());
         }
         expect(SUPABASE_STUDENT_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).not.toContain("payload");
+        expect(SUPABASE_STUDENT_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).not.toContain("question_results");
+        expect(SUPABASE_STUDENT_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).toContain("question_results_question_count");
         expect(SUPABASE_STUDENT_ATTEMPT_SUMMARY_READ_COLUMNS).toContain("exam_title:payload->>examTitle");
         expect(SUPABASE_STUDENT_ATTEMPT_SUMMARY_READ_COLUMNS).toContain("student_question_summaries");
 
@@ -294,10 +316,49 @@ describe("canonical list projections", () => {
         expect(SUPABASE_ATTEMPT_LIST_READ_COLUMNS).not.toContain("subQuestionAnswers");
         expect(SUPABASE_ATTEMPT_LIST_READ_COLUMNS).toContain("answers:payload->answers");
         expect(SUPABASE_ATTEMPT_LIST_READ_COLUMNS).toContain("question_results:payload->questionResults");
+        expect(SUPABASE_ATTEMPT_LIST_READ_COLUMNS).toContain("question_results_source:payload->>questionResultsSource");
+        expect(SUPABASE_ATTEMPT_LIST_READ_COLUMNS.split(/\s*,\s*/)).toContain("assignment_revision");
         expect(SUPABASE_ATTEMPT_LIST_READ_COLUMNS).toContain("student_questions:student_question_summaries");
         expect(SUPABASE_ATTEMPT_LIST_READ_COLUMNS).not.toContain("payload->studentQuestions");
         expect(SUPABASE_EXAM_LIST_READ_COLUMNS).toContain("questions:question_summaries");
         expect(SUPABASE_EXAM_LIST_READ_COLUMNS).not.toContain("payload->questions");
+    });
+
+    it("round-trips only an exact positive assignment generation in full attempt list rows", () => {
+        const row = {
+            id: "attempt-generation",
+            organization_id: "org-1",
+            class_id: "class-1",
+            assignment_id: "assignment-reused",
+            assignment_revision: 8,
+            student_profile_id: "student-1",
+            exam_id: "exam-1",
+            exam_title: "목록 시험",
+            student_name: "학생 1",
+            student_id: "student-1",
+            group_id: "class-1",
+            group_name: "A반",
+            identity_type: "registered",
+            status: "completed",
+            score: 0,
+            total_score: 0,
+            started_at: "2026-08-06T00:00:00.000Z",
+            finished_at: "2026-08-06T00:01:00.000Z",
+            answers: {},
+            question_results: [],
+        };
+
+        expect(attemptFromSupabaseListRow(row)).toMatchObject({
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+        });
+        expect(() => attemptFromSupabaseListRow({ ...row, assignment_revision: null })).toThrow();
+        expect(() => attemptFromSupabaseListRow({ ...row, assignment_revision: 0 })).toThrow();
+        expect(() => attemptFromSupabaseListRow({
+            ...row,
+            assignment_id: null,
+            assignment_revision: 8,
+        })).toThrow();
     });
 
     it("reconstructs the exam list contract without legacy PDF bodies or answer-key references", () => {
@@ -419,6 +480,7 @@ describe("canonical list projections", () => {
                 isUnanswered: false,
                 finishedAt: "2026-07-14T00:10:00.000Z",
             }],
+            question_results_source: "legacy_derived_current_exam",
             question_timings: [{ questionId: 1, questionNumber: 1, totalTimeSec: 30, visitCount: 1, revisitCount: 0, answerChangeCount: 0 }],
             focus_loss_events: [{ at: "2026-07-14T00:05:00.000Z", count: 1, reason: "blur" }],
             student_questions: [{
@@ -443,6 +505,7 @@ describe("canonical list projections", () => {
             guestId: "guest-1",
             answers: { 1: 2 },
             questionResults: [{ questionId: 1 }],
+            questionResultsSource: "legacy_derived_current_exam",
             questionTimings: [{ questionId: 1 }],
             tabFociLostCount: 1,
             studentQuestions: [{
@@ -461,6 +524,25 @@ describe("canonical list projections", () => {
         expect(answeredQuestionKeys([attempt])).toEqual([
             "attempt-1:1:2026-07-14T00:12:00.000Z",
         ]);
+    });
+
+    it("marks malformed projected grading provenance as invalid instead of canonical", () => {
+        const attempt = attemptFromSupabaseListRow({
+            id: "attempt-invalid-source",
+            exam_id: "exam-1",
+            exam_title: "목록 시험",
+            student_name: "학생 1",
+            started_at: "2026-07-14T00:00:00.000Z",
+            finished_at: "2026-07-14T00:10:00.000Z",
+            status: "completed",
+            score: 0,
+            total_score: 10,
+            answers: {},
+            question_results: [],
+            question_results_source: "canonical_submission",
+        });
+
+        expect(attempt.questionResultsSource).toBe("incomplete_or_invalid");
     });
 
     it("serializes the JSON-path aliases through the real Supabase/PostgREST client", async () => {

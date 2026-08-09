@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildGroupProfileInsight } from "./groupProfileAnalytics";
+import { buildStudentProfileInsight } from "./studentProfileAnalytics";
+import { buildQuestionResults, summarizeQuestionResults } from "./premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 
 const exam: Exam = {
     id: "exam-1",
@@ -50,7 +53,7 @@ const students: RosterStudent[] = [
 ];
 
 function attempt(partial: Partial<Attempt>): Attempt {
-    return {
+    const candidate: Attempt = {
         id: partial.id || "attempt-1",
         examId: partial.examId || exam.id,
         examTitle: partial.examTitle || exam.title,
@@ -71,9 +74,74 @@ function attempt(partial: Partial<Attempt>): Attempt {
         retake: partial.retake,
         status: partial.status || "completed",
     };
+    if (candidate.examId !== exam.id) return candidate;
+    const questionResults = buildQuestionResults(exam, candidate);
+    const summary = summarizeQuestionResults(questionResults);
+    const canonical = { ...candidate, score: summary.earnedScore, totalScore: summary.totalScore, questionResults };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
 }
 
 describe("group profile analytics", () => {
+    it("keeps the supported 20 by 500 student and group profile builders within the CPU boundary", () => {
+        const maxExam: Exam = {
+            id: "exam-profile-cpu-max",
+            title: "프로필 최대 시험",
+            organizationId: "org-1",
+            createdAt: "2026-08-10T00:00:00.000Z",
+            questions: Array.from({ length: 500 }, (_, index) => ({
+                id: index + 1,
+                number: index + 1,
+                answer: 2,
+                score: 1,
+                label: `영역 ${index % 5}`,
+            })),
+        };
+        const maxStudent: RosterStudent = { ...students[0], id: "profile-cpu-student", group: group.name };
+        const maxAttempts = Array.from({ length: 20 }, (_, attemptIndex) => {
+            const base: Attempt = {
+                id: `profile-cpu-${attemptIndex}`,
+                examId: maxExam.id,
+                examTitle: maxExam.title,
+                organizationId: "org-1",
+                classId: group.id,
+                groupId: group.id,
+                groupName: group.name,
+                studentProfileId: maxStudent.id,
+                studentId: maxStudent.id,
+                studentName: maxStudent.name,
+                identityType: "registered",
+                startedAt: "2026-08-10T00:00:00.000Z",
+                finishedAt: "2026-08-10T00:30:00.000Z",
+                score: 500,
+                totalScore: 500,
+                answers: Object.fromEntries(maxExam.questions.map(question => [question.id, 2])),
+                status: "completed",
+            };
+            const questionResults = buildQuestionResults(maxExam, base);
+            return { ...base, questionResults, ...buildCanonicalQuestionResultEvidence(base, questionResults) };
+        });
+        const examById = new Map([[maxExam.id, maxExam]]);
+        const startedAt = performance.now();
+        const studentProfile = buildStudentProfileInsight(maxStudent, maxAttempts, examById, {
+            recentLimit: 8,
+            weaknessLimit: 6,
+        });
+        const studentElapsedMs = performance.now() - startedAt;
+        const groupStartedAt = performance.now();
+        const groupProfile = buildGroupProfileInsight(group, [maxStudent], maxAttempts, examById, {
+            examLimit: 6,
+            weaknessLimit: 6,
+            riskLimit: 5,
+        });
+        const groupElapsedMs = performance.now() - groupStartedAt;
+        console.info("bounded roster profile CPU", { studentElapsedMs, groupElapsedMs });
+
+        expect(studentProfile.baseAttemptCount).toBe(20);
+        expect(groupProfile.attemptCount).toBe(20);
+        expect(studentElapsedMs).toBeLessThan(1_500);
+        expect(groupElapsedMs).toBeLessThan(1_500);
+    });
+
     it("keeps the group away total at the stored cumulative value", () => {
         const insight = buildGroupProfileInsight(group, students, [
             attempt({
@@ -192,13 +260,14 @@ describe("group profile analytics", () => {
     });
 
     it("includes roster-matched class attempts even when the attempt group snapshot is missing", () => {
+        const rosterMatchedAttempt = attempt({
+            id: "legacy-class-key",
+            studentId: "A반::김학생",
+            studentName: "김학생",
+            answers: { 1: 2, 2: 1, 3: 0 },
+        });
         const insight = buildGroupProfileInsight(group, students, [
-            attempt({
-                id: "legacy-class-key",
-                studentId: "A반::김학생",
-                studentName: "김학생",
-                answers: { 1: 2, 2: 1, 3: 0 },
-            }),
+            rosterMatchedAttempt,
             attempt({
                 id: "other-class-key",
                 studentId: "class-b::김학생",

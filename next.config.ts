@@ -46,6 +46,9 @@ const isDesktopRuntime = process.env.OMR_DESKTOP_RUNTIME === "1";
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
+  // The development toolbar owns the first tab stop inside a shadow-root
+  // portal. Keep local/E2E keyboard order representative of the production UI.
+  devIndicators: false,
   ...(deploymentId ? { deploymentId } : {}),
   ...(isDesktopRuntime
     ? {

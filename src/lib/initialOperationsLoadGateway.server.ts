@@ -18,7 +18,7 @@ import {
     openStudentAttemptSessionWithGateway,
     prepareStudentAttemptSessionSubmitWithGateway,
 } from "./studentAttemptSessionGateway.server";
-import { buildServerAttempt } from "./studentExamCore";
+import { buildServerAttempt } from "./studentExamServerGrading";
 import { leaseTokenHash } from "./studentAttemptSessionCrypto.server";
 import { serverGradedAttemptReceiptFromAttempt } from "./serverAttemptGrading";
 import { listTeacherActiveAttemptSessionsWithGateway } from "./teacherAttemptGateway";

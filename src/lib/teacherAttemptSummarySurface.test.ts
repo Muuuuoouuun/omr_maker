@@ -17,7 +17,7 @@ describe("teacher attempt summary surfaces", () => {
         expect(source).toContain("loadTeacherAttemptSummaries");
     });
 
-    it("keeps complete fresh dashboard attempts rich and delegates cache redaction to the canonical projection", () => {
+    it("keeps the initial dashboard bounded and delegates rich rows to explicit detail/snapshot actions", () => {
         const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
         const cacheProjection = readProjectFile("src/lib/teacherDashboardCanonicalCache.ts");
         const loadStart = dashboard.indexOf("const loadDashboardData = useCallback");
@@ -27,8 +27,8 @@ describe("teacher attempt summary surfaces", () => {
         const projectionEnd = cacheProjection.indexOf("export function cacheFreshTeacherDashboardOptional", projectionStart);
         const projection = cacheProjection.slice(projectionStart, projectionEnd);
 
-        expect(freshLoad).toContain("loadTeacherAttempts(),");
-        expect(freshLoad).not.toContain("loadTeacherAttemptSummaries()");
+        expect(freshLoad).toContain("loadTeacherAttemptSummaries(),");
+        expect(freshLoad).not.toContain("loadTeacherAttempts(),");
         expect(freshLoad).toContain("applyDashboardSnapshot(nextState.data)");
         expect(freshLoad).toContain("cacheFreshTeacherDashboardOptional(");
         expect(projection).not.toMatch(/\b(?:questions|answers|drawings|studentQuestions|feedback)\s*:/);
@@ -48,10 +48,11 @@ describe("teacher attempt summary surfaces", () => {
 
     it("loads rich dashboard analytics behind a loading/error boundary", () => {
         const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
-        expect(dashboard).toContain("detailedAttemptStatus");
+        expect(dashboard).toContain("analyticsSnapshotStatus");
         expect(dashboard).toContain("loadDetailedAttempts");
         expect(dashboard).toContain("analyticsAttempts");
-        expect(dashboard).toContain("상세 제출 데이터를 불러오지 못했습니다");
+        expect(dashboard).toContain("loadTeacherAnalyticsSnapshots");
+        expect(dashboard).toContain("공식 분석 데이터를 불러오지 못했습니다");
     });
 
     it("refreshes the selected live exam immediately and blocks answer-dependent actions until rich rows arrive", () => {
@@ -62,10 +63,11 @@ describe("teacher attempt summary surfaces", () => {
         expect(live).toContain("loadSelectedAttemptDetails(nextSelectedExamId, true)");
     });
 
-    it("loads rich user analytics only when a profile or group report is opened", () => {
+    it("loads bounded server profile analytics only when a profile or group report is opened", () => {
         const users = readProjectFile("src/app/teacher/users/page.tsx");
-        expect(users).toContain("ensureDetailedAttempts");
-        expect(users).toContain("await ensureDetailedAttempts()");
-        expect(users).toContain("detailedAttempts || allAttempts");
+        expect(users).toContain('await import("@/app/actions/teacherRosterProfiles")');
+        expect(users).toContain("loadTeacherCanonicalRosterProfile({ kind: \"student\"");
+        expect(users).toContain("loadTeacherCanonicalRosterProfile({ kind: \"group\"");
+        expect(users).not.toContain("ensureDetailedAttempts");
     });
 });

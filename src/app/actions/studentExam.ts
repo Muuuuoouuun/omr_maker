@@ -15,13 +15,13 @@ import { applyDurableRateLimitToSubjects } from "@/lib/durableRateLimit";
 import { stripExamForAttemptReview, stripExamForSolving, type ReviewableExam, type SolvableExam } from "@/lib/examSolvePayload";
 import {
     attemptOwnedBy,
-    buildServerAttempt,
     hasArchiveableHandwriting,
     identityAccessSession,
     loadSubmissionBaseInParallel,
     ownerStudentId,
     type SubmitAttemptInput,
 } from "@/lib/studentExamCore";
+import { buildServerAttempt } from "@/lib/studentExamServerGrading";
 import { type StudentQuestionInput } from "@/lib/studentQuestions";
 import { attemptIdForStudentSubmission } from "@/lib/studentSubmissionId";
 import type { Attempt, Exam } from "@/types/omr";
@@ -38,6 +38,7 @@ import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import { createStudentSubmissionSimulator } from "@/lib/studentSubmissionSimulation";
 import { INITIAL_CAPACITY_EXCEEDED_ERROR } from "@/lib/initialOperationsPolicy";
 import { studentAttemptSummaryFromSupabaseListRow } from "@/lib/supabaseListProjection";
+import { attestCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 import type { StudentAssignmentPreview, StudentAttemptSummary } from "@/lib/studentExamContract";
 import { upsertStudentQuestionWithGateway } from "@/lib/studentExamServerGateway";
 import { resolveExamEntryInviteWithGateway } from "@/lib/examEntryInviteGateway";
@@ -240,7 +241,10 @@ async function ownAttempt(
     );
     if (!row) return null;
     try {
-        const attempt = attemptFromSupabaseRow(row as Parameters<typeof attemptFromSupabaseRow>[0]);
+        const attempt = attemptFromSupabaseRow(
+            row as Parameters<typeof attemptFromSupabaseRow>[0],
+            attestCanonicalQuestionResultEvidence,
+        );
         return attemptOwnedBy(attempt, identity) ? attempt : null;
     } catch {
         return null;
