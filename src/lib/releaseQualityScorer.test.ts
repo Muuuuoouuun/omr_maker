@@ -232,15 +232,22 @@ async function scorerGitFixture() {
     await mkdir(scripts);
     await writeFile(join(scripts, "release-quality-core.mjs"), "export const core = true;\n", { flag: "wx" });
     await writeFile(join(scripts, "score-release-quality.mjs"), "export const cli = true;\n", { flag: "wx" });
+    await writeFile(join(scripts, "strict-json.mjs"), "export const strict = true;\n", { flag: "wx" });
     git(temporary, ["init", "--quiet"]);
     git(temporary, ["config", "user.email", "release-test@example.invalid"]);
     git(temporary, ["config", "user.name", "Release Test"]);
-    git(temporary, ["add", "--", "scripts/release-quality-core.mjs", "scripts/score-release-quality.mjs"]);
+    git(temporary, [
+        "add", "--",
+        "scripts/release-quality-core.mjs",
+        "scripts/score-release-quality.mjs",
+        "scripts/strict-json.mjs",
+    ]);
     git(temporary, ["commit", "--quiet", "-m", "fixture"]);
     return {
         temporary,
         corePath: join(scripts, "release-quality-core.mjs"),
         cliPath: join(scripts, "score-release-quality.mjs"),
+        strictJsonPath: join(scripts, "strict-json.mjs"),
         head: git(temporary, ["rev-parse", "HEAD"]),
     };
 }
@@ -917,6 +924,24 @@ describe("release quality scorer", () => {
         }
     });
 
+    it.each(["unstaged", "staged", "untracked"] as const)(
+        "rejects a %s strict JSON parser replacement from scorer identity",
+        async (state) => {
+            const resolver = Reflect.get(releaseScoreCli, "resolveVerifiedScorerSha") as (cwd: string) => string;
+            const fixture = await scorerGitFixture();
+            if (state === "unstaged") {
+                await writeFile(fixture.strictJsonPath, "export const strict = false;\n");
+            } else if (state === "staged") {
+                await writeFile(fixture.strictJsonPath, "export const strict = false;\n");
+                git(fixture.temporary, ["add", "--", "scripts/strict-json.mjs"]);
+            } else {
+                git(fixture.temporary, ["rm", "--quiet", "--cached", "--", "scripts/strict-json.mjs"]);
+            }
+
+            expect(() => resolver(fixture.temporary)).toThrow();
+        },
+    );
+
     it("fails closed on duplicate JSON keys without publishing or exposing content", async () => {
         const fixture = await cliFixture();
         const duplicateManifest = join(fixture.temporary, "duplicate.json");
@@ -949,5 +974,6 @@ describe("release quality scorer", () => {
         expect(evidenceTemplate).toContain("environmentDigest");
         expect(evidenceTemplate).toContain("hard gate `passed`가 atomic failure를 덮어쓸 수 없습니다");
         expect(evidenceTemplate).toContain("manifest `buildSha`와 scorer commit SHA가 정확히 같아야");
+        expect(evidenceTemplate).toContain("strict JSON parser source");
     });
 });

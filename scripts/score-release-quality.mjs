@@ -15,6 +15,7 @@ const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 const SCORER_SOURCE_PATHS = Object.freeze([
     "scripts/release-quality-core.mjs",
     "scripts/score-release-quality.mjs",
+    "scripts/strict-json.mjs",
 ]);
 
 export function resolveVerifiedScorerSha(cwd, run = execFileSync) {
