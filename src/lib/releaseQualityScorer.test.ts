@@ -243,17 +243,19 @@ describe("release quality scorer", () => {
 
     it("scores exact tenths and accepts the mean and minimum boundary", async () => {
         const input = manifest({
-            student_core: 87,
+            student_core: 90,
             teacher_core: 100,
             provisioning_entitlement: 100,
             data_integrity_isolation: 100,
-            code_supply_chain: 93,
+            code_supply_chain: 90,
             browser_determinism: 90,
             ux_accessibility_responsiveness: 93,
             hosted_deployment: 87,
             capacity_observability: 90,
             recovery_release: 90,
         });
+        setAtomicStatusById(input, "student_core_history", "passed");
+        setAtomicStatusById(input, "student_core_cross_device", "failed");
         setAtomicStatusById(input, "browser_determinism_zero_order_dependence", "passed");
         setAtomicStatusById(input, "browser_determinism_credential_boundary", "failed");
         setAtomicStatusById(input, "recovery_release_object_hashes", "passed");
@@ -268,7 +270,7 @@ describe("release quality scorer", () => {
             mean: 9.3,
             minimum: 8.7,
             dimensions: {
-                student_core: 8.7,
+                student_core: 9,
                 teacher_core: 10,
                 recovery_release: 9,
             },
@@ -337,6 +339,31 @@ describe("release quality scorer", () => {
         const result = await scoreReleaseEvidence(input, scoringDependencies(input));
 
         expect(result.hardGateFailures).toContain("restore_rpo_rto");
+        expect(result.status).toBe("no_go");
+    });
+
+    it.each([
+        "student_core_identity_entry",
+        "student_core_assignment_state",
+        "student_core_autosave_resume",
+        "student_core_exact_submit",
+        "student_core_history",
+        "student_core_question_feedback",
+        "teacher_core_teacher_login",
+        "teacher_core_truthful_load_states",
+        "teacher_core_draft_create",
+        "teacher_core_publish_distribution",
+        "teacher_core_live_monitor",
+        "teacher_core_results_feedback",
+        "teacher_core_csv_export",
+        "teacher_core_roster",
+    ])("hard-fails core_e2e when required browser outcome %s fails", async (checkId) => {
+        const input = manifest();
+        setAtomicStatusById(input, checkId, "failed");
+
+        const result = await scoreReleaseEvidence(input, scoringDependencies(input));
+
+        expect(result.hardGateFailures).toContain("core_e2e");
         expect(result.status).toBe("no_go");
     });
 
@@ -592,7 +619,7 @@ describe("release quality scorer", () => {
 
     it.each([
         ["skipped", "no_go"],
-        ["unverified", "go"],
+        ["unverified", "no_go"],
     ])("scores an atomic %s check as zero", async (status, expectedStatus) => {
         const input = manifest();
         setAtomicStatus(input, "student_core", 0, status as EvidenceStatus);

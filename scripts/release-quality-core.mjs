@@ -57,7 +57,20 @@ export const RELEASE_ATOMIC_CHECKS = Object.freeze(Object.fromEntries(
 
 export const RELEASE_HARD_GATE_PREDICATES = Object.freeze(Object.fromEntries(Object.entries({
     core_e2e: [
+        "student_core_identity_entry",
+        "student_core_assignment_state",
+        "student_core_autosave_resume",
+        "student_core_exact_submit",
+        "student_core_history",
+        "student_core_question_feedback",
         "teacher_core_teacher_login",
+        "teacher_core_truthful_load_states",
+        "teacher_core_draft_create",
+        "teacher_core_publish_distribution",
+        "teacher_core_live_monitor",
+        "teacher_core_results_feedback",
+        "teacher_core_csv_export",
+        "teacher_core_roster",
         "browser_determinism_chromium_repeat",
         "browser_determinism_webkit_core",
         "browser_determinism_production_e2e",
