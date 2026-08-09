@@ -5,6 +5,17 @@ loadEnvConfig(process.cwd());
 
 const e2eTeacherSessionSecret = "omr-maker-e2e-teacher-session-secret-2026";
 process.env.TEACHER_SESSION_SECRET = e2eTeacherSessionSecret;
+const e2eExamInviteFixtures = JSON.stringify([{
+    organizationId: "default",
+    examId: "e2e-invite-exam-a",
+    actorUserIds: ["teacher_0en845w"],
+    groups: [{ id: "e2e-group-a", name: "E2E A반", region: "서울" }],
+}, {
+    organizationId: "default",
+    examId: "e2e-invite-exam-b",
+    actorUserIds: ["teacher_0en845w"],
+    groups: [{ id: "e2e-group-b", name: "E2E B반", region: "부산" }],
+}]);
 
 const externalBaseURL = process.env.PLAYWRIGHT_BASE_URL;
 const baseURL = externalBaseURL || "http://localhost:3003";
@@ -193,6 +204,8 @@ export default defineConfig({
             STUDENT_ATTEMPT_SECRET: "",
             OMR_STUDENT_ATTEMPT_SECRET: "",
             STUDENT_SESSION_SECRET: "omr-maker-e2e-student-session-secret-2026",
+            OMR_E2E_EXAM_INVITE_SIMULATION: "1",
+            OMR_E2E_EXAM_INVITE_FIXTURES: e2eExamInviteFixtures,
             OMR_E2E_STUDENT_SUBMISSION_SIMULATION: "1",
             OMR_E2E_STUDENT_SUBMISSION_EXAM_ID: "e2e-korean-integrated-exam",
             OMR_E2E_STUDENT_SUBMISSION_EXAM_TITLE: "E2E 국어 통합 시험",

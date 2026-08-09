@@ -182,6 +182,18 @@ begin
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_resolve_exam_entry_invite_v1(text,text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_get_exam_entry_invite_metadata_v1(text,text,text)', 'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_revoke_exam_entry_invite_v1(text,text,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'anon', 'public.omr_get_exam_entry_invite_metadata_v1(text,text,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'authenticated', 'public.omr_get_exam_entry_invite_metadata_v1(text,text,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'anon', 'public.omr_revoke_exam_entry_invite_v1(text,text,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'authenticated', 'public.omr_revoke_exam_entry_invite_v1(text,text,text)', 'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_load_teacher_notification_state_v1(text,text,text[])', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_mutate_teacher_notification_state_v1(text,text,text,text[])', 'EXECUTE'
@@ -312,6 +324,8 @@ begin
                'omr_advance_teacher_session_on_disable_v1',
                'omr_rotate_exam_entry_invite_v1',
                'omr_resolve_exam_entry_invite_v1',
+               'omr_get_exam_entry_invite_metadata_v1',
+               'omr_revoke_exam_entry_invite_v1',
                'omr_assign_students_v1',
                'omr_clear_student_assignment_v1',
                'omr_load_teacher_student_assignment_v1',

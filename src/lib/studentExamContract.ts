@@ -8,6 +8,7 @@ import type {
     QuestionTiming,
     StoredDataRef,
 } from "@/types/omr";
+import type { AssignmentLifecycle } from "@/lib/assignmentLifecycle";
 
 export interface StudentExamAccessInput {
     examId: string;
@@ -76,8 +77,9 @@ export interface StudentAssignmentPreview {
     createdAt: string;
     updatedAt?: string;
     durationMin?: number;
-    startAt?: string;
-    endAt?: string;
+    lifecycle: AssignmentLifecycle;
+    startsAt?: string;
+    endsAt?: string;
     archived?: boolean;
     access: {
         type: "public" | "group" | "targeted";

@@ -1,4 +1,5 @@
 import type { Exam } from "@/types/omr";
+import { resolveAssignmentLifecycle } from "@/lib/assignmentLifecycle";
 
 export interface ExamAccessSession {
     groupId?: string;
@@ -38,10 +39,10 @@ export function verifyExamPin(exam: Pick<Exam, "accessConfig"> | null | undefine
     return normalizeExamPin(input) === exam?.accessConfig?.pin;
 }
 
-function timestamp(value: string | undefined): number | null {
-    if (!value) return null;
-    const time = new Date(value).getTime();
-    return Number.isFinite(time) ? time : null;
+function numericNowIso(value: number): string | null {
+    if (!Number.isFinite(value)) return null;
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 export function evaluateExamAccess(
@@ -55,11 +56,16 @@ export function evaluateExamAccess(
     if (!exam) return { status: "ended" };
     if (exam.archived) return { status: "archived" };
 
-    const now = context.now ?? Date.now();
-    const startAt = timestamp(exam.startAt);
-    const endAt = timestamp(exam.endAt);
-    if (startAt !== null && startAt > now) return { status: "not_started", at: exam.startAt };
-    if (endAt !== null && endAt < now) return { status: "ended", at: exam.endAt };
+    const now = numericNowIso(context.now ?? Date.now());
+    const lifecycle = resolveAssignmentLifecycle({
+        state: "open",
+        startsAt: exam.startAt,
+        endsAt: exam.endAt,
+        now,
+    });
+    if (lifecycle === "scheduled") return { status: "not_started", at: exam.startAt };
+    if (lifecycle === "closed") return { status: "ended", at: exam.endAt };
+    if (lifecycle === "invalid") return { status: "ended" };
 
     const config = exam.accessConfig;
     if (config?.type === "targeted") {

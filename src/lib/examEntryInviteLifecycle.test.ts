@@ -99,6 +99,23 @@ describe("exam entry invite capability", () => {
     });
 
     it.each([
+        ["metadata", {
+            metadata: { ...active, issuedAt: "2026-08-08T12:00:01.000Z" },
+            rawUrl: validCurrentUrl,
+        }],
+        ["local raw URL", {
+            metadata: active,
+            rawUrl: { ...validCurrentUrl, issuedAt: "2026-08-08T12:00:01.000Z" },
+        }],
+        ["metadata and local raw URL", {
+            metadata: { ...active, issuedAt: "2026-08-08T12:00:01.000Z" },
+            rawUrl: { ...validCurrentUrl, issuedAt: "2026-08-08T12:00:02.000Z" },
+        }],
+    ])("tolerates slight clock skew in %s issue time", (_label, input) => {
+        expect(resolveInviteCapability({ ...input, now: NOW })).toBe("copyable_here");
+    });
+
+    it.each([
         ["zero metadata generation", { metadata: { ...active, generation: 0 }, rawUrl: validCurrentUrl, now: NOW }],
         ["fractional raw generation", { metadata: active, rawUrl: { ...validCurrentUrl, generation: 1.5 }, now: NOW }],
         ["malformed metadata issue time", { metadata: { ...active, issuedAt: "not-a-date" }, rawUrl: validCurrentUrl, now: NOW }],

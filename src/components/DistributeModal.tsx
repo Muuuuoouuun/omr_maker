@@ -16,7 +16,9 @@ import { toast } from '@/components/Toast';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import {
     confirmExistingGroupInviteRotation,
+    isGroupInviteShareUrl,
     normalizeDistributionShareResult,
+    resolveInviteRotationExamId,
     type DistributionShareResultLike,
 } from '@/lib/distributionInviteRotation';
 import type {
@@ -27,6 +29,16 @@ import type {
     SaveTeacherIndividualAssignmentResult,
 } from '@/lib/individualAssignmentGateway';
 import { reloadLatestAssignmentAfterConflict } from '@/lib/studentAssignmentClassification';
+import {
+    resolveInviteCapability,
+    type ExamEntryInviteCapability,
+    type ExamEntryInviteMetadata,
+    type ExamEntryInviteRawUrlState,
+} from '@/lib/examEntryInviteLifecycle';
+import type {
+    TeacherExamEntryInviteMetadataResult,
+    TeacherExamEntryInviteRevokeResult,
+} from '@/app/actions/teacherExam';
 
 type AccessConfig = NonNullable<Exam["accessConfig"]>;
 
@@ -37,6 +49,10 @@ interface DistributeModalProps {
     onAssignStudents: (input: SaveTeacherIndividualAssignmentInput) => Promise<SaveTeacherIndividualAssignmentResult | { status: "local_only" }>;
     onClearStudentAssignment: (input: ClearTeacherIndividualAssignmentInput) => Promise<ClearTeacherIndividualAssignmentResult | { status: "local_only" }>;
     onLoadStudentAssignment: (examId: string) => Promise<LoadTeacherIndividualAssignmentResult | { status: "local_only" }>;
+    onLoadInviteMetadata: (examId: string) => Promise<TeacherExamEntryInviteMetadataResult>;
+    onRevokeInvite: (examId: string) => Promise<TeacherExamEntryInviteRevokeResult>;
+    inviteRawUrlState: ExamEntryInviteRawUrlState | null;
+    onInviteRawUrlStateChange: (state: ExamEntryInviteRawUrlState | null) => void;
     retakeAssignmentsEnabled: boolean;
     onAutoMatchRegions?: () => void;
     validationSummary?: ExamValidationSummary;
@@ -47,7 +63,11 @@ interface DistributeModalProps {
     isExistingExam?: boolean;
 }
 
-export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAssignStudents, onClearStudentAssignment, onLoadStudentAssignment, retakeAssignmentsEnabled, onAutoMatchRegions, validationSummary, initialAccessConfig, initialShareUrl, initialShareExpiresAt, examId, isExistingExam = false }: DistributeModalProps) {
+type InviteMetadataLoadState =
+    | { status: "idle" | "loading" | "not_found" | "forbidden" | "dependency_unavailable" }
+    | { status: "found"; metadata: ExamEntryInviteMetadata };
+
+export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAssignStudents, onClearStudentAssignment, onLoadStudentAssignment, onLoadInviteMetadata, onRevokeInvite, inviteRawUrlState, onInviteRawUrlStateChange, retakeAssignmentsEnabled, onAutoMatchRegions, validationSummary, initialAccessConfig, initialShareUrl, initialShareExpiresAt, examId, isExistingExam = false }: DistributeModalProps) {
     const [accessType, setAccessType] = useState<'public' | 'group' | 'student'>('public');
     const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
     const [groups, setGroups] = useState<RosterGroup[]>([]);
@@ -73,8 +93,13 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     const [assignmentRevision, setAssignmentRevision] = useState(0);
     const [assignmentLoadError, setAssignmentLoadError] = useState("");
     const [isAssignmentLoading, setIsAssignmentLoading] = useState(false);
+    const [inviteMetadataLoad, setInviteMetadataLoad] = useState<InviteMetadataLoadState>({ status: "idle" });
+    const [inviteMetadataRetryGeneration, setInviteMetadataRetryGeneration] = useState(0);
+    const [inviteClock, setInviteClock] = useState(() => Date.now());
+    const [isInviteRevoking, setIsInviteRevoking] = useState(false);
     const wasOpenRef = useRef(false);
     const rosterLoadGenerationRef = useRef(0);
+    const inviteMetadataLoadGenerationRef = useRef(0);
     const copyResetTimerRef = useRef<number | undefined>(undefined);
     const dialogRef = useDialogFocus(isOpen, onClose);
     const dialogTitleId = useId();
@@ -192,6 +217,72 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
         return () => { cancelled = true; };
     }, [examId, isOpen, onLoadStudentAssignment, retakeAssignmentsEnabled]);
 
+    useEffect(() => {
+        const loadGeneration = ++inviteMetadataLoadGenerationRef.current;
+        if (!isOpen || !examId) {
+            setInviteMetadataLoad({ status: "idle" });
+            return;
+        }
+
+        const expectedExamId = examId;
+        setInviteMetadataLoad({ status: "loading" });
+        void onLoadInviteMetadata(expectedExamId)
+            .then(result => {
+                if (inviteMetadataLoadGenerationRef.current !== loadGeneration) return;
+                if (result.status === "found") {
+                    if (result.metadata.examId !== expectedExamId) {
+                        setInviteMetadataLoad({ status: "dependency_unavailable" });
+                        return;
+                    }
+                    setInviteClock(Date.now());
+                    setInviteMetadataLoad({ status: "found", metadata: result.metadata });
+                    return;
+                }
+                setInviteMetadataLoad({ status: result.status });
+            })
+            .catch(() => {
+                if (inviteMetadataLoadGenerationRef.current === loadGeneration) {
+                    setInviteMetadataLoad({ status: "dependency_unavailable" });
+                }
+            });
+
+        return () => {
+            if (inviteMetadataLoadGenerationRef.current === loadGeneration) {
+                inviteMetadataLoadGenerationRef.current += 1;
+            }
+        };
+    }, [examId, inviteMetadataRetryGeneration, isOpen, onLoadInviteMetadata]);
+
+    const inviteCapability: ExamEntryInviteCapability | null = inviteMetadataLoad.status === "found"
+        ? resolveInviteCapability({
+            metadata: inviteMetadataLoad.metadata,
+            rawUrl: inviteRawUrlState,
+            now: inviteClock,
+        })
+        : null;
+
+    useEffect(() => {
+        if (inviteMetadataLoad.status !== "found") return;
+        const expiryMs = Date.parse(inviteMetadataLoad.metadata.expiresAt);
+        if (!Number.isFinite(expiryMs) || expiryMs <= inviteClock) return;
+        const timer = window.setTimeout(
+            () => setInviteClock(Date.now()),
+            Math.min(expiryMs - inviteClock + 25, 2_147_483_647),
+        );
+        return () => window.clearTimeout(timer);
+    }, [inviteClock, inviteMetadataLoad]);
+
+    useEffect(() => {
+        const shouldDiscardGroupBearer = inviteMetadataLoad.status === "not_found"
+            || (inviteMetadataLoad.status === "found" && inviteCapability !== "copyable_here");
+        if (!shouldDiscardGroupBearer) return;
+        if (inviteRawUrlState) onInviteRawUrlStateChange(null);
+        if (isGroupInviteShareUrl(shareUrl)) {
+            setShareUrl(null);
+            setShareExpiresAt(null);
+        }
+    }, [inviteCapability, inviteMetadataLoad, inviteRawUrlState, onInviteRawUrlStateChange, shareUrl]);
+
     const targetSummary = useMemo(() => summarizeDistributionTargets({
         selectedGroupIds: selectedGroups,
         groups,
@@ -205,6 +296,19 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     const isRotatingExistingGroupInvite = isExistingExam
         && initialAccessConfig?.type === 'group'
         && accessType === 'group';
+    const isGroupReissue = accessType === "group"
+        && (isRotatingExistingGroupInvite || inviteMetadataLoad.status === "found");
+    const hasActiveGroupInvite = accessType === "group"
+        && (inviteCapability === "copyable_here" || inviteCapability === "active_but_raw_unavailable");
+    const inviteLifecycleBlocksIssuance = isExistingExam
+        && accessType === "group"
+        && (inviteMetadataLoad.status === "idle"
+            || inviteMetadataLoad.status === "loading"
+            || inviteMetadataLoad.status === "forbidden"
+            || inviteMetadataLoad.status === "dependency_unavailable");
+    const visibleShareUrl = accessType === "group"
+        ? inviteCapability === "copyable_here" ? inviteRawUrlState?.url || null : null
+        : isGroupInviteShareUrl(shareUrl) ? null : shareUrl;
 
     if (!isOpen) return null;
 
@@ -222,6 +326,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
 
     const handleShareClick = async () => {
         setFormError("");
+        if (accessType === "group" && inviteLifecycleBlocksIssuance) {
+            setFormError("기존 배포 링크 상태를 확인한 뒤 새 링크를 발급할 수 있습니다. 다시 시도해주세요.");
+            return;
+        }
         if (validationSummary && !validationSummary.isPublishable) {
             setFormError(validationSummary.errors[0]?.message || "배포 전 시험 설정을 확인해주세요.");
             return;
@@ -342,7 +450,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 setAssignmentMode("base");
             }
             const outcome = await confirmExistingGroupInviteRotation({
-                needsConfirmation: isRotatingExistingGroupInvite,
+                needsConfirmation: hasActiveGroupInvite,
                 confirm: message => window.confirm(message),
                 rotateAndSave: async () => {
                     setIsSaving(true);
@@ -355,6 +463,23 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 setFormError("링크 생성에 실패했습니다. 배포 체크와 저장 상태를 확인한 뒤 다시 시도해주세요.");
                 return;
             }
+            if (accessType === "group") {
+                const boundExamId = resolveInviteRotationExamId(shareResult, examId);
+                if (!shareResult.metadata || !boundExamId) {
+                    setFormError("새 링크는 발급됐지만 현재 배포 상태를 확인하지 못했습니다. 창을 닫고 다시 확인해주세요.");
+                    onInviteRawUrlStateChange(null);
+                    return;
+                }
+                const nextRawUrlState: ExamEntryInviteRawUrlState = {
+                    url: shareResult.shareUrl,
+                    examId: boundExamId,
+                    generation: shareResult.metadata.generation,
+                    issuedAt: shareResult.metadata.issuedAt,
+                };
+                setInviteClock(Date.now());
+                setInviteMetadataLoad({ status: "found", metadata: shareResult.metadata });
+                onInviteRawUrlStateChange(nextRawUrlState);
+            }
             setShareUrl(shareResult.shareUrl);
             setShareExpiresAt(shareResult.expiresAt || null);
         } catch {
@@ -365,13 +490,13 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     };
 
     const copyShareLink = async () => {
-        if (!shareUrl) return;
+        if (!visibleShareUrl) return;
         if (copyResetTimerRef.current !== undefined) {
             window.clearTimeout(copyResetTimerRef.current);
             copyResetTimerRef.current = undefined;
         }
         try {
-            await navigator.clipboard.writeText(shareUrl);
+            await navigator.clipboard.writeText(visibleShareUrl);
             setCopyStatus("복사됨");
             copyResetTimerRef.current = window.setTimeout(() => {
                 copyResetTimerRef.current = undefined;
@@ -379,6 +504,44 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             }, 1600);
         } catch {
             setCopyStatus("복사 실패");
+        }
+    };
+
+    const revokeGroupInvite = async () => {
+        if (!examId || isInviteRevoking) return;
+        setFormError("");
+        setIsInviteRevoking(true);
+        try {
+            const result = await onRevokeInvite(examId);
+            if (result.status === "revoked") {
+                if (result.metadata.examId !== examId) {
+                    setInviteMetadataLoad({ status: "dependency_unavailable" });
+                    setFormError("링크 해지 결과의 시험 범위를 확인하지 못했습니다. 다시 시도해주세요.");
+                    return;
+                }
+                onInviteRawUrlStateChange(null);
+                setShareUrl(null);
+                setShareExpiresAt(null);
+                setInviteClock(Date.now());
+                setInviteMetadataLoad({ status: "found", metadata: result.metadata });
+                return;
+            }
+            if (result.status === "not_found") {
+                onInviteRawUrlStateChange(null);
+                setShareUrl(null);
+                setShareExpiresAt(null);
+                setInviteMetadataLoad({ status: "not_found" });
+                return;
+            }
+            setInviteMetadataLoad({ status: result.status });
+            setFormError(result.status === "forbidden"
+                ? "이 링크를 해지할 권한이 없습니다."
+                : "링크 해지 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
+        } catch {
+            setInviteMetadataLoad({ status: "dependency_unavailable" });
+            setFormError("링크 해지 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
+        } finally {
+            setIsInviteRevoking(false);
         }
     };
 
@@ -537,8 +700,78 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                 </header>
 
                 <div className="distribute-dialog-body">
-                    {!shareUrl ? (
+                    {!visibleShareUrl ? (
                         <>
+                            {accessType === "group" && inviteMetadataLoad.status === "loading" && (
+                                <div
+                                    role="status"
+                                    aria-live="polite"
+                                    style={{ marginBottom: '1rem', padding: '0.8rem', borderRadius: 8, background: 'rgba(99,102,241,0.08)', color: 'var(--muted)', fontSize: '0.82rem', fontWeight: 700 }}
+                                >
+                                    현재 배포 링크 상태를 확인하고 있습니다.
+                                </div>
+                            )}
+                            {accessType === "group" && inviteMetadataLoad.status === "dependency_unavailable" && (
+                                <div
+                                    role="alert"
+                                    style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', lineHeight: 1.5 }}
+                                >
+                                    <strong style={{ display: 'block', marginBottom: '0.25rem' }}>배포 링크 상태를 불러오지 못했습니다.</strong>
+                                    없는 링크로 처리하지 않았습니다. 네트워크를 확인한 뒤 다시 시도해주세요.
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary"
+                                        onClick={() => setInviteMetadataRetryGeneration(value => value + 1)}
+                                        style={{ display: 'block', marginTop: '0.65rem' }}
+                                    >
+                                        다시 시도
+                                    </button>
+                                </div>
+                            )}
+                            {accessType === "group" && inviteMetadataLoad.status === "forbidden" && (
+                                <div
+                                    role="alert"
+                                    style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', lineHeight: 1.5 }}
+                                >
+                                    현재 계정에는 배포 링크를 조회하거나 변경할 권한이 없습니다.
+                                </div>
+                            )}
+                            {accessType === "group" && inviteMetadataLoad.status === "found" && inviteCapability && (
+                                <div
+                                    data-testid={`distribution-invite-${inviteCapability}`}
+                                    role="status"
+                                    aria-live="polite"
+                                    style={{ marginBottom: '1rem', padding: '0.9rem', borderRadius: 8, border: '1px solid rgba(99,102,241,0.25)', background: 'rgba(99,102,241,0.07)', fontSize: '0.82rem', lineHeight: 1.55 }}
+                                >
+                                    <strong style={{ display: 'block', marginBottom: '0.25rem' }}>
+                                        {inviteCapability === "active_but_raw_unavailable"
+                                            ? "활성 링크가 있습니다"
+                                            : inviteCapability === "expired"
+                                                ? "링크가 만료되었습니다"
+                                                : "링크가 해지되었습니다"}
+                                    </strong>
+                                    {inviteCapability === "active_but_raw_unavailable" && (
+                                        <>
+                                            <p style={{ margin: 0 }}>이 기기에는 링크 원문이 없습니다. 보안을 위해 서버에서 원문을 복구하지 않습니다.</p>
+                                            <p style={{ margin: '0.35rem 0 0', fontWeight: 800 }}>새 링크를 발급하면 기존 링크와 QR은 즉시 무효화됩니다.</p>
+                                        </>
+                                    )}
+                                    <p style={{ margin: '0.35rem 0 0' }}>
+                                        만료 시각: {new Date(inviteMetadataLoad.metadata.expiresAt).toLocaleString('ko-KR')}
+                                    </p>
+                                    {inviteCapability !== "revoked" && (
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={revokeGroupInvite}
+                                            disabled={isInviteRevoking}
+                                            style={{ marginTop: '0.65rem' }}
+                                        >
+                                            {isInviteRevoking ? "해지 중..." : "링크 해지"}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                             {validationSummary && (
                                 <div style={{
                                     marginBottom: '1.25rem',
@@ -874,16 +1107,17 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                             )}
 
                             <button
+                                type="button"
                                 onClick={handleShareClick}
                                 className="btn btn-primary distribute-dialog-primary-action"
                                 style={{ width: '100%', padding: '0.8rem' }}
-                                disabled={isSaving || isAssignmentLoading || (validationSummary ? !validationSummary.isPublishable : false)}
+                                disabled={isSaving || isAssignmentLoading || inviteLifecycleBlocksIssuance || (validationSummary ? !validationSummary.isPublishable : false)}
                             >
                                 {isSaving
                                     ? "생성 중..."
                                     : accessType === "student"
                                         ? assignmentMode === "retake" ? "재시험 배정하기" : "선택한 학생에게 배정하기"
-                                    : isRotatingExistingGroupInvite
+                                    : isGroupReissue
                                         ? "새 링크 발급하기"
                                         : "링크 생성하기"}
                             </button>
@@ -913,24 +1147,37 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                         </>
                     ) : (
                         <div style={{ textAlign: 'center' }}>
-                            {!isShareUrlReachableByStudents(shareUrl) && (
+                            {!isShareUrlReachableByStudents(visibleShareUrl) && (
                                 <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5, marginBottom: '1.25rem', textAlign: 'left' }}>
                                     ⚠️ 이 링크는 이 컴퓨터에서만 열립니다. 학생들이 다른 기기에서 접속하려면 공개 주소(NEXT_PUBLIC_SHARE_BASE_URL)를 설정해야 합니다.
                                 </div>
                             )}
                             <div style={{ marginBottom: '1.5rem' }}>
-                                <QRCodeCanvas id="qr-code-canvas" value={shareUrl} size={200} level={"H"} includeMargin={true} />
+                                <QRCodeCanvas id="qr-code-canvas" value={visibleShareUrl} size={200} level={"H"} includeMargin={true} />
                             </div>
 
                             <div className="distribute-share-actions">
-                                <button onClick={downloadQR} className="btn btn-secondary">QR 저장</button>
-                                <button onClick={copyShareLink} className="btn btn-primary">
+                                <button type="button" onClick={downloadQR} className="btn btn-secondary">QR 저장</button>
+                                <button type="button" onClick={copyShareLink} className="btn btn-primary">
                                     {copyStatus || "링크 복사"}
                                 </button>
+                                {accessType === "group" && examId && (
+                                    <button
+                                        type="button"
+                                        onClick={revokeGroupInvite}
+                                        disabled={isInviteRevoking}
+                                        className="btn btn-secondary"
+                                    >
+                                        {isInviteRevoking ? "해지 중..." : "링크 해지"}
+                                    </button>
+                                )}
                             </div>
 
-                            <div style={{ background: 'var(--background)', border: '1px solid var(--border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.8rem', wordBreak: 'break-all', color: 'var(--muted)', marginBottom: '1.25rem' }}>
-                                {shareUrl}
+                            <div
+                                data-testid="distribution-share-url"
+                                style={{ background: 'var(--background)', border: '1px solid var(--border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.8rem', wordBreak: 'break-all', color: 'var(--muted)', marginBottom: '1.25rem' }}
+                            >
+                                {visibleShareUrl}
                             </div>
 
                             {shareExpiresAt && (
