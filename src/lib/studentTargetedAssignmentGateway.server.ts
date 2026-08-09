@@ -95,10 +95,11 @@ export async function listStudentAssignmentsWithGateway(
             const createdAt = clean(row.created_at);
             const assignmentId = clean(row.assignment_id);
             const assignmentMode = row.assignment_mode === "retake" ? "retake" : row.assignment_mode === "base" ? "base" : undefined;
-            const accessType = row.access_type === "targeted" ? "targeted" : row.access_type === "group" ? "group" : "public";
+            const accessType = row.access_type;
             if (
                 !id || !title || !createdAt
                 || typeof row.archived !== "boolean"
+                || (accessType !== "public" && accessType !== "group" && accessType !== "targeted")
                 || (accessType === "targeted" && (!assignmentId || !assignmentMode))
             ) {
                 throw new Error("invalid assignment row");

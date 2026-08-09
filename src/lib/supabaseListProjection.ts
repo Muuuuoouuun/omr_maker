@@ -54,6 +54,10 @@ export function studentAssignmentPreviewFromSupabaseListRow(
         throw new Error("Invalid student assignment preview");
     }
     if (typeof row.archived !== "boolean") throw new Error("Invalid student assignment lifecycle");
+    const accessType = row.access_type;
+    if (accessType !== "public" && accessType !== "group" && accessType !== "targeted") {
+        throw new Error("Invalid student assignment access type");
+    }
     const lifecycle = resolveAssignmentLifecycle({
         state: row.archived ? "archived" : "open",
         startsAt: row.start_at,
@@ -72,7 +76,7 @@ export function studentAssignmentPreviewFromSupabaseListRow(
         ...(typeof row.end_at === "string" ? { endsAt: row.end_at } : {}),
         archived: row.archived,
         access: {
-            type: row.access_type === "targeted" ? "targeted" : row.access_type === "group" ? "group" : "public",
+            type: accessType,
             entryCheck: "required",
         },
     };

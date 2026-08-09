@@ -185,6 +185,22 @@ describe("canonical list projections", () => {
         expect(preview).not.toHaveProperty("endsAt");
     });
 
+    it.each([
+        ["typo", "targetted"],
+        ["object", { type: "targeted" }],
+        ["missing", undefined],
+    ])("fails closed for a %s student assignment access type", (_label, accessType) => {
+        expect(() => studentAssignmentPreviewFromSupabaseListRow({
+            id: "exam-invalid-access",
+            title: "학생 목록 시험",
+            created_at: "2026-08-06T00:00:00.000Z",
+            archived: false,
+            start_at: null,
+            end_at: null,
+            access_type: accessType,
+        }, "2026-08-07T00:30:00.000Z")).toThrow("Invalid student assignment access type");
+    });
+
     it("uses an explicit student attempt summary projection with no pre-entry secrets or telemetry", () => {
         const forbidden = [
             "student_name",

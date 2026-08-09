@@ -119,6 +119,10 @@ describe("student targeted assignment gateway", () => {
         ["malformed start", { archived: false, start_at: "soon" }],
         ["blank start", { archived: false, start_at: "" }],
         ["malformed end", { archived: false, end_at: "2026-08-07" }],
+        ["typo access type", { archived: false, access_type: "targetted" }],
+        ["object access type", { archived: false, access_type: { type: "targeted" } }],
+        ["missing access type", { archived: false, access_type: undefined }],
+        ["targeted access without assignment scope", { archived: false, access_type: "targeted" }],
         ["reversed window", {
             archived: false,
             start_at: "2026-08-07T02:00:00.000Z",
