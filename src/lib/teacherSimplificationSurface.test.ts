@@ -49,13 +49,16 @@ describe("teacher surface simplification regressions", () => {
         const dashboard = read("src/app/teacher/dashboard/page.tsx");
 
         expect(dashboard).toContain("isRealDashboardEmpty");
-        expect(dashboard).toContain("hasDashboardDataResolved");
+        expect(dashboard).toContain("dashboardHasRenderableData");
         expect(dashboard).toContain("isDashboardResolving");
         expect(dashboard).toContain("isDashboardResolving ? (");
+        expect(dashboard).toContain(") : isDashboardUnavailable ? (");
+        expect(dashboard).toContain('data-testid="canonical-error-no-cache"');
         expect(dashboard).toContain("dashboard-empty-onboarding");
         expect(dashboard).toContain("첫 시험 만들기");
         expect(dashboard).toContain("!isRealDashboardEmpty && renderTabs()");
-        expect(dashboard).toMatch(/isRealDashboardEmpty[\s\S]*rosterGroups\.length === 0/);
+        expect(dashboard).toMatch(/function isDashboardSnapshotEmpty[\s\S]*snapshot\.rosterGroups\.length === 0/);
+        expect(dashboard).toContain("&& isDashboardSnapshotEmpty(dashboardLoadState.data)");
         expect(dashboard).toContain('options.notifyOnError === true');
         expect(dashboard).toContain('notifyOnSuccess: true, notifyOnError: true');
     });

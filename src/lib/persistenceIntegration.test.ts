@@ -59,13 +59,15 @@ describe("persistence integration", () => {
         expect(source).toContain("loadTeacherRosterSnapshot");
         expect(source).toContain("void loadTeacherRosterSnapshot(localStorage)");
         expect(source).toContain("if (rosterLoadGenerationRef.current !== loadGeneration) return;");
-        expect(source).toContain("setGroups(snapshot.groups)");
-        expect(source).toContain("setStudents(snapshot.students)");
+        expect(source).toContain("resolveCanonicalLoad({");
+        expect(source).toContain("remote: snapshot.remoteError ? { ok: false } : { ok: true, data: loadedData }");
+        expect(source).toContain("setGroups(visibleData.groups)");
+        expect(source).toContain("setStudents(visibleData.students)");
         expect(source).toContain('role="status"');
         expect(source).toContain("서버 명단을 불러오는 중입니다.");
-        expect(source).toContain("서버 명단을 불러오지 못해 이 기기에 저장된 명단을 표시합니다.");
-        expect(source.match(/if \(isRosterLoading\) \{/g)).toHaveLength(2);
-        expect(source.match(/disabled=\{isRosterLoading\}/g)?.length).toBeGreaterThanOrEqual(3);
+        expect(source).toContain("서버 명단을 불러오지 못해 검증된 저장 명단을 표시합니다.");
+        expect(source).toContain('const distributionRosterReadOnly = distributionRosterState.state !== "loaded_empty"');
+        expect(source.match(/disabled=\{distributionRosterReadOnly\}/g)?.length).toBeGreaterThanOrEqual(3);
     });
 
     it("teacher settings checks exam, attempt, roster, and deletion persistence together", () => {

@@ -674,8 +674,9 @@ describe("exam overview wiring", () => {
         );
 
         expect(source).toContain(
-            '!isDashboardResolving && !isRealDashboardEmpty && !isMockupAccount && activeTab !== "overview" && activeTab !== "exam"',
+            'dashboardHasRenderableData && !isMockupAccount && activeTab !== "overview" && activeTab !== "exam"',
         );
+        expect(source).toContain('.filter(action => dashboardAllowsMutations || (action.key !== "create" && action.key !== "repair"))');
         expect(source).toContain("questionResultRepairPlan.repairableCount > 0");
     });
 

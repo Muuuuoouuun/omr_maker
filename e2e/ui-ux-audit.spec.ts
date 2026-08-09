@@ -31,7 +31,12 @@ async function visitTarget(browser: Browser, target: AuditTarget): Promise<Page>
     if (target.initialTheme) {
         await page.addInitScript(theme => window.localStorage.setItem("omr_theme", theme), target.initialTheme);
     }
-    if (target.teacher) {
+    if (target.teacher && target.path.includes("showcase=1")) {
+        await loginAsShowcaseTeacher(page);
+        if (!page.url().endsWith(target.path)) {
+            await page.goto(target.path, { waitUntil: "domcontentloaded" });
+        }
+    } else if (target.teacher) {
         await openTeacherPage(page, target.path);
     } else {
         await page.goto(target.path, { waitUntil: "domcontentloaded" });
@@ -300,7 +305,7 @@ test.describe("UI-UX PROMAX layout audit", () => {
             })
         );
 
-        await openTeacherPage(page, "/teacher/dashboard?showcase=1&tab=overview");
+        await loginAsShowcaseTeacher(page);
         await expect(page.locator(".mockup-dashboard-tabs")).toBeVisible();
         const actionMotion = await readMotion(".mockup-primary-action");
         const cardMotion = await readMotion(".mockup-panel");
@@ -376,7 +381,7 @@ test.describe("UI-UX PROMAX layout audit", () => {
             });
             observer.observe(document, { childList: true, subtree: true });
         });
-        await openTeacherPage(page, "/teacher/dashboard?showcase=1&tab=overview");
+        await loginAsShowcaseTeacher(page);
         await expect(page.locator("html")).toHaveAttribute("data-motion", "off");
 
         const countUps = page.locator("[data-count-up-value]");
