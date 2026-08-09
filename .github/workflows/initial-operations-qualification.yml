@@ -1,0 +1,964 @@
+name: Initial operations qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_sha:
+        description: Exact lowercase 40-character Git SHA deployed to immutable staging
+        required: true
+        type: string
+      preview_deployment_id:
+        description: Immutable staging preview deployment identifier
+        required: true
+        type: string
+      preview_artifact_digest:
+        description: sha256-prefixed immutable preview artifact digest
+        required: true
+        type: string
+      preview_attestation_signature:
+        description: HMAC-SHA256 immutable preview identity signature
+        required: true
+        type: string
+      expected_readiness_version:
+        description: Exact readiness contract version
+        required: true
+        default: "202608080010"
+        type: string
+
+concurrency:
+  group: initial-operations-qualification
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    name: Protected staging qualification
+    runs-on: ubuntu-latest
+    environment: initial-operations-staging
+    timeout-minutes: 240
+    steps:
+      - name: Validate qualification request and protected environment
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+          PREVIEW_DEPLOYMENT_ID: ${{ inputs.preview_deployment_id }}
+          PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}
+          PREVIEW_ATTESTATION_SIGNATURE: ${{ inputs.preview_attestation_signature }}
+          EXPECTED_READINESS_VERSION: ${{ inputs.expected_readiness_version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          OMR_STAGING_BASE_URL: ${{ secrets.OMR_STAGING_BASE_URL }}
+          OMR_PRODUCTION_BASE_URL: ${{ secrets.OMR_PRODUCTION_BASE_URL }}
+          OMR_STAGING_SUPABASE_URL: ${{ secrets.OMR_STAGING_SUPABASE_URL }}
+          OMR_PRODUCTION_SUPABASE_URL: ${{ secrets.OMR_PRODUCTION_SUPABASE_URL }}
+          OMR_STAGING_HOST_CONFIRMATION: ${{ secrets.OMR_STAGING_HOST_CONFIRMATION }}
+          OMR_STAGING_PROJECT_CONFIRMATION: ${{ secrets.OMR_STAGING_PROJECT_CONFIRMATION }}
+          OMR_STAGING_WRITES_PAUSED_PROJECT_REF: ${{ secrets.OMR_STAGING_WRITES_PAUSED_PROJECT_REF }}
+          OMR_STAGING_ASSET_GC_PAUSED_PROJECT_REF: ${{ secrets.OMR_STAGING_ASSET_GC_PAUSED_PROJECT_REF }}
+          OMR_STAGING_ENVIRONMENT_REVISION: ${{ vars.OMR_STAGING_ENVIRONMENT_REVISION }}
+          OMR_STAGING_INFRA_DIGEST: ${{ vars.OMR_STAGING_INFRA_DIGEST }}
+          OMR_RESTORE_TARGET_SUPABASE_URL: ${{ secrets.OMR_RESTORE_TARGET_SUPABASE_URL }}
+          OMR_RESTORE_TARGET_PROJECT_CONFIRMATION: ${{ secrets.OMR_RESTORE_TARGET_PROJECT_CONFIRMATION }}
+          OMR_INITIAL_OPS_TOKEN: ${{ secrets.OMR_INITIAL_OPS_TOKEN }}
+          OMR_READINESS_TOKEN: ${{ secrets.OMR_READINESS_TOKEN }}
+          OMR_INITIAL_OPS_RUN_CHALLENGE: ${{ secrets.OMR_INITIAL_OPS_RUN_CHALLENGE }}
+          OMR_RELEASE_ATTESTATION_SECRET: ${{ secrets.OMR_RELEASE_ATTESTATION_SECRET }}
+          OMR_RESTORE_SMOKE_RUNNER_B64: ${{ secrets.OMR_RESTORE_SMOKE_RUNNER_B64 }}
+          OMR_RESTORE_SMOKE_RUNNER_SHA256: ${{ secrets.OMR_RESTORE_SMOKE_RUNNER_SHA256 }}
+          OMR_RESTORE_PREPARE_RUNNER_B64: ${{ secrets.OMR_RESTORE_PREPARE_RUNNER_B64 }}
+          OMR_RESTORE_PREPARE_RUNNER_SHA256: ${{ secrets.OMR_RESTORE_PREPARE_RUNNER_SHA256 }}
+          OMR_STAGING_SUPABASE_ANON_KEY: ${{ secrets.OMR_STAGING_SUPABASE_ANON_KEY }}
+          OMR_STAGING_AUTHENTICATED_JWT: ${{ secrets.OMR_STAGING_AUTHENTICATED_JWT }}
+          OMR_STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.OMR_STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          OMR_STAGING_ASSET_GC_CRON_SECRET: ${{ secrets.OMR_STAGING_ASSET_GC_CRON_SECRET }}
+          OMR_STAGING_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: ${{ secrets.OMR_STAGING_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID }}
+          OMR_STUDENT_CREDENTIAL_FIXTURE_ID: ${{ secrets.OMR_STUDENT_CREDENTIAL_FIXTURE_ID }}
+          OMR_STUDENT_CREDENTIAL_STUDENT_IDS: ${{ secrets.OMR_STUDENT_CREDENTIAL_STUDENT_IDS }}
+          OMR_STUDENT_CREDENTIAL_STUDENT_NAMES: ${{ secrets.OMR_STUDENT_CREDENTIAL_STUDENT_NAMES }}
+          OMR_STUDENT_CREDENTIAL_EXPECTED_ESCAPED_NAME: ${{ secrets.OMR_STUDENT_CREDENTIAL_EXPECTED_ESCAPED_NAME }}
+          OMR_STUDENT_CREDENTIAL_GROUP_ID: ${{ secrets.OMR_STUDENT_CREDENTIAL_GROUP_ID }}
+          OMR_STUDENT_CREDENTIAL_INVITE_URL: ${{ secrets.OMR_STUDENT_CREDENTIAL_INVITE_URL }}
+          OMR_STUDENT_CREDENTIAL_TEACHER_LOGIN: ${{ secrets.OMR_STUDENT_CREDENTIAL_TEACHER_LOGIN }}
+          OMR_STUDENT_CREDENTIAL_TEACHER_PASSWORD: ${{ secrets.OMR_STUDENT_CREDENTIAL_TEACHER_PASSWORD }}
+          OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_URL: ${{ secrets.OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_URL }}
+          OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_TOKEN: ${{ secrets.OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_TOKEN }}
+          OMR_ALERT_SINK_URL: ${{ secrets.OMR_ALERT_SINK_URL }}
+          OMR_ALERT_RECEIPT_URL: ${{ secrets.OMR_ALERT_RECEIPT_URL }}
+          OMR_ALERT_ACK_URL: ${{ secrets.OMR_ALERT_ACK_URL }}
+          OMR_ALERT_RESOLVE_URL: ${{ secrets.OMR_ALERT_RESOLVE_URL }}
+          OMR_ALERT_SINK_TOKEN: ${{ secrets.OMR_ALERT_SINK_TOKEN }}
+          OMR_ALERT_RECEIPT_TOKEN: ${{ secrets.OMR_ALERT_RECEIPT_TOKEN }}
+          OMR_ALERT_ACK_TOKEN: ${{ secrets.OMR_ALERT_ACK_TOKEN }}
+          OMR_ALERT_RESOLVE_TOKEN: ${{ secrets.OMR_ALERT_RESOLVE_TOKEN }}
+          OMR_ALERT_EVIDENCE_HMAC_SECRET: ${{ secrets.OMR_ALERT_EVIDENCE_HMAC_SECRET }}
+          OMR_STAGING_DB_HOST: ${{ secrets.OMR_STAGING_DB_HOST }}
+          OMR_STAGING_DB_PORT: ${{ secrets.OMR_STAGING_DB_PORT }}
+          OMR_STAGING_DB_USER: ${{ secrets.OMR_STAGING_DB_USER }}
+          OMR_STAGING_DB_NAME: ${{ secrets.OMR_STAGING_DB_NAME }}
+          OMR_STAGING_DB_PASSWORD: ${{ secrets.OMR_STAGING_DB_PASSWORD }}
+          OMR_RESTORE_TARGET_APP_URL: ${{ secrets.OMR_RESTORE_TARGET_APP_URL }}
+          OMR_RESTORE_TARGET_SERVICE_ROLE_KEY: ${{ secrets.OMR_RESTORE_TARGET_SERVICE_ROLE_KEY }}
+          OMR_RESTORE_TARGET_DB_HOST: ${{ secrets.OMR_RESTORE_TARGET_DB_HOST }}
+          OMR_RESTORE_TARGET_DB_PORT: ${{ secrets.OMR_RESTORE_TARGET_DB_PORT }}
+          OMR_RESTORE_TARGET_DB_USER: ${{ secrets.OMR_RESTORE_TARGET_DB_USER }}
+          OMR_RESTORE_TARGET_DB_NAME: ${{ secrets.OMR_RESTORE_TARGET_DB_NAME }}
+          OMR_RESTORE_TARGET_DB_PASSWORD: ${{ secrets.OMR_RESTORE_TARGET_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          EVIDENCE_DIR="$RUNNER_TEMP/initial-operations-qualification"
+          PRIVATE_EVIDENCE_DIR="$RUNNER_TEMP/initial-operations-private-evidence"
+          test ! -e "$EVIDENCE_DIR"
+          test ! -e "$PRIVATE_EVIDENCE_DIR"
+          mkdir -m 700 "$EVIDENCE_DIR" "$EVIDENCE_DIR/raw" "$EVIDENCE_DIR/release" \
+            "$EVIDENCE_DIR/release/sources" "$PRIVATE_EVIDENCE_DIR"
+          printf '%s\n' '{"schemaVersion":1,"status":"incomplete"}' > "$EVIDENCE_DIR/.INCOMPLETE"
+          chmod 600 "$EVIDENCE_DIR/.INCOMPLETE"
+          printf '%s\n' '{"schemaVersion":1,"status":"unverified","code":"missing_protected_environment"}' > "$EVIDENCE_DIR/raw/preflight.json"
+          chmod 600 "$EVIDENCE_DIR/raw/preflight.json"
+
+          test "$OMR_BUILD_SHA" != "" && [[ "$OMR_BUILD_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$OMR_BUILD_SHA" = "$GITHUB_SHA"
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          required=(
+            OMR_STAGING_BASE_URL OMR_PRODUCTION_BASE_URL OMR_STAGING_SUPABASE_URL
+            OMR_PRODUCTION_SUPABASE_URL OMR_STAGING_HOST_CONFIRMATION
+            OMR_STAGING_PROJECT_CONFIRMATION OMR_STAGING_WRITES_PAUSED_PROJECT_REF
+            OMR_STAGING_ASSET_GC_PAUSED_PROJECT_REF OMR_STAGING_ENVIRONMENT_REVISION
+            OMR_STAGING_INFRA_DIGEST OMR_RESTORE_TARGET_SUPABASE_URL
+            OMR_RESTORE_TARGET_PROJECT_CONFIRMATION OMR_INITIAL_OPS_TOKEN
+            OMR_READINESS_TOKEN OMR_INITIAL_OPS_RUN_CHALLENGE
+            OMR_RELEASE_ATTESTATION_SECRET OMR_RESTORE_SMOKE_RUNNER_B64
+            OMR_RESTORE_SMOKE_RUNNER_SHA256 OMR_RESTORE_PREPARE_RUNNER_B64
+            OMR_RESTORE_PREPARE_RUNNER_SHA256 OMR_STAGING_SUPABASE_ANON_KEY
+            OMR_STAGING_AUTHENTICATED_JWT OMR_STAGING_SUPABASE_SERVICE_ROLE_KEY
+            OMR_STAGING_ASSET_GC_CRON_SECRET OMR_STAGING_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID
+            OMR_STUDENT_CREDENTIAL_FIXTURE_ID OMR_STUDENT_CREDENTIAL_STUDENT_IDS
+            OMR_STUDENT_CREDENTIAL_STUDENT_NAMES OMR_STUDENT_CREDENTIAL_EXPECTED_ESCAPED_NAME
+            OMR_STUDENT_CREDENTIAL_GROUP_ID OMR_STUDENT_CREDENTIAL_INVITE_URL
+            OMR_STUDENT_CREDENTIAL_TEACHER_LOGIN OMR_STUDENT_CREDENTIAL_TEACHER_PASSWORD
+            OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_URL OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_TOKEN
+            OMR_ALERT_SINK_URL OMR_ALERT_RECEIPT_URL OMR_ALERT_ACK_URL OMR_ALERT_RESOLVE_URL
+            OMR_ALERT_SINK_TOKEN OMR_ALERT_RECEIPT_TOKEN OMR_ALERT_ACK_TOKEN
+            OMR_ALERT_RESOLVE_TOKEN OMR_ALERT_EVIDENCE_HMAC_SECRET OMR_STAGING_DB_HOST
+            OMR_STAGING_DB_PORT OMR_STAGING_DB_USER OMR_STAGING_DB_NAME OMR_STAGING_DB_PASSWORD
+            OMR_RESTORE_TARGET_APP_URL OMR_RESTORE_TARGET_SERVICE_ROLE_KEY
+            OMR_RESTORE_TARGET_DB_HOST OMR_RESTORE_TARGET_DB_PORT OMR_RESTORE_TARGET_DB_USER
+            OMR_RESTORE_TARGET_DB_NAME OMR_RESTORE_TARGET_DB_PASSWORD
+          )
+          for name in "${required[@]}"; do
+            test -n "${!name:-}" || exit 1
+          done
+          [[ "$OMR_STAGING_INFRA_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$OMR_STAGING_ENVIRONMENT_REVISION" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$OMR_RESTORE_SMOKE_RUNNER_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$OMR_RESTORE_PREPARE_RUNNER_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$PREVIEW_DEPLOYMENT_ID" =~ ^[A-Za-z0-9._:-]{3,200}$ ]]
+          [[ "$PREVIEW_ARTIFACT_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          [[ "$PREVIEW_ATTESTATION_SIGNATURE" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$EXPECTED_READINESS_VERSION" =~ ^[0-9]{12}$ ]]
+
+          STAGING_HOST="$(node -e 'process.stdout.write(new URL(process.env.OMR_STAGING_BASE_URL).hostname.toLowerCase())')"
+          PRODUCTION_HOST="$(node -e 'process.stdout.write(new URL(process.env.OMR_PRODUCTION_BASE_URL).hostname.toLowerCase())')"
+          STAGING_PROJECT_REF="$(node -e 'process.stdout.write(new URL(process.env.OMR_STAGING_SUPABASE_URL).hostname.split(".")[0].toLowerCase())')"
+          PRODUCTION_PROJECT_REF="$(node -e 'process.stdout.write(new URL(process.env.OMR_PRODUCTION_SUPABASE_URL).hostname.split(".")[0].toLowerCase())')"
+          RESTORE_PROJECT_REF="$(node -e 'process.stdout.write(new URL(process.env.OMR_RESTORE_TARGET_SUPABASE_URL).hostname.split(".")[0].toLowerCase())')"
+          RESTORE_APP_HOST="$(node -e 'process.stdout.write(new URL(process.env.OMR_RESTORE_TARGET_APP_URL).hostname.toLowerCase())')"
+          test "$STAGING_HOST" != "$PRODUCTION_HOST"
+          test "$STAGING_PROJECT_REF" != "$PRODUCTION_PROJECT_REF"
+          test "$RESTORE_PROJECT_REF" != "$PRODUCTION_PROJECT_REF"
+          test "$RESTORE_PROJECT_REF" != "$STAGING_PROJECT_REF"
+          test "$RESTORE_APP_HOST" != "$PRODUCTION_HOST"
+          test "$RESTORE_APP_HOST" != "$STAGING_HOST"
+          test "$OMR_STAGING_HOST_CONFIRMATION" = "$STAGING_HOST"
+          test "$OMR_STAGING_PROJECT_CONFIRMATION" = "$STAGING_PROJECT_REF"
+          test "$OMR_STAGING_WRITES_PAUSED_PROJECT_REF" = "$STAGING_PROJECT_REF"
+          test "$OMR_STAGING_ASSET_GC_PAUSED_PROJECT_REF" = "$STAGING_PROJECT_REF"
+          test "$OMR_RESTORE_TARGET_PROJECT_CONFIRMATION" = "$RESTORE_PROJECT_REF"
+
+          ENVIRONMENT_DIGEST="$(printf 'omr.initial-operations.environment:v1\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+            "$OMR_BUILD_SHA" "$STAGING_HOST" "$STAGING_PROJECT_REF" "$PRODUCTION_HOST" \
+            "$PRODUCTION_PROJECT_REF" "$RESTORE_PROJECT_REF" "$RESTORE_APP_HOST" "$OMR_STAGING_ENVIRONMENT_REVISION" \
+            "$OMR_STAGING_INFRA_DIGEST" "$PREVIEW_DEPLOYMENT_ID" \
+            "$PREVIEW_ARTIFACT_DIGEST" "$EXPECTED_READINESS_VERSION" \
+            "$OMR_RESTORE_PREPARE_RUNNER_SHA256" "$OMR_RESTORE_SMOKE_RUNNER_SHA256" \
+            "$OMR_ALERT_SINK_URL" "$OMR_ALERT_RECEIPT_URL" "$OMR_ALERT_ACK_URL" \
+            "$OMR_ALERT_RESOLVE_URL" | sha256sum | cut -d ' ' -f 1)"
+          STAGING_HOST_DIGEST="$(printf 'omr.initial-operations.staging-host:v1\n%s\n' "$STAGING_HOST" | sha256sum | cut -d ' ' -f 1)"
+          QUALIFIED_PREVIEW_HOST_DIGEST="$(printf 'omr.initial-operations.qualified-preview-host:v1\n%s' "$STAGING_HOST" | sha256sum | cut -d ' ' -f 1)"
+          QUALIFIED_PREVIEW_ARTIFACT_DIGEST="${PREVIEW_ARTIFACT_DIGEST#sha256:}"
+          STAGING_PROJECT_DIGEST="$(printf 'omr.initial-operations.staging-project:v1\n%s\n' "$STAGING_PROJECT_REF" | sha256sum | cut -d ' ' -f 1)"
+          PRODUCTION_PROJECT_REF_HASH="$(printf '%s' "$PRODUCTION_PROJECT_REF" | sha256sum | cut -d ' ' -f 1)"
+          PRODUCTION_HOST_DIGEST="$(printf 'omr.initial-operations.production-host:v1\n%s' "$PRODUCTION_HOST" | sha256sum | cut -d ' ' -f 1)"
+          PRODUCTION_PROJECT_DIGEST="$(printf 'omr.initial-operations.production-project-hash:v1\n%s' "$PRODUCTION_PROJECT_REF_HASH" | sha256sum | cut -d ' ' -f 1)"
+          RESTORE_PROJECT_DIGEST="$(printf 'omr.initial-operations.restore-project:v1\n%s\n' "$RESTORE_PROJECT_REF" | sha256sum | cut -d ' ' -f 1)"
+
+          node -e 'const fs=require("node:fs");const value={schemaVersion:1,status:"verified",qualificationPhase:"pre_promotion",buildSha:process.env.OMR_BUILD_SHA,environmentDigest:process.argv[1],stagingHostDigest:process.argv[2],stagingProjectDigest:process.argv[3],productionHostDigest:process.argv[4],productionProjectDigest:process.argv[5],restoreProjectDigest:process.argv[6],qualifiedPreviewHostDigest:process.argv[7],qualifiedPreviewDeploymentId:process.argv[8],qualifiedPreviewArtifactDigest:process.argv[9]};fs.writeFileSync(process.argv[10],JSON.stringify(value)+"\n",{mode:0o600});' \
+            "$ENVIRONMENT_DIGEST" "$STAGING_HOST_DIGEST" "$STAGING_PROJECT_DIGEST" \
+            "$PRODUCTION_HOST_DIGEST" "$PRODUCTION_PROJECT_DIGEST" "$RESTORE_PROJECT_DIGEST" \
+            "$QUALIFIED_PREVIEW_HOST_DIGEST" "$PREVIEW_DEPLOYMENT_ID" "$QUALIFIED_PREVIEW_ARTIFACT_DIGEST" \
+            "$EVIDENCE_DIR/qualification-identity.json"
+          rm "$EVIDENCE_DIR/raw/preflight.json"
+          cp "$EVIDENCE_DIR/qualification-identity.json" "$EVIDENCE_DIR/raw/preflight.json"
+          chmod 600 "$EVIDENCE_DIR/raw/preflight.json"
+          IDENTITY_SHA256="$(sha256sum "$EVIDENCE_DIR/qualification-identity.json" | cut -d ' ' -f 1)"
+          node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({schemaVersion:1,id:"environment",status:"verified",buildSha:process.env.OMR_BUILD_SHA,environmentDigest:process.argv[2],sourceSha256:process.argv[3],metrics:{protectedInputs:"passed",targetIsolation:"passed"}})+"\n",{mode:0o600,flag:"wx"});' \
+            "$EVIDENCE_DIR/release/sources/source-environment.json" "$ENVIRONMENT_DIGEST" "$IDENTITY_SHA256"
+          {
+            printf 'EVIDENCE_DIR=%s\n' "$EVIDENCE_DIR"
+            printf 'RAW_DIR=%s\n' "$EVIDENCE_DIR/raw"
+            printf 'RELEASE_DIR=%s\n' "$EVIDENCE_DIR/release"
+            printf 'ENVIRONMENT_DIGEST=%s\n' "$ENVIRONMENT_DIGEST"
+            printf 'PRIVATE_EVIDENCE_DIR=%s\n' "$PRIVATE_EVIDENCE_DIR"
+            printf 'STAGING_HOST=%s\n' "$STAGING_HOST"
+            printf 'STAGING_PROJECT_REF=%s\n' "$STAGING_PROJECT_REF"
+            printf 'RESTORE_PROJECT_REF=%s\n' "$RESTORE_PROJECT_REF"
+            printf 'RESTORE_APP_HOST=%s\n' "$RESTORE_APP_HOST"
+            printf 'QUALIFIED_PREVIEW_HOST_DIGEST=%s\n' "$QUALIFIED_PREVIEW_HOST_DIGEST"
+            printf 'QUALIFIED_PREVIEW_DEPLOYMENT_ID=%s\n' "$PREVIEW_DEPLOYMENT_ID"
+            printf 'QUALIFIED_PREVIEW_ARTIFACT_DIGEST=%s\n' "$QUALIFIED_PREVIEW_ARTIFACT_DIGEST"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.build_sha }}
+          fetch-depth: 0
+
+      - name: Assert immutable checkout
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$OMR_BUILD_SHA"
+          git rev-parse --verify "origin/$DEFAULT_BRANCH^{commit}" > /dev/null
+          git merge-base --is-ancestor "$OMR_BUILD_SHA" "origin/$DEFAULT_BRANCH"
+          git diff --exit-code --no-ext-diff
+          git diff --cached --exit-code --no-ext-diff
+          test -z "$(git status --porcelain=v1 --untracked-files=normal)"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - name: Install PostgreSQL 17 client tools
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          POSTGRES_LOG="$PRIVATE_EVIDENCE_DIR/postgres-install.log"
+          sudo apt-get update > "$POSTGRES_LOG" 2>&1
+          sudo apt-get install --yes ca-certificates curl gnupg >> "$POSTGRES_LOG" 2>&1
+          source /etc/os-release
+          [[ "$VERSION_CODENAME" =~ ^[a-z]+$ ]]
+          PGDG_KEY="$RUNNER_TEMP/postgresql-pgdg.asc"
+          curl --fail --silent --show-error --location \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc --output "$PGDG_KEY"
+          test "$(gpg --show-keys --with-colons "$PGDG_KEY" | awk -F: '$1 == "fpr" { print $10; exit }')" \
+            = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+          sudo install -d -m 755 /usr/share/postgresql-common/pgdg
+          gpg --dearmor < "$PGDG_KEY" | sudo tee /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg > /dev/null
+          printf 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' \
+            "$VERSION_CODENAME" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update >> "$POSTGRES_LOG" 2>&1
+          sudo apt-get install --yes postgresql-client-17 >> "$POSTGRES_LOG" 2>&1
+          test "$(/usr/lib/postgresql/17/bin/pg_dump --version | awk '{print $3}' | cut -d. -f1)" = "17"
+          printf 'OMR_POSTGRES_BIN=%s\n' '/usr/lib/postgresql/17/bin' >> "$GITHUB_ENV"
+          SOURCE_SHA256="$(sha256sum "$POSTGRES_LOG" | cut -d ' ' -f 1)"
+          node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({schemaVersion:1,id:"postgres17",status:"verified",buildSha:process.env.OMR_BUILD_SHA,environmentDigest:process.env.ENVIRONMENT_DIGEST,sourceSha256:process.argv[2],metrics:{major:17}})+"\n",{mode:0o600,flag:"wx"});' \
+            "$RELEASE_DIR/sources/source-postgres17.json" "$SOURCE_SHA256"
+
+      - name: Install locked dependencies
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          INSTALL_LOG="$PRIVATE_EVIDENCE_DIR/npm-ci.log"
+          npm ci > "$INSTALL_LOG" 2>&1
+          SOURCE_SHA256="$(sha256sum "$INSTALL_LOG" | cut -d ' ' -f 1)"
+          node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({schemaVersion:1,id:"install",status:"verified",buildSha:process.env.OMR_BUILD_SHA,environmentDigest:process.env.ENVIRONMENT_DIGEST,sourceSha256:process.argv[2],metrics:{lockedInstall:"passed"}})+"\n",{mode:0o600,flag:"wx"});' \
+            "$RELEASE_DIR/sources/source-install.json" "$SOURCE_SHA256"
+
+      - name: Run static supply-chain gates
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          npm audit --package-lock-only --omit=dev --audit-level=high --json \
+            > "$PRIVATE_EVIDENCE_DIR/production-audit.json" 2> "$PRIVATE_EVIDENCE_DIR/production-audit.stderr"
+          node scripts/verify-desktop-dependency-audit.mjs > "$PRIVATE_EVIDENCE_DIR/desktop-audit.log" 2>&1
+          npm run lint > "$PRIVATE_EVIDENCE_DIR/lint.log" 2>&1
+          npx tsc --noEmit > "$PRIVATE_EVIDENCE_DIR/typecheck.log" 2>&1
+          set +e
+          git grep -nEI -- '(BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|eyJ[a-zA-Z0-9_-]{24,}\.eyJ[a-zA-Z0-9_-]{24,}\.)' -- ':!package-lock.json' > "$PRIVATE_EVIDENCE_DIR/secret-scan.log"
+          SECRET_SCAN_STATUS=$?
+          set -e
+          if [ "$SECRET_SCAN_STATUS" -eq 0 ]; then
+            exit 1
+          fi
+          test "$SECRET_SCAN_STATUS" -eq 1
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          const names = ["production-audit.json", "production-audit.stderr", "desktop-audit.log", "lint.log", "typecheck.log", "secret-scan.log"];
+          const buffers = names.map((name) => readFileSync(join(process.env.PRIVATE_EVIDENCE_DIR, name)));
+          const audit = JSON.parse(buffers[0].toString("utf8"));
+          const vulnerabilities = audit.metadata?.vulnerabilities;
+          if (!vulnerabilities || vulnerabilities.high !== 0 || vulnerabilities.critical !== 0) throw new Error("unverified");
+          const sourceSha256 = createHash("sha256");
+          for (const [index, bytes] of buffers.entries()) {
+            sourceSha256.update(`${names[index]}\0${createHash("sha256").update(bytes).digest("hex")}\n`);
+          }
+          writeFileSync(join(process.env.RELEASE_DIR, "sources/source-static.json"), `${JSON.stringify({
+            schemaVersion: 1, id: "static", status: "verified", buildSha: process.env.OMR_BUILD_SHA,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST, sourceSha256: sourceSha256.digest("hex"),
+            metrics: { criticalVulnerabilities: 0, desktopAudit: "passed", highVulnerabilities: 0,
+              lint: "passed", productionAudit: "passed", secretScan: "passed", typecheck: "passed" },
+          })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          NODE
+
+      - name: Run unit tests
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          UNIT_JSON="$PRIVATE_EVIDENCE_DIR/unit-tests.json"
+          npm test -- --reporter=json --outputFile="$UNIT_JSON" > "$PRIVATE_EVIDENCE_DIR/unit-tests.log" 2>&1
+          export UNIT_JSON
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          const bytes = readFileSync(process.env.UNIT_JSON);
+          const report = JSON.parse(bytes.toString("utf8"));
+          const skipped = Number(report.numPendingTests ?? 0) + Number(report.numTodoTests ?? 0);
+          if (report.success !== true || report.numFailedTests !== 0 || report.numFailedTestSuites !== 0
+            || skipped !== 0 || !Number.isSafeInteger(report.numTotalTests) || report.numTotalTests < 1
+            || report.numPassedTests !== report.numTotalTests) throw new Error("unverified");
+          writeFileSync(join(process.env.RELEASE_DIR, "sources/source-unit.json"), `${JSON.stringify({
+            schemaVersion: 1, id: "unit", status: "verified", buildSha: process.env.OMR_BUILD_SHA,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST,
+            sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+            metrics: { failedTests: 0, skippedTests: 0, totalTests: report.numTotalTests },
+          })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          NODE
+
+      - name: Run deterministic core browser gates
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          npx playwright install --with-deps chromium webkit > "$PRIVATE_EVIDENCE_DIR/playwright-install.log" 2>&1
+          CORE_SPECS=(
+            e2e/full-journey.spec.ts e2e/teacher-pages.spec.ts e2e/teacher-canonical-load-state.spec.ts
+            e2e/student-dashboard-load-state.spec.ts e2e/student-assignment-lifecycle.spec.ts
+            e2e/student-handwriting-recovery.spec.ts e2e/exam-invite-lifecycle.spec.ts
+            e2e/ui-ux-audit.spec.ts e2e/tablet-layout.spec.ts
+          )
+          REVERSE_SPECS=(
+            e2e/tablet-layout.spec.ts e2e/ui-ux-audit.spec.ts e2e/exam-invite-lifecycle.spec.ts
+            e2e/student-handwriting-recovery.spec.ts e2e/student-assignment-lifecycle.spec.ts
+            e2e/student-dashboard-load-state.spec.ts e2e/teacher-canonical-load-state.spec.ts
+            e2e/teacher-pages.spec.ts e2e/full-journey.spec.ts
+          )
+          for RUN_NUMBER in {1..10}; do
+            if (( RUN_NUMBER % 2 == 1 )); then RUN_SPECS=("${CORE_SPECS[@]}");
+            else RUN_SPECS=("${REVERSE_SPECS[@]}"); fi
+            npx playwright test "${RUN_SPECS[@]}" --project=chromium --workers=1 --retries=0 --reporter=json \
+              > "$PRIVATE_EVIDENCE_DIR/chromium-run-$RUN_NUMBER.json" \
+              2> "$PRIVATE_EVIDENCE_DIR/chromium-run-$RUN_NUMBER.stderr"
+          done
+          npm run --silent test:e2e:ios-webkit -- --workers=1 --retries=0 --reporter=json \
+            > "$PRIVATE_EVIDENCE_DIR/webkit-e2e.json" 2> "$PRIVATE_EVIDENCE_DIR/webkit-e2e.stderr"
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          const chromiumNames = Array.from({ length: 10 }, (_, index) => `chromium-run-${index + 1}.json`);
+          const names = chromiumNames.flatMap((name) => [name, name.replace(".json", ".stderr")])
+            .concat(["webkit-e2e.json", "webkit-e2e.stderr"]);
+          const buffers = names.map((name) => readFileSync(join(process.env.PRIVATE_EVIDENCE_DIR, name)));
+          const chromiumReports = Array.from({ length: 10 }, (_, index) => JSON.parse(buffers[index * 2].toString("utf8")));
+          const webkitReport = JSON.parse(buffers[20].toString("utf8"));
+          const metrics = {};
+          const validateReport = (report) => {
+            const stats = report.stats;
+            if (!stats || stats.unexpected !== 0 || stats.flaky !== 0 || stats.skipped !== 0
+              || !Number.isSafeInteger(stats.expected) || stats.expected < 1
+              || report.config?.workers !== 1 || !Array.isArray(report.config?.projects)
+              || report.config.projects.length < 1
+              || report.config.projects.some((project) => project.retries !== 0)) throw new Error("unverified");
+            return stats;
+          };
+          const chromiumStats = chromiumReports.map(validateReport);
+          const webkitStats = validateReport(webkitReport);
+          if (chromiumStats.some((stats) => stats.expected !== chromiumStats[0].expected)) throw new Error("unverified");
+          metrics.chromiumExpected = chromiumStats[0].expected;
+          metrics.chromiumFlaky = 0;
+          metrics.chromiumRuns = chromiumReports.length;
+          metrics.chromiumSkipped = 0;
+          metrics.chromiumUnexpected = 0;
+          metrics.webkitExpected = webkitStats.expected;
+          metrics.webkitFlaky = 0;
+          metrics.webkitSkipped = 0;
+          metrics.webkitUnexpected = 0;
+          const collectFiles = (suites, found = new Set()) => {
+            for (const suite of suites ?? []) {
+              if (typeof suite.file === "string") found.add(suite.file.split("/").at(-1));
+              collectFiles(suite.suites, found);
+            }
+            return found;
+          };
+          const chromiumFiles = ["full-journey.spec.ts", "teacher-pages.spec.ts",
+            "teacher-canonical-load-state.spec.ts", "student-dashboard-load-state.spec.ts",
+            "student-assignment-lifecycle.spec.ts", "student-handwriting-recovery.spec.ts",
+            "exam-invite-lifecycle.spec.ts", "ui-ux-audit.spec.ts", "tablet-layout.spec.ts"];
+          const webkitFiles = ["ios-mobile-layout.spec.ts", "pwa-mobile.spec.ts", "teacher-mobile.spec.ts"];
+          for (const report of chromiumReports) {
+            const found = collectFiles(report.suites);
+            if (chromiumFiles.some((file) => !found.has(file))) throw new Error("unverified");
+          }
+          const webkitFound = collectFiles(webkitReport.suites);
+          if (webkitFiles.some((file) => !webkitFound.has(file))) throw new Error("unverified");
+          metrics.retries = 0;
+          metrics.workers = 1;
+          metrics.reportDigestSet = chromiumReports.map((_, index) => createHash("sha256")
+            .update(`chromium-run-${index + 1}\0`).update(buffers[index * 2]).digest("hex"));
+          if (new Set(metrics.reportDigestSet).size !== 10) throw new Error("unverified");
+          const sourceSha256 = createHash("sha256");
+          for (const [index, bytes] of buffers.entries()) {
+            sourceSha256.update(`${names[index]}\0${createHash("sha256").update(bytes).digest("hex")}\n`);
+          }
+          writeFileSync(join(process.env.PRIVATE_EVIDENCE_DIR, "browser-local-metrics.json"), `${JSON.stringify({
+            schemaVersion: 1, status: "verified", buildSha: process.env.OMR_BUILD_SHA,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST, sourceSha256: sourceSha256.digest("hex"), metrics,
+          })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          NODE
+
+      - name: Build immutable application
+        env:
+          VERCEL_GIT_COMMIT_SHA: ${{ inputs.build_sha }}
+          GIT_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          npm run build > "$PRIVATE_EVIDENCE_DIR/build.log" 2>&1
+          npm run pwa:smoke > "$PRIVATE_EVIDENCE_DIR/pwa-smoke.log" 2>&1
+          SOURCE_SHA256="$(printf 'build.log\0%s\npwa-smoke.log\0%s\n' \
+            "$(sha256sum "$PRIVATE_EVIDENCE_DIR/build.log" | cut -d ' ' -f 1)" \
+            "$(sha256sum "$PRIVATE_EVIDENCE_DIR/pwa-smoke.log" | cut -d ' ' -f 1)" | sha256sum | cut -d ' ' -f 1)"
+          node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({schemaVersion:1,id:"build",status:"verified",buildSha:process.env.GIT_SHA,environmentDigest:process.env.ENVIRONMENT_DIGEST,sourceSha256:process.argv[2],metrics:{budget:"passed",build:"passed",pwaSmoke:"passed"}})+"\n",{mode:0o600,flag:"wx"});' \
+            "$RELEASE_DIR/sources/source-build.json" "$SOURCE_SHA256"
+
+      - name: Run live PostgreSQL contract
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          npm run test:supabase:live > "$PRIVATE_EVIDENCE_DIR/live-postgresql.log" 2>&1
+          SOURCE_SHA256="$(sha256sum "$PRIVATE_EVIDENCE_DIR/live-postgresql.log" | cut -d ' ' -f 1)"
+          node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({schemaVersion:1,id:"live_pg",status:"verified",buildSha:process.env.OMR_BUILD_SHA,environmentDigest:process.env.ENVIRONMENT_DIGEST,sourceSha256:process.argv[2],metrics:{contract:"passed",postgresMajor:17}})+"\n",{mode:0o600,flag:"wx"});' \
+            "$RELEASE_DIR/sources/source-live_pg.json" "$SOURCE_SHA256"
+
+      - name: Verify immutable staging preview
+        env:
+          OMR_PRODUCTION_BASE_URL: ${{ secrets.OMR_STAGING_BASE_URL }}
+          OMR_PRODUCTION_HOST: ${{ secrets.OMR_STAGING_HOST_CONFIRMATION }}
+          OMR_PRODUCTION_SUPABASE_URL: ${{ secrets.OMR_STAGING_SUPABASE_URL }}
+          OMR_PRODUCTION_SUPABASE_ANON_KEY: ${{ secrets.OMR_STAGING_SUPABASE_ANON_KEY }}
+          OMR_PRODUCTION_AUTHENTICATED_JWT: ${{ secrets.OMR_STAGING_AUTHENTICATED_JWT }}
+          OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.OMR_STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          OMR_READINESS_TOKEN: ${{ secrets.OMR_READINESS_TOKEN }}
+          OMR_ASSET_GC_CRON_SECRET: ${{ secrets.OMR_STAGING_ASSET_GC_CRON_SECRET }}
+          OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.build_sha }}
+          VERCEL_GIT_COMMIT_SHA: ${{ inputs.build_sha }}
+          GIT_SHA: ${{ inputs.build_sha }}
+          OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID: ${{ inputs.preview_deployment_id }}
+          OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}
+          OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE: ${{ inputs.preview_attestation_signature }}
+          OMR_RELEASE_ATTESTATION_SECRET: ${{ secrets.OMR_RELEASE_ATTESTATION_SECRET }}
+          OMR_PRODUCTION_EXPECTED_READINESS_VERSION: ${{ inputs.expected_readiness_version }}
+          OMR_PRODUCTION_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: ${{ secrets.OMR_STAGING_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID }}
+          PLAYWRIGHT_BASE_URL: ${{ secrets.OMR_STAGING_BASE_URL }}
+          OMR_STUDENT_CREDENTIAL_HOSTED_MODE: "1"
+          OMR_STUDENT_CREDENTIAL_APPROVED_ORIGIN: ${{ secrets.OMR_STAGING_BASE_URL }}
+          OMR_PRODUCTION_ORIGIN: ${{ secrets.OMR_PRODUCTION_BASE_URL }}
+          OMR_STUDENT_CREDENTIAL_ALLOW_MUTATION: "1"
+          OMR_STUDENT_CREDENTIAL_NON_PRODUCTION: "1"
+          OMR_STUDENT_CREDENTIAL_FIXTURE_ID: ${{ secrets.OMR_STUDENT_CREDENTIAL_FIXTURE_ID }}
+          OMR_STUDENT_CREDENTIAL_STUDENT_IDS: ${{ secrets.OMR_STUDENT_CREDENTIAL_STUDENT_IDS }}
+          OMR_STUDENT_CREDENTIAL_STUDENT_NAMES: ${{ secrets.OMR_STUDENT_CREDENTIAL_STUDENT_NAMES }}
+          OMR_STUDENT_CREDENTIAL_EXPECTED_ESCAPED_NAME: ${{ secrets.OMR_STUDENT_CREDENTIAL_EXPECTED_ESCAPED_NAME }}
+          OMR_STUDENT_CREDENTIAL_GROUP_ID: ${{ secrets.OMR_STUDENT_CREDENTIAL_GROUP_ID }}
+          OMR_STUDENT_CREDENTIAL_INVITE_URL: ${{ secrets.OMR_STUDENT_CREDENTIAL_INVITE_URL }}
+          OMR_STUDENT_CREDENTIAL_TEACHER_LOGIN: ${{ secrets.OMR_STUDENT_CREDENTIAL_TEACHER_LOGIN }}
+          OMR_STUDENT_CREDENTIAL_TEACHER_PASSWORD: ${{ secrets.OMR_STUDENT_CREDENTIAL_TEACHER_PASSWORD }}
+          OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_URL: ${{ secrets.OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_URL }}
+          OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_TOKEN: ${{ secrets.OMR_STUDENT_CREDENTIAL_FIXTURE_CLEANUP_TOKEN }}
+        run: |
+          set -euo pipefail
+          export OMR_PRODUCTION_ASSET_GC_PAUSED_REF="asset-gc-paused:$STAGING_HOST"
+          PRIVATE_PREVIEW_DIR="$RUNNER_TEMP/initial-operations-private-preview"
+          mkdir -m 700 "$PRIVATE_PREVIEW_DIR"
+          export PRIVATE_PREVIEW_DIR
+          npm run ops:verify:production -- \
+            --confirm-production-host="$STAGING_HOST" \
+            --output="$PRIVATE_PREVIEW_DIR/hosted-preview.json" > "$PRIVATE_PREVIEW_DIR/command.log" 2>&1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$PRIVATE_PREVIEW_DIR/production-build-e2e.json" \
+            npm run test:e2e:prod -- --workers=1 --retries=0 --reporter=json \
+            > "$PRIVATE_PREVIEW_DIR/production-build-e2e.log" \
+            2> "$PRIVATE_PREVIEW_DIR/production-build-e2e.stderr"
+          npx playwright test e2e/student-credential-batch.spec.ts \
+            --project=student-credential-chromium --workers=1 --retries=0 --reporter=json \
+            > "$PRIVATE_PREVIEW_DIR/hosted-e2e.json" 2> "$PRIVATE_PREVIEW_DIR/hosted-e2e.stderr"
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          import { QUALIFICATION_BROWSER_PROOFS } from "./scripts/build-initial-operations-qualification.mjs";
+          const bytes = readFileSync(join(process.env.PRIVATE_PREVIEW_DIR, "hosted-preview.json"));
+          const preview = JSON.parse(bytes.toString("utf8"));
+          const expectedProjectHash = createHash("sha256").update(process.env.STAGING_PROJECT_REF).digest("hex");
+          if (preview.status !== "verified" || preview.build !== process.env.OMR_PRODUCTION_EXPECTED_BUILD
+            || preview.releaseIdentity?.deployedSha !== process.env.OMR_PRODUCTION_EXPECTED_BUILD
+            || preview.releaseIdentity?.verifierSha !== process.env.OMR_PRODUCTION_EXPECTED_BUILD
+            || preview.releaseIdentity?.previewDeploymentId !== process.env.OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID
+            || preview.releaseIdentity?.previewArtifactDigest !== process.env.OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST
+            || preview.releaseIdentity?.previewIdentityAttested !== true
+            || preview.readinessVersion !== process.env.OMR_PRODUCTION_EXPECTED_READINESS_VERSION
+            || preview.databaseProjectRefHash !== expectedProjectHash
+            || preview.access?.anon !== "denied" || preview.access?.authenticated !== "denied"
+            || preview.provisionedTeacherCanary !== "ready"
+            || preview.staticAssetCompression?.statusCode !== 200
+            || !["br", "gzip"].includes(preview.staticAssetCompression?.encoding)
+            || preview.staticAssetCompression?.cachePolicy !== "immutable"
+            || preview.assetGcBootstrap?.observability !== "ready") throw new Error("unverified");
+          writeFileSync(join(process.env.RELEASE_DIR, "sources/source-hosted.json"), `${JSON.stringify({
+            schemaVersion: 1, id: "hosted", status: "verified",
+            buildSha: process.env.OMR_PRODUCTION_EXPECTED_BUILD,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST,
+            sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+            metrics: { anonDenied: true, authenticatedDenied: true, boundary: "passed",
+              cleanupHeartbeatFresh: "passed", deliveryProbe: "passed", healthSha: "passed", immutablePreview: "passed",
+              readinessExact: "passed", staticCompression: "passed", teacherCanary: "passed" },
+          })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          const localBytes = readFileSync(join(process.env.PRIVATE_EVIDENCE_DIR, "browser-local-metrics.json"));
+          const local = JSON.parse(localBytes.toString("utf8"));
+          const productionBytes = readFileSync(join(process.env.PRIVATE_PREVIEW_DIR, "production-build-e2e.json"));
+          const production = JSON.parse(productionBytes.toString("utf8"));
+          const hostedBytes = readFileSync(join(process.env.PRIVATE_PREVIEW_DIR, "hosted-e2e.json"));
+          const hosted = JSON.parse(hostedBytes.toString("utf8"));
+          const productionStats = production.stats;
+          const hostedStats = hosted.stats;
+          const productionProjects = (production.config?.projects ?? []).map((project) => project.name).sort();
+          if (local.schemaVersion !== 1 || local.status !== "verified"
+            || local.buildSha !== process.env.OMR_PRODUCTION_EXPECTED_BUILD
+            || local.environmentDigest !== process.env.ENVIRONMENT_DIGEST
+            || !/^[a-f0-9]{64}$/.test(local.sourceSha256)
+            || !productionStats || !Number.isSafeInteger(productionStats.expected) || productionStats.expected < 1
+            || productionStats.unexpected !== 0 || productionStats.flaky !== 0 || productionStats.skipped !== 0
+            || production.config?.workers !== 1 || !Array.isArray(production.config?.projects)
+            || productionProjects.join(",") !== "prod-chromium,prod-webkit-ipad"
+            || production.config.projects.some((project) => project.retries !== 0)
+            || !hostedStats || !Number.isSafeInteger(hostedStats.expected) || hostedStats.expected < 1
+            || hostedStats.unexpected !== 0 || hostedStats.flaky !== 0 || hostedStats.skipped !== 0
+            || hosted.config?.workers !== 1 || !Array.isArray(hosted.config?.projects)
+            || hosted.config.projects.length !== 1 || hosted.config.projects[0].retries !== 0
+            || !JSON.stringify(hosted.suites ?? []).includes("student-credential-batch.spec.ts")) {
+            throw new Error("unverified");
+          }
+          const metrics = { ...local.metrics, hostedExpected: hostedStats.expected, hostedFlaky: 0,
+            hostedSkipped: 0, hostedUnexpected: 0, productionExpected: productionStats.expected,
+            productionFlaky: 0, productionProjects, productionSkipped: 0, productionUnexpected: 0,
+            proofs: QUALIFICATION_BROWSER_PROOFS };
+          writeFileSync(join(process.env.RELEASE_DIR, "sources/source-browser.json"), `${JSON.stringify({
+            schemaVersion: 1, id: "browser", status: "verified",
+            buildSha: process.env.OMR_PRODUCTION_EXPECTED_BUILD,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST,
+            sourceSha256: createHash("sha256")
+              .update(`${local.sourceSha256}\n${createHash("sha256").update(productionBytes).digest("hex")}\n${createHash("sha256").update(hostedBytes).digest("hex")}\n`)
+              .digest("hex"), metrics,
+          })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          NODE
+
+      - name: Run exact 80 + 10 + 10 initial workload
+        env:
+          OMR_INITIAL_OPS_LOAD_ENABLED: "1"
+          OMR_INITIAL_OPS_STAGING_URL: ${{ secrets.OMR_STAGING_BASE_URL }}
+          OMR_PRODUCTION_BASE_URL: ${{ secrets.OMR_PRODUCTION_BASE_URL }}
+          OMR_INITIAL_OPS_STAGING_SUPABASE_URL: ${{ secrets.OMR_STAGING_SUPABASE_URL }}
+          OMR_PRODUCTION_SUPABASE_URL: ${{ secrets.OMR_PRODUCTION_SUPABASE_URL }}
+          OMR_INITIAL_OPS_TOKEN: ${{ secrets.OMR_INITIAL_OPS_TOKEN }}
+          OMR_READINESS_TOKEN: ${{ secrets.OMR_READINESS_TOKEN }}
+          OMR_INITIAL_OPS_EXPECTED_BUILD: ${{ inputs.build_sha }}
+          OMR_INITIAL_OPS_RUN_ID: initial-${{ github.run_id }}-${{ github.run_attempt }}
+          OMR_INITIAL_OPS_RUN_CHALLENGE: ${{ secrets.OMR_INITIAL_OPS_RUN_CHALLENGE }}
+          OMR_STAGING_DB_HOST: ${{ secrets.OMR_STAGING_DB_HOST }}
+          OMR_STAGING_DB_PORT: ${{ secrets.OMR_STAGING_DB_PORT }}
+          OMR_STAGING_DB_USER: ${{ secrets.OMR_STAGING_DB_USER }}
+          OMR_STAGING_DB_NAME: ${{ secrets.OMR_STAGING_DB_NAME }}
+          OMR_STAGING_DB_PASSWORD: ${{ secrets.OMR_STAGING_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export OMR_INITIAL_OPS_COLLECTOR_MODULE="$GITHUB_WORKSPACE/scripts/initial-operations-http-collectors.mjs"
+          PRIVATE_LOAD_DIR="$RUNNER_TEMP/initial-operations-private-load"
+          test ! -e "$PRIVATE_LOAD_DIR"
+          npm run test:ops:initial -- --run \
+            --confirm-staging-host="$STAGING_HOST" \
+            --confirm-load-fixture="initial-ops-100" \
+            --output="$PRIVATE_LOAD_DIR" > "$PRIVATE_EVIDENCE_DIR/initial-load-command.log" 2>&1
+          DEAD_QUEUE_COUNT="$(PGPASSWORD="$OMR_STAGING_DB_PASSWORD" "$OMR_POSTGRES_BIN/psql" \
+            "host=$OMR_STAGING_DB_HOST port=$OMR_STAGING_DB_PORT user=$OMR_STAGING_DB_USER dbname=$OMR_STAGING_DB_NAME sslmode=require" \
+            -X -A -t -v ON_ERROR_STOP=1 \
+            -c "select count(*)::text from public.omr_remote_asset_cleanup_queue where status = 'dead'")"
+          test "$DEAD_QUEUE_COUNT" = "0"
+          export DEAD_QUEUE_COUNT
+          export PRIVATE_LOAD_DIR
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          import { evaluateInitialOperationsEvidenceBundle } from "./scripts/initial-operations-evidence-bundle.mjs";
+          import { INITIAL_OPERATIONS_GATE } from "./scripts/initial-operations-core.mjs";
+          const bytes = readFileSync(join(process.env.PRIVATE_LOAD_DIR, "manifest.json"));
+          const commandLog = readFileSync(join(process.env.PRIVATE_EVIDENCE_DIR, "initial-load-command.log"), "utf8");
+          for (const name of ["OMR_INITIAL_OPS_TOKEN", "OMR_READINESS_TOKEN", "OMR_INITIAL_OPS_RUN_CHALLENGE", "OMR_STAGING_DB_PASSWORD"]) {
+            const secret = process.env[name];
+            if (!secret || commandLog.includes(secret)) throw new Error("unverified");
+          }
+          if (/authorization\s*[:=]|service[_-]?role|student[_-]?answer|raw[_-]?provider/i.test(commandLog)) throw new Error("unverified");
+          const manifest = JSON.parse(bytes.toString("utf8"));
+          const expectedProjectHash = createHash("sha256").update(process.env.STAGING_PROJECT_REF).digest("hex");
+          if (manifest.schemaVersion !== 2 || manifest.closed !== true
+            || manifest.fixture !== "initial-ops-100"
+            || manifest.target?.build !== process.env.OMR_INITIAL_OPS_EXPECTED_BUILD
+            || manifest.target?.databaseProjectRefHash !== expectedProjectHash) throw new Error("unverified");
+          const evaluation = await evaluateInitialOperationsEvidenceBundle(process.env.PRIVATE_LOAD_DIR, {
+            expectedBuild: process.env.OMR_INITIAL_OPS_EXPECTED_BUILD,
+            expectedDatabaseProjectRefHash: expectedProjectHash,
+          });
+          if (evaluation.status !== "passed" || evaluation.failures?.length !== 0) throw new Error("unverified");
+          const evidence = {
+            schemaVersion: 1, id: "load", status: "verified",
+            buildSha: process.env.OMR_INITIAL_OPS_EXPECTED_BUILD,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST,
+            sourceSha256: createHash("sha256")
+              .update(`${createHash("sha256").update(bytes).digest("hex")}\n${createHash("sha256").update(commandLog).digest("hex")}\n${process.env.DEAD_QUEUE_COUNT}\n`)
+              .digest("hex"),
+            metrics: { cleanupVerified: true,
+              concurrentMaxPdfUploads: INITIAL_OPERATIONS_GATE.concurrentMaxPdfUploads,
+              concurrentSubmissions: INITIAL_OPERATIONS_GATE.concurrentSubmissions,
+              deadQueueCount: Number(process.env.DEAD_QUEUE_COUNT), failures: 0,
+              gatewayReadP95Ms: evaluation.metrics.gatewayReadP95Ms,
+              logRedaction: "passed", maximumQueryMs: evaluation.metrics.maximumQueryMs, status: "passed",
+              students: INITIAL_OPERATIONS_GATE.students,
+              submitEndToEndP99Ms: evaluation.metrics.submitEndToEndP99Ms,
+              submitRpcP95Ms: evaluation.metrics.submitRpcP95Ms,
+              teacherLivePollers: INITIAL_OPERATIONS_GATE.teacherLivePollers,
+              teacherUploaders: INITIAL_OPERATIONS_GATE.teacherUploaders,
+              virtualUsers: INITIAL_OPERATIONS_GATE.virtualUsers },
+          };
+          writeFileSync(join(process.env.RELEASE_DIR, "sources/source-load.json"), `${JSON.stringify(evidence)}\n`, {
+            encoding: "utf8", mode: 0o600, flag: "wx",
+          });
+          NODE
+
+      - name: Exercise external alert roundtrip
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+          OMR_ALERT_SINK_URL: ${{ secrets.OMR_ALERT_SINK_URL }}
+          OMR_ALERT_RECEIPT_URL: ${{ secrets.OMR_ALERT_RECEIPT_URL }}
+          OMR_ALERT_ACK_URL: ${{ secrets.OMR_ALERT_ACK_URL }}
+          OMR_ALERT_RESOLVE_URL: ${{ secrets.OMR_ALERT_RESOLVE_URL }}
+          OMR_ALERT_SINK_TOKEN: ${{ secrets.OMR_ALERT_SINK_TOKEN }}
+          OMR_ALERT_RECEIPT_TOKEN: ${{ secrets.OMR_ALERT_RECEIPT_TOKEN }}
+          OMR_ALERT_ACK_TOKEN: ${{ secrets.OMR_ALERT_ACK_TOKEN }}
+          OMR_ALERT_RESOLVE_TOKEN: ${{ secrets.OMR_ALERT_RESOLVE_TOKEN }}
+          OMR_ALERT_EVIDENCE_HMAC_SECRET: ${{ secrets.OMR_ALERT_EVIDENCE_HMAC_SECRET }}
+          OMR_ALERT_POLL_INTERVAL_MS: "1000"
+          OMR_ALERT_DEADLINE_MS: "120000"
+          OMR_ALERT_REQUEST_TIMEOUT_MS: "10000"
+        run: |
+          set -euo pipefail
+          ALERT_EVIDENCE="$PRIVATE_EVIDENCE_DIR/operational-alert.json"
+          npm run ops:alert:verify -- --output "$ALERT_EVIDENCE" > "$PRIVATE_EVIDENCE_DIR/operational-alert-command.log" 2>&1
+          export ALERT_EVIDENCE
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          const bytes = readFileSync(process.env.ALERT_EVIDENCE);
+          const value = JSON.parse(bytes.toString("utf8"));
+          const canonicalTime = (candidate) => typeof candidate === "string"
+            && new Date(candidate).toISOString() === candidate ? Date.parse(candidate) : Number.NaN;
+          const times = [value.emittedAt, value.sinkReceivedAt, value.alertReceivedAt,
+            value.acknowledgedAt, value.resolvedAt, value.verifiedAt].map(canonicalTime);
+          if (value.schemaVersion !== 1 || value.status !== "verified"
+            || value.buildSha !== process.env.OMR_BUILD_SHA
+            || typeof value.eventId !== "string" || !/^[A-Za-z0-9._:-]{8,200}$/.test(value.eventId)
+            || times.some((time) => !Number.isFinite(time))
+            || times.some((time, index) => index > 0 && time < times[index - 1])
+            || Object.keys(value.endpointOriginHashes ?? {}).sort().join(",") !== "acknowledge,receipt,resolve,sink"
+            || Object.values(value.endpointOriginHashes).some((digest) => !/^[a-f0-9]{64}$/.test(digest))
+            || !/^sha256:[a-f0-9]{64}$/.test(value.integrity)
+            || !/^hmac-sha256:[a-f0-9]{64}$/.test(value.attestation)) throw new Error("unverified");
+          writeFileSync(join(process.env.RELEASE_DIR, "sources/source-alert.json"), `${JSON.stringify({
+            schemaVersion: 1, id: "alert", status: "verified", buildSha: process.env.OMR_BUILD_SHA,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST,
+            sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+            metrics: { alertAck: "passed", alertResolve: "passed", roundtrip: "passed", sinkReceipt: "passed" },
+          })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          NODE
+
+      - name: Create staging backup
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+          SUPABASE_URL: ${{ secrets.OMR_STAGING_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.OMR_STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_DB_HOST: ${{ secrets.OMR_STAGING_DB_HOST }}
+          SUPABASE_DB_PORT: ${{ secrets.OMR_STAGING_DB_PORT }}
+          SUPABASE_DB_USER: ${{ secrets.OMR_STAGING_DB_USER }}
+          SUPABASE_DB_NAME: ${{ secrets.OMR_STAGING_DB_NAME }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.OMR_STAGING_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BACKUP_DIR="$RUNNER_TEMP/initial-operations-private-backup"
+          test ! -e "$BACKUP_DIR"
+          npm run ops:backup:create -- \
+            --confirm-source-project-ref="$STAGING_PROJECT_REF" \
+            --confirm-writes-paused="$STAGING_PROJECT_REF" \
+            --confirm-asset-gc-paused="$STAGING_PROJECT_REF" \
+            --output="$BACKUP_DIR" > "$PRIVATE_EVIDENCE_DIR/backup-command.log" 2>&1
+          test -f "$BACKUP_DIR/.COMPLETE"
+          export BACKUP_DIR
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          const manifest = readFileSync(join(process.env.BACKUP_DIR, "manifest.json"));
+          const parsed = JSON.parse(manifest.toString("utf8"));
+          const complete = readFileSync(join(process.env.BACKUP_DIR, ".COMPLETE"));
+          const expectedProjectHash = createHash("sha256").update(process.env.STAGING_PROJECT_REF).digest("hex");
+          if (parsed.gitCommit !== process.env.OMR_BUILD_SHA
+            || parsed.sourceProjectRefHash !== expectedProjectHash) throw new Error("unverified");
+          if (typeof parsed.createdAt !== "string" || new Date(parsed.createdAt).toISOString() !== parsed.createdAt) throw new Error("unverified");
+          writeFileSync(join(process.env.RELEASE_DIR, "sources/source-backup.json"), `${JSON.stringify({
+            schemaVersion: 1, id: "backup", status: "verified",
+            buildSha: process.env.OMR_BUILD_SHA,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST,
+            sourceSha256: createHash("sha256").update(Buffer.concat([manifest, complete])).digest("hex"),
+            metrics: { backup: "verified", createdAt: parsed.createdAt },
+          })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          NODE
+          printf 'BACKUP_DIR=%s\n' "$BACKUP_DIR" >> "$GITHUB_ENV"
+
+      - name: Apply backup to disposable restore target
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+          OMR_RESTORE_PREPARE_RUNNER_B64: ${{ secrets.OMR_RESTORE_PREPARE_RUNNER_B64 }}
+          OMR_RESTORE_PREPARE_RUNNER_SHA256: ${{ secrets.OMR_RESTORE_PREPARE_RUNNER_SHA256 }}
+          OMR_RESTORE_TARGET_APP_URL: ${{ secrets.OMR_RESTORE_TARGET_APP_URL }}
+          OMR_RESTORE_TARGET_SUPABASE_URL: ${{ secrets.OMR_RESTORE_TARGET_SUPABASE_URL }}
+          OMR_RESTORE_TARGET_SERVICE_ROLE_KEY: ${{ secrets.OMR_RESTORE_TARGET_SERVICE_ROLE_KEY }}
+          OMR_RESTORE_TARGET_DB_HOST: ${{ secrets.OMR_RESTORE_TARGET_DB_HOST }}
+          OMR_RESTORE_TARGET_DB_PORT: ${{ secrets.OMR_RESTORE_TARGET_DB_PORT }}
+          OMR_RESTORE_TARGET_DB_USER: ${{ secrets.OMR_RESTORE_TARGET_DB_USER }}
+          OMR_RESTORE_TARGET_DB_NAME: ${{ secrets.OMR_RESTORE_TARGET_DB_NAME }}
+          OMR_RESTORE_TARGET_DB_PASSWORD: ${{ secrets.OMR_RESTORE_TARGET_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          PRIVATE_RESTORE_DIR="$RUNNER_TEMP/initial-operations-private-restore"
+          PRIVATE_RUNNER_DIR="$RUNNER_TEMP/restore-prepare-runner"
+          test ! -e "$PRIVATE_RESTORE_DIR"
+          test ! -e "$PRIVATE_RUNNER_DIR"
+          mkdir -m 700 "$PRIVATE_RESTORE_DIR" "$PRIVATE_RUNNER_DIR"
+          printf '%s' "$OMR_RESTORE_PREPARE_RUNNER_B64" | base64 --decode > "$PRIVATE_RUNNER_DIR/runner.mjs"
+          chmod 700 "$PRIVATE_RUNNER_DIR/runner.mjs"
+          test "$(sha256sum "$PRIVATE_RUNNER_DIR/runner.mjs" | cut -d ' ' -f 1)" = "$OMR_RESTORE_PREPARE_RUNNER_SHA256"
+          export OMR_RESTORE_BACKUP_DIR="$BACKUP_DIR"
+          export OMR_RESTORE_TARGET_PROJECT_REF="$RESTORE_PROJECT_REF"
+          node "$PRIVATE_RUNNER_DIR/runner.mjs" > "$PRIVATE_RESTORE_DIR/prepare-result.json" \
+            2> "$PRIVATE_RESTORE_DIR/prepare-command.stderr"
+          test "$(stat -c %s "$PRIVATE_RESTORE_DIR/prepare-result.json")" -ge 2
+          test "$(stat -c %s "$PRIVATE_RESTORE_DIR/prepare-result.json")" -le 65536
+          export PRIVATE_RESTORE_DIR
+          RESTORE_STARTED_AT="$(node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+          import { join } from "node:path";
+          import { parseStrictJson } from "./scripts/strict-json.mjs";
+          const manifest = readFileSync(join(process.env.BACKUP_DIR, "manifest.json"));
+          const value = parseStrictJson(readFileSync(join(process.env.PRIVATE_RESTORE_DIR, "prepare-result.json"), "utf8"));
+          const keys = Object.keys(value ?? {}).sort();
+          const expected = ["backupManifestSha256", "buildSha", "completedAt", "restoreStartedAt", "schemaVersion", "status", "targetProjectRefHash"].sort();
+          if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])
+            || value.schemaVersion !== 1 || value.status !== "restored" || value.buildSha !== process.env.OMR_BUILD_SHA
+            || value.backupManifestSha256 !== createHash("sha256").update(manifest).digest("hex")
+            || value.targetProjectRefHash !== createHash("sha256").update(process.env.RESTORE_PROJECT_REF).digest("hex")
+            || new Date(value.restoreStartedAt).toISOString() !== value.restoreStartedAt
+            || new Date(value.completedAt).toISOString() !== value.completedAt
+            || Date.parse(value.completedAt) < Date.parse(value.restoreStartedAt)
+            || Date.parse(value.completedAt) - Date.parse(value.restoreStartedAt) > 120 * 60_000
+            || Date.parse(value.completedAt) > Date.now() + 30_000) throw new Error("unverified");
+          process.stdout.write(value.restoreStartedAt);
+          NODE
+          )"
+          printf 'PRIVATE_RESTORE_DIR=%s\n' "$PRIVATE_RESTORE_DIR" >> "$GITHUB_ENV"
+          printf 'RESTORE_STARTED_AT=%s\n' "$RESTORE_STARTED_AT" >> "$GITHUB_ENV"
+
+      - name: Verify disposable restore and core journey
+        env:
+          OMR_DEPLOYMENT_TIER: staging
+          OMR_RESTORE_TARGET_APP_URL: ${{ secrets.OMR_RESTORE_TARGET_APP_URL }}
+          OMR_RESTORE_TARGET_SUPABASE_URL: ${{ secrets.OMR_RESTORE_TARGET_SUPABASE_URL }}
+          OMR_RESTORE_TARGET_SERVICE_ROLE_KEY: ${{ secrets.OMR_RESTORE_TARGET_SERVICE_ROLE_KEY }}
+          OMR_PRODUCTION_SUPABASE_URL: ${{ secrets.OMR_PRODUCTION_SUPABASE_URL }}
+          OMR_RESTORE_TARGET_DB_HOST: ${{ secrets.OMR_RESTORE_TARGET_DB_HOST }}
+          OMR_RESTORE_TARGET_DB_PORT: ${{ secrets.OMR_RESTORE_TARGET_DB_PORT }}
+          OMR_RESTORE_TARGET_DB_USER: ${{ secrets.OMR_RESTORE_TARGET_DB_USER }}
+          OMR_RESTORE_TARGET_DB_NAME: ${{ secrets.OMR_RESTORE_TARGET_DB_NAME }}
+          OMR_RESTORE_TARGET_DB_PASSWORD: ${{ secrets.OMR_RESTORE_TARGET_DB_PASSWORD }}
+          OMR_RESTORE_EXPECTED_BUILD: ${{ inputs.build_sha }}
+          OMR_RESTORE_SMOKE_RUNNER_B64: ${{ secrets.OMR_RESTORE_SMOKE_RUNNER_B64 }}
+          OMR_RESTORE_SMOKE_RUNNER_SHA256: ${{ secrets.OMR_RESTORE_SMOKE_RUNNER_SHA256 }}
+        run: |
+          set -euo pipefail
+          PRIVATE_RUNNER_DIR="$RUNNER_TEMP/restore-smoke-runner"
+          mkdir -m 700 "$PRIVATE_RUNNER_DIR"
+          cleanup_runner() { rm -f "$PRIVATE_RUNNER_DIR/runner.mjs"; }
+          trap cleanup_runner EXIT
+          printf '%s' "$OMR_RESTORE_SMOKE_RUNNER_B64" | base64 --decode > "$PRIVATE_RUNNER_DIR/runner.mjs"
+          chmod 700 "$PRIVATE_RUNNER_DIR/runner.mjs"
+          test "$(sha256sum "$PRIVATE_RUNNER_DIR/runner.mjs" | cut -d ' ' -f 1)" = "$OMR_RESTORE_SMOKE_RUNNER_SHA256"
+          export OMR_RESTORE_SMOKE_RUNNER="$PRIVATE_RUNNER_DIR/runner.mjs"
+          mkdir -m 700 "$PRIVATE_RESTORE_DIR/verification"
+          npm run ops:restore:verify -- \
+            --verify \
+            --backup="$BACKUP_DIR" \
+            --confirm-target-project-ref="$RESTORE_PROJECT_REF" \
+            --started-at="$RESTORE_STARTED_AT" \
+            --rpo-minutes=60 \
+            --rto-minutes=120 \
+            --output="$PRIVATE_RESTORE_DIR/verification/restore-evidence.json" \
+            > "$PRIVATE_RESTORE_DIR/restore-command.log" 2>&1
+          test -f "$PRIVATE_RESTORE_DIR/verification/.RESTORE_COMPLETE"
+          test ! -e "$PRIVATE_RESTORE_DIR/verification/.INCOMPLETE"
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          const result = readFileSync(join(process.env.PRIVATE_RESTORE_DIR, "verification/restore-evidence.json"));
+          const complete = readFileSync(join(process.env.PRIVATE_RESTORE_DIR, "verification/.RESTORE_COMPLETE"));
+          const prepare = readFileSync(join(process.env.PRIVATE_RESTORE_DIR, "prepare-result.json"));
+          const value = JSON.parse(result.toString("utf8"));
+          if (value.status !== "verified" || value.environment !== "staging"
+            || value.buildSha !== process.env.OMR_RESTORE_EXPECTED_BUILD
+            || value.restoreStartedAt !== process.env.RESTORE_STARTED_AT
+            || value.boundaryContract !== "passed" || value.browserSmoke !== "passed"
+            || value.disposableCredentialsRevoked !== true || value.completeMarker !== ".RESTORE_COMPLETE"
+            || typeof value.backupAgeMinutes !== "number" || value.backupAgeMinutes < 0 || value.backupAgeMinutes > 60
+            || typeof value.recoveryMinutes !== "number" || value.recoveryMinutes < 0 || value.recoveryMinutes > 120) {
+            throw new Error("unverified");
+          }
+          writeFileSync(join(process.env.RELEASE_DIR, "sources/source-restore.json"), `${JSON.stringify({
+            schemaVersion: 1, id: "restore", status: "verified",
+            buildSha: process.env.OMR_RESTORE_EXPECTED_BUILD,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST,
+            sourceSha256: createHash("sha256").update(Buffer.concat([prepare, result, complete])).digest("hex"),
+            metrics: { boundary: "passed", browser: "passed", credentialRevocation: "passed",
+              objectHashes: "passed", releaseSeal: "passed", rpo: "passed", rto: "passed",
+              tableInventory: "passed" },
+          })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          NODE
+
+      - name: Generate release score
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          GENERATED_AT="$(node -e 'process.stdout.write(new Date().toISOString())')"
+          node scripts/build-initial-operations-qualification.mjs \
+            --build="$OMR_BUILD_SHA" \
+            --environment="$ENVIRONMENT_DIGEST" \
+            --generated-at="$GENERATED_AT" \
+            --preview-host-digest="$QUALIFIED_PREVIEW_HOST_DIGEST" \
+            --preview-deployment-id="$QUALIFIED_PREVIEW_DEPLOYMENT_ID" \
+            --preview-artifact-digest="$QUALIFIED_PREVIEW_ARTIFACT_DIGEST" \
+            --release="$RELEASE_DIR"
+          test "$(node -e 'const v=require(process.argv[1]);process.stdout.write(v.qualificationPhase)' "$RELEASE_DIR/bundle-index.json")" = "pre_promotion"
+          MANIFEST_PATH="$RELEASE_DIR/release-quality-manifest.json"
+          SCORE_PATH="$RELEASE_DIR/release-quality-score.json"
+          npm run release:score -- --manifest="$MANIFEST_PATH" --output="$SCORE_PATH" \
+            > "$PRIVATE_EVIDENCE_DIR/release-score-command.log" 2>&1
+          MANIFEST_SHA256="$(sha256sum "$MANIFEST_PATH" | cut -d ' ' -f 1)"
+          export MANIFEST_PATH SCORE_PATH MANIFEST_SHA256
+          node --input-type=module <<'NODE'
+          import { validatePublishedReleaseScore } from "./scripts/score-release-quality.mjs";
+          const result = await validatePublishedReleaseScore(process.env.SCORE_PATH, {
+            buildSha: process.env.OMR_BUILD_SHA,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST,
+            manifestSha256: process.env.MANIFEST_SHA256,
+            scorerSha: process.env.OMR_BUILD_SHA,
+          });
+          if (result.status !== "verified" || result.score.status !== "go") throw new Error("unverified");
+          NODE
+
+      - name: Clean private qualification material
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          rm -rf \
+            "$RUNNER_TEMP/initial-operations-private-backup" \
+            "$RUNNER_TEMP/initial-operations-private-load" \
+            "$RUNNER_TEMP/initial-operations-private-preview" \
+            "$RUNNER_TEMP/initial-operations-private-restore" \
+            "$RUNNER_TEMP/restore-prepare-runner" \
+            "$RUNNER_TEMP/restore-smoke-runner" \
+            "$RUNNER_TEMP/initial-operations-private-evidence"
+
+      - name: Seal qualification success
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+        run: |
+          set -euo pipefail
+          test -f "$EVIDENCE_DIR/.INCOMPLETE"
+          test -f "$RELEASE_DIR/release-quality-score.json"
+          SCORE_SHA256="$(sha256sum "$RELEASE_DIR/release-quality-score.json" | cut -d ' ' -f 1)"
+          node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({schemaVersion:1,status:"qualified",qualificationPhase:"pre_promotion",buildSha:process.env.OMR_BUILD_SHA,environmentDigest:process.env.ENVIRONMENT_DIGEST,scoreSha256:process.argv[2],qualifiedAt:new Date().toISOString()})+"\n",{mode:0o600,flag:"wx"});' \
+            "$EVIDENCE_DIR/.QUALIFICATION_COMPLETE.tmp" "$SCORE_SHA256"
+          chmod 600 "$EVIDENCE_DIR/.QUALIFICATION_COMPLETE.tmp"
+          rm "$EVIDENCE_DIR/.INCOMPLETE"
+          mv "$EVIDENCE_DIR/.QUALIFICATION_COMPLETE.tmp" "$EVIDENCE_DIR/QUALIFICATION_COMPLETE"
+          chmod 600 "$EVIDENCE_DIR/QUALIFICATION_COMPLETE"
+
+      - name: Upload qualification evidence
+        id: upload-qualification-evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: initial-operations-qualification-${{ inputs.build_sha }}
+          path: ${{ runner.temp }}/initial-operations-qualification
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Record immutable bundle digest
+        if: ${{ always() && steps.upload-qualification-evidence.outcome == 'success' }}
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+          ARTIFACT_DIGEST: ${{ steps.upload-qualification-evidence.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+          ENVIRONMENT_SUMMARY="${ENVIRONMENT_DIGEST:-unverified}"
+          {
+            printf '### Initial operations qualification evidence\n\n'
+            printf -- '- bundle: `initial-operations-qualification-%s`\n' "$OMR_BUILD_SHA"
+            printf -- '- build SHA: `%s`\n' "$OMR_BUILD_SHA"
+            printf -- '- environment digest: `%s`\n' "$ENVIRONMENT_SUMMARY"
+            printf -- '- GitHub artifact digest: `%s`\n' "$ARTIFACT_DIGEST"
+            printf -- '- cross-runner status: raw evidence only; rebind paths and rerun scorer\n'
+          } >> "$GITHUB_STEP_SUMMARY"

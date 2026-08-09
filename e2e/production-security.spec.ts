@@ -3,6 +3,30 @@ import { expect, test } from "@playwright/test";
 const LEGACY_STUDENT_CODES_KEY = "omr_student_codes";
 const LEGACY_RAW_CODE = "LEGACY-RAW-CODE-SECRET";
 
+test("production health exposes the exact immutable build without cache", async ({ request }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("prod-"), "Production-build security contract.");
+    const expectedBuild = process.env.OMR_PRODUCTION_EXPECTED_BUILD;
+    expect(expectedBuild).toMatch(/^[a-f0-9]{40}$/);
+    const response = await request.get("/api/healthz", { headers: { accept: "application/json" } });
+    expect(response.status()).toBe(200);
+    expect(response.headers()["cache-control"]).toContain("no-store");
+    const body = await response.json() as unknown;
+    expect(body).toMatchObject({ status: "alive", build: expectedBuild });
+});
+
+test("production static assets use immutable same-origin delivery", async ({ request }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("prod-"), "Production-build security contract.");
+    const documentResponse = await request.get("/?role=student", { headers: { accept: "text/html" } });
+    expect(documentResponse.status()).toBe(200);
+    const document = await documentResponse.text();
+    const scriptPath = document.match(/<script[^>]+src="([^"?]*\/_next\/static\/[^"?]+\.js)["?]/)?.[1];
+    expect(scriptPath).toMatch(/^\/_next\/static\/[A-Za-z0-9._\/-]+\.js$/);
+    const assetResponse = await request.get(scriptPath!);
+    expect(assetResponse.status()).toBe(200);
+    expect(assetResponse.headers()["content-type"]).toContain("javascript");
+    expect(assetResponse.headers()["cache-control"]).toMatch(/max-age=31536000.*immutable/);
+});
+
 test("production showcase button preserves exact read-only mockup authority", async ({ page }, testInfo) => {
     test.skip(!testInfo.project.name.startsWith("prod-"), "Production-build security contract.");
     await page.goto("/?role=teacher");
