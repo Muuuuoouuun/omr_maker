@@ -558,6 +558,7 @@ async function acquireLock(statePath, boundary, deps, recovered = false) {
     let handle;
     let owned;
     let linked = false;
+    let linkAttempted = false;
     try {
         handle = await deps.fs.open(temporaryPath, "wx", 0o600);
         const initial = await handle.stat();
@@ -592,6 +593,7 @@ async function acquireLock(statePath, boundary, deps, recovered = false) {
             || stats.size !== Buffer.byteLength(serialized, "utf8")
         ) fail("unsafe_state");
         if (!await sameParent(boundary, deps)) fail("unsafe_state");
+        linkAttempted = true;
         await deps.fs.link(temporaryPath, lockPath);
         linked = true;
         await deps.checkpoint("lock_final_linked");
@@ -619,15 +621,39 @@ async function acquireLock(statePath, boundary, deps, recovered = false) {
         if (handle) {
             try { await handle.close(); } catch { /* fail closed */ }
         }
-        if (error instanceof OperatorProvisioningCliError) throw error;
-        if (error?.code === "EEXIST" && owned && !linked) {
+        let removedOwnedPath = false;
+        let removedOwnedLock = false;
+        if (linkAttempted && owned) {
+            try {
+                const current = await deps.fs.lstat(lockPath);
+                if (current.dev === owned.dev && current.ino === owned.ino) {
+                    await deps.fs.unlink(lockPath);
+                    removedOwnedPath = true;
+                    removedOwnedLock = true;
+                }
+            } catch { /* foreign or unavailable lock remains untouched */ }
             try {
                 const current = await deps.fs.lstat(temporaryPath);
-                if (current.dev === owned.dev && current.ino === owned.ino) await deps.fs.unlink(temporaryPath);
-            } catch { /* winner remains untouched */ }
+                if (current.dev === owned.dev && current.ino === owned.ino) {
+                    await deps.fs.unlink(temporaryPath);
+                    removedOwnedPath = true;
+                }
+            } catch { /* foreign or unavailable temp remains untouched */ }
+            if (removedOwnedPath) {
+                try { await syncDirectory(boundary, deps, "unsafe_state"); } catch { /* best effort */ }
+            }
+        }
+        if (error instanceof OperatorProvisioningCliError) throw error;
+        if (error?.code === "EEXIST" && owned && !linked && !removedOwnedLock) {
+            if (!linkAttempted) {
+                try {
+                    const current = await deps.fs.lstat(temporaryPath);
+                    if (current.dev === owned.dev && current.ino === owned.ino) await deps.fs.unlink(temporaryPath);
+                } catch { /* winner remains untouched */ }
+            }
             if (!recovered) return acquireLock(statePath, boundary, deps, true);
         }
-        throw error;
+        fail("unsafe_state");
     }
 }
 

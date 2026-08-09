@@ -8,6 +8,7 @@ import {
     mkdtemp,
     open,
     readFile,
+    readdir,
     rename,
     rm,
     symlink,
@@ -240,6 +241,88 @@ describe("operator teacher provisioning CLI", () => {
         );
         expect((await receipt(current.statePath)).initialPassword).toBe(PASSWORD);
     });
+
+    it.each([undefined, "EEXIST"])(
+        "cleans an owned lock when hard-link publication succeeds and then throws %s",
+        async (errorCode) => {
+            const current = await fixture();
+            const stderr: string[] = [];
+            const stdout: string[] = [];
+            const temporaryId = "d".repeat(32);
+            let linkCalls = 0;
+
+            const exitCode = await runOperatorProvisioningCli({
+                argv: [`--request=${current.requestPath}`],
+                env: {},
+                deps: {
+                    ...current.deps,
+                    generateTempName: () => temporaryId,
+                    fs: {
+                        link: async (source: string, target: string) => {
+                            linkCalls += 1;
+                            await link(source, target);
+                            throw Object.assign(new Error("raw-sensitive-post-link-error"), { code: errorCode });
+                        },
+                    },
+                },
+                stdout: (line: string) => stdout.push(line),
+                stderr: (line: string) => stderr.push(line),
+            });
+
+            expect(exitCode).toBe(1);
+            expect(linkCalls).toBe(1);
+            expect(stdout).toEqual([]);
+            expect(stderr).toEqual(["provision_failed: unsafe_state"]);
+            expect(stderr.join("\n")).not.toContain("raw-sensitive-post-link-error");
+            expect(stderr.join("\n")).not.toContain("internal_failure");
+            await expect(lstat(`${current.statePath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+            expect((await readdir(current.stateDir)).filter((name) => name.includes(".lock."))).toEqual([]);
+        },
+    );
+
+    it.each(["lock", "parent"] as const)(
+        "does not delete a foreign %s inode while cleaning a failed owned publication",
+        async (replacement) => {
+            const current = await fixture();
+            const lockPath = `${current.statePath}.lock`;
+            const movedParent = join(current.root, "credentials-before-replacement");
+            const foreign = `${JSON.stringify({ owner: "foreign" })}\n`;
+            let foreignStats: Awaited<ReturnType<typeof lstat>> | undefined;
+            const stderr: string[] = [];
+
+            const exitCode = await runOperatorProvisioningCli({
+                argv: [`--request=${current.requestPath}`],
+                env: {},
+                deps: {
+                    ...current.deps,
+                    generateTempName: () => "e".repeat(32),
+                    fs: {
+                        link: async (source: string, target: string) => {
+                            await link(source, target);
+                            if (replacement === "lock") {
+                                await unlink(target);
+                            } else {
+                                await rename(current.stateDir, movedParent);
+                                await mkdir(current.stateDir, { mode: 0o700 });
+                            }
+                            await writeFile(lockPath, foreign, { flag: "wx", mode: 0o600 });
+                            foreignStats = await lstat(lockPath);
+                            throw new Error("raw-sensitive-replacement-error");
+                        },
+                    },
+                },
+                stderr: (line: string) => stderr.push(line),
+                stdout: () => {},
+            });
+
+            expect(exitCode).toBe(1);
+            expect(stderr).toEqual(["provision_failed: unsafe_state"]);
+            expect(await readFile(lockPath, "utf8")).toBe(foreign);
+            const retained = await lstat(lockPath);
+            expect(retained.dev).toBe(foreignStats?.dev);
+            expect(retained.ino).toBe(foreignStats?.ino);
+        },
+    );
 
     it("serializes two real competing operator processes without divergent credentials", async () => {
         const current = await fixture();
