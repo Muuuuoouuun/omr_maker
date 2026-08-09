@@ -154,5 +154,7 @@ manifest는 scorer가 내장한 100개 fixed atomic check ID·dimension·정수 
 `buildSha`, `environmentDigest`, 생성 시각 및 상태가 모두 일치해야 합니다. source/browser 및 hosted
 증거의 유효 기간은 정확히 24시간, restore 증거는 정확히 30일입니다. hosted 증거는 앱·DB·환경·인프라
 구성을 대표하는 `environmentDigest`가 바뀌는 즉시 무효이며, 임의 `freshUntil` 연장은 허용하지 않습니다.
+각 hard gate는 scorer의 immutable atomic predicate에 다시 연결되므로, artifact의 별도
+hard gate `passed`가 atomic failure를 덮어쓸 수 없습니다. 두 상태가 모순되면 항상 `no_go`입니다.
 
 `verified` JSON에는 토큰, URL query, 학생 정보, row ID, Storage object path를 복사하지 않습니다.

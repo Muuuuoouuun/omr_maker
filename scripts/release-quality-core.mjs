@@ -35,14 +35,14 @@ export const RELEASE_HARD_GATES = Object.freeze([
 const FIXED_CHECK_WEIGHTS = Object.freeze([13, 8, 7, 12, 10, 10, 10, 10, 10, 10]);
 const CHECK_NAMES = Object.freeze({
     student_core: ["identity_entry", "assignment_state", "autosave_resume", "exact_submit", "history", "question_feedback", "cross_device", "handwriting_recovery", "retake", "guest_boundary"],
-    teacher_core: ["draft_create", "publish", "distribution", "live_monitor", "results", "feedback", "statistics", "csv_export", "roster", "retest"],
+    teacher_core: ["teacher_login", "truthful_load_states", "draft_create", "publish_distribution", "live_monitor", "results_feedback", "statistics", "csv_export", "roster", "retest"],
     provisioning_entitlement: ["operator_provision", "provision_audit", "pilot_grant", "student_batch", "one_time_csv", "credential_rotation", "session_revocation", "invite_lifecycle", "assignment_binding", "account_recovery"],
     data_integrity_isolation: ["tenant_isolation", "canonical_acl", "submission_replay", "quota_atomicity", "receipt_replay", "session_generation", "roster_cas", "question_atomicity", "storage_isolation", "rollback_contract"],
     code_supply_chain: ["locked_install", "production_audit", "desktop_audit", "lint", "typecheck", "unit_suite", "live_pg17", "build_budget", "secret_scan", "artifact_provenance"],
     browser_determinism: ["chromium_repeat", "webkit_core", "production_e2e", "zero_retry", "zero_order_dependence", "credential_boundary", "reduced_motion", "fresh_context", "pwa_smoke", "skip_accounting"],
     ux_accessibility_responsiveness: ["student_mobile", "teacher_mobile", "tablet", "desktop", "keyboard", "screen_reader", "contrast", "reduced_motion", "load_states", "error_recovery"],
     hosted_deployment: ["immutable_preview", "promotion_lineage", "health_sha", "readiness_exact", "database_boundary", "anon_denial", "authenticated_denial", "teacher_canary", "delivery_probe", "static_compression"],
-    capacity_observability: ["hundred_user_load", "read_p95", "submit_p95", "submit_p99", "query_budget", "memory_budget", "central_sink", "alert_roundtrip", "cleanup_heartbeat", "dead_queue"],
+    capacity_observability: ["hundred_user_load", "read_p95", "submit_p95", "submit_p99", "query_budget", "log_redaction", "central_sink", "alert_roundtrip", "cleanup_heartbeat", "dead_queue"],
     recovery_release: ["backup_freshness", "rpo", "rto", "table_inventory", "object_hashes", "restore_boundary", "restore_browser", "credential_revocation", "rollback_evidence", "release_seal"],
 });
 
@@ -54,6 +54,61 @@ export const RELEASE_ATOMIC_CHECKS = Object.freeze(Object.fromEntries(
         })),
     )]),
 ));
+
+export const RELEASE_HARD_GATE_PREDICATES = Object.freeze(Object.fromEntries(Object.entries({
+    core_e2e: [
+        "teacher_core_teacher_login",
+        "browser_determinism_chromium_repeat",
+        "browser_determinism_webkit_core",
+        "browser_determinism_production_e2e",
+        "browser_determinism_zero_retry",
+        "browser_determinism_zero_order_dependence",
+    ],
+    health_readiness: [
+        "hosted_deployment_health_sha",
+        "hosted_deployment_readiness_exact",
+    ],
+    production_boundary: [
+        "data_integrity_isolation_tenant_isolation",
+        "data_integrity_isolation_canonical_acl",
+        "hosted_deployment_database_boundary",
+        "hosted_deployment_anon_denial",
+        "hosted_deployment_authenticated_denial",
+    ],
+    hundred_user_load: ["capacity_observability_hundred_user_load"],
+    submission_integrity: [
+        "student_core_exact_submit",
+        "data_integrity_isolation_submission_replay",
+        "data_integrity_isolation_receipt_replay",
+        "data_integrity_isolation_question_atomicity",
+    ],
+    data_exposure: [
+        "data_integrity_isolation_tenant_isolation",
+        "data_integrity_isolation_canonical_acl",
+        "data_integrity_isolation_storage_isolation",
+    ],
+    secret_hygiene: [
+        "provisioning_entitlement_one_time_csv",
+        "code_supply_chain_secret_scan",
+    ],
+    log_hygiene: ["capacity_observability_log_redaction"],
+    sink_alert_heartbeat: [
+        "capacity_observability_central_sink",
+        "capacity_observability_alert_roundtrip",
+        "capacity_observability_cleanup_heartbeat",
+    ],
+    restore_rpo_rto: [
+        "recovery_release_backup_freshness",
+        "recovery_release_rpo",
+        "recovery_release_rto",
+        "recovery_release_table_inventory",
+        "recovery_release_object_hashes",
+        "recovery_release_restore_boundary",
+        "recovery_release_restore_browser",
+    ],
+    production_vulnerabilities: ["code_supply_chain_production_audit"],
+    unexplained_skips: ["browser_determinism_skip_accounting"],
+}).map(([gate, checks]) => [gate, Object.freeze(checks)])));
 
 const HARD_GATE_ARTIFACT_KIND = Object.freeze({
     core_e2e: "browser_determinism",
@@ -383,14 +438,13 @@ export async function scoreReleaseEvidence(input, overrides = {}) {
     const dimensionTenths = {};
     const atomicStatuses = new Map();
     for (const dimension of manifest.dimensions) {
-        const tenths = dimension.checks.reduce((score, check) => score + (
-            artifactValid(check.artifactId)
-                && artifactStates.get(check.artifactId).evidence?.checks.get(check.id) === "passed"
-                ? check.weightTenths
-                : 0
-        ), 0);
+        let tenths = 0;
         for (const check of dimension.checks) {
-            atomicStatuses.set(check.id, artifactStates.get(check.artifactId)?.evidence?.checks.get(check.id));
+            const status = artifactValid(check.artifactId)
+                ? artifactStates.get(check.artifactId).evidence?.checks.get(check.id)
+                : undefined;
+            atomicStatuses.set(check.id, status);
+            if (status === "passed") tenths += check.weightTenths;
         }
         dimensionTenths[dimension.id] = tenths;
         dimensionScores[dimension.id] = tenths / 10;
@@ -402,7 +456,9 @@ export async function scoreReleaseEvidence(input, overrides = {}) {
     const minimum = minimumTenths / 10;
     const hardGateFailures = manifest.hardGates
         .filter((gate) => !artifactValid(gate.artifactId)
-            || artifactStates.get(gate.artifactId).evidence?.hardGates.get(gate.id) !== "passed")
+            || artifactStates.get(gate.artifactId).evidence?.hardGates.get(gate.id) !== "passed"
+            || RELEASE_HARD_GATE_PREDICATES[gate.id]
+                .some((checkId) => atomicStatuses.get(checkId) !== "passed"))
         .map((gate) => gate.id);
     if ([...atomicStatuses.values()].some((status) => status === "skipped")
         && !hardGateFailures.includes("unexplained_skips")) {

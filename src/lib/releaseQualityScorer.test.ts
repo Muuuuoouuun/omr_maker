@@ -22,6 +22,7 @@ import {
     RELEASE_ARTIFACT_CATALOG,
     RELEASE_ATOMIC_CHECKS,
     RELEASE_DIMENSIONS,
+    RELEASE_HARD_GATE_PREDICATES,
     RELEASE_HARD_GATES,
     scoreReleaseEvidence,
 } from "../../scripts/release-quality-core.mjs";
@@ -160,6 +161,19 @@ function setAtomicStatus(
     refreshArtifact(input, kind);
 }
 
+function setAtomicStatusById(
+    input: ReturnType<typeof manifest>,
+    checkId: string,
+    status: EvidenceStatus,
+) {
+    const kind = RELEASE_DIMENSIONS.find((candidate) => (
+        RELEASE_ATOMIC_CHECKS[candidate] as AtomicCheck[]
+    ).some((check) => check.id === checkId))!;
+    const state = FIXTURE_EVIDENCE.get(input)!;
+    state[kind].checks[checkId] = status;
+    refreshArtifact(input, kind);
+}
+
 function setHardGateStatus(input: ReturnType<typeof manifest>, gateId: string, status: EvidenceStatus) {
     const kind = RELEASE_DIMENSIONS.find((candidate) => RELEASE_ARTIFACT_CATALOG[candidate].hardGates.includes(gateId))!;
     FIXTURE_EVIDENCE.get(input)![kind].hardGates[gateId] = status;
@@ -215,6 +229,18 @@ describe("release quality scorer", () => {
         ]);
     });
 
+    it("fixes ten checks and 100 tenths per dimension including teacher login and load states", () => {
+        const teacherChecks = (RELEASE_ATOMIC_CHECKS.teacher_core as AtomicCheck[]).map((check) => check.id);
+
+        expect(teacherChecks).toContain("teacher_core_teacher_login");
+        expect(teacherChecks).toContain("teacher_core_truthful_load_states");
+        for (const dimension of RELEASE_DIMENSIONS) {
+            const checks = RELEASE_ATOMIC_CHECKS[dimension] as AtomicCheck[];
+            expect(checks).toHaveLength(10);
+            expect(checks.reduce((sum, check) => sum + check.weightTenths, 0)).toBe(100);
+        }
+    });
+
     it("scores exact tenths and accepts the mean and minimum boundary", async () => {
         const input = manifest({
             student_core: 87,
@@ -222,12 +248,16 @@ describe("release quality scorer", () => {
             provisioning_entitlement: 100,
             data_integrity_isolation: 100,
             code_supply_chain: 93,
-            browser_determinism: 93,
+            browser_determinism: 90,
             ux_accessibility_responsiveness: 93,
             hosted_deployment: 87,
-            capacity_observability: 87,
+            capacity_observability: 90,
             recovery_release: 90,
         });
+        setAtomicStatusById(input, "browser_determinism_zero_order_dependence", "passed");
+        setAtomicStatusById(input, "browser_determinism_credential_boundary", "failed");
+        setAtomicStatusById(input, "recovery_release_object_hashes", "passed");
+        setAtomicStatusById(input, "recovery_release_credential_revocation", "failed");
 
         await expect(scoreReleaseEvidence(input, scoringDependencies(input))).resolves.toMatchObject({
             schemaVersion: 1,
@@ -272,6 +302,42 @@ describe("release quality scorer", () => {
 
         expect(result.status).toBe("no_go");
         expect(result.hardGateFailures).toContain(gateId);
+    });
+
+    it.each([
+        ["core_e2e", "browser_determinism_zero_retry"],
+        ["health_readiness", "hosted_deployment_health_sha"],
+        ["production_boundary", "data_integrity_isolation_tenant_isolation"],
+        ["hundred_user_load", "capacity_observability_hundred_user_load"],
+        ["submission_integrity", "data_integrity_isolation_submission_replay"],
+        ["data_exposure", "data_integrity_isolation_storage_isolation"],
+        ["secret_hygiene", "code_supply_chain_secret_scan"],
+        ["log_hygiene", "capacity_observability_log_redaction"],
+        ["sink_alert_heartbeat", "capacity_observability_cleanup_heartbeat"],
+        ["restore_rpo_rto", "recovery_release_rpo"],
+        ["production_vulnerabilities", "code_supply_chain_production_audit"],
+        ["unexplained_skips", "browser_determinism_skip_accounting"],
+    ])("does not let a passed %s gate contradict failed atomic evidence", async (gateId, checkId) => {
+        const input = manifest();
+        setAtomicStatusById(input, checkId, "failed");
+
+        const result = await scoreReleaseEvidence(input, scoringDependencies(input));
+
+        expect(result.hardGateFailures).toContain(gateId);
+        expect(result.status).toBe("no_go");
+    });
+
+    it("exports a complete immutable hard-gate predicate catalog", () => {
+        const fixedCheckIds = new Set(RELEASE_DIMENSIONS.flatMap((dimension) => (
+            RELEASE_ATOMIC_CHECKS[dimension] as AtomicCheck[]
+        ).map((check) => check.id)));
+
+        expect(Object.keys(RELEASE_HARD_GATE_PREDICATES).sort()).toEqual([...RELEASE_HARD_GATES].sort());
+        expect(Object.isFrozen(RELEASE_HARD_GATE_PREDICATES)).toBe(true);
+        expect(RELEASE_HARD_GATES.every((gate) => Object.isFrozen(RELEASE_HARD_GATE_PREDICATES[gate]))).toBe(true);
+        expect(RELEASE_HARD_GATES.every((gate) => (
+            RELEASE_HARD_GATE_PREDICATES[gate] as string[]
+        ).every((checkId) => fixedCheckIds.has(checkId)))).toBe(true);
     });
 
     it.each([
@@ -724,5 +790,6 @@ describe("release quality scorer", () => {
         expect(evidenceTemplate).toContain("24시간");
         expect(evidenceTemplate).toContain("30일");
         expect(evidenceTemplate).toContain("environmentDigest");
+        expect(evidenceTemplate).toContain("hard gate `passed`가 atomic failure를 덮어쓸 수 없습니다");
     });
 });
