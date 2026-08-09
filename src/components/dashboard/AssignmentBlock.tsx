@@ -2,11 +2,53 @@ import Link from "next/link";
 import { Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
 import type { StudentAssignmentPreview } from "@/lib/studentExamContract";
+import type { AssignmentLifecycle } from "@/lib/assignmentLifecycle";
 import StatusPill from "@/components/dashboard/StatusPill";
 
+type AssignmentCard = (Exam | SolvableExam | StudentAssignmentPreview) & {
+  attemptId?: string;
+  hasUnreadFeedback?: boolean;
+  answeredQuestionCount?: number;
+  hasLocalDraft?: boolean;
+};
+
 interface AssignmentBlockProps {
-  exams: Array<(Exam | SolvableExam | StudentAssignmentPreview) & { attemptId?: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }>;
+  exams: AssignmentCard[];
   type: "todo" | "done";
+}
+
+const KOREAN_ASSIGNMENT_TIME = new Intl.DateTimeFormat("ko-KR", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+function formattedStart(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? KOREAN_ASSIGNMENT_TIME.format(new Date(parsed)) : null;
+}
+
+function lifecyclePresentation(exam: AssignmentCard): {
+  lifecycle: AssignmentLifecycle;
+  label: string;
+  tone: "success" | "primary" | "muted" | "warning";
+  detail?: string;
+} {
+  const raw = (exam as { lifecycle?: unknown }).lifecycle;
+  if (raw === "scheduled") {
+    const startsAt = formattedStart((exam as { startsAt?: unknown }).startsAt);
+    return startsAt
+      ? { lifecycle: "scheduled", label: "예정", tone: "primary", detail: `${startsAt} 시작` }
+      : { lifecycle: "invalid", label: "확인 필요", tone: "warning" };
+  }
+  if (raw === "open") return { lifecycle: "open", label: "응시 가능", tone: "success" };
+  if (raw === "closed") return { lifecycle: "closed", label: "마감", tone: "muted" };
+  return { lifecycle: "invalid", label: "확인 필요", tone: "warning" };
 }
 
 function BookIcon() {
@@ -145,9 +187,12 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
           exams.map((exam) => {
             const questionCount = "questions" in exam ? exam.questions.length : undefined;
             const accessType = "access" in exam ? exam.access.type : exam.accessConfig?.type;
+            const availability = lifecyclePresentation(exam);
             return (
             <div
               key={("assignmentId" in exam && exam.assignmentId) || exam.id}
+              data-testid="student-assignment-row"
+              data-assignment-id={exam.id}
               className={`student-assignment-row${isTodo ? " card-hover" : ""}`}
               style={{
                 padding: "1.1rem 1.25rem",
@@ -227,6 +272,13 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                   >
                     {accessType === "targeted" ? "개별 배정" : accessType === "group" ? "클래스" : "공개"}
                   </span>
+                  <StatusPill
+                    size="sm"
+                    tone={availability.tone}
+                    label={availability.label}
+                    detail={availability.detail}
+                  />
+                  {!isTodo && <StatusPill size="sm" tone="success" label="완료" />}
                   {!isTodo && exam.hasUnreadFeedback && (
                     <StatusPill size="sm" tone="primary" label="새 피드백" />
                   )}
@@ -245,15 +297,15 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                 </div>
               </div>
 
-              {isTodo ? (
+              {isTodo && availability.lifecycle === "open" ? (
                 <Link
                   href={assignmentSolveHref(exam)}
                   className="btn btn-primary student-assignment-action"
                   style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
                 >
-                  시작
+                  {exam.hasLocalDraft ? "계속 풀기" : "시작"}
                 </Link>
-              ) : (
+              ) : !isTodo ? (
                 <Link
                   href={`/student/review/${exam.attemptId || exam.id}`}
                   className="btn btn-secondary student-assignment-action"
@@ -261,6 +313,14 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                 >
                   복습
                 </Link>
+              ) : (
+                <span
+                  className="btn btn-secondary student-assignment-action"
+                  aria-disabled="true"
+                  style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
+                >
+                  {availability.lifecycle === "scheduled" ? "시작 전" : availability.lifecycle === "closed" ? "마감" : "확인 필요"}
+                </span>
               )}
             </div>
             );

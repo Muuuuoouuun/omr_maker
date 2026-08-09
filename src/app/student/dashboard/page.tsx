@@ -52,11 +52,12 @@ function hasLocalDraftFor(examId: string, ownerKey: string): boolean {
 }
 
 type DashboardDataState = "loading" | "ready" | "error";
+type DashboardAssignment = (Exam | StudentAssignmentPreview) & { hasLocalDraft?: boolean };
 
 export default function StudentDashboard() {
     const router = useRouter();
     const [user, setUser] = useState<StudentSession | null>(null);
-    const [todoExams, setTodoExams] = useState<Array<Exam | StudentAssignmentPreview>>([]);
+    const [todoExams, setTodoExams] = useState<DashboardAssignment[]>([]);
     const [doneExams, setDoneExams] = useState<Array<(Exam | StudentAssignmentPreview) & { attemptId: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }>>([]);
     const [stats, setStats] = useState({
         avgScore: 0,
@@ -192,7 +193,7 @@ export default function StudentDashboard() {
 
             // 3. Categorize Exams
             const done: Array<(Exam | StudentAssignmentPreview) & { attemptId: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }> = [];
-            const todo: Array<Exam | StudentAssignmentPreview> = [];
+            const todo: DashboardAssignment[] = [];
 
             allExams.forEach(exam => {
                 const hasAccess = attemptSource === "server" || (() => {
@@ -204,6 +205,7 @@ export default function StudentDashboard() {
 
                 // Check if completed
                 const attempt = findCompletedAttemptForAssignment(exam, myAttempts);
+                const hasLocalDraft = hasLocalDraftFor(exam.id, currentUser.studentId || "");
                 if (attempt) {
                     done.push({
                         ...exam,
@@ -216,9 +218,9 @@ export default function StudentDashboard() {
                     // started (submitted or drafted on this device) — the public
                     // exam catalog is not broadcast to anonymous identities.
                     !(currentUser.isGuest && attemptSource === "server")
-                    || hasLocalDraftFor(exam.id, currentUser.studentId || "")
+                    || hasLocalDraft
                 ) {
-                    todo.push(exam);
+                    todo.push({ ...exam, hasLocalDraft });
                 }
             });
 
