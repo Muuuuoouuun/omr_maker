@@ -37,6 +37,7 @@
     "ops:backup:inventory": "node scripts/backup-production.mjs --inventory-only",
     "ops:backup:create": "node scripts/backup-production.mjs --create",
     "ops:restore:verify": "node scripts/verify-restored-environment.mjs",
+    "release:score": "node scripts/score-release-quality.mjs",
     "accounts:deploy:dry-run": "node scripts/setup-deployment-test-accounts.mjs --dry-run",
     "accounts:deploy:apply": "node scripts/setup-deployment-test-accounts.mjs --apply",
     "accounts:deploy:verify": "node scripts/setup-deployment-test-accounts.mjs --verify",

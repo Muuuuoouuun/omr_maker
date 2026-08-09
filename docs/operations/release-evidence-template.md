@@ -118,8 +118,33 @@ file handle의 `writeFile`/`sync`/`stat`/`close`와 directory handle의 `sync`/`
 
 ## 승인 판정
 
+- release quality manifest 절대 경로:
+- release quality manifest SHA-256:
+- release quality score 절대 경로:
+- release quality score SHA-256:
+- scorer SHA(40자리 Git SHA):
+- score build SHA와 배포 SHA 일치: 예 / 아니오
+- 산술 결과(mean ≥9.3, minimum ≥8.7): 통과 / 실패
+- hard gate failures: 없음 / 목록
+- scorer 상태: `go` / `no_go` / `unverified`
 - 최종 판정: GO / NO-GO
 - 남은 예외와 만료 시각:
 - 롤백 담당자와 기준:
+
+다음 exact 명령만 사용합니다. manifest와 score는 기존에 존재하지 않는 정규화된 절대 경로이며,
+score 부모는 실행 uid가 소유한 symlink 없는 canonical `0700` 디렉터리여야 합니다.
+
+```sh
+npm run release:score -- \
+  --manifest=/absolute/private/path/release-quality-manifest.json \
+  --output=/absolute/private/path/release-quality-score.json
+```
+
+`go`는 exact 10개 dimension, 모든 artifact SHA-256·build SHA·freshness, mean ≥9.3,
+minimum ≥8.7, hard gate 0개가 함께 통과한 경우뿐이며 exit 0입니다. `no_go`는 유효한 manifest를
+채점했지만 기준 또는 hard gate가 실패한 결과로, 봉인된 `0600` score를 남기되 exit 1입니다.
+`unverified`는 manifest·artifact·출력 경계를 신뢰할 수 없어 score를 승인 증거로 만들 수 없는 상태이며
+exit 1입니다. missing, expired, wrong-SHA, skipped, unverified atomic evidence는 추정하지 않고 0점입니다.
+score에는 artifact 경로·본문·토큰·학생 정보·provider 원문을 기록하지 않습니다.
 
 `verified` JSON에는 토큰, URL query, 학생 정보, row ID, Storage object path를 복사하지 않습니다.
