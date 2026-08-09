@@ -1,5 +1,30 @@
 import type { PlanKey, StoredPlanKey } from "@/types/omr";
 
+export interface PlanEntitlements {
+    handwritingArchive: boolean;
+    feedbackMarkup: boolean;
+    returnedFeedback: boolean;
+    advancedAnalytics: boolean;
+    advancedQuestionDesign: boolean;
+    studentGrowthReports: boolean;
+    csvExport: boolean;
+    pdfExport: boolean;
+    reminders: boolean;
+    retakeAssignments: boolean;
+    multiTeacher: boolean;
+    organizationDashboard: boolean;
+    rolesAndPermissions: boolean;
+    sso: boolean;
+    apiAccess: boolean;
+    customDomain: boolean;
+    auditLogs: boolean;
+    retentionControls: boolean;
+    prioritySupport: boolean;
+    dedicatedSupport: boolean;
+}
+
+export type PlanEntitlementKey = keyof PlanEntitlements;
+
 export interface PlanCatalogEntry {
     key: PlanKey;
     name: "Free" | "Pro" | "Academy";
@@ -14,29 +39,7 @@ export interface PlanCatalogEntry {
         students: number;
         aiRecognition: number;
     };
-    entitlements: {
-        handwritingArchive: boolean;
-        feedbackMarkup: boolean;
-        returnedFeedback: boolean;
-        remoteHandwritingArchive: boolean;
-        advancedAnalytics: boolean;
-        advancedQuestionDesign: boolean;
-        studentGrowthReports: boolean;
-        csvExport: boolean;
-        pdfExport: boolean;
-        reminders: boolean;
-        retakeAssignments: boolean;
-        multiTeacher: boolean;
-        organizationDashboard: boolean;
-        rolesAndPermissions: boolean;
-        sso: boolean;
-        apiAccess: boolean;
-        customDomain: boolean;
-        auditLogs: boolean;
-        retentionControls: boolean;
-        prioritySupport: boolean;
-        dedicatedSupport: boolean;
-    };
+    entitlements: PlanEntitlements;
 }
 
 const AI_USAGE_KEY = "omr_ai_usage";
@@ -45,8 +48,7 @@ const PLAN_KEY = "omr_plan";
 const FREE_ENTITLEMENTS: PlanCatalogEntry["entitlements"] = {
     handwritingArchive: false,
     feedbackMarkup: false,
-    returnedFeedback: false,
-    remoteHandwritingArchive: false,
+    returnedFeedback: true,
     advancedAnalytics: false,
     advancedQuestionDesign: false,
     studentGrowthReports: false,
@@ -70,8 +72,6 @@ const PRO_ENTITLEMENTS: PlanCatalogEntry["entitlements"] = {
     ...FREE_ENTITLEMENTS,
     handwritingArchive: true,
     feedbackMarkup: true,
-    returnedFeedback: true,
-    remoteHandwritingArchive: true,
     advancedAnalytics: true,
     advancedQuestionDesign: true,
     studentGrowthReports: true,
@@ -90,7 +90,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
         color: "#64748b",
         gradient: "linear-gradient(135deg, #94a3b8, #64748b)",
         message: "Try the full OMR loop.",
-        features: ["월 시험 5개", "학생 30명", "AI 정답 인식 월 100회", "기본 분석", "CSV 내보내기"],
+        features: ["월 시험 5개", "학생 30명", "AI 정답 인식 월 100회", "기본 분석", "기본 텍스트 피드백 반환 · 열람 확인", "CSV 내보내기"],
         limits: { exams: 5, students: 30, aiRecognition: 100 },
         entitlements: FREE_ENTITLEMENTS,
     },
@@ -102,7 +102,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
         color: "#4f46e5",
         gradient: "linear-gradient(135deg, #6366f1, #4f46e5)",
         message: "Save time after every test.",
-        features: ["무제한 시험", "학생 300명", "AI 정답 인식 월 5,000회", "풀이 필기 보관", "고급 분석", "PDF 리포트", "우선 지원"],
+        features: ["무제한 시험", "학생 300명", "AI 정답 인식 월 5,000회", "비공개 서버 필기 원본 보관", "필기 마크업 · 주석 파일", "고급 분석", "PDF 리포트", "우선 지원"],
         limits: { exams: Infinity, students: 300, aiRecognition: 5000 },
         entitlements: PRO_ENTITLEMENTS,
     },
@@ -137,8 +137,6 @@ export const PLAN_BY_KEY: Record<PlanKey, PlanCatalogEntry> = PLAN_CATALOG.reduc
 }, {} as Record<PlanKey, PlanCatalogEntry>);
 
 export type PlanLimitMetric = keyof PlanCatalogEntry["limits"];
-export type PlanEntitlementKey = keyof PlanCatalogEntry["entitlements"];
-
 export interface PlanEntitlementCopy {
     label: string;
     description: string;
@@ -156,16 +154,12 @@ export const PLAN_ENTITLEMENT_COPY: Record<PlanEntitlementKey, PlanEntitlementCo
         description: "제출 후 문항별 필기와 OMR 흔적을 장기 저장합니다.",
     },
     feedbackMarkup: {
-        label: "교사 첨삭 피드백",
-        description: "학생 제출 화면 위에 교사가 직접 마크업하고 피드백을 남깁니다.",
+        label: "필기 마크업 · 주석 파일",
+        description: "학생 제출 화면 위에 교사가 직접 마크업하고 주석 파일을 제공합니다.",
     },
     returnedFeedback: {
-        label: "피드백 반환/열람",
-        description: "피드백을 학생에게 반환하고 열람 상태를 확인합니다.",
-    },
-    remoteHandwritingArchive: {
-        label: "원격 필기 보관",
-        description: "다른 기기에서도 학생 필기와 교사 첨삭을 열 수 있게 보관합니다.",
+        label: "기본 피드백 반환 · 열람 확인",
+        description: "텍스트 요약과 문항별 코멘트를 학생에게 반환하고 열람 상태를 확인합니다.",
     },
     advancedAnalytics: {
         label: "고급 오답 분석",

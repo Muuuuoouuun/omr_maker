@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+    PLAN_ENTITLEMENT_COPY,
     PLAN_CATALOG,
     canArchiveHandwriting,
     currentAiUsageMonth,
@@ -54,10 +55,39 @@ describe("plan catalog", () => {
         expect(canArchiveHandwriting("academy")).toBe(true);
         expect(hasPlanEntitlement("free", "feedbackMarkup")).toBe(false);
         expect(hasPlanEntitlement("pro", "feedbackMarkup")).toBe(true);
-        expect(hasPlanEntitlement("academy", "returnedFeedback")).toBe(true);
         expect(hasPlanEntitlement("free", "retakeAssignments")).toBe(false);
         expect(hasPlanEntitlement("pro", "retakeAssignments")).toBe(true);
         expect(hasPlanEntitlement("academy", "organizationDashboard")).toBe(true);
+    });
+
+    it("keeps basic returned feedback core while markup and reminders stay paid", () => {
+        for (const plan of ["free", "pro", "academy"] as const) {
+            expect(hasPlanEntitlement(plan, "returnedFeedback")).toBe(true);
+        }
+
+        expect(hasPlanEntitlement("free", "feedbackMarkup")).toBe(false);
+        expect(hasPlanEntitlement("pro", "feedbackMarkup")).toBe(true);
+        expect(hasPlanEntitlement("academy", "feedbackMarkup")).toBe(true);
+        expect(hasPlanEntitlement("free", "reminders")).toBe(false);
+        expect(hasPlanEntitlement("pro", "reminders")).toBe(true);
+        expect(hasPlanEntitlement("academy", "reminders")).toBe(true);
+    });
+
+    it("keeps plan feature summaries aligned with the feedback entitlement boundary", () => {
+        expect(PLAN_CATALOG.find(plan => plan.key === "free")?.features).toContain("기본 텍스트 피드백 반환 · 열람 확인");
+        expect(PLAN_CATALOG.find(plan => plan.key === "pro")?.features).toEqual(expect.arrayContaining([
+            "비공개 서버 필기 원본 보관",
+            "필기 마크업 · 주석 파일",
+        ]));
+    });
+
+    it("uses one canonical entitlement-key set without a duplicate remote archive key", () => {
+        const canonicalKeys = Object.keys(PLAN_ENTITLEMENT_COPY);
+        for (const plan of PLAN_CATALOG) {
+            expect(Object.keys(plan.entitlements).sort()).toEqual([...canonicalKeys].sort());
+            expect(plan.entitlements).not.toHaveProperty("remoteHandwritingArchive");
+        }
+        expect(getPlanEntitlementViews("free").map(view => view.key)).toEqual(canonicalKeys);
     });
 
     it("summarizes plan entitlements with the first upgrade plan that unlocks them", () => {

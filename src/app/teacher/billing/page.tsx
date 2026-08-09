@@ -26,12 +26,14 @@ import {
 import { readRosterStudents } from "@/lib/rosterStorage";
 import { formatPaymentProviderRoadmap } from "@/lib/serviceRoadmap";
 import {
+    BILLING_ENTITLEMENT_KEYS,
     BILLING_PLAN_FEATURES,
-    buildBillingFeatureView,
+    PLAN_HEALTH_ENTITLEMENT_KEYS,
+    buildBillingFeatureViews,
     type BillingFeatureStatus,
     type PremiumDeliveryStatus,
 } from "@/lib/premiumFeatureReadiness";
-import { PLAN_BY_KEY, PLAN_CATALOG, getPlanEntitlementViews, readAiRecognitionUsage, type PlanEntitlementKey } from "@/utils/plans";
+import { PLAN_BY_KEY, PLAN_CATALOG, readAiRecognitionUsage } from "@/utils/plans";
 import { buildPlanChangeImpact } from "./planChangeImpact";
 import { isLiveCheckoutUiEnabled } from "@/lib/billingCheckoutGate";
 import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient";
@@ -41,36 +43,6 @@ const PLAN_ICONS: Record<PlanKey, React.ReactNode> = {
     pro: <Zap size={22} />,
     academy: <Building size={22} />,
 };
-
-const BILLING_ENTITLEMENT_KEYS = [
-    "handwritingArchive",
-    "advancedAnalytics",
-    "advancedQuestionDesign",
-    "retakeAssignments",
-    "studentGrowthReports",
-    "pdfExport",
-    "reminders",
-    "multiTeacher",
-    "organizationDashboard",
-    "rolesAndPermissions",
-    "sso",
-    "apiAccess",
-    "customDomain",
-    "auditLogs",
-    "retentionControls",
-    "prioritySupport",
-    "dedicatedSupport",
-] satisfies readonly PlanEntitlementKey[];
-
-const PLAN_HEALTH_ENTITLEMENT_KEYS = [
-    "handwritingArchive",
-    "advancedAnalytics",
-    "advancedQuestionDesign",
-    "retakeAssignments",
-    "studentGrowthReports",
-    "pdfExport",
-    "reminders",
-] satisfies readonly PlanEntitlementKey[];
 
 const PLAN_HEALTH_META: Record<BillingPlanHealthLevel, { label: string; color: string; background: string }> = {
     ready: { label: "서비스 가능", color: "#047857", background: "#d1fae5" },
@@ -324,7 +296,7 @@ export default function BillingPage() {
         ? PLAN_BY_KEY.pro
         : null;
     const currentEntitlements = useMemo(
-        () => getPlanEntitlementViews(current, BILLING_ENTITLEMENT_KEYS).map(buildBillingFeatureView),
+        () => buildBillingFeatureViews(current),
         [current]
     );
     const enabledPlannedFeatureCount = currentEntitlements.filter(entitlement => entitlement.enabled && entitlement.status === "planned").length;

@@ -1,5 +1,5 @@
-import type { PlanKey } from "@/types/omr";
-import type { PlanEntitlementKey, PlanEntitlementView } from "@/utils/plans";
+import type { PlanKey, StoredPlanKey } from "@/types/omr";
+import { getPlanEntitlementViews, type PlanEntitlementKey, type PlanEntitlementView } from "@/utils/plans";
 
 export type PremiumDeliveryStatus = "available" | "partial" | "planned";
 export type BillingFeatureStatus = PremiumDeliveryStatus | "locked";
@@ -23,6 +23,40 @@ export interface BillingPlanFeature {
     detail?: string;
 }
 
+export const BILLING_ENTITLEMENT_KEYS = [
+    "returnedFeedback",
+    "feedbackMarkup",
+    "handwritingArchive",
+    "advancedAnalytics",
+    "advancedQuestionDesign",
+    "retakeAssignments",
+    "studentGrowthReports",
+    "pdfExport",
+    "reminders",
+    "multiTeacher",
+    "organizationDashboard",
+    "rolesAndPermissions",
+    "sso",
+    "apiAccess",
+    "customDomain",
+    "auditLogs",
+    "retentionControls",
+    "prioritySupport",
+    "dedicatedSupport",
+] as const satisfies readonly PlanEntitlementKey[];
+
+export const PLAN_HEALTH_ENTITLEMENT_KEYS = [
+    "returnedFeedback",
+    "feedbackMarkup",
+    "handwritingArchive",
+    "advancedAnalytics",
+    "advancedQuestionDesign",
+    "retakeAssignments",
+    "studentGrowthReports",
+    "pdfExport",
+    "reminders",
+] as const satisfies readonly PlanEntitlementKey[];
+
 /**
  * Product-delivery truth for the billing surface.
  *
@@ -31,21 +65,20 @@ export interface BillingPlanFeature {
  * as "available" before the corresponding workflow exists.
  */
 export const PREMIUM_FEATURE_READINESS: Record<PlanEntitlementKey, PremiumFeatureReadiness> = {
-    handwritingArchive: { status: "available" },
+    handwritingArchive: {
+        status: "available",
+        label: "비공개 서버 필기 원본 보관",
+        description: "학생 필기 원본을 비공개 원격 저장소에 보관하고 권한이 확인된 사용자에게만 제공합니다.",
+    },
     feedbackMarkup: {
         status: "available",
-        label: "교사 첨삭",
-        description: "응시 결과에 문항별 코멘트와 필기 첨삭을 저장해 학생에게 돌려보냅니다.",
+        label: "필기 마크업 · 주석 파일",
+        description: "Pro 이상에서 학생 제출 화면 위에 필기 첨삭을 저장하고 주석 파일을 제공합니다.",
     },
     returnedFeedback: {
         status: "available",
-        label: "학생 피드백 확인",
-        description: "학생이 반환된 피드백과 첨삭을 확인하고 허용된 파일을 내려받을 수 있습니다.",
-    },
-    remoteHandwritingArchive: {
-        status: "available",
-        label: "서버 필기 보관",
-        description: "학생 필기 원본을 비공개 원격 저장소에 보관하고 권한이 확인된 사용자에게만 제공합니다.",
+        label: "기본 피드백 반환 · 열람 확인",
+        description: "Free부터 텍스트 요약과 문항별 코멘트를 반환하고 학생 열람 상태를 확인합니다.",
     },
     advancedAnalytics: { status: "available" },
     advancedQuestionDesign: { status: "available" },
@@ -132,20 +165,24 @@ export function buildBillingFeatureView(view: PlanEntitlementView): BillingFeatu
     };
 }
 
+export function buildBillingFeatureViews(plan: StoredPlanKey | null | undefined): BillingFeatureView[] {
+    return getPlanEntitlementViews(plan, BILLING_ENTITLEMENT_KEYS).map(buildBillingFeatureView);
+}
+
 export const BILLING_PLAN_FEATURES: Record<PlanKey, readonly BillingPlanFeature[]> = {
     free: [
         { label: "월 시험 5개 · 학생 30명", status: "available", detail: "서버 플랜·월 사용량 기준" },
         { label: "AI 정답 인식 월 100회", status: "available", detail: "서버 플랜·월 사용량 기준" },
         { label: "기본 분석", status: "available" },
+        { label: "기본 텍스트 피드백 반환 · 열람 확인", status: "available" },
         { label: "CSV 내보내기", status: "available" },
     ],
     pro: [
         { label: "무제한 시험 · 학생 300명", status: "available", detail: "서버 플랜·월 사용량 기준" },
         { label: "AI 정답 인식 월 5,000회", status: "available", detail: "서버 플랜·월 사용량 기준" },
         { label: "하위 질문 · 심화 응답", status: "available", detail: "객관식 아래 자유 응답 설계" },
-        { label: "필기 원본 보관", status: "available" },
-        { label: "교사 첨삭 · 학생 피드백", status: "available" },
-        { label: "비공개 서버 필기 보관", status: "available" },
+        { label: "비공개 서버 필기 원본 보관", status: "available" },
+        { label: "필기 마크업 · 주석 파일", status: "available" },
         { label: "고급 오답·성장 분석", status: "available" },
         { label: "인쇄 · PDF 저장", status: "partial", detail: "브라우저 인쇄 방식" },
         { label: "카카오 발송 후보 · 큐", status: "partial", detail: "실제 발송 미연동" },

@@ -1,18 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildPlanChangeImpact, type PlanChangeImpact } from "./planChangeImpact";
-import type { PlanEntitlementKey } from "@/utils/plans";
 import type { BillingUsageSummary } from "@/lib/billingUsage";
+import { BILLING_ENTITLEMENT_KEYS } from "@/lib/premiumFeatureReadiness";
 
-const ENTITLEMENT_KEYS = [
-    "handwritingArchive",
-    "advancedAnalytics",
-    "retakeAssignments",
-    "studentGrowthReports",
-    "pdfExport",
-    "reminders",
-    "multiTeacher",
-    "organizationDashboard",
-] satisfies readonly PlanEntitlementKey[];
+const ENTITLEMENT_KEYS = BILLING_ENTITLEMENT_KEYS;
 
 function usage(overrides: Partial<BillingUsageSummary> = {}): BillingUsageSummary {
     return {

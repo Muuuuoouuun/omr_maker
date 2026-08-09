@@ -1070,7 +1070,6 @@ describe("service UI surface", () => {
         expect(billingPage).toContain("잠긴 프리미엄 기능");
         expect(billingPage).toContain("lockedEntitlementSummary");
         expect(billingPage).toContain("Pro 이상에서 제출 후 원본 보관");
-        expect(billingPage).toContain("getPlanEntitlementViews");
         expect(billingPage).toContain("getPaymentProviderReadiness");
         expect(billingPage).toContain("getPaymentProviderRolloutReadiness");
         expect(billingPage).toContain("결제 provider 상태");
