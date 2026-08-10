@@ -249,22 +249,37 @@ describe("initial operations qualification workflow", () => {
         expect(workflowSource).toContain("qualification-identity.json");
     });
 
-    it("applies the just-created backup through a pinned protected runner before verification", () => {
+    it("applies the just-created backup with SHA-bound repository runners before verification", () => {
         const guard = String(namedStep("Validate qualification request and protected environment").run);
         const apply = String(namedStep("Apply backup to disposable restore target").run);
         const restore = String(namedStep("Verify disposable restore and core journey").run);
 
-        expect(guard).toContain("OMR_RESTORE_PREPARE_RUNNER_SHA256");
+        expect(workflowSource).not.toMatch(/OMR_RESTORE_(?:PREPARE|SMOKE)_RUNNER_B64/);
+        expect(workflowSource).not.toMatch(/OMR_RESTORE_(?:PREPARE|SMOKE)_RUNNER_SHA256/);
+        expect(guard).toContain("scripts/apply-backup-to-restore-target.mjs");
+        expect(guard).toContain("scripts/restore-smoke-runner.mjs");
+        expect(guard).toContain('git show "$OMR_BUILD_SHA:scripts/apply-backup-to-restore-target.mjs"');
+        expect(guard).toContain('git show "$OMR_BUILD_SHA:scripts/restore-smoke-runner.mjs"');
         expect(guard).toContain('test "$RESTORE_APP_HOST" != "$PRODUCTION_HOST"');
         expect(guard).toContain('test "$RESTORE_APP_HOST" != "$STAGING_HOST"');
-        expect(apply).toContain('node "$PRIVATE_RUNNER_DIR/runner.mjs"');
+        expect(apply).toContain("node scripts/apply-backup-to-restore-target.mjs");
+        expect(namedStep("Apply backup to disposable restore target").env).toMatchObject({
+            OMR_PRODUCTION_APP_URL: "${{ secrets.OMR_PRODUCTION_BASE_URL }}",
+        });
+        expect(apply).not.toMatch(/base64|PRIVATE_RUNNER_DIR/);
         expect(apply).toContain('value.status !== "restored"');
         expect(apply).toContain("backupManifestSha256");
         expect(apply).toContain("targetProjectRefHash");
+        expect(apply).not.toContain("value.environmentDigest !== process.env.ENVIRONMENT_DIGEST");
+        expect(apply).toContain("RESTORE_ENVIRONMENT_DIGEST");
+        expect(apply).toContain("RESTORE_TARGET_DIGEST");
         expect(stepIndex("Apply backup to disposable restore target")).toBeGreaterThan(stepIndex("Create staging backup"));
         expect(stepIndex("Verify disposable restore and core journey")).toBeGreaterThan(
             stepIndex("Apply backup to disposable restore target"),
         );
+        expect(restore).not.toMatch(/base64|PRIVATE_RUNNER_DIR|OMR_RESTORE_SMOKE_RUNNER/);
+        expect(restore).toContain("value.environmentDigest !== process.env.RESTORE_ENVIRONMENT_DIGEST");
+        expect(restore).toContain("value.targetDigest !== process.env.RESTORE_TARGET_DIGEST");
         expect(restore).toContain('value.disposableCredentialsRevoked !== true');
         expect(restore).toContain("source-restore.json");
     });

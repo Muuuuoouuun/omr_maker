@@ -9,6 +9,9 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const DEFAULT_PAGE_SIZE = 1000;
 const DEFAULT_MAX_OBJECTS = 100_000;
+const DEFAULT_MAX_DIRECTORIES = 4 * DEFAULT_MAX_OBJECTS + 2;
+const MAX_CANONICAL_RESTORE_LISTED_OBJECTS = 10_001;
+const MAX_LIST_PAGES = 100_000;
 
 function boundedInteger(value, fallback, min, max, label) {
     const resolved = value === undefined ? fallback : value;
@@ -103,7 +106,7 @@ async function listOneInventoryPass(client, bucket, options) {
         const directory = directories.shift();
         if (visited.has(directory)) throw new Error("Storage inventory contains a directory cycle");
         visited.add(directory);
-        if (visited.size > options.maxObjects + 16) throw new Error("Storage inventory directory limit exceeded");
+        if (visited.size > options.maxDirectories) throw new Error("Storage inventory directory limit exceeded");
 
         for (let offset = 0; ; offset += options.pageSize) {
             pageCount += 1;
@@ -124,7 +127,7 @@ async function listOneInventoryPass(client, bucket, options) {
                 if (isFolderEntry(entry)) {
                     if (!discoveredDirectories.has(path)) {
                         discoveredDirectories.add(path);
-                        if (discoveredDirectories.size > options.maxObjects + 16) {
+                        if (discoveredDirectories.size > options.maxDirectories) {
                             throw new Error("Storage inventory directory limit exceeded");
                         }
                         directories.push(path);
@@ -148,13 +151,34 @@ function inventoryFingerprint(objects) {
     return createHash("sha256").update(JSON.stringify(objects)).digest("hex");
 }
 
+export function deriveCanonicalStorageTraversalBounds(maximumObjects, pageSize = DEFAULT_PAGE_SIZE) {
+    const maxObjects = boundedInteger(
+        maximumObjects,
+        undefined,
+        1,
+        MAX_CANONICAL_RESTORE_LISTED_OBJECTS,
+        "canonical restore object limit",
+    );
+    const boundedPageSize = boundedInteger(pageSize, DEFAULT_PAGE_SIZE, 1, DEFAULT_PAGE_SIZE, "pageSize");
+    const maxDirectories = 2 + 4 * maxObjects;
+    const maxListPages = maxDirectories + Math.ceil(maxObjects / boundedPageSize);
+    if (maxListPages > MAX_LIST_PAGES) throw new Error("canonical restore page limit is outside the allowed range");
+    return {
+        pageSize: boundedPageSize,
+        maxObjects,
+        maxDirectories,
+        maxListPages,
+    };
+}
+
 export async function listStorageObjectsToFixedPoint(client, bucket, options = {}) {
     assertBucket(bucket);
     const settings = {
         pageSize: boundedInteger(options.pageSize, DEFAULT_PAGE_SIZE, 1, 1000, "pageSize"),
         maxPasses: boundedInteger(options.maxPasses, 3, 2, 10, "maxPasses"),
         maxObjects: boundedInteger(options.maxObjects, DEFAULT_MAX_OBJECTS, 1, 1_000_000, "maxObjects"),
-        maxListPages: boundedInteger(options.maxListPages, 10_000, 1, 100_000, "maxListPages"),
+        maxDirectories: boundedInteger(options.maxDirectories, DEFAULT_MAX_DIRECTORIES, 1, 4_000_002, "maxDirectories"),
+        maxListPages: boundedInteger(options.maxListPages, 10_000, 1, MAX_LIST_PAGES, "maxListPages"),
     };
     let previousFingerprint = null;
     for (let pass = 0; pass < settings.maxPasses; pass += 1) {

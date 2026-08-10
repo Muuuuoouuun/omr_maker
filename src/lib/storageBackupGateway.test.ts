@@ -151,6 +151,92 @@ describe("storage backup gateway", () => {
         await expect(listStorageObjectsToFixedPoint(client, BUCKET, {
             pageSize: 20,
             maxObjects: 1,
+            maxDirectories: 17,
+        })).rejects.toThrow(/directory limit/i);
+    });
+
+    it("allows canonical multi-prefix depth independently of the exact object cap", async () => {
+        const organizations = Array.from({ length: 10 }, (_, index) => `org-${index}`);
+        const client = treeClient((path) => {
+            if (path === "") return [folderEntry("organizations")];
+            if (path === "organizations") return organizations.map(folderEntry);
+            const segments = path.split("/");
+            if (segments.length === 2 && organizations.includes(segments[1])) return [folderEntry("exams")];
+            if (segments.length === 3 && segments[2] === "exams") return [folderEntry(`exam-${segments[1]}`)];
+            if (segments.length === 4 && segments[2] === "exams") return [folderEntry("problem")];
+            if (segments.length === 5 && segments[4] === "problem") return [objectEntry("asset.pdf")];
+            return [];
+        });
+
+        await expect(listStorageObjectsToFixedPoint(client, BUCKET, {
+            maxObjects: 11,
+            maxDirectories: 64,
+        })).resolves.toHaveLength(10);
+    });
+
+    it("traverses the reproduced 2,500 unique-prefix inventory within derived canonical page bounds", async () => {
+        const gateway = await import("../../scripts/storage-backup-gateway.mjs") as unknown as {
+            deriveCanonicalStorageTraversalBounds?: (maximumObjects: number, pageSize?: number) => {
+                pageSize: number;
+                maxObjects: number;
+                maxDirectories: number;
+                maxListPages: number;
+            };
+        };
+        expect(gateway.deriveCanonicalStorageTraversalBounds).toBeTypeOf("function");
+        const organizations = Array.from({ length: 2_500 }, (_, index) => `org-${String(index).padStart(4, "0")}`);
+        const organizationSet = new Set(organizations);
+        const client = treeClient((path) => {
+            if (path === "") return [folderEntry("organizations")];
+            if (path === "organizations") return organizations.map(folderEntry);
+            const segments = path.split("/");
+            if (segments.length === 2 && organizationSet.has(segments[1])) return [folderEntry("exams")];
+            if (segments.length === 3 && segments[2] === "exams") return [folderEntry(`exam-${segments[1]}`)];
+            if (segments.length === 4 && segments[2] === "exams") return [folderEntry("problem")];
+            if (segments.length === 5 && segments[4] === "problem") return [objectEntry("asset.pdf")];
+            return [];
+        });
+        const bounds = gateway.deriveCanonicalStorageTraversalBounds!(2_501, 1_000);
+
+        const objects = await listStorageObjectsToFixedPoint(client, BUCKET, bounds);
+
+        expect(bounds).toEqual({
+            pageSize: 1_000,
+            maxObjects: 2_501,
+            maxDirectories: 10_006,
+            maxListPages: 10_009,
+        });
+        expect(objects).toHaveLength(2_500);
+        expect(objects[0].path).toBe("organizations/org-0000/exams/exam-org-0000/problem/asset.pdf");
+        expect(objects.at(-1)?.path).toBe("organizations/org-2499/exams/exam-org-2499/problem/asset.pdf");
+    });
+
+    it("derives a bounded worst-prefix page budget for the exact 10,000-object restore cap", async () => {
+        const gateway = await import("../../scripts/storage-backup-gateway.mjs") as unknown as {
+            deriveCanonicalStorageTraversalBounds?: (maximumObjects: number, pageSize?: number) => {
+                pageSize: number;
+                maxObjects: number;
+                maxDirectories: number;
+                maxListPages: number;
+            };
+        };
+        expect(gateway.deriveCanonicalStorageTraversalBounds).toBeTypeOf("function");
+        expect(gateway.deriveCanonicalStorageTraversalBounds!(10_001, 1_000)).toEqual({
+            pageSize: 1_000,
+            maxObjects: 10_001,
+            maxDirectories: 40_006,
+            maxListPages: 40_017,
+        });
+        expect(() => gateway.deriveCanonicalStorageTraversalBounds!(10_002, 1_000)).toThrow(/object|limit|bound/i);
+    });
+
+    it("enforces an explicit directory bound independently of a larger object cap", async () => {
+        const client = treeClient(path => path === ""
+            ? Array.from({ length: 28 }, (_, index) => folderEntry(`folder-${index}`))
+            : []);
+        await expect(listStorageObjectsToFixedPoint(client, BUCKET, {
+            maxObjects: 100,
+            maxDirectories: 27,
         })).rejects.toThrow(/directory limit/i);
     });
 

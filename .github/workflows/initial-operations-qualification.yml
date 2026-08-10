@@ -39,6 +39,12 @@ jobs:
     environment: initial-operations-staging
     timeout-minutes: 240
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.build_sha }}
+          fetch-depth: 0
+
       - name: Validate qualification request and protected environment
         env:
           OMR_BUILD_SHA: ${{ inputs.build_sha }}
@@ -63,10 +69,6 @@ jobs:
           OMR_READINESS_TOKEN: ${{ secrets.OMR_READINESS_TOKEN }}
           OMR_INITIAL_OPS_RUN_CHALLENGE: ${{ secrets.OMR_INITIAL_OPS_RUN_CHALLENGE }}
           OMR_RELEASE_ATTESTATION_SECRET: ${{ secrets.OMR_RELEASE_ATTESTATION_SECRET }}
-          OMR_RESTORE_SMOKE_RUNNER_B64: ${{ secrets.OMR_RESTORE_SMOKE_RUNNER_B64 }}
-          OMR_RESTORE_SMOKE_RUNNER_SHA256: ${{ secrets.OMR_RESTORE_SMOKE_RUNNER_SHA256 }}
-          OMR_RESTORE_PREPARE_RUNNER_B64: ${{ secrets.OMR_RESTORE_PREPARE_RUNNER_B64 }}
-          OMR_RESTORE_PREPARE_RUNNER_SHA256: ${{ secrets.OMR_RESTORE_PREPARE_RUNNER_SHA256 }}
           OMR_STAGING_SUPABASE_ANON_KEY: ${{ secrets.OMR_STAGING_SUPABASE_ANON_KEY }}
           OMR_STAGING_AUTHENTICATED_JWT: ${{ secrets.OMR_STAGING_AUTHENTICATED_JWT }}
           OMR_STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.OMR_STAGING_SUPABASE_SERVICE_ROLE_KEY }}
@@ -128,9 +130,7 @@ jobs:
             OMR_STAGING_INFRA_DIGEST OMR_RESTORE_TARGET_SUPABASE_URL
             OMR_RESTORE_TARGET_PROJECT_CONFIRMATION OMR_INITIAL_OPS_TOKEN
             OMR_READINESS_TOKEN OMR_INITIAL_OPS_RUN_CHALLENGE
-            OMR_RELEASE_ATTESTATION_SECRET OMR_RESTORE_SMOKE_RUNNER_B64
-            OMR_RESTORE_SMOKE_RUNNER_SHA256 OMR_RESTORE_PREPARE_RUNNER_B64
-            OMR_RESTORE_PREPARE_RUNNER_SHA256 OMR_STAGING_SUPABASE_ANON_KEY
+            OMR_RELEASE_ATTESTATION_SECRET OMR_STAGING_SUPABASE_ANON_KEY
             OMR_STAGING_AUTHENTICATED_JWT OMR_STAGING_SUPABASE_SERVICE_ROLE_KEY
             OMR_STAGING_ASSET_GC_CRON_SECRET OMR_STAGING_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID
             OMR_STUDENT_CREDENTIAL_FIXTURE_ID OMR_STUDENT_CREDENTIAL_STUDENT_IDS
@@ -151,8 +151,6 @@ jobs:
           done
           [[ "$OMR_STAGING_INFRA_DIGEST" =~ ^[a-f0-9]{64}$ ]]
           [[ "$OMR_STAGING_ENVIRONMENT_REVISION" =~ ^[a-f0-9]{64}$ ]]
-          [[ "$OMR_RESTORE_SMOKE_RUNNER_SHA256" =~ ^[a-f0-9]{64}$ ]]
-          [[ "$OMR_RESTORE_PREPARE_RUNNER_SHA256" =~ ^[a-f0-9]{64}$ ]]
           [[ "$PREVIEW_DEPLOYMENT_ID" =~ ^[A-Za-z0-9._:-]{3,200}$ ]]
           [[ "$PREVIEW_ARTIFACT_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
           [[ "$PREVIEW_ATTESTATION_SIGNATURE" =~ ^[a-f0-9]{64}$ ]]
@@ -176,12 +174,20 @@ jobs:
           test "$OMR_STAGING_ASSET_GC_PAUSED_PROJECT_REF" = "$STAGING_PROJECT_REF"
           test "$OMR_RESTORE_TARGET_PROJECT_CONFIRMATION" = "$RESTORE_PROJECT_REF"
 
-          ENVIRONMENT_DIGEST="$(printf 'omr.initial-operations.environment:v1\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+          RESTORE_APPLY_SOURCE_SHA256="$(sha256sum scripts/apply-backup-to-restore-target.mjs | cut -d ' ' -f 1)"
+          RESTORE_SMOKE_SOURCE_SHA256="$(sha256sum scripts/restore-smoke-runner.mjs | cut -d ' ' -f 1)"
+          test "$RESTORE_APPLY_SOURCE_SHA256" = "$(git show "$OMR_BUILD_SHA:scripts/apply-backup-to-restore-target.mjs" | sha256sum | cut -d ' ' -f 1)"
+          test "$RESTORE_SMOKE_SOURCE_SHA256" = "$(git show "$OMR_BUILD_SHA:scripts/restore-smoke-runner.mjs" | sha256sum | cut -d ' ' -f 1)"
+          RESTORE_RUNNER_SOURCE_SHA256="$(printf 'omr.initial-operations.restore-runners:v1\n%s\n%s\n' \
+            "$RESTORE_APPLY_SOURCE_SHA256" "$RESTORE_SMOKE_SOURCE_SHA256" | sha256sum | cut -d ' ' -f 1)"
+          RESTORE_BOUNDARY_SHA256="$(git show "$OMR_BUILD_SHA:supabase/production-server-boundary.sql" | sha256sum | cut -d ' ' -f 1)"
+
+          ENVIRONMENT_DIGEST="$(printf 'omr.initial-operations.environment:v1\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
             "$OMR_BUILD_SHA" "$STAGING_HOST" "$STAGING_PROJECT_REF" "$PRODUCTION_HOST" \
             "$PRODUCTION_PROJECT_REF" "$RESTORE_PROJECT_REF" "$RESTORE_APP_HOST" "$OMR_STAGING_ENVIRONMENT_REVISION" \
             "$OMR_STAGING_INFRA_DIGEST" "$PREVIEW_DEPLOYMENT_ID" \
             "$PREVIEW_ARTIFACT_DIGEST" "$EXPECTED_READINESS_VERSION" \
-            "$OMR_RESTORE_PREPARE_RUNNER_SHA256" "$OMR_RESTORE_SMOKE_RUNNER_SHA256" \
+            "$RESTORE_RUNNER_SOURCE_SHA256" \
             "$OMR_ALERT_SINK_URL" "$OMR_ALERT_RECEIPT_URL" "$OMR_ALERT_ACK_URL" \
             "$OMR_ALERT_RESOLVE_URL" | sha256sum | cut -d ' ' -f 1)"
           STAGING_HOST_DIGEST="$(printf 'omr.initial-operations.staging-host:v1\n%s\n' "$STAGING_HOST" | sha256sum | cut -d ' ' -f 1)"
@@ -214,16 +220,11 @@ jobs:
             printf 'STAGING_PROJECT_REF=%s\n' "$STAGING_PROJECT_REF"
             printf 'RESTORE_PROJECT_REF=%s\n' "$RESTORE_PROJECT_REF"
             printf 'RESTORE_APP_HOST=%s\n' "$RESTORE_APP_HOST"
+            printf 'RESTORE_BOUNDARY_SHA256=%s\n' "$RESTORE_BOUNDARY_SHA256"
             printf 'QUALIFIED_PREVIEW_HOST_DIGEST=%s\n' "$QUALIFIED_PREVIEW_HOST_DIGEST"
             printf 'QUALIFIED_PREVIEW_DEPLOYMENT_ID=%s\n' "$PREVIEW_DEPLOYMENT_ID"
             printf 'QUALIFIED_PREVIEW_ARTIFACT_DIGEST=%s\n' "$QUALIFIED_PREVIEW_ARTIFACT_DIGEST"
           } >> "$GITHUB_ENV"
-
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-          ref: ${{ inputs.build_sha }}
-          fetch-depth: 0
 
       - name: Assert immutable checkout
         env:
@@ -785,8 +786,10 @@ jobs:
       - name: Apply backup to disposable restore target
         env:
           OMR_BUILD_SHA: ${{ inputs.build_sha }}
-          OMR_RESTORE_PREPARE_RUNNER_B64: ${{ secrets.OMR_RESTORE_PREPARE_RUNNER_B64 }}
-          OMR_RESTORE_PREPARE_RUNNER_SHA256: ${{ secrets.OMR_RESTORE_PREPARE_RUNNER_SHA256 }}
+          OMR_DEPLOYMENT_TIER: staging
+          OMR_RESTORE_EXPECTED_BUILD: ${{ inputs.build_sha }}
+          OMR_PRODUCTION_SUPABASE_URL: ${{ secrets.OMR_PRODUCTION_SUPABASE_URL }}
+          OMR_PRODUCTION_APP_URL: ${{ secrets.OMR_PRODUCTION_BASE_URL }}
           OMR_RESTORE_TARGET_APP_URL: ${{ secrets.OMR_RESTORE_TARGET_APP_URL }}
           OMR_RESTORE_TARGET_SUPABASE_URL: ${{ secrets.OMR_RESTORE_TARGET_SUPABASE_URL }}
           OMR_RESTORE_TARGET_SERVICE_ROLE_KEY: ${{ secrets.OMR_RESTORE_TARGET_SERVICE_ROLE_KEY }}
@@ -798,41 +801,49 @@ jobs:
         run: |
           set -euo pipefail
           PRIVATE_RESTORE_DIR="$RUNNER_TEMP/initial-operations-private-restore"
-          PRIVATE_RUNNER_DIR="$RUNNER_TEMP/restore-prepare-runner"
           test ! -e "$PRIVATE_RESTORE_DIR"
-          test ! -e "$PRIVATE_RUNNER_DIR"
-          mkdir -m 700 "$PRIVATE_RESTORE_DIR" "$PRIVATE_RUNNER_DIR"
-          printf '%s' "$OMR_RESTORE_PREPARE_RUNNER_B64" | base64 --decode > "$PRIVATE_RUNNER_DIR/runner.mjs"
-          chmod 700 "$PRIVATE_RUNNER_DIR/runner.mjs"
-          test "$(sha256sum "$PRIVATE_RUNNER_DIR/runner.mjs" | cut -d ' ' -f 1)" = "$OMR_RESTORE_PREPARE_RUNNER_SHA256"
-          export OMR_RESTORE_BACKUP_DIR="$BACKUP_DIR"
-          export OMR_RESTORE_TARGET_PROJECT_REF="$RESTORE_PROJECT_REF"
-          node "$PRIVATE_RUNNER_DIR/runner.mjs" > "$PRIVATE_RESTORE_DIR/prepare-result.json" \
+          mkdir -m 700 "$PRIVATE_RESTORE_DIR" "$PRIVATE_RESTORE_DIR/verification"
+          RESTORE_STARTED_AT="$(node -e 'process.stdout.write(new Date().toISOString())')"
+          export OMR_RESTORE_EXPECTED_BOUNDARY_SHA256="$RESTORE_BOUNDARY_SHA256"
+          node scripts/apply-backup-to-restore-target.mjs \
+            --apply \
+            --backup="$BACKUP_DIR" \
+            --output-dir="$PRIVATE_RESTORE_DIR/verification" \
+            --confirm-target-project-ref="$RESTORE_PROJECT_REF" \
+            --confirm-boundary-sha256="$RESTORE_BOUNDARY_SHA256" \
+            --started-at="$RESTORE_STARTED_AT" \
+            > "$PRIVATE_RESTORE_DIR/prepare-result.json" \
             2> "$PRIVATE_RESTORE_DIR/prepare-command.stderr"
           test "$(stat -c %s "$PRIVATE_RESTORE_DIR/prepare-result.json")" -ge 2
           test "$(stat -c %s "$PRIVATE_RESTORE_DIR/prepare-result.json")" -le 65536
+          test -f "$PRIVATE_RESTORE_DIR/verification/.INCOMPLETE"
+          test ! -e "$PRIVATE_RESTORE_DIR/verification/.RESTORE_COMPLETE"
           export PRIVATE_RESTORE_DIR
-          RESTORE_STARTED_AT="$(node --input-type=module <<'NODE'
+          export RESTORE_STARTED_AT
+          node --input-type=module <<'NODE'
           import { createHash } from "node:crypto";
-          import { readFileSync } from "node:fs";
+          import { appendFileSync, readFileSync } from "node:fs";
           import { join } from "node:path";
           import { parseStrictJson } from "./scripts/strict-json.mjs";
           const manifest = readFileSync(join(process.env.BACKUP_DIR, "manifest.json"));
           const value = parseStrictJson(readFileSync(join(process.env.PRIVATE_RESTORE_DIR, "prepare-result.json"), "utf8"));
           const keys = Object.keys(value ?? {}).sort();
-          const expected = ["backupManifestSha256", "buildSha", "completedAt", "restoreStartedAt", "schemaVersion", "status", "targetProjectRefHash"].sort();
+          const expected = ["backupManifestSha256", "boundarySha256", "buildSha", "completedAt", "environmentDigest",
+            "schemaVersion", "status", "storageBytes", "storageObjectCount", "targetDigest", "targetProjectRefHash"].sort();
           if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])
             || value.schemaVersion !== 1 || value.status !== "restored" || value.buildSha !== process.env.OMR_BUILD_SHA
+            || !/^[a-f0-9]{64}$/.test(value.environmentDigest)
+            || !/^[a-f0-9]{64}$/.test(value.targetDigest)
+            || value.boundarySha256 !== process.env.RESTORE_BOUNDARY_SHA256
             || value.backupManifestSha256 !== createHash("sha256").update(manifest).digest("hex")
             || value.targetProjectRefHash !== createHash("sha256").update(process.env.RESTORE_PROJECT_REF).digest("hex")
-            || new Date(value.restoreStartedAt).toISOString() !== value.restoreStartedAt
             || new Date(value.completedAt).toISOString() !== value.completedAt
-            || Date.parse(value.completedAt) < Date.parse(value.restoreStartedAt)
-            || Date.parse(value.completedAt) - Date.parse(value.restoreStartedAt) > 120 * 60_000
+            || Date.parse(value.completedAt) < Date.parse(process.env.RESTORE_STARTED_AT)
+            || Date.parse(value.completedAt) - Date.parse(process.env.RESTORE_STARTED_AT) > 120 * 60_000
             || Date.parse(value.completedAt) > Date.now() + 30_000) throw new Error("unverified");
-          process.stdout.write(value.restoreStartedAt);
+          appendFileSync(process.env.GITHUB_ENV,
+            `RESTORE_ENVIRONMENT_DIGEST=${value.environmentDigest}\nRESTORE_TARGET_DIGEST=${value.targetDigest}\n`);
           NODE
-          )"
           printf 'PRIVATE_RESTORE_DIR=%s\n' "$PRIVATE_RESTORE_DIR" >> "$GITHUB_ENV"
           printf 'RESTORE_STARTED_AT=%s\n' "$RESTORE_STARTED_AT" >> "$GITHUB_ENV"
 
@@ -843,25 +854,16 @@ jobs:
           OMR_RESTORE_TARGET_SUPABASE_URL: ${{ secrets.OMR_RESTORE_TARGET_SUPABASE_URL }}
           OMR_RESTORE_TARGET_SERVICE_ROLE_KEY: ${{ secrets.OMR_RESTORE_TARGET_SERVICE_ROLE_KEY }}
           OMR_PRODUCTION_SUPABASE_URL: ${{ secrets.OMR_PRODUCTION_SUPABASE_URL }}
+          OMR_PRODUCTION_APP_URL: ${{ secrets.OMR_PRODUCTION_BASE_URL }}
           OMR_RESTORE_TARGET_DB_HOST: ${{ secrets.OMR_RESTORE_TARGET_DB_HOST }}
           OMR_RESTORE_TARGET_DB_PORT: ${{ secrets.OMR_RESTORE_TARGET_DB_PORT }}
           OMR_RESTORE_TARGET_DB_USER: ${{ secrets.OMR_RESTORE_TARGET_DB_USER }}
           OMR_RESTORE_TARGET_DB_NAME: ${{ secrets.OMR_RESTORE_TARGET_DB_NAME }}
           OMR_RESTORE_TARGET_DB_PASSWORD: ${{ secrets.OMR_RESTORE_TARGET_DB_PASSWORD }}
           OMR_RESTORE_EXPECTED_BUILD: ${{ inputs.build_sha }}
-          OMR_RESTORE_SMOKE_RUNNER_B64: ${{ secrets.OMR_RESTORE_SMOKE_RUNNER_B64 }}
-          OMR_RESTORE_SMOKE_RUNNER_SHA256: ${{ secrets.OMR_RESTORE_SMOKE_RUNNER_SHA256 }}
         run: |
           set -euo pipefail
-          PRIVATE_RUNNER_DIR="$RUNNER_TEMP/restore-smoke-runner"
-          mkdir -m 700 "$PRIVATE_RUNNER_DIR"
-          cleanup_runner() { rm -f "$PRIVATE_RUNNER_DIR/runner.mjs"; }
-          trap cleanup_runner EXIT
-          printf '%s' "$OMR_RESTORE_SMOKE_RUNNER_B64" | base64 --decode > "$PRIVATE_RUNNER_DIR/runner.mjs"
-          chmod 700 "$PRIVATE_RUNNER_DIR/runner.mjs"
-          test "$(sha256sum "$PRIVATE_RUNNER_DIR/runner.mjs" | cut -d ' ' -f 1)" = "$OMR_RESTORE_SMOKE_RUNNER_SHA256"
-          export OMR_RESTORE_SMOKE_RUNNER="$PRIVATE_RUNNER_DIR/runner.mjs"
-          mkdir -m 700 "$PRIVATE_RESTORE_DIR/verification"
+          export OMR_RESTORE_EXPECTED_BOUNDARY_SHA256="$RESTORE_BOUNDARY_SHA256"
           npm run ops:restore:verify -- \
             --verify \
             --backup="$BACKUP_DIR" \
@@ -883,6 +885,8 @@ jobs:
           const value = JSON.parse(result.toString("utf8"));
           if (value.status !== "verified" || value.environment !== "staging"
             || value.buildSha !== process.env.OMR_RESTORE_EXPECTED_BUILD
+            || value.environmentDigest !== process.env.RESTORE_ENVIRONMENT_DIGEST
+            || value.targetDigest !== process.env.RESTORE_TARGET_DIGEST
             || value.restoreStartedAt !== process.env.RESTORE_STARTED_AT
             || value.boundaryContract !== "passed" || value.browserSmoke !== "passed"
             || value.disposableCredentialsRevoked !== true || value.completeMarker !== ".RESTORE_COMPLETE"
@@ -942,8 +946,6 @@ jobs:
             "$RUNNER_TEMP/initial-operations-private-load" \
             "$RUNNER_TEMP/initial-operations-private-preview" \
             "$RUNNER_TEMP/initial-operations-private-restore" \
-            "$RUNNER_TEMP/restore-prepare-runner" \
-            "$RUNNER_TEMP/restore-smoke-runner" \
             "$RUNNER_TEMP/initial-operations-private-evidence"
 
       - name: Seal qualification success

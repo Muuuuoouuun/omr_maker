@@ -16,8 +16,6 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
-import { createClient } from "@supabase/supabase-js";
-
 import {
     CANONICAL_BACKUP_TABLES,
     REMOTE_ASSET_BUCKET,
@@ -25,29 +23,33 @@ import {
     compareRestoredInventory,
     validateBackupManifest,
 } from "./backup-restore-core.mjs";
-import {
-    downloadAndHashStorageObjects,
-    listStorageObjectsToFixedPoint,
-} from "./storage-backup-gateway.mjs";
 import { parseStrictJson } from "./strict-json.mjs";
 import {
-    createExternalRestoredSmokeDependencies,
     runRestoredEnvironmentSmoke,
 } from "./run-restored-environment-smoke.mjs";
+import {
+    assertRestoreApplyBounds,
+    buildRestoreApplyBinding,
+    createRestoreApplyMarker,
+    readRestoreApplyMarker,
+    RESTORE_BINDING_SOURCE_PATHS,
+    RESTORE_TARGET_APPLY_LIMITS,
+} from "./restore-target-apply-core.mjs";
+import {
+    createRepositoryRestoredSmokeDependencies,
+    resolveRepositoryRestoreSmokeConfig,
+} from "./restore-smoke-runner.mjs";
 
 const PROJECT_REF = /^[a-z0-9][a-z0-9-]{2,62}$/;
 const SAFE_DB_HOST = /^[A-Za-z0-9.-]{1,253}$/;
 const SAFE_DB_IDENTIFIER = /^[A-Za-z0-9_.-]{1,128}$/;
 const BUILD_SHA = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
-const VERIFIER_SOURCE_PATHS = Object.freeze([
-    "scripts/verify-restored-environment.mjs",
-    "scripts/run-restored-environment-smoke.mjs",
-    "scripts/backup-restore-core.mjs",
-    "scripts/storage-backup-gateway.mjs",
-    "scripts/strict-json.mjs",
-    "supabase/production-server-boundary.sql",
-]);
+const RESTORE_STORAGE_REQUEST_TIMEOUT_MS = 30_000;
+const RESTORE_STORAGE_OPERATION_TIMEOUT_MS = 10 * 60_000;
+const RESTORE_STORAGE_CONCURRENCY = 3;
+const RESTORE_STORAGE_METADATA_OUTPUT_BYTES = RESTORE_TARGET_APPLY_LIMITS.maxManifestBytes;
+const RESTORE_STORAGE_METADATA_QUERY_TIMEOUT_MS = 30_000;
 
 function clean(value) {
     return typeof value === "string" ? value.trim() : "";
@@ -200,6 +202,47 @@ function assertSecureOutputParent(identity) {
     }
 }
 
+function restoreApplyMarkerIdentity(path) {
+    let info;
+    try { info = lstatSync(path); } catch { throw new Error("Restore apply marker is missing or invalid"); }
+    if (
+        !info.isFile() || info.isSymbolicLink() || info.nlink !== 1
+        || (info.mode & 0o777) !== 0o600 || info.size < 2 || info.size > 8 * 1024
+    ) throw new Error("Restore apply marker is missing or invalid");
+    return Object.freeze({ dev: info.dev, ino: info.ino, size: info.size });
+}
+
+function assertRestoreApplyMarkerIdentity(path, expected) {
+    const current = restoreApplyMarkerIdentity(path);
+    if (current.dev !== expected.dev || current.ino !== expected.ino || current.size !== expected.size) {
+        throw new Error("Restore apply marker identity changed");
+    }
+}
+
+function assertRestoreApplyMarkerBindingAtPath(path, expectedIdentity, config) {
+    assertRestoreApplyMarkerIdentity(path, expectedIdentity);
+    let parsed;
+    try { parsed = parseStrictJson(readFileSync(path, "utf8")); } catch { throw new Error("Restore apply marker binding changed"); }
+    assertRestoreApplyMarkerIdentity(path, expectedIdentity);
+    const expected = createRestoreApplyMarker(config);
+    exactDataObject(parsed, Object.keys(expected));
+    if (JSON.stringify(parsed) !== JSON.stringify(expected)) {
+        throw new Error("Restore apply marker binding changed");
+    }
+}
+
+function checkedRecoveryTime(currentTime, config) {
+    const observed = currentTime();
+    if (!(observed instanceof Date) || Number.isNaN(observed.getTime())) {
+        throw new Error("Restore verification time is invalid");
+    }
+    const recoveryMs = observed.getTime() - Date.parse(config.startedAt);
+    if (recoveryMs < 0 || recoveryMs > config.rtoMinutes * 60_000) {
+        throw new Error("Restore exceeds the declared RTO");
+    }
+    return Object.freeze({ observed, recoveryMs });
+}
+
 function canonicalIso(value, label) {
     const text = clean(value);
     if (!text || Number.isNaN(Date.parse(text)) || new Date(text).toISOString() !== text) {
@@ -218,8 +261,13 @@ function boundedMinutes(value, label) {
 }
 
 function strongSecret(value, label, minimum = 8) {
-    const secret = clean(value);
-    if (Buffer.byteLength(secret, "utf8") < minimum || Buffer.byteLength(secret, "utf8") > 4096 || /[\r\n\u0000]/.test(secret)) {
+    const secret = typeof value === "string" ? value : "";
+    if (
+        secret !== secret.trim()
+        || Buffer.byteLength(secret, "utf8") < minimum
+        || Buffer.byteLength(secret, "utf8") > 4096
+        || /[\s\u0000-\u001f\u007f]/.test(secret)
+    ) {
         throw new Error(`${label} is missing or invalid`);
     }
     return secret;
@@ -233,14 +281,14 @@ function readValidatedManifest(backupDir) {
     } catch {
         completion = null;
     }
-    if (!completion?.isFile() || completion.isSymbolicLink() || existsSync(join(backupDir, ".INCOMPLETE"))) {
+    if (!completion?.isFile() || completion.isSymbolicLink() || completion.nlink !== 1 || existsSync(join(backupDir, ".INCOMPLETE"))) {
         throw new Error("Backup completion marker is missing or invalid");
     }
     const manifestPath = join(backupDir, "manifest.json");
     let raw;
     try {
         const info = lstatSync(manifestPath);
-        if (!info.isFile() || info.isSymbolicLink() || info.size > 32 * 1024 * 1024) throw new Error("invalid");
+        if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size < 2 || info.size > 8 * 1024 * 1024) throw new Error("invalid");
         raw = readFileSync(manifestPath, "utf8");
     } catch {
         throw new Error("Backup manifest is missing or invalid");
@@ -252,21 +300,23 @@ function readValidatedManifest(backupDir) {
         throw new Error("Backup manifest is missing or invalid");
     }
     const manifest = validateBackupManifest(value);
+    assertRestoreApplyBounds({
+        sqlArtifactBytes: [manifest.database.roles.bytes, manifest.database.schema.bytes, manifest.database.data.bytes],
+        storageObjectBytes: manifest.storage.objects.map(object => object.bytes),
+    });
     for (const artifact of Object.values(manifest.database).filter(item => item && typeof item === "object" && "file" in item)) {
         const path = join(backupDir, "database", artifact.file);
-        let bytes;
         try {
             const info = lstatSync(path);
-            if (!info.isFile() || info.isSymbolicLink() || info.size !== artifact.bytes) throw new Error("invalid");
-            bytes = readFileSync(path);
+            if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size !== artifact.bytes) throw new Error("invalid");
         } catch {
             throw new Error("Backup database artifact is missing or invalid");
         }
-        if (createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) {
-            throw new Error("Backup database artifact hash mismatch");
-        }
     }
-    return manifest;
+    return {
+        manifest,
+        manifestSha256: createHash("sha256").update(raw, "utf8").digest("hex"),
+    };
 }
 
 function resolveDatabaseIdentity(env, projectRef) {
@@ -278,10 +328,9 @@ function resolveDatabaseIdentity(env, projectRef) {
         throw new Error("Restore target database identity is missing or invalid");
     }
     const port = Number(portText);
-    if (port < 1 || port > 65535) throw new Error("Restore target database port is invalid");
-    const direct = host === `db.${projectRef}.supabase.co` && user === "postgres";
-    const pooler = host.endsWith(".pooler.supabase.com") && user === `postgres.${projectRef}`;
-    if (!direct && !pooler) throw new Error("Restore target database project identity is invalid");
+    const direct = host === `db.${projectRef}.supabase.co` && port === 5432 && user === "postgres";
+    const pooler = host.endsWith(".pooler.supabase.com") && (port === 5432 || port === 6543) && user === `postgres.${projectRef}`;
+    if ((!direct && !pooler) || name !== "postgres") throw new Error("Restore target database project identity is invalid");
     return Object.freeze({
         host,
         port,
@@ -289,27 +338,6 @@ function resolveDatabaseIdentity(env, projectRef) {
         name,
         password: strongSecret(env.OMR_RESTORE_TARGET_DB_PASSWORD, "Restore target database password"),
     });
-}
-
-function resolveOptionalSmokeRunner(env) {
-    const path = clean(env.OMR_RESTORE_SMOKE_RUNNER);
-    const expectedSha256 = clean(env.OMR_RESTORE_SMOKE_RUNNER_SHA256);
-    if (!path && !expectedSha256) return { path: "", sha256: "unconfigured" };
-    if (!isAbsolute(path) || resolve(path) !== path || !SHA256.test(expectedSha256)) {
-        throw new Error("Restore smoke runner identity is missing or invalid");
-    }
-    let bytes;
-    try {
-        const info = lstatSync(path);
-        if (!info.isFile() || info.isSymbolicLink() || info.size < 1 || info.size > 4 * 1024 * 1024) throw new Error("invalid");
-        bytes = readFileSync(path);
-    } catch {
-        throw new Error("Restore smoke runner identity is missing or invalid");
-    }
-    if (createHash("sha256").update(bytes).digest("hex") !== expectedSha256) {
-        throw new Error("Restore smoke runner identity is missing or invalid");
-    }
-    return { path, sha256: expectedSha256 };
 }
 
 function verifyCheckoutAtBuild(cwd, buildSha) {
@@ -327,8 +355,9 @@ function verifyCheckoutAtBuild(cwd, buildSha) {
         throw new Error("Restore verifier checkout is missing or invalid");
     }
     if (head !== buildSha) throw new Error("Restore verifier checkout does not match the restored build");
-    const digest = createHash("sha256").update("omr.restore.verifier-sources:v1\n", "utf8");
-    for (const relativePath of VERIFIER_SOURCE_PATHS) {
+    const sourceHashes = [];
+    let boundarySha256;
+    for (const relativePath of RESTORE_BINDING_SOURCE_PATHS) {
         let current;
         let committed;
         try {
@@ -352,9 +381,15 @@ function verifyCheckoutAtBuild(cwd, buildSha) {
         if (!Buffer.isBuffer(committed) || !current.equals(committed)) {
             throw new Error("Restore verifier source does not match the restored build");
         }
-        digest.update(`${relativePath}\n${current.byteLength}\n`, "utf8").update(current);
+        const sha = createHash("sha256").update(current).digest("hex");
+        sourceHashes.push(`${relativePath}:${sha}`);
+        if (relativePath === "supabase/production-server-boundary.sql") boundarySha256 = sha;
     }
-    return { buildSha: head, sourceSha256: digest.digest("hex") };
+    return {
+        buildSha: head,
+        sourceSha256: bindingDigest("apply-sources", sourceHashes),
+        boundarySha256,
+    };
 }
 
 function resolveVerifierIdentity(input, buildSha) {
@@ -370,11 +405,12 @@ function resolveVerifierIdentity(input, buildSha) {
         !identity
         || typeof identity !== "object"
         || Array.isArray(identity)
-        || Object.keys(identity).length !== 2
+        || Object.keys(identity).length !== 3
         || identity.buildSha !== buildSha
         || !SHA256.test(identity.sourceSha256)
+        || !SHA256.test(identity.boundarySha256)
     ) throw new Error("Restore verifier checkout or source is missing or invalid");
-    return { buildSha, sourceSha256: identity.sourceSha256 };
+    return { buildSha, sourceSha256: identity.sourceSha256, boundarySha256: identity.boundarySha256 };
 }
 
 export function resolveRestoredEnvironmentConfig(input) {
@@ -384,11 +420,15 @@ export function resolveRestoredEnvironmentConfig(input) {
     const backupDir = safeAbsolutePath(args.backupDir, input.cwd, "Backup directory", true);
     const outputPath = safeAbsolutePath(args.outputPath, input.cwd, "Restore verification output", false);
     const outputParentIdentity = resolveSecureOutputParent(outputPath);
-    const manifest = readValidatedManifest(backupDir);
+    const manifestRead = readValidatedManifest(backupDir);
+    const manifest = manifestRead.manifest;
     const target = strictSupabaseOrigin(env.OMR_RESTORE_TARGET_SUPABASE_URL, "Restore target Supabase URL");
     const app = strictHttpsOrigin(env.OMR_RESTORE_TARGET_APP_URL, "Restore target app URL");
     const production = strictSupabaseOrigin(env.OMR_PRODUCTION_SUPABASE_URL, "Production Supabase URL");
-    if (target.projectRef === production.projectRef) throw new Error("Restore target must not be the production project");
+    const productionApp = strictHttpsOrigin(env.OMR_PRODUCTION_APP_URL, "Production app URL");
+    if (target.projectRef === production.projectRef || app.hostname === productionApp.hostname) {
+        throw new Error("Restore target must not be the production environment");
+    }
     const confirmedTarget = clean(args.confirmedTargetProjectRef).toLowerCase();
     if (confirmedTarget !== target.projectRef) throw new Error("Confirmed restore target project is missing or invalid");
     const targetIdentity = assertTargetProjectDiffers(manifest.sourceProjectRefHash, target.projectRef);
@@ -397,6 +437,10 @@ export function resolveRestoredEnvironmentConfig(input) {
         throw new Error("Restore target build is missing or invalid");
     }
     const verifierIdentity = resolveVerifierIdentity(input, buildSha);
+    const expectedBoundarySha256 = clean(env.OMR_RESTORE_EXPECTED_BOUNDARY_SHA256);
+    if (!SHA256.test(expectedBoundarySha256) || expectedBoundarySha256 !== verifierIdentity.boundarySha256) {
+        throw new Error("Restore production boundary identity is missing or invalid");
+    }
     const startedAt = canonicalIso(args.startedAt, "Restore start time");
     const rpoMinutes = boundedMinutes(args.rpoMinutes, "RPO minutes");
     const rtoMinutes = boundedMinutes(args.rtoMinutes, "RTO minutes");
@@ -412,21 +456,17 @@ export function resolveRestoredEnvironmentConfig(input) {
     }
     const serviceRoleKey = strongSecret(env.OMR_RESTORE_TARGET_SERVICE_ROLE_KEY, "Restore target service role key", 32);
     const database = resolveDatabaseIdentity(env, target.projectRef);
-    const smokeRunner = resolveOptionalSmokeRunner(env);
     const targetAppDigest = bindingDigest("target-app", [app.origin]);
     const targetSupabaseDigest = bindingDigest("target-supabase", [target.origin, target.projectRef]);
-    const targetDigest = bindingDigest("target", [targetAppDigest, targetSupabaseDigest]);
-    const environmentDigest = bindingDigest("environment", [
-        "staging",
+    const binding = buildRestoreApplyBinding({
         buildSha,
-        targetDigest,
-        database.host,
-        String(database.port),
-        database.user,
-        database.name,
-        smokeRunner.sha256,
-        verifierIdentity.sourceSha256,
-    ]);
+        targetProjectRef: target.projectRef,
+        targetSupabaseHost: new URL(target.origin).hostname,
+        targetAppHost: app.hostname,
+        backupManifestSha256: manifestRead.manifestSha256,
+        boundarySha256: expectedBoundarySha256,
+        sourceSha256: verifierIdentity.sourceSha256,
+    });
     const config = {
         environment: "staging",
         backupDir,
@@ -439,9 +479,11 @@ export function resolveRestoredEnvironmentConfig(input) {
         buildSha,
         targetAppDigest,
         targetSupabaseDigest,
-        targetDigest,
-        environmentDigest,
+        targetDigest: binding.targetDigest,
+        environmentDigest: binding.environmentDigest,
         verifierSourceSha256: verifierIdentity.sourceSha256,
+        backupManifestSha256: manifestRead.manifestSha256,
+        boundarySha256: expectedBoundarySha256,
         startedAt,
         rpoMinutes,
         rtoMinutes,
@@ -452,21 +494,25 @@ export function resolveRestoredEnvironmentConfig(input) {
         serviceRoleKey: { value: serviceRoleKey, enumerable: false },
         database: { value: database, enumerable: false },
         outputParentIdentity: { value: outputParentIdentity, enumerable: false },
-        smokeRunnerPath: { value: smokeRunner.path, enumerable: false },
-        smokeRunnerSha256: { value: smokeRunner.sha256, enumerable: false },
         smokeRunnerEnv: {
             value: Object.freeze({
                 LC_ALL: "C",
                 LANG: "C",
                 PATH: process.env.PATH ?? "",
                 OMR_DEPLOYMENT_TIER: "staging",
+                OMR_BUILD_SHA: buildSha,
                 OMR_RESTORE_TARGET_APP_URL: app.origin,
                 OMR_RESTORE_TARGET_SUPABASE_URL: target.origin,
+                OMR_RESTORE_TARGET_PROJECT_REF: target.projectRef,
+                OMR_RESTORE_STARTED_AT: startedAt,
                 OMR_RESTORE_TARGET_SERVICE_ROLE_KEY: serviceRoleKey,
-                OMR_RESTORE_EXPECTED_BUILD: buildSha,
-                OMR_RESTORE_ENVIRONMENT_DIGEST: environmentDigest,
-                OMR_RESTORE_TARGET_DIGEST: targetDigest,
+                OMR_RESTORE_ENVIRONMENT_DIGEST: binding.environmentDigest,
+                OMR_RESTORE_TARGET_DIGEST: binding.targetDigest,
                 OMR_RESTORE_VERIFIER_SOURCE_SHA256: verifierIdentity.sourceSha256,
+                OMR_PRODUCTION_SUPABASE_URL: production.origin,
+                OMR_PRODUCTION_APP_URL: productionApp.origin,
+                OMR_DELIVERY_PROVIDER_MODE: "disabled",
+                OMR_PAYMENT_PROVIDER_MODE: "disabled",
             }),
             enumerable: false,
         },
@@ -554,23 +600,394 @@ async function collectTableCountsWithPsql(config) {
     }
 }
 
-async function collectStorageObjectsWithBodies(config) {
-    const client = createClient(config.targetSupabaseUrl, config.serviceRoleKey, {
-        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-        global: { headers: { "x-omr-client": "restore-verifier" } },
-    });
-    const temporary = mkdtempSync(join(tmpdir(), "omr-restore-storage-"));
+export function buildRestoredStorageMetadataSql() {
+    return `begin;
+set local statement_timeout = '25s';
+set local lock_timeout = '2s';
+with bounded as materialized (
+    select object.name, object.metadata
+      from storage.objects as object
+     where object.bucket_id = '${REMOTE_ASSET_BUCKET}'
+     order by object.name collate "C"
+     limit ${RESTORE_TARGET_APPLY_LIMITS.maxStorageObjects + 1}
+)
+select coalesce(
+    pg_catalog.jsonb_agg(
+        pg_catalog.jsonb_build_object(
+            'path', bounded.name,
+            'bytes', case
+                when pg_catalog.jsonb_typeof(bounded.metadata -> 'size') = 'number'
+                    then bounded.metadata -> 'size'
+                when pg_catalog.jsonb_typeof(bounded.metadata -> 'contentLength') = 'number'
+                    then bounded.metadata -> 'contentLength'
+                else 'null'::pg_catalog.jsonb
+            end,
+            'sha256', coalesce(
+                nullif(bounded.metadata ->> 'sha256Hex', ''),
+                nullif(bounded.metadata ->> 'sha256_hex', ''),
+                nullif(bounded.metadata #>> '{metadata,sha256Hex}', ''),
+                nullif(bounded.metadata #>> '{metadata,sha256_hex}', '')
+            ),
+            'contentType', coalesce(
+                nullif(bounded.metadata ->> 'mimetype', ''),
+                nullif(bounded.metadata ->> 'contentType', '')
+            )
+        ) order by bounded.name collate "C"
+    ),
+    '[]'::pg_catalog.jsonb
+)::text
+from bounded;
+rollback;`;
+}
+
+function parseRestoredStorageMetadata(raw, expected) {
+    if (
+        typeof raw !== "string"
+        || Buffer.byteLength(raw, "utf8") < 2
+        || Buffer.byteLength(raw, "utf8") > RESTORE_STORAGE_METADATA_OUTPUT_BYTES
+    ) throw new Error("invalid");
+    const parsed = parseStrictJson(raw.trim());
+    if (
+        !Array.isArray(parsed)
+        || parsed.length > RESTORE_TARGET_APPLY_LIMITS.maxStorageObjects
+        || parsed.length !== expected.length
+    ) {
+        throw new Error("invalid");
+    }
+    const expectedByPath = new Map(expected.map(object => [object.path, object]));
+    const paths = new Set();
+    let previousPath = null;
+    for (const object of parsed) {
+        exactDataObject(object, ["path", "bytes", "sha256", "contentType"]);
+        const candidate = expectedByPath.get(object.path);
+        if (
+            !candidate
+            || paths.has(object.path)
+            || (previousPath !== null && object.path <= previousPath)
+            || !Number.isSafeInteger(object.bytes)
+            || object.bytes < 1
+            || !SHA256.test(object.sha256)
+            || (object.contentType !== "application/pdf" && object.contentType !== "application/json")
+            || object.bytes !== candidate.bytes
+            || object.sha256 !== candidate.sha256
+            || object.contentType !== candidate.contentType
+        ) throw new Error("invalid");
+        paths.add(object.path);
+        previousPath = object.path;
+    }
+    if (paths.size !== expected.length) throw new Error("invalid");
+    return parsed;
+}
+
+export async function collectRestoredStorageMetadataWithPsql(config, options = {}) {
+    const execute = options.execFileSync ?? execFileSync;
+    if (typeof execute !== "function") throw new Error("Restored Storage metadata collection failed");
+    const timeoutMs = boundedRestoreStorageInteger(
+        options.timeoutMs,
+        RESTORE_STORAGE_METADATA_QUERY_TIMEOUT_MS,
+        1,
+        60_000,
+        "metadata query timeout",
+    );
+    const credentialDir = mkdtempSync(join(tmpdir(), "omr-restore-storage-pg-"));
+    const passFile = join(credentialDir, "pgpass");
     try {
-        const listed = await listStorageObjectsToFixedPoint(client, REMOTE_ASSET_BUCKET);
-        const downloaded = await downloadAndHashStorageObjects(
-            client,
-            REMOTE_ASSET_BUCKET,
-            listed,
-            join(temporary, "objects"),
-        );
-        return downloaded.objects;
+        chmodSync(credentialDir, 0o700);
+        const db = config.database;
+        let version;
+        try {
+            version = execute(join(config.postgresBin, "psql"), ["--version"], {
+                encoding: "utf8",
+                env: { LC_ALL: "C", LANG: "C" },
+                stdio: ["ignore", "pipe", "ignore"],
+                timeout: Math.min(timeoutMs, 10_000),
+                maxBuffer: 4_096,
+            });
+        } catch {
+            throw new Error("invalid");
+        }
+        assertPostgres17Version(version);
+        writeFileSync(passFile, `${[db.host, db.port, db.name, db.user, db.password].map(escapePgPass).join(":")}\n`, {
+            mode: 0o600,
+            flag: "wx",
+        });
+        const stdout = execute(join(config.postgresBin, "psql"), [
+            "-X",
+            "--no-psqlrc",
+            "--no-password",
+            "--quiet",
+            "--set=ON_ERROR_STOP=1",
+            "--tuples-only",
+            "--no-align",
+            "--host", db.host,
+            "--port", String(db.port),
+            "--username", db.user,
+            "--dbname", db.name,
+            "--command", buildRestoredStorageMetadataSql(),
+        ], {
+            encoding: "utf8",
+            env: {
+                LC_ALL: "C",
+                LANG: "C",
+                PGAPPNAME: "omr-restore-storage-verifier",
+                PGCONNECT_TIMEOUT: "10",
+                PGPASSFILE: passFile,
+                PGSSLMODE: "verify-full",
+                PGSSLROOTCERT: "system",
+            },
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: timeoutMs,
+            maxBuffer: RESTORE_STORAGE_METADATA_OUTPUT_BYTES,
+        });
+        return parseRestoredStorageMetadata(stdout, config.manifest.storage.objects);
+    } catch {
+        throw new Error("Restored Storage metadata collection failed");
     } finally {
-        rmSync(temporary, { recursive: true, force: true });
+        rmSync(credentialDir, { recursive: true, force: true });
+    }
+}
+
+function boundedRestoreStorageInteger(value, fallback, minimum, maximum, label) {
+    const resolved = value === undefined ? fallback : value;
+    if (!Number.isSafeInteger(resolved) || resolved < minimum || resolved > maximum) {
+        throw new Error(`Restore Storage ${label} is invalid`);
+    }
+    return resolved;
+}
+
+async function runBoundedStorageOperation(operation, timeoutMs, parentSignal) {
+    const controller = new AbortController();
+    let timedOut = false;
+    const abortFromParent = () => controller.abort(parentSignal?.reason ?? new Error("Restore Storage operation aborted"));
+    if (parentSignal?.aborted) abortFromParent();
+    else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+    const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new Error("Restore Storage operation timed out"));
+    }, timeoutMs);
+    try {
+        const result = await operation(controller.signal);
+        if (timedOut || controller.signal.aborted) throw new Error("Restore Storage operation timed out");
+        return result;
+    } catch {
+        controller.abort(new Error("Restore Storage operation failed"));
+        if (timedOut) throw new Error("Restore Storage operation timed out");
+        throw new Error("Restore Storage operation failed");
+    } finally {
+        clearTimeout(timer);
+        controller.abort(new Error("Restore Storage operation completed"));
+        parentSignal?.removeEventListener("abort", abortFromParent);
+    }
+}
+
+function exactListedStorageObjects(listed, expected) {
+    if (!Array.isArray(listed) || listed.length !== expected.length) {
+        throw new Error("Restore Storage inventory mismatch");
+    }
+    const expectedByPath = new Map(expected.map(object => [object.path, object]));
+    const paths = new Set();
+    for (const object of listed) {
+        if (!object || typeof object !== "object" || Array.isArray(object)) {
+            throw new Error("Restore Storage inventory mismatch");
+        }
+        const candidate = expectedByPath.get(object.path);
+        if (
+            !candidate || paths.has(object.path)
+            || object.bytes !== candidate.bytes
+            || object.sha256 !== candidate.sha256
+            || object.contentType !== candidate.contentType
+        ) throw new Error("Restore Storage inventory mismatch");
+        paths.add(object.path);
+    }
+    if (paths.size !== expected.length) throw new Error("Restore Storage inventory mismatch");
+}
+
+function exactStorageMetadataSnapshot(before, after) {
+    if (!Array.isArray(before) || !Array.isArray(after) || before.length !== after.length) {
+        throw new Error("Restore Storage metadata changed during body verification");
+    }
+    for (let index = 0; index < before.length; index += 1) {
+        const left = before[index];
+        const right = after[index];
+        if (
+            left.path !== right.path
+            || left.bytes !== right.bytes
+            || left.sha256 !== right.sha256
+            || left.contentType !== right.contentType
+        ) throw new Error("Restore Storage metadata changed during body verification");
+    }
+}
+
+function storageObjectUrl(config, path) {
+    const encoded = path.split("/").map(segment => encodeURIComponent(segment)).join("/");
+    return new URL(`/storage/v1/object/authenticated/${REMOTE_ASSET_BUCKET}/${encoded}`, `${config.targetSupabaseUrl}/`);
+}
+
+async function hashRestoredStorageObject(config, object, fetchImpl, timeoutMs, aggregateController, byteBudget) {
+    return runBoundedStorageOperation(async (signal) => {
+        const response = await fetchImpl(storageObjectUrl(config, object.path), {
+            method: "GET",
+            headers: {
+                accept: object.contentType,
+                apikey: config.serviceRoleKey,
+                authorization: `Bearer ${config.serviceRoleKey}`,
+                "x-omr-client": "restore-verifier",
+            },
+            cache: "no-store",
+            credentials: "omit",
+            redirect: "error",
+            signal,
+        });
+        const contentType = response?.headers?.get?.("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+        const declared = response?.headers?.get?.("content-length");
+        if (
+            !response || response.status !== 200 || response.redirected === true
+            || !response.body || typeof response.body.getReader !== "function"
+            || contentType !== object.contentType
+            || (declared !== null && (!/^\d+$/.test(declared) || Number(declared) !== object.bytes))
+        ) {
+            await response?.body?.cancel?.().catch(() => undefined);
+            throw new Error("Restore Storage object response is invalid");
+        }
+        const reader = response.body.getReader();
+        const abortReader = () => { void reader.cancel().catch(() => undefined); };
+        signal.addEventListener("abort", abortReader, { once: true });
+        const digest = createHash("sha256");
+        let objectBytes = 0;
+        let completed = false;
+        try {
+            while (true) {
+                const item = await reader.read();
+                if (signal.aborted) throw new Error("Restore Storage object download aborted");
+                if (item.done) break;
+                if (!(item.value instanceof Uint8Array)) throw new Error("Restore Storage object body is invalid");
+                objectBytes += item.value.byteLength;
+                byteBudget.total += item.value.byteLength;
+                if (
+                    !Number.isSafeInteger(objectBytes) || objectBytes > object.bytes
+                    || !Number.isSafeInteger(byteBudget.total) || byteBudget.total > byteBudget.maximum
+                ) throw new Error("Restore Storage object body exceeded its byte bound");
+                digest.update(item.value);
+            }
+            if (objectBytes !== object.bytes || digest.digest("hex") !== object.sha256) {
+                throw new Error("Restore Storage object body mismatch");
+            }
+            completed = true;
+            return { ...object };
+        } finally {
+            signal.removeEventListener("abort", abortReader);
+            if (!completed) await reader.cancel().catch(() => undefined);
+        }
+    }, timeoutMs, aggregateController.signal);
+}
+
+export async function collectRestoredStorageObjectsWithBodies(config, options = {}) {
+    const requestTimeoutMs = boundedRestoreStorageInteger(
+        options.requestTimeoutMs,
+        RESTORE_STORAGE_REQUEST_TIMEOUT_MS,
+        1,
+        120_000,
+        "request timeout",
+    );
+    const concurrency = boundedRestoreStorageInteger(options.concurrency, RESTORE_STORAGE_CONCURRENCY, 1, 8, "concurrency");
+    const operationTimeoutMs = boundedRestoreStorageInteger(
+        options.operationTimeoutMs,
+        RESTORE_STORAGE_OPERATION_TIMEOUT_MS,
+        1,
+        15 * 60_000,
+        "operation timeout",
+    );
+    const fetchImpl = options.fetchImpl ?? fetch;
+    if (typeof fetchImpl !== "function") throw new Error("Restore Storage fetch is invalid");
+    const expected = config?.manifest?.storage?.objects;
+    const expectedTotal = config?.manifest?.storage?.totalBytes;
+    if (!Array.isArray(expected) || !Number.isSafeInteger(expectedTotal) || expectedTotal < 0) {
+        throw new Error("Restore Storage manifest is invalid");
+    }
+    const aggregateController = new AbortController();
+    let aggregateTimedOut = false;
+    const aggregateTimer = setTimeout(() => {
+        aggregateTimedOut = true;
+        aggregateController.abort(new Error("Restore Storage aggregate operation timed out"));
+    }, operationTimeoutMs);
+    const collectMetadata = options.listObjects
+        ?? (() => collectRestoredStorageMetadataWithPsql(config, {
+            execFileSync: options.psqlExecFileSync,
+            timeoutMs: requestTimeoutMs,
+        }));
+    if (typeof collectMetadata !== "function") throw new Error("Restore Storage metadata collector is invalid");
+    let listed;
+    try {
+        listed = await runBoundedStorageOperation(
+            signal => collectMetadata({ signal }),
+            requestTimeoutMs,
+            aggregateController.signal,
+        );
+        exactListedStorageObjects(listed, expected);
+    } catch {
+        aggregateController.abort(new Error("Restore Storage listing failed"));
+        clearTimeout(aggregateTimer);
+        throw new Error("Restore Storage listing failed or timed out");
+    }
+    const downloaded = new Array(expected.length);
+    const byteBudget = { total: 0, maximum: expectedTotal };
+    let cursor = 0;
+    let stopped = false;
+    async function worker() {
+        try {
+            while (!stopped) {
+                const index = cursor;
+                cursor += 1;
+                if (index >= expected.length) return;
+                downloaded[index] = await hashRestoredStorageObject(
+                    config,
+                    expected[index],
+                    fetchImpl,
+                    requestTimeoutMs,
+                    aggregateController,
+                    byteBudget,
+                );
+            }
+        } catch (error) {
+            stopped = true;
+            aggregateController.abort(error);
+            throw error;
+        }
+    }
+    try {
+        const outcomes = await Promise.allSettled(
+            Array.from({ length: Math.min(concurrency, Math.max(1, expected.length)) }, () => worker()),
+        );
+        const failure = outcomes.find(outcome => outcome.status === "rejected");
+        if (aggregateTimedOut) throw new Error("Restore Storage aggregate operation timed out");
+        if (failure?.status === "rejected") throw failure.reason;
+        if (byteBudget.total !== expectedTotal || downloaded.some(object => !object)) {
+            throw new Error("Restore Storage aggregate byte count mismatch");
+        }
+        let finalListed;
+        try {
+            finalListed = await runBoundedStorageOperation(
+                signal => collectMetadata({ signal }),
+                requestTimeoutMs,
+                aggregateController.signal,
+            );
+            exactListedStorageObjects(finalListed, expected);
+            exactStorageMetadataSnapshot(listed, finalListed);
+        } catch {
+            throw new Error("Restore Storage metadata changed during body verification");
+        }
+        return downloaded;
+    } finally {
+        clearTimeout(aggregateTimer);
+        aggregateController.abort(new Error("Restore Storage aggregate operation completed"));
+    }
+}
+
+async function collectStorageObjectsWithBodies(config) {
+    try {
+        return await collectRestoredStorageObjectsWithBodies(config);
+    } catch {
+        throw new Error("Restored Storage inventory collection failed");
     }
 }
 
@@ -667,12 +1084,13 @@ async function runBoundaryContractWithPsql(config) {
     }
 }
 
-async function runBrowserSmokeWithExternalRunner(config) {
+async function runBrowserSmokeWithRepositoryRunner(config) {
+    const smokeConfig = resolveRepositoryRestoreSmokeConfig({ env: config.smokeRunnerEnv }, config.buildSha);
     return runRestoredEnvironmentSmoke({
         buildSha: config.buildSha,
         environmentDigest: config.environmentDigest,
         targetDigest: config.targetDigest,
-    }, createExternalRestoredSmokeDependencies(config));
+    }, createRepositoryRestoredSmokeDependencies(smokeConfig));
 }
 
 async function writeExclusiveJson(path, value) {
@@ -781,9 +1199,7 @@ async function publishCompletionAtomically(input) {
     try {
         markerHandle = await openExclusiveJson(pendingPath, input.marker, "wx+");
         await syncParent(pendingPath);
-        await rename(pendingPath, input.incompleteMarkerPath);
-        await syncParent(input.incompleteMarkerPath);
-        await rename(input.incompleteMarkerPath, input.completeMarkerPath);
+        await rename(pendingPath, input.completeMarkerPath);
         finalPublished = true;
         await syncParent(input.completeMarkerPath);
         const finalInfo = lstatSync(input.completeMarkerPath);
@@ -798,11 +1214,7 @@ async function publishCompletionAtomically(input) {
         await invalidateOwnedHandle(markerHandle);
         await removeIfPresent(pendingPath).catch(() => undefined);
         if (finalPublished || existsSync(input.completeMarkerPath)) {
-            if (!existsSync(input.incompleteMarkerPath)) {
-                await rename(input.completeMarkerPath, input.incompleteMarkerPath).catch(() => undefined);
-            } else {
-                await removeIfPresent(input.completeMarkerPath).catch(() => undefined);
-            }
+            await removeIfPresent(input.completeMarkerPath).catch(() => undefined);
         }
         throw new Error("Restore completion publication was not verified");
     }
@@ -890,19 +1302,14 @@ export async function runRestoredEnvironmentVerification(config, dependencies = 
     }
     assertSecureOutputParent(config.outputParentIdentity);
     const incompleteMarkerPath = join(dirname(config.outputPath), ".INCOMPLETE");
+    const fencedMarkerPath = join(dirname(config.outputPath), ".RESTORE_APPLY_FENCE");
     const completeMarkerPath = join(dirname(config.outputPath), ".RESTORE_COMPLETE");
-    if (existsSync(config.outputPath) || existsSync(completeMarkerPath)) {
+    if (existsSync(config.outputPath) || existsSync(completeMarkerPath) || existsSync(fencedMarkerPath)) {
         throw new Error("Restore verification output already exists");
     }
-    await writeExclusiveJson(incompleteMarkerPath, {
-        status: "incomplete",
-        buildSha: config.buildSha,
-        environmentDigest: config.environmentDigest,
-        targetDigest: config.targetDigest,
-        verifierSourceSha256: config.verifierSourceSha256,
-        startedAt: startedVerificationAt.toISOString(),
-    });
-    await syncParent(incompleteMarkerPath);
+    readRestoreApplyMarker({ ...config, outputDir: dirname(config.outputPath) });
+    const incompleteMarkerIdentity = restoreApplyMarkerIdentity(incompleteMarkerPath);
+    assertSecureOutputParent(config.outputParentIdentity);
     let outputCreated = false;
     let outputHandle;
     let completionHandle;
@@ -919,7 +1326,7 @@ export async function runRestoredEnvironmentVerification(config, dependencies = 
         );
         if (!comparison.ok) throw new Error("Restored environment inventory mismatch");
         const runBoundaryContract = dependencies.runBoundaryContract ?? runBoundaryContractWithPsql;
-        const runBrowserSmoke = dependencies.runBrowserSmoke ?? runBrowserSmokeWithExternalRunner;
+        const runBrowserSmoke = dependencies.runBrowserSmoke ?? runBrowserSmokeWithRepositoryRunner;
         let boundary;
         let smoke;
         try {
@@ -928,17 +1335,29 @@ export async function runRestoredEnvironmentVerification(config, dependencies = 
         } catch {
             throw new Error("Restored environment qualification was not verified");
         }
-        const completedAt = currentTime();
-        if (!(completedAt instanceof Date) || Number.isNaN(completedAt.getTime())) {
-            throw new Error("Restore verification time is invalid");
-        }
-        const recoveryMs = completedAt.getTime() - Date.parse(config.startedAt);
-        if (recoveryMs < 0 || recoveryMs > config.rtoMinutes * 60_000) {
-            throw new Error("Restore exceeds the declared RTO");
+        checkedRecoveryTime(currentTime, config);
+        readRestoreApplyMarker({ ...config, outputDir: dirname(config.outputPath) });
+        assertRestoreApplyMarkerIdentity(incompleteMarkerPath, incompleteMarkerIdentity);
+        assertSecureOutputParent(config.outputParentIdentity);
+        const usesDefaultPublisher = dependencies.publishCompletion === undefined;
+        let publicationFence;
+        if (usesDefaultPublisher) {
+            checkedRecoveryTime(currentTime, config);
+            await dependencies.beforeCompletionPromotion?.();
+            await rename(incompleteMarkerPath, fencedMarkerPath);
+            await syncParent(fencedMarkerPath);
+            assertRestoreApplyMarkerBindingAtPath(fencedMarkerPath, incompleteMarkerIdentity, config);
+            if (existsSync(incompleteMarkerPath)) throw new Error("Restore completion publication was not verified");
+            publicationFence = checkedRecoveryTime(currentTime, config);
+            assertSecureOutputParent(config.outputParentIdentity);
+        } else {
+            publicationFence = checkedRecoveryTime(currentTime, config);
+            readRestoreApplyMarker({ ...config, outputDir: dirname(config.outputPath) });
+            assertRestoreApplyMarkerIdentity(incompleteMarkerPath, incompleteMarkerIdentity);
         }
         const evidence = Object.freeze({
             status: "verified",
-            verifiedAt: completedAt.toISOString(),
+            verifiedAt: publicationFence.observed.toISOString(),
             environment: "staging",
             buildSha: config.buildSha,
             environmentDigest: config.environmentDigest,
@@ -952,7 +1371,7 @@ export async function runRestoredEnvironmentVerification(config, dependencies = 
             rpoMinutes: config.rpoMinutes,
             rtoMinutes: config.rtoMinutes,
             backupAgeMinutes: (Date.parse(config.startedAt) - Date.parse(config.manifest.createdAt)) / 60_000,
-            recoveryMinutes: recoveryMs / 60_000,
+            recoveryMinutes: publicationFence.recoveryMs / 60_000,
             databaseTableCount: CANONICAL_BACKUP_TABLES.length,
             databaseRowCount: Object.values(tableCounts).reduce((sum, count) => sum + count, 0),
             storageObjectCount: objects.length,
@@ -975,13 +1394,15 @@ export async function runRestoredEnvironmentVerification(config, dependencies = 
             targetDigest: config.targetDigest,
             verifierSourceSha256: config.verifierSourceSha256,
             evidenceSha256,
-            verifiedAt: completedAt.toISOString(),
+            verifiedAt: publicationFence.observed.toISOString(),
         };
         const publishCompletion = dependencies.publishCompletion ?? publishCompletionAtomically;
         let publishedCompletionHandle;
         try {
+            assertSecureOutputParent(config.outputParentIdentity);
             const published = await publishCompletion({
                 incompleteMarkerPath,
+                fencedMarkerPath,
                 completeMarkerPath,
                 marker: completionMarker,
             });
@@ -1003,6 +1424,14 @@ export async function runRestoredEnvironmentVerification(config, dependencies = 
             completionMarker,
             publishedCompletionHandle,
         );
+        await dependencies.afterCompletionPromotion?.();
+        checkedRecoveryTime(currentTime, config);
+        assertSecureOutputParent(config.outputParentIdentity);
+        if (existsSync(fencedMarkerPath)) {
+            assertRestoreApplyMarkerBindingAtPath(fencedMarkerPath, incompleteMarkerIdentity, config);
+            await removeIfPresent(fencedMarkerPath);
+            await syncParent(completeMarkerPath);
+        }
         await completionHandle.close();
         completionHandle = undefined;
         await outputHandle.close();
@@ -1016,22 +1445,19 @@ export async function runRestoredEnvironmentVerification(config, dependencies = 
         let completeInfo = null;
         try { completeInfo = lstatSync(completeMarkerPath); } catch { /* absent */ }
         if (completeInfo) {
-            if (completeInfo.isFile() && !completeInfo.isSymbolicLink() && !existsSync(incompleteMarkerPath)) {
-                await rename(completeMarkerPath, incompleteMarkerPath).catch(() => undefined);
-            } else {
-                await removeIfPresent(completeMarkerPath).catch(() => undefined);
-            }
+            await removeIfPresent(completeMarkerPath).catch(() => undefined);
+        }
+        if (existsSync(fencedMarkerPath)) {
+            await removeIfPresent(incompleteMarkerPath).catch(() => undefined);
+            await rename(fencedMarkerPath, incompleteMarkerPath).catch(() => undefined);
+            await syncParent(incompleteMarkerPath).catch(() => undefined);
         }
         if (outputCreated) await removeIfPresent(config.outputPath).catch(() => undefined);
         if (!existsSync(incompleteMarkerPath)) {
-            await writeExclusiveJson(incompleteMarkerPath, {
-                status: "incomplete",
-                buildSha: config.buildSha,
-                environmentDigest: config.environmentDigest,
-                targetDigest: config.targetDigest,
-                verifierSourceSha256: config.verifierSourceSha256,
-                startedAt: startedVerificationAt.toISOString(),
-            }).catch(() => undefined);
+            await writeExclusiveJson(
+                incompleteMarkerPath,
+                createRestoreApplyMarker(config),
+            ).catch(() => undefined);
         }
         throw error;
     }

@@ -61,12 +61,13 @@ function validateBinding(value) {
     });
 }
 
-function validateIdentity(value) {
+function validateIdentity(value, kind) {
     exactDataObject(value, ["id", "credential"]);
     if (!SAFE_ACTOR_ID.test(value.id)) fail();
+    const minimumBytes = kind === "student" ? 6 : 8;
     if (
         typeof value.credential !== "string"
-        || Buffer.byteLength(value.credential, "utf8") < 8
+        || Buffer.byteLength(value.credential, "utf8") < minimumBytes
         || Buffer.byteLength(value.credential, "utf8") > 4096
         || /[\r\n\u0000]/.test(value.credential)
     ) fail();
@@ -233,10 +234,10 @@ export async function runRestoredEnvironmentSmoke(input, dependencies = {}) {
     try {
         binding = validateBinding(input);
         if (typeof dependencies.createDisposableIdentity !== "function") fail();
-        teacher = validateIdentity(dependencies.createDisposableIdentity("teacher", 0));
+        teacher = validateIdentity(dependencies.createDisposableIdentity("teacher", 0), "teacher");
         students = [
-            validateIdentity(dependencies.createDisposableIdentity("student", 1)),
-            validateIdentity(dependencies.createDisposableIdentity("student", 2)),
+            validateIdentity(dependencies.createDisposableIdentity("student", 1), "student"),
+            validateIdentity(dependencies.createDisposableIdentity("student", 2), "student"),
         ];
         if (new Set([teacher.id, ...students.map(student => student.id)]).size !== 3) fail();
         if (

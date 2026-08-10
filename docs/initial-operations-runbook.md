@@ -50,15 +50,13 @@ origin과 production origin 불일치를 다시 검증하고 mutation/non-produc
 cleanup이 실패하면 production E2E source를 만들지 않습니다.
 
 backup에는 staging DB host/port/user/name/password와 service-role key가 필요합니다. restore에는
-`OMR_RESTORE_TARGET_APP_URL`, target Supabase/DB credential, target project confirmation, 그리고 Task 4의
-self-contained smoke runner와 실제 backup 적용 runner가 필요합니다. runner bytes는
-`OMR_RESTORE_SMOKE_RUNNER_B64`/`OMR_RESTORE_PREPARE_RUNNER_B64`로 제공하고 각각의 lowercase SHA-256
-protected secret과 일치해야 합니다. prepare runner는 바로 앞 단계가 만든 exact manifest SHA와 disposable
-project hash에 결속된 bounded strict envelope
-`{schemaVersion,status,buildSha,backupManifestSha256,targetProjectRefHash,restoreStartedAt,completedAt}`를
-반환해야 합니다. `status`는 `restored`이며 canonical timestamps는 120분 RTO 안이어야 합니다. workflow는
-private `0700` 공간에만 materialize하며
-실행 뒤 삭제합니다. alert secret 계약은 [release evidence template](operations/release-evidence-template.md)의
+`OMR_RESTORE_TARGET_APP_URL`, target Supabase/DB credential, target project confirmation과 exact production
+boundary SHA가 필요합니다. apply CLI와 smoke runner는 외부 주입 runner secret이 아니라 exact build에 추적된
+repo-owned 파일입니다. workflow는 `git show <build>:<path>`와 현재 bytes를 비교하고, 공통 source 목록의
+aggregate SHA·backup manifest SHA·disposable project/app·boundary에 결속합니다. apply 결과는 bounded 한 줄
+strict envelope이며, 같은 private `0700` verification directory에 0600 `.INCOMPLETE`를 만듭니다. 이후
+verifier만 이 marker를 exact 검증해 `.RESTORE_COMPLETE`로 승격할 수 있습니다. alert secret 계약은
+[release evidence template](operations/release-evidence-template.md)의
 다섯 distinct credential 및 bounded HTTPS 규칙을 그대로 따릅니다.
 
 ## 3. 실행
@@ -85,9 +83,10 @@ workflow는 `set -euo pipefail`로 다음을 순서대로 수행합니다.
    production E2E proof를 대신하지 않습니다.
 5. production과 같은 경로에서 exact **80 students + 10 teacher live pollers + 10 teacher uploaders**,
    80 simultaneous submissions와 10 max-PDF uploads를 실행합니다. 임의 축소는 허용하지 않습니다.
-6. 외부 alert roundtrip과 staging backup을 만든 뒤 SHA-pinned prepare runner로 그 exact backup을 disposable
-   target에 실제 적용합니다. runner가 반환한 시작 시각을 사용해 count/hash/boundary/browser/credential
-   revocation/RPO/RTO restore verification을 수행합니다.
+6. 외부 alert roundtrip과 staging backup을 만든 뒤 SHA-bound repo apply CLI로 그 exact backup을 disposable
+   target에 roles→schema→data streaming과 bounded Storage upload로 실제 적용합니다. 같은 output directory와
+   시작 시각을 사용해 count/hash/boundary/browser/credential revocation/RPO/RTO restore verification을
+   수행합니다. smoke는 repo-import된 runner를 in-process로 실행하며 source 검증 뒤 path를 다시 열지 않습니다.
 7. fixed 10 dimensions/100 atomic checks/12 hard gates manifest를 생성하고 현재 checkout의 scorer를 실행한 뒤,
    exported exact-path validator로 같은 `0700` parent의 score를 즉시 재검증합니다.
 
@@ -115,7 +114,7 @@ release/release-quality-score.json
 ```
 
 `raw/`에는 safe preflight identity만 들어갑니다. backup DB/Storage bytes, initial-load run challenge가 든 원본
-bundle, prepare/smoke runner, unit/browser JSON, command log, token, cookie, 답안, provider stdout/stderr는
+bundle, backup/apply 원본 bytes, unit/browser JSON, command log, token, cookie, 답안, provider stdout/stderr는
 업로드하지 않습니다. 해당 private material은 runner 임시 공간에서만 사용하고 항상 cleanup합니다. 실패 시
 지금까지 생성된 allowlisted safe source attestation과 `.INCOMPLETE`만 업로드합니다.
 
