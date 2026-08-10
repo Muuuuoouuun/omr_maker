@@ -465,6 +465,10 @@ test.describe("Mobile PWA entry", () => {
     });
 
     test("lets students answer and submit an exam in the phone and tablet app shell", async ({ page }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "student_core_autosave_resume" },
+            { type: "release-proof", description: "ux_accessibility_responsiveness_student_mobile" },
+        );
         const consoleProblems = collectConsoleProblems(page);
         await seedMobileSolveExam(page);
 

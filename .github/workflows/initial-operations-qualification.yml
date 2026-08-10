@@ -375,8 +375,12 @@ jobs:
             > "$PRIVATE_EVIDENCE_DIR/webkit-e2e.json" 2> "$PRIVATE_EVIDENCE_DIR/webkit-e2e.stderr"
           node --input-type=module <<'NODE'
           import { createHash } from "node:crypto";
-          import { readFileSync, writeFileSync } from "node:fs";
+          import { existsSync, readFileSync, writeFileSync } from "node:fs";
           import { join } from "node:path";
+          import {
+            BROWSER_RELEASE_PROOF_CATALOG,
+            deriveBrowserReleaseProofs,
+          } from "./scripts/browser-release-proof-core.mjs";
           const chromiumNames = Array.from({ length: 10 }, (_, index) => `chromium-run-${index + 1}.json`);
           const names = chromiumNames.flatMap((name) => [name, name.replace(".json", ".stderr")])
             .concat(["webkit-e2e.json", "webkit-e2e.stderr"]);
@@ -423,6 +427,13 @@ jobs:
           }
           const webkitFound = collectFiles(webkitReport.suites);
           if (webkitFiles.some((file) => !webkitFound.has(file))) throw new Error("unverified");
+          for (const file of new Set(BROWSER_RELEASE_PROOF_CATALOG.map((proof) => proof.file))) {
+            if (!existsSync(join(process.cwd(), file))) throw new Error("unverified");
+          }
+          metrics.proofs = deriveBrowserReleaseProofs({
+            chromiumReports: Array.from({ length: 10 }, (_, index) => buffers[index * 2]),
+            webkitReports: [buffers[20]],
+          });
           metrics.retries = 0;
           metrics.workers = 1;
           metrics.reportDigestSet = chromiumReports.map((_, index) => createHash("sha256")
@@ -517,7 +528,6 @@ jobs:
           import { createHash } from "node:crypto";
           import { readFileSync, writeFileSync } from "node:fs";
           import { join } from "node:path";
-          import { QUALIFICATION_BROWSER_PROOFS } from "./scripts/build-initial-operations-qualification.mjs";
           const bytes = readFileSync(join(process.env.PRIVATE_PREVIEW_DIR, "hosted-preview.json"));
           const preview = JSON.parse(bytes.toString("utf8"));
           const expectedProjectHash = createHash("sha256").update(process.env.STAGING_PROJECT_REF).digest("hex");
@@ -572,7 +582,7 @@ jobs:
           const metrics = { ...local.metrics, hostedExpected: hostedStats.expected, hostedFlaky: 0,
             hostedSkipped: 0, hostedUnexpected: 0, productionExpected: productionStats.expected,
             productionFlaky: 0, productionProjects, productionSkipped: 0, productionUnexpected: 0,
-            proofs: QUALIFICATION_BROWSER_PROOFS };
+          };
           writeFileSync(join(process.env.RELEASE_DIR, "sources/source-browser.json"), `${JSON.stringify({
             schemaVersion: 1, id: "browser", status: "verified",
             buildSha: process.env.OMR_PRODUCTION_EXPECTED_BUILD,

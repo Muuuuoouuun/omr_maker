@@ -11,6 +11,7 @@ const MANIFEST_KEY = `omr_handwriting_upload_recovery:${ATTEMPT_ID}`;
 const SOURCE_KEY = `attempt:${ATTEMPT_ID}:handwriting-upload-source`;
 
 test("restores and retries a private handwriting upload on phone and tablet", async ({ page }) => {
+    test.info().annotations.push({ type: "release-proof", description: "student_core_handwriting_recovery" });
     const consoleErrors: string[] = [];
     page.on("console", message => {
         if (message.type() === "error") consoleErrors.push(message.text());

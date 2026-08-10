@@ -175,6 +175,14 @@ describe("initial operations qualification builder", () => {
             recovery_release_backup_freshness: "backup",
             recovery_release_credential_revocation: "restore",
         });
+        expect(Object.fromEntries(checks.map((check) => [check.id, check.metricPredicate]))).toMatchObject({
+            student_core_history: "browser.proof:student_core_history",
+            teacher_core_roster: "browser.proof:teacher_core_roster",
+            ux_accessibility_responsiveness_keyboard: "browser.proof:ux_accessibility_responsiveness_keyboard",
+            browser_determinism_credential_boundary: "browser.proof:browser_determinism_credential_boundary",
+            browser_determinism_reduced_motion: "browser.proof:browser_determinism_reduced_motion",
+            browser_determinism_fresh_context: "browser.proof:browser_determinism_fresh_context",
+        });
         expect(Object.keys(result.evidenceByDimension)).toEqual(RELEASE_DIMENSIONS);
         expect(result.manifest.artifacts.find(({ kind }) => kind === "hosted_deployment")?.freshUntil).toBe(
             "2026-08-10T04:05:06.000Z",
@@ -223,6 +231,7 @@ describe("initial operations qualification builder", () => {
         ["browser", { metrics: { ...METRICS.browser, chromiumExpected: 1, chromiumRuns: 1 } }],
         ["browser", { metrics: { ...METRICS.browser, chromiumRuns: 1 } }],
         ["browser", { metrics: { ...METRICS.browser, productionExpected: 0 } }],
+        ["browser", { metrics: { ...METRICS.browser, proofs: [] } }],
         ["static", { metrics: { ...METRICS.static, highVulnerabilities: 1 } }],
         ["hosted", { metrics: { ...METRICS.hosted, anonDenied: false } }],
         ["hosted", { metrics: { ...METRICS.hosted, cleanupHeartbeatFresh: "failed" } }],

@@ -4,6 +4,11 @@ import { resetBrowserState } from "./helpers";
 test.skip(Boolean(process.env.PLAYWRIGHT_BASE_URL), "local guest fallback failure control must never target an external server");
 
 test("dashboard data failure is not presented as an empty successful dashboard and can recover", async ({ page, context }) => {
+    test.info().annotations.push(
+        { type: "release-proof", description: "student_core_guest_boundary" },
+        { type: "release-proof", description: "ux_accessibility_responsiveness_load_states" },
+        { type: "release-proof", description: "ux_accessibility_responsiveness_error_recovery" },
+    );
     let failCanonicalActions = false;
     let injectedFailureCount = 0;
     await resetBrowserState(page, context);

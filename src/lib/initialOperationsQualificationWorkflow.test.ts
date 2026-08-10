@@ -172,7 +172,11 @@ describe("initial operations qualification workflow", () => {
             OMR_STUDENT_CREDENTIAL_HOSTED_MODE: "1",
         });
         expect(preview).toContain("productionExpected: productionStats.expected");
-        expect(preview).toContain("QUALIFICATION_BROWSER_PROOFS");
+        expect(localBrowser).toContain("deriveBrowserReleaseProofs");
+        expect(localBrowser).toContain("BROWSER_RELEASE_PROOF_CATALOG");
+        expect(localBrowser).toContain("metrics.proofs = deriveBrowserReleaseProofs");
+        expect(preview).not.toContain("proofs: QUALIFICATION_BROWSER_PROOFS");
+        expect(workflowSource).not.toContain("import { QUALIFICATION_BROWSER_PROOFS }");
         expect(productionPlaywrightSource).not.toContain("Teacher and student full journey|");
         for (const title of [
             "production health exposes the exact immutable build without cache",

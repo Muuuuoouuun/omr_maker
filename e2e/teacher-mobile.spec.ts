@@ -250,6 +250,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
     });
 
     test("keeps the dashboard header touch friendly", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_teacher_mobile" });
         await loginAsTeacher(page, "/teacher/dashboard");
 
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();

@@ -13,6 +13,7 @@ import {
     RELEASE_HARD_GATE_PREDICATES,
     RELEASE_HARD_GATES,
 } from "./release-quality-core.mjs";
+import { BROWSER_RELEASE_PROOF_IDS } from "./browser-release-proof-core.mjs";
 import { parseStrictJson } from "./strict-json.mjs";
 
 const BUILD_SHA = /^[a-f0-9]{40}$/;
@@ -30,14 +31,7 @@ export const QUALIFICATION_SOURCE_CATALOG = Object.freeze(SOURCE_IDS.map((id) =>
     relativePath: `sources/source-${id}.json`,
 })));
 
-export const QUALIFICATION_BROWSER_PROOFS = Object.freeze([
-    ...RELEASE_ATOMIC_CHECKS.student_core.map(({ id }) => id),
-    ...RELEASE_ATOMIC_CHECKS.teacher_core.map(({ id }) => id),
-    ...RELEASE_ATOMIC_CHECKS.ux_accessibility_responsiveness.map(({ id }) => id),
-    "browser_determinism_credential_boundary",
-    "browser_determinism_reduced_motion",
-    "browser_determinism_fresh_context",
-]);
+export const QUALIFICATION_BROWSER_PROOFS = BROWSER_RELEASE_PROOF_IDS;
 
 function atomicSourceRule(id) {
     const [dimension, name] = RELEASE_DIMENSIONS
@@ -45,7 +39,7 @@ function atomicSourceRule(id) {
         .find(([candidate]) => id.startsWith(`${candidate}_`)) ?? [];
     if (!dimension || !name) fail();
     if (["student_core", "teacher_core", "ux_accessibility_responsiveness"].includes(dimension)) {
-        return { sourceId: "browser", metricPredicate: "browser.zero_failure_full_suite" };
+        return { sourceId: "browser", metricPredicate: `browser.proof:${id}` };
     }
     if (dimension === "provisioning_entitlement") {
         return { sourceId: "live_pg", metricPredicate: "live_pg.exact_contract" };
@@ -71,6 +65,9 @@ function atomicSourceRule(id) {
         return { sourceId: rule[0], metricPredicate: rule[1] };
     }
     if (dimension === "browser_determinism") {
+        if (BROWSER_RELEASE_PROOF_IDS.includes(id)) {
+            return { sourceId: "browser", metricPredicate: `browser.proof:${id}` };
+        }
         if (name === "pwa_smoke") return { sourceId: "build", metricPredicate: "build.pwa_smoke" };
         if (name === "production_e2e") return { sourceId: "browser", metricPredicate: "browser.production_e2e" };
         return { sourceId: "browser", metricPredicate: `browser.${name}` };
@@ -214,9 +211,9 @@ function validateMetrics(id, value) {
         if (metrics.workers !== 1) fail();
         const proofs = exactArray(metrics.proofs, QUALIFICATION_BROWSER_PROOFS.length);
         if (proofs.some((proof, index) => proof !== QUALIFICATION_BROWSER_PROOFS[index])) fail();
+        predicates.push(...proofs.map((proof) => `browser.proof:${proof}`));
         predicates.push("browser.zero_failure_full_suite", "browser.chromium_repeat", "browser.webkit_core",
-            "browser.production_e2e", "browser.zero_retry", "browser.zero_order_dependence", "browser.credential_boundary",
-            "browser.reduced_motion", "browser.fresh_context", "browser.skip_accounting");
+            "browser.production_e2e", "browser.zero_retry", "browser.zero_order_dependence", "browser.skip_accounting");
     } else if (id === "build") {
         const metrics = exactRecord(value, ["budget", "build", "pwaSmoke"]);
         passed(metrics.budget); passed(metrics.build); passed(metrics.pwaSmoke);

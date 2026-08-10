@@ -258,6 +258,10 @@ test.describe("UI-UX PROMAX layout audit", () => {
     });
 
     test("uses balanced motion for primary actions, cards, modal panels, and tab indicators", async ({ page }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "ux_accessibility_responsiveness_reduced_motion" },
+            { type: "release-proof", description: "browser_determinism_reduced_motion" },
+        );
         type MotionSnapshot = {
             duration: string;
             property: string;
@@ -555,6 +559,10 @@ test.describe("UI-UX PROMAX layout audit continued", () => {
     test.skip(({ browserName }) => browserName !== "chromium", "Layout audit runs on Chromium only.");
 
     test("keeps one visible landing landmark and one role-specific level-one heading", async ({ browser }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "ux_accessibility_responsiveness_screen_reader" },
+            { type: "release-proof", description: "browser_determinism_fresh_context" },
+        );
         const landingStates = [
             { name: "initial", path: "/", expectedText: "OMR Maker", heading: "OMR Maker" },
             { name: "teacher", path: "/?role=teacher", expectedText: "교사 포털", heading: "환영합니다" },
@@ -619,6 +627,7 @@ test.describe("UI-UX PROMAX layout audit continued", () => {
     });
 
     test("lets keyboard users bypass repeated teacher header controls", async ({ browser }) => {
+        test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_keyboard" });
         const page = await visitTarget(browser, {
             name: "teacher-settings-skip-link",
             path: "/teacher/settings",

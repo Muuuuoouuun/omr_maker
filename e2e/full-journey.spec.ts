@@ -588,6 +588,10 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("requires student ID or email before opening a roster-backed student account", async ({ page }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "student_core_identity_entry" },
+            { type: "release-proof", description: "browser_determinism_credential_boundary" },
+        );
         await seedStudentRoster(page);
         await page.goto("/?role=student");
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
@@ -666,6 +670,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("lets a start-code student submit an exam and feed teacher analytics", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_exact_submit" });
         await seedExamAndStudent(page);
         await requireStartCodeForSeedStudent(page);
 
@@ -790,6 +795,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("skips the entry dialog and scopes questions when re-entering a retake from the student's own review", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_retake" });
         await seedExamAndStudent(page);
         await requireStartCodeForSeedStudent(page);
 
@@ -831,6 +837,11 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("creates an exam through the teacher UI before student submission and analytics", async ({ page }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "teacher_core_teacher_login" },
+            { type: "release-proof", description: "teacher_core_draft_create" },
+            { type: "release-proof", description: "teacher_core_publish_distribution" },
+        );
         await loginAsTeacher(page, "/create");
         await expect(page.getByRole("heading", { name: "새 시험 만들기" })).toBeVisible();
 
@@ -917,6 +928,10 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("covers creation entry, student submission, teacher analytics, and statistics CSV", async ({ page }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "teacher_core_statistics" },
+            { type: "release-proof", description: "teacher_core_csv_export" },
+        );
         const remoteFixture = await registerCanonicalTeacherDashboardFixtureRoute(page);
         await loginAsTeacher(page, "/create");
         await expect(page.getByRole("heading", { name: "새 시험 만들기" })).toBeVisible();
@@ -1083,6 +1098,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("keeps the tablet solve rail usable for answer entry", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_tablet" });
         await seedExamAndStudent(page);
         await page.setViewportSize({ width: 820, height: 1180 });
         await page.goto(`/solve/${TEST_EXAM_ID}`);
@@ -1100,6 +1116,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("keeps the desktop solve OMR as a blurred overlay without shrinking the PDF", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_desktop" });
         await seedExamAndStudent(page);
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`/solve/${TEST_EXAM_ID}`);
@@ -1169,6 +1186,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("keeps tablet student history and review usable with real submission data", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_history" });
         await seedExamAndStudent(page);
         await seedCompletedAttempt(page);
         await page.setViewportSize({ width: 820, height: 1180 });
@@ -1261,6 +1279,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("automatically sends an offline queued question after connectivity recovers", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_question_feedback" });
         await seedStudentRoster(page);
         await loginAsStudent(page);
         await seedExamAndStudent(page);
@@ -1351,6 +1370,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("reconciles manual and automatic submission receipt retries through the real server action", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_cross_device" });
         await page.context().addInitScript(() => {
             Object.defineProperty(navigator, "locks", {
                 configurable: true,

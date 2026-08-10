@@ -114,6 +114,7 @@ if (hostedMode) {
     });
 } else {
     test("local lifecycle fixture renders boundaries without claiming hosted authorization", async ({ page, context }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_assignment_state" });
         await page.clock.install({ time: new Date("2035-01-01T00:00:00.000Z") });
         await resetBrowserState(page, context);
         await seedLifecycleDashboard(page);

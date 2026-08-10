@@ -327,6 +327,10 @@ async function seedAwaySeverityAttempts(page: Page) {
 }
 
 test("opens one student result hub and preserves the selected view across attempts", async ({ page, baseURL }) => {
+    test.info().annotations.push(
+        { type: "release-proof", description: "teacher_core_results_feedback" },
+        { type: "release-proof", description: "teacher_core_retest" },
+    );
     await authenticateTeacher(page, baseURL);
     await seedStudentResultHub(page);
     await page.goto("/teacher/exam/result-hub-exam");
@@ -843,6 +847,7 @@ test.describe("Live Results page", () => {
     });
 
     test("screen refresh pause is explicitly scoped and exposes its pressed state", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "teacher_core_live_monitor" });
         await page.goto("/teacher/live");
         const pauseBtn = page.getByRole("button", { name: "화면 갱신 일시정지" });
         await expect(pauseBtn).toBeVisible();
@@ -854,6 +859,7 @@ test.describe("Live Results page", () => {
     });
 
     test("away severity stays factual and escalates from neutral to attention", async ({ page, baseURL }) => {
+        test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_contrast" });
         await authenticateTeacher(page, baseURL, TEACHER_IDENTITY);
         await seedAwaySeverityAttempts(page);
         await page.goto("/teacher/live");

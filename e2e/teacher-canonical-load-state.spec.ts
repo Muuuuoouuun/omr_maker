@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { exactNextActionId, loginAsTeacher, resetBrowserState } from "./helpers";
 
 test("teacher dashboard keeps a scoped degraded snapshot strictly read only", async ({ page, context }) => {
+    test.info().annotations.push({ type: "release-proof", description: "teacher_core_truthful_load_states" });
     test.setTimeout(45_000);
     let failCanonicalActions = false;
     let injectedFailureCount = 0;
@@ -141,6 +142,7 @@ test("teacher dashboard keeps a scoped degraded snapshot strictly read only", as
 });
 
 test("teacher roster and distribution preserve failure, recovery, and degraded capabilities", async ({ page, context }) => {
+    test.info().annotations.push({ type: "release-proof", description: "teacher_core_roster" });
     test.setTimeout(45_000);
     let failCanonicalActions = false;
     let delayCanonicalActions = false;
