@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 import { CANONICAL_TABLES } from "./canonical-table-manifest.mjs";
+import { deriveLivePgReleaseProofs } from "./live-pg-release-proof-core.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const container = `omr-postgres-verify-${process.pid}`;
@@ -21,6 +22,7 @@ const migrationOwner = "postgres";
 const localDatabase = "omr_live_verify";
 const requiredPostgresBinaries = ["initdb", "pg_ctl", "createdb", "psql", "postgres", "pg_dump"];
 const dockerInfoTimeoutMs = 5_000;
+const liveSqlTimeoutMs = 120_000;
 const kakaoEntitlementUpgradeFixture =
     process.env.OMR_KAKAO_ENTITLEMENT_UPGRADE_FIXTURE === "1";
 const liveCanonicalTablesSql = `
@@ -66,6 +68,10 @@ function run(command, args, options = {}) {
         throw new Error(`${command} ${args.join(" ")} failed${detail ? `\n${detail}` : ""}`);
     }
     return result;
+}
+
+function releaseProofReport(result) {
+    return { stdout: result.stdout, stderr: result.stderr };
 }
 
 function unsupportedLiveCanonicalRelations(psqlQuery) {
@@ -114,6 +120,7 @@ $probe$
 }
 
 function runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip) {
+    const releaseProofReports = [];
     psqlFile("supabase/live-test-prelude.sql");
     psqlFile("supabase/schema.sql");
     psqlFile("supabase/live-test-alpha-generated-helpers.sql");
@@ -149,19 +156,36 @@ function runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip)
     psqlFile("supabase/teacher-session-revocation-assertions.sql");
     psqlFile("supabase/production-server-boundary.sql");
     psqlFile("supabase/live-test-boundary-assertions.sql");
+    releaseProofReports.push(releaseProofReport(psqlFile("supabase/initial-operations-release-proof-assertions.sql", [], {
+        capture: true,
+        variables: ["release_proof_phase=boundary_asserted"],
+    })));
     psqlFile("supabase/kakao-reminder-overload-fixtures.sql");
     psqlFile("supabase/production-server-boundary-rollback.sql", [
         "set omr.rollback_confirm = 'restore-browser-access'",
     ]);
     psqlFile("supabase/live-test-rollback-assertions.sql");
+    releaseProofReports.push(releaseProofReport(psqlFile("supabase/initial-operations-release-proof-assertions.sql", [], {
+        capture: true,
+        variables: ["release_proof_phase=rollback_asserted"],
+    })));
     psqlFile("supabase/production-server-boundary.sql");
     psqlFile("supabase/kakao-reminder-overload-boundary-assertions.sql");
     psqlFile("supabase/production-server-boundary.sql");
     psqlFile("supabase/live-test-boundary-assertions.sql");
+    releaseProofReports.push(releaseProofReport(psqlFile("supabase/initial-operations-release-proof-assertions.sql", [], {
+        capture: true,
+        variables: ["release_proof_phase=reapplied"],
+    })));
     psqlFile("supabase/live-test-assertions.sql");
     psqlFile("supabase/roster-snapshot-cas-assertions.sql");
     psqlFile("supabase/teacher-notification-summary-assertions.sql");
     psqlFile("supabase/teacher-notification-state-assertions.sql");
+    releaseProofReports.push(releaseProofReport(psqlFile("supabase/initial-operations-release-proof-assertions.sql", [], {
+        capture: true,
+        variables: ["release_proof_phase=final_asserted"],
+    })));
+    return deriveLivePgReleaseProofs({ reports: releaseProofReports });
 }
 
 function postgresBinCandidates() {
@@ -231,15 +255,16 @@ function getFreePort(host) {
 }
 
 function runDockerVerification() {
-    function psqlFile(path, commands = []) {
-        run("docker", [
+    function psqlFile(path, commands = [], options = {}) {
+        return run("docker", [
             "exec", container,
             "psql", "-U", migrationOwner, "-d", "postgres",
             "-v", "ON_ERROR_STOP=1",
             "-v", `kakao_dblink_password=${password}`,
+            ...(options.variables ?? []).flatMap(variable => ["-v", variable]),
             ...commands.flatMap(command => ["-c", command]),
             "-f", `/workspace/${path}`,
-        ]);
+        ], { capture: options.capture === true, timeout: liveSqlTimeoutMs });
     }
 
     function psqlQuery(sql) {
@@ -247,7 +272,7 @@ function runDockerVerification() {
             "exec", container,
             "psql", "-U", migrationOwner, "-d", "postgres",
             "-v", "ON_ERROR_STOP=1", "-At", "-c", sql,
-        ], { capture: true }).stdout;
+        ], { capture: true, timeout: liveSqlTimeoutMs }).stdout;
     }
 
     function verifyKakaoQuarantineBackupRoundtrip() {
@@ -326,7 +351,7 @@ delete from public.omr_kakao_reminder_legacy_quarantine
         }
         if (!ready) throw new Error("PostgreSQL container did not become ready in time.");
 
-        runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip);
+        return runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip);
     } finally {
         run("docker", ["rm", "--force", container], { capture: true, allowFailure: true });
     }
@@ -363,17 +388,18 @@ async function runLocalVerification() {
         mkdirSync(socketDirectory, { mode: 0o700 });
         writeFileSync(passwordPath, `${password}\n`, { mode: 0o600 });
 
-        function psqlFile(path, commands = []) {
-            run(postgresBinary(postgresBin, "psql"), [
+        function psqlFile(path, commands = [], options = {}) {
+            return run(postgresBinary(postgresBin, "psql"), [
                 "-h", "127.0.0.1",
                 "-p", String(port),
                 "-U", migrationOwner,
                 "-d", localDatabase,
                 "-v", "ON_ERROR_STOP=1",
                 "-v", `kakao_dblink_password=${password}`,
+                ...(options.variables ?? []).flatMap(variable => ["-v", variable]),
                 ...commands.flatMap(command => ["-c", command]),
                 "-f", resolve(root, path),
-            ], { env: localEnv });
+            ], { capture: options.capture === true, env: localEnv, timeout: liveSqlTimeoutMs });
         }
 
         function psqlQuery(sql) {
@@ -384,7 +410,7 @@ async function runLocalVerification() {
                 "-d", localDatabase,
                 "-v", "ON_ERROR_STOP=1",
                 "-At", "-c", sql,
-            ], { capture: true, env: localEnv }).stdout;
+            ], { capture: true, env: localEnv, timeout: liveSqlTimeoutMs }).stdout;
         }
 
         function verifyKakaoQuarantineBackupRoundtrip() {
@@ -465,7 +491,7 @@ delete from public.omr_kakao_reminder_legacy_quarantine
             localDatabase,
         ], { env: localEnv });
 
-        runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip);
+        return runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip);
     } finally {
         run(postgresBinary(postgresBin, "pg_ctl"), [
             "-D", resolve(temporaryDirectory, "data"),
@@ -495,14 +521,24 @@ async function main() {
         throw new Error("Docker backend was requested, but the Docker engine is not responsive.");
     }
 
+    let evidence;
     if (dockerCheck.status === 0) {
         console.log("Supabase live verification backend: Docker PostgreSQL 17");
-        runDockerVerification();
-        return;
+        evidence = runDockerVerification();
+    } else {
+        console.log("Supabase live verification backend: ephemeral local PostgreSQL 17");
+        evidence = await runLocalVerification();
     }
 
-    console.log("Supabase live verification backend: ephemeral local PostgreSQL 17");
-    await runLocalVerification();
+    const summaryPath = process.env.OMR_LIVE_PG_PROOF_SUMMARY_PATH;
+    if (summaryPath) {
+        writeFileSync(summaryPath, `${JSON.stringify({ schemaVersion: 1, ...evidence })}\n`, {
+            encoding: "utf8",
+            mode: 0o600,
+            flag: "wx",
+        });
+    }
+    console.log(`Supabase live release proofs verified: ${evidence.proofs.length}`);
 }
 
 await main();

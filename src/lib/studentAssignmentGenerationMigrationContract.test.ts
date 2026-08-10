@@ -1,7 +1,10 @@
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const migrationPath = "supabase/migrations/202608090001_assignment_generation_scope.sql";
+const aliasFixMigrationPath = "supabase/migrations/202608100003_assignment_generation_alias_fix.sql";
+const historicalMigrationSha256 = "b942cd372e7c9b23606a246d97373c548990e8714d591fbce31228d5efbba4d4";
 const OPEN_V3_TYPES = "text,text,text,text,bigint,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer";
 
 interface SqlFunctionParameter {
@@ -94,6 +97,11 @@ const functionBody = (sql: string, name: string, nextName: string) =>
     sql.split(`function public.${name}(`)[1].split(`function public.${nextName}(`)[0];
 
 describe("assignment generation migration contract", () => {
+    it("keeps the already-deployed assignment generation migration byte-for-byte immutable", () => {
+        expect(createHash("sha256").update(readFileSync(migrationPath)).digest("hex"))
+            .toBe(historicalMigrationSha256);
+    });
+
     it("parses every function signature and rejects duplicate parameter names before migration apply", () => {
         expect(() => parsePublicFunctionSignatures(`
             create function public.invalid_duplicate(p_session_id text, p_session_id text)
@@ -163,7 +171,11 @@ describe("assignment generation migration contract", () => {
 
     it("uses assignment-before-exam lock order, but returns exact submitted replay before current-generation rejection", () => {
         const sql = readFileSync(migrationPath, "utf8").toLowerCase();
-        const open = functionBody(sql, "omr_open_attempt_session_v3", "omr_checkpoint_attempt_session_v2");
+        const open = functionBody(
+            sql,
+            "omr_open_attempt_session_v3",
+            "omr_lock_attempt_session_generation_v1",
+        );
         expect(open).not.toContain("omr_open_attempt_session_v2(");
         expect(open).not.toContain("omr_open_attempt_session_v1(");
         expect(open.indexOf("from public.omr_assignments assignment"))
@@ -185,6 +197,49 @@ describe("assignment generation migration contract", () => {
         expect(open).toContain("'session_id'");
         expect(open).not.toContain("to_jsonb(v_existing)");
         expect(open).toContain("assignment_revision");
+    });
+
+    it("keeps assignment and exam records distinct from SQL aliases in targeted session paths", () => {
+        expect(existsSync(aliasFixMigrationPath)).toBe(true);
+        const sql = existsSync(aliasFixMigrationPath)
+            ? readFileSync(aliasFixMigrationPath, "utf8").toLowerCase()
+            : "";
+        expect(sql).toContain("begin;");
+        expect(sql).toContain("set local lock_timeout = '5s';");
+        expect(sql).toContain("set local statement_timeout = '60s';");
+        expect(sql).toContain("create or replace function public.omr_open_attempt_session_v3(");
+        expect(sql).toContain("create or replace function public.omr_lock_attempt_session_generation_v1(");
+        const open = functionBody(
+            sql,
+            "omr_open_attempt_session_v3",
+            "omr_lock_attempt_session_generation_v1",
+        );
+        const generationLock = functionBody(
+            sql,
+            "omr_lock_attempt_session_generation_v1",
+            "alter function public.omr_lock_attempt_session_generation_v1",
+        );
+        for (const body of [open, generationLock]) {
+            expect(body).not.toMatch(/\n\s+assignment public\.omr_assignments%rowtype;/);
+            expect(body).not.toMatch(/\n\s+exam public\.omr_exams%rowtype;/);
+            expect(body).not.toContain("from public.omr_assignments assignment\n");
+            expect(body).not.toContain("from public.omr_exams exam\n");
+            expect(body).toContain("v_assignment public.omr_assignments%rowtype;");
+            expect(body).toContain("v_exam public.omr_exams%rowtype;");
+            expect(body).toContain("from public.omr_assignments assignment_row");
+            expect(body).toContain("from public.omr_exams exam_row");
+        }
+        expect(open).toContain("v_max_attempts := v_assignment.max_attempts");
+        expect(sql).toContain("alter function public.omr_open_attempt_session_v3(");
+        expect(sql).toContain("alter function public.omr_lock_attempt_session_generation_v1(");
+        expect(sql.match(/owner to postgres;/g)).toHaveLength(2);
+        expect(sql).toContain("revoke all on function public.omr_open_attempt_session_v3(");
+        expect(sql).toContain("grant execute on function public.omr_open_attempt_session_v3(");
+        expect(sql).toContain("to service_role;");
+        expect(sql).toContain("revoke all on function public.omr_lock_attempt_session_generation_v1(");
+        expect(sql).toContain("from public, anon, authenticated, service_role;");
+        expect(sql).toContain("assignment-generation-alias-fix:202608100003");
+        expect(sql.trimEnd()).toMatch(/commit;$/);
     });
 
     it("creates a paid effective-plan proof before any new retake session can reach domain locks or insert", () => {

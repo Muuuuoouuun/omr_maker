@@ -468,10 +468,26 @@ jobs:
           OMR_BUILD_SHA: ${{ inputs.build_sha }}
         run: |
           set -euo pipefail
+          export OMR_LIVE_PG_PROOF_SUMMARY_PATH="$PRIVATE_EVIDENCE_DIR/live-pg-release-proofs.json"
           npm run test:supabase:live > "$PRIVATE_EVIDENCE_DIR/live-postgresql.log" 2>&1
-          SOURCE_SHA256="$(sha256sum "$PRIVATE_EVIDENCE_DIR/live-postgresql.log" | cut -d ' ' -f 1)"
-          node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({schemaVersion:1,id:"live_pg",status:"verified",buildSha:process.env.OMR_BUILD_SHA,environmentDigest:process.env.ENVIRONMENT_DIGEST,sourceSha256:process.argv[2],metrics:{contract:"passed",postgresMajor:17}})+"\n",{mode:0o600,flag:"wx"});' \
-            "$RELEASE_DIR/sources/source-live_pg.json" "$SOURCE_SHA256"
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          import { parseLivePgReleaseProofSummary } from "./scripts/live-pg-release-proof-core.mjs";
+          const logBytes = readFileSync(join(process.env.PRIVATE_EVIDENCE_DIR, "live-postgresql.log"));
+          const proofBytes = readFileSync(process.env.OMR_LIVE_PG_PROOF_SUMMARY_PATH);
+          const evidence = parseLivePgReleaseProofSummary(proofBytes);
+          const sourceSha256 = createHash("sha256")
+            .update("live-postgresql.log\0").update(createHash("sha256").update(logBytes).digest("hex"))
+            .update("\nlive-pg-release-proofs.json\0").update(createHash("sha256").update(proofBytes).digest("hex"))
+            .digest("hex");
+          writeFileSync(join(process.env.RELEASE_DIR, "sources/source-live_pg.json"), `${JSON.stringify({
+            schemaVersion: 1, id: "live_pg", status: "verified", buildSha: process.env.OMR_BUILD_SHA,
+            environmentDigest: process.env.ENVIRONMENT_DIGEST, sourceSha256,
+            metrics: { contract: "passed", postgresMajor: 17, ...evidence },
+          })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          NODE
 
       - name: Verify immutable staging preview
         env:
@@ -528,6 +544,7 @@ jobs:
           import { createHash } from "node:crypto";
           import { readFileSync, writeFileSync } from "node:fs";
           import { join } from "node:path";
+          import { deriveHostedBrowserReleaseProofs } from "./scripts/browser-release-proof-core.mjs";
           const bytes = readFileSync(join(process.env.PRIVATE_PREVIEW_DIR, "hosted-preview.json"));
           const preview = JSON.parse(bytes.toString("utf8"));
           const expectedProjectHash = createHash("sha256").update(process.env.STAGING_PROJECT_REF).digest("hex");
@@ -560,6 +577,7 @@ jobs:
           const production = JSON.parse(productionBytes.toString("utf8"));
           const hostedBytes = readFileSync(join(process.env.PRIVATE_PREVIEW_DIR, "hosted-e2e.json"));
           const hosted = JSON.parse(hostedBytes.toString("utf8"));
+          const hostedProofs = deriveHostedBrowserReleaseProofs({ hostedReports: [hostedBytes] });
           const productionStats = production.stats;
           const hostedStats = hosted.stats;
           const productionProjects = (production.config?.projects ?? []).map((project) => project.name).sort();
@@ -579,7 +597,7 @@ jobs:
             || !JSON.stringify(hosted.suites ?? []).includes("student-credential-batch.spec.ts")) {
             throw new Error("unverified");
           }
-          const metrics = { ...local.metrics, hostedExpected: hostedStats.expected, hostedFlaky: 0,
+          const metrics = { ...local.metrics, hostedExpected: hostedStats.expected, hostedFlaky: 0, hostedProofs,
             hostedSkipped: 0, hostedUnexpected: 0, productionExpected: productionStats.expected,
             productionFlaky: 0, productionProjects, productionSkipped: 0, productionUnexpected: 0,
           };

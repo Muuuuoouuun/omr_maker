@@ -5,6 +5,7 @@ import {
     QUALIFICATION_SOURCE_CATALOG,
     QUALIFICATION_ATOMIC_SOURCE_CATALOG,
     QUALIFICATION_BROWSER_PROOFS,
+    QUALIFICATION_LIVE_PG_PROOFS,
     buildInitialOperationsQualification,
 } from "../../scripts/build-initial-operations-qualification.mjs";
 import {
@@ -21,6 +22,9 @@ const RELEASE_DIRECTORY = "/private/qualification/release";
 const QUALIFIED_PREVIEW_HOST_DIGEST = "c".repeat(64);
 const QUALIFIED_PREVIEW_DEPLOYMENT_ID = "preview-deployment-123";
 const QUALIFIED_PREVIEW_ARTIFACT_DIGEST = "d".repeat(64);
+const HOSTED_BROWSER_PROOFS = ["provisioning_entitlement_one_time_csv"];
+const LIVE_PG_WITNESSES = ["provisioning_entitlement_one_time_secret_nonpersistence"];
+const LIVE_PG_ROLLBACK_PHASES = ["boundary_asserted", "rollback_asserted", "reapplied", "final_asserted"];
 type ProvenanceCheck = { id: string; status: string; sourceAttestationIds: string[]; metricPredicate: string };
 type ProvenanceGate = { id: string; status: string; sourceAttestationIds: string[] };
 
@@ -54,6 +58,7 @@ const METRICS = {
         hostedFlaky: 0,
         hostedSkipped: 0,
         hostedUnexpected: 0,
+        hostedProofs: HOSTED_BROWSER_PROOFS,
         proofs: QUALIFICATION_BROWSER_PROOFS,
         reportDigestSet: Array.from({ length: 10 }, (_, index) => createHash("sha256").update(`report-${index}`).digest("hex")),
         webkitExpected: 60,
@@ -63,7 +68,13 @@ const METRICS = {
         workers: 1,
     },
     build: { build: "passed", budget: "passed", pwaSmoke: "passed" },
-    live_pg: { contract: "passed", postgresMajor: 17 },
+    live_pg: {
+        contract: "passed",
+        postgresMajor: 17,
+        proofs: QUALIFICATION_LIVE_PG_PROOFS,
+        rollbackPhases: LIVE_PG_ROLLBACK_PHASES,
+        witnesses: LIVE_PG_WITNESSES,
+    },
     hosted: {
         anonDenied: true,
         authenticatedDenied: true,
@@ -148,8 +159,15 @@ describe("initial operations qualification builder", () => {
         );
         expect(gates).toHaveLength(RELEASE_HARD_GATES.length);
         expect(checks.every((check) => check.sourceAttestationIds.length > 0)).toBe(true);
-        expect(checks.every((check) => check.sourceAttestationIds.length === 1
+        expect(checks.every((check) => check.sourceAttestationIds.length >= 1
             && typeof check.metricPredicate === "string" && check.metricPredicate.includes("."))).toBe(true);
+        expect(checks.filter((check) => check.sourceAttestationIds.length > 1)).toEqual([
+            expect.objectContaining({
+                id: "provisioning_entitlement_one_time_csv",
+                sourceAttestationIds: ["browser", "live_pg"],
+                metricPredicate: "all(browser.hosted-proof:provisioning_entitlement_one_time_csv,live_pg.witness:provisioning_entitlement_one_time_secret_nonpersistence)",
+            }),
+        ]);
         expect(atomicCatalog.map(({ id }) => id)).toEqual(
             RELEASE_DIMENSIONS.flatMap((dimension) => (RELEASE_ATOMIC_CHECKS[dimension] as Array<{ id: string }>).map(({ id }) => id)),
         );
@@ -182,6 +200,12 @@ describe("initial operations qualification builder", () => {
             browser_determinism_credential_boundary: "browser.proof:browser_determinism_credential_boundary",
             browser_determinism_reduced_motion: "browser.proof:browser_determinism_reduced_motion",
             browser_determinism_fresh_context: "browser.proof:browser_determinism_fresh_context",
+            provisioning_entitlement_operator_provision: "live_pg.proof:provisioning_entitlement_operator_provision",
+            provisioning_entitlement_one_time_csv: "all(browser.hosted-proof:provisioning_entitlement_one_time_csv,live_pg.witness:provisioning_entitlement_one_time_secret_nonpersistence)",
+            provisioning_entitlement_account_recovery: "live_pg.proof:provisioning_entitlement_account_recovery",
+            data_integrity_isolation_tenant_isolation: "live_pg.proof:data_integrity_isolation_tenant_isolation",
+            data_integrity_isolation_rollback_contract: "live_pg.proof:data_integrity_isolation_rollback_contract",
+            code_supply_chain_live_pg17: "live_pg.postgres17_exact_contract",
         });
         expect(Object.keys(result.evidenceByDimension)).toEqual(RELEASE_DIMENSIONS);
         expect(result.manifest.artifacts.find(({ kind }) => kind === "hosted_deployment")?.freshUntil).toBe(
@@ -225,6 +249,24 @@ describe("initial operations qualification builder", () => {
         );
     });
 
+    it("requires both the exact hosted CSV owner and PostgreSQL secret-nonpersistence witness", () => {
+        const browserOnlyMissing = sourceDocuments({
+            browser: { metrics: { ...METRICS.browser, hostedProofs: [] } },
+        });
+        const pgOnlyMissing = sourceDocuments({
+            live_pg: { metrics: { ...METRICS.live_pg, witnesses: [] } },
+        });
+        expect(() => buildInitialOperationsQualification(qualificationInput(browserOnlyMissing)))
+            .toThrow("Qualification source evidence is invalid");
+        expect(() => buildInitialOperationsQualification(qualificationInput(pgOnlyMissing)))
+            .toThrow("Qualification source evidence is invalid");
+        const passing = buildInitialOperationsQualification(qualificationInput());
+        expect(passing.provenance.checks.find(
+            ({ id }: { id: string }) => id === "provisioning_entitlement_one_time_csv",
+        ))
+            .toMatchObject({ status: "passed", sourceAttestationIds: ["browser", "live_pg"] });
+    });
+
     it.each([
         ["unit", { metrics: { ...METRICS.unit, skippedTests: 1 } }],
         ["browser", { metrics: { ...METRICS.browser, chromiumFlaky: 1 } }],
@@ -232,6 +274,11 @@ describe("initial operations qualification builder", () => {
         ["browser", { metrics: { ...METRICS.browser, chromiumRuns: 1 } }],
         ["browser", { metrics: { ...METRICS.browser, productionExpected: 0 } }],
         ["browser", { metrics: { ...METRICS.browser, proofs: [] } }],
+        ["browser", { metrics: { ...METRICS.browser, hostedProofs: [] } }],
+        ["live_pg", { metrics: { contract: "passed", postgresMajor: 17 } }],
+        ["live_pg", { metrics: { ...METRICS.live_pg, proofs: QUALIFICATION_LIVE_PG_PROOFS.slice(0, -1) } }],
+        ["live_pg", { metrics: { ...METRICS.live_pg, rollbackPhases: LIVE_PG_ROLLBACK_PHASES.slice(1) } }],
+        ["live_pg", { metrics: { ...METRICS.live_pg, witnesses: [] } }],
         ["static", { metrics: { ...METRICS.static, highVulnerabilities: 1 } }],
         ["hosted", { metrics: { ...METRICS.hosted, anonDenied: false } }],
         ["hosted", { metrics: { ...METRICS.hosted, cleanupHeartbeatFresh: "failed" } }],

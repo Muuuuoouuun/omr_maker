@@ -289,6 +289,9 @@ if (!hostedMode) {
     });
 } else {
     test("hosted provision, CSV login, rotation, and old credential rejection", async ({ page, baseURL, request }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "provisioning_entitlement_one_time_csv" },
+        );
         const fixture = requireHostedEnvironment(baseURL);
         const browserMessages: string[] = [];
         page.on("console", message => browserMessages.push(message.text()));

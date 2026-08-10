@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-    BROWSER_RELEASE_PROOF_CATALOG,
-    BROWSER_RELEASE_PROOF_IDS,
-    BrowserReleaseProofError,
-    deriveBrowserReleaseProofs,
-} from "../../scripts/browser-release-proof-core.mjs";
+import * as browserProofCore from "../../scripts/browser-release-proof-core.mjs";
 import { QUALIFICATION_BROWSER_PROOFS } from "../../scripts/build-initial-operations-qualification.mjs";
 
 type BrowserKind = "chromium" | "webkit";
@@ -13,8 +8,17 @@ type ResultStatus = "passed" | "failed" | "skipped" | "timedOut" | "interrupted"
 type ProofCatalogEntry = { id: string; browser: BrowserKind; file: string; title: string };
 type ReportInput = Record<string, unknown> | Uint8Array;
 type ProofInput = { chromiumReports: ReportInput[]; webkitReports: ReportInput[] };
+const {
+    BROWSER_RELEASE_PROOF_CATALOG,
+    BROWSER_RELEASE_PROOF_IDS,
+    HOSTED_BROWSER_RELEASE_PROOF_IDS,
+    BrowserReleaseProofError,
+    deriveBrowserReleaseProofs,
+    deriveHostedBrowserReleaseProofs,
+} = browserProofCore as typeof browserProofCore & Record<string, unknown>;
 const PROOF_CATALOG = BROWSER_RELEASE_PROOF_CATALOG as readonly ProofCatalogEntry[];
 const PROOF_IDS = BROWSER_RELEASE_PROOF_IDS as readonly string[];
+const HOSTED_PROOF_ID = "provisioning_entitlement_one_time_csv";
 
 function report(browser: BrowserKind, mutate?: (value: Record<string, unknown>) => void) {
     const owners = new Map<string, {
@@ -98,6 +102,38 @@ function result(status: ResultStatus) {
     };
 }
 
+function hostedReport(status: ResultStatus = "passed", annotation = HOSTED_PROOF_ID) {
+    const title = "hosted provision, CSV login, rotation, and old credential rejection";
+    const hostedSpec = specForOwner(
+        "student-credential-batch.spec.ts",
+        title,
+        [annotation],
+        "chromium",
+    );
+    hostedSpec.tests[0].projectId = "student-credential-chromium";
+    hostedSpec.tests[0].projectName = "student-credential-chromium";
+    return {
+        config: {
+            workers: 1,
+            projects: [{
+                id: "student-credential-chromium",
+                name: "student-credential-chromium",
+                retries: 0,
+            }],
+        },
+        suites: [{
+            title: "student-credential-batch.spec.ts",
+            file: "student-credential-batch.spec.ts",
+            column: 0,
+            line: 0,
+            specs: [hostedSpec],
+            suites: [],
+        }],
+        errors: [],
+        stats: { expected: status === "passed" ? 1 : 0, skipped: 0, unexpected: status === "passed" ? 0 : 1, flaky: 0 },
+    } as Record<string, unknown>;
+}
+
 function input(chromium = report("chromium"), webkit = report("webkit")): ProofInput {
     return {
         chromiumReports: Array.from({ length: 10 }, () => structuredClone(chromium)),
@@ -135,6 +171,28 @@ describe("browser release proof core", () => {
             file: "e2e/teacher-pages.spec.ts",
             title: "renders concrete live values, student grid, heatmap, and a countdown while controlling refresh",
         });
+    });
+
+    it("derives the one-time CSV proof only from its exact hosted credential owner", () => {
+        expect(HOSTED_BROWSER_RELEASE_PROOF_IDS).toEqual([HOSTED_PROOF_ID]);
+        expect(deriveHostedBrowserReleaseProofs({ hostedReports: [hostedReport()] }))
+            .toEqual([HOSTED_PROOF_ID]);
+    });
+
+    it("rejects generic green, wrong-owner, unknown, and failed hosted credential reports", () => {
+        const noAnnotation = hostedReport("passed", "student_core_identity_entry");
+        const wrongOwner = hostedReport();
+        ((wrongOwner.suites as Array<{ specs: Array<Record<string, unknown>> }>)[0].specs[0]).title =
+            "random passing test";
+        const failed = hostedReport("failed");
+        const failedTest = ((failed.suites as Array<{ specs: Array<{ tests: Array<Record<string, unknown>> }> }>)[0]
+            .specs[0].tests[0]);
+        failedTest.status = "unexpected";
+        failedTest.results = [result("failed")];
+        for (const report of [noAnnotation, wrongOwner, failed]) {
+            expect(() => deriveHostedBrowserReleaseProofs({ hostedReports: [report] }))
+                .toThrow(BrowserReleaseProofError);
+        }
     });
 
     it("rejects a generic all-green report with no release-proof annotations", () => {

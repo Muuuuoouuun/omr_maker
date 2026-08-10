@@ -17,6 +17,10 @@ export const BROWSER_RELEASE_PROOF_IDS = Object.freeze([
     "browser_determinism_fresh_context",
 ]);
 
+export const HOSTED_BROWSER_RELEASE_PROOF_IDS = Object.freeze([
+    "provisioning_entitlement_one_time_csv",
+]);
+
 const OWNERSHIP = Object.freeze({
     student_core_identity_entry: ["chromium", "e2e/full-journey.spec.ts", "requires student ID or email before opening a roster-backed student account"],
     student_core_assignment_state: ["chromium", "e2e/student-assignment-lifecycle.spec.ts", "local lifecycle fixture renders boundaries without claiming hosted authorization"],
@@ -80,11 +84,22 @@ function makeCatalog() {
 
 export const BROWSER_RELEASE_PROOF_CATALOG = makeCatalog();
 
+export const HOSTED_BROWSER_RELEASE_PROOF_CATALOG = Object.freeze([
+    Object.freeze({
+        id: HOSTED_BROWSER_RELEASE_PROOF_IDS[0],
+        browser: "chromium",
+        projectName: "student-credential-chromium",
+        file: "e2e/student-credential-batch.spec.ts",
+        title: "hosted provision, CSV login, rotation, and old credential rejection",
+    }),
+]);
+
 const OWNER_BY_ID = new Map(BROWSER_RELEASE_PROOF_CATALOG.map((entry) => [entry.id, entry]));
 const IDS_BY_BROWSER = new Map(["chromium", "webkit"].map((browser) => [
     browser,
     BROWSER_RELEASE_PROOF_CATALOG.filter((entry) => entry.browser === browser).map(({ id }) => id),
 ]));
+const HOSTED_OWNER_BY_ID = new Map(HOSTED_BROWSER_RELEASE_PROOF_CATALOG.map((entry) => [entry.id, entry]));
 
 function ownDataRecord(value, requiredKeys, optionalKeys = []) {
     if (!value || typeof value !== "object" || Array.isArray(value)
@@ -152,24 +167,26 @@ function resultPassed(value) {
     exactArray(fields.attachments, 256);
 }
 
-function proofIdsFromTest(value, browser, file, title) {
+function proofIdsFromTest(value, browser, file, title, context) {
     const fields = ownDataRecord(value, [
         "timeout", "annotations", "expectedStatus", "projectId", "projectName", "results", "status",
     ]);
     if (!Number.isSafeInteger(fields.timeout) || fields.timeout < 0 || fields.timeout > 10 * 60_000
         || fields.expectedStatus !== "passed" || fields.status !== "expected"
         || typeof fields.projectId !== "string" || typeof fields.projectName !== "string") fail();
+    if (context.projectName !== undefined
+        && (fields.projectId !== context.projectName || fields.projectName !== context.projectName)) fail();
     const results = exactArray(fields.results, 2, 1);
     resultPassed(results[0]);
     const proofIds = annotationValues(fields.annotations);
     for (const id of proofIds) {
-        const owner = OWNER_BY_ID.get(id);
+        const owner = context.ownerById.get(id);
         if (!owner || owner.browser !== browser || owner.file !== `e2e/${file}` || owner.title !== title) fail();
     }
     return proofIds;
 }
 
-function proofIdsFromSpec(value, browser, suiteFile) {
+function proofIdsFromSpec(value, browser, suiteFile, context) {
     const fields = ownDataRecord(value, ["title", "ok", "tags", "tests", "id", "file", "line", "column"]);
     const title = boundedString(fields.title);
     const file = boundedString(fields.file, 240);
@@ -178,10 +195,10 @@ function proofIdsFromSpec(value, browser, suiteFile) {
         || !Number.isSafeInteger(fields.column) || fields.column < 0) fail();
     exactArray(fields.tags, 64);
     return exactArray(fields.tests, MAX_TESTS_PER_SPEC)
-        .flatMap((test) => proofIdsFromTest(test, browser, file, title));
+        .flatMap((test) => proofIdsFromTest(test, browser, file, title, context));
 }
 
-function proofIdsFromSuites(value, browser, depth, budget) {
+function proofIdsFromSuites(value, browser, depth, budget, context) {
     if (depth > MAX_NESTING_DEPTH) fail();
     const proofIds = [];
     for (const suite of exactArray(value, MAX_REPORT_SUITES)) {
@@ -193,37 +210,41 @@ function proofIdsFromSuites(value, browser, depth, budget) {
         const specs = exactArray(fields.specs, MAX_REPORT_SPECS);
         budget.count += specs.length;
         if (budget.count > MAX_REPORT_SPECS) fail();
-        for (const spec of specs) proofIds.push(...proofIdsFromSpec(spec, browser, file));
+        for (const spec of specs) proofIds.push(...proofIdsFromSpec(spec, browser, file, context));
         if (fields.suites !== undefined) {
-            proofIds.push(...proofIdsFromSuites(fields.suites, browser, depth + 1, budget));
+            proofIds.push(...proofIdsFromSuites(fields.suites, browser, depth + 1, budget, context));
         }
     }
     return proofIds;
 }
 
-function proofIdsFromReport(value, browser) {
+function proofIdsFromReport(value, browser, context) {
     const root = ownDataRecord(reportObject(value), ["config", "suites", "errors", "stats"]);
     ownDataRecord(root.config, ["workers", "projects"], [
         "configFile", "forbidOnly", "fullyParallel", "globalSetup", "globalTeardown", "globalTimeout",
         "grep", "grepInvert", "maxFailures", "metadata", "preserveOutput", "reporter", "reportSlowTests",
         "quiet", "rootDir", "shard", "tags", "updateSnapshots", "updateSourceMethod", "version", "webServer",
     ]);
-    for (const project of exactArray(root.config.projects, 64)) {
+    const projects = exactArray(root.config.projects, 64);
+    if (context.projectName !== undefined && projects.length !== 1) fail();
+    for (const project of projects) {
         const fields = ownDataRecord(project, ["id", "name", "retries"], [
             "metadata", "outputDir", "repeatEach", "testDir", "testIgnore", "testMatch", "timeout",
         ]);
         boundedString(fields.id, 240);
         boundedString(fields.name, 240);
         if (fields.retries !== 0) fail();
+        if (context.projectName !== undefined
+            && (fields.id !== context.projectName || fields.name !== context.projectName)) fail();
     }
     const errors = exactArray(root.errors, 256);
     if (errors.length !== 0) fail();
     const stats = ownDataRecord(root.stats, ["expected", "skipped", "unexpected", "flaky"], ["startTime", "duration"]);
     if (!Number.isSafeInteger(stats.expected) || stats.expected < 1
         || stats.skipped !== 0 || stats.unexpected !== 0 || stats.flaky !== 0) fail();
-    const proofIds = proofIdsFromSuites(root.suites, browser, 0, { count: 0 });
-    const expectedIds = IDS_BY_BROWSER.get(browser);
-    if (!expectedIds || proofIds.length < expectedIds.length) fail();
+    const proofIds = proofIdsFromSuites(root.suites, browser, 0, { count: 0 }, context);
+    const expectedIds = context.expectedIds;
+    if (proofIds.length < expectedIds.length) fail();
     const seen = new Set(proofIds);
     if (seen.size !== expectedIds.length || expectedIds.some((id) => !seen.has(id))) fail();
     return proofIds;
@@ -234,7 +255,22 @@ export function deriveBrowserReleaseProofs(input) {
     const chromiumReports = exactArray(fields.chromiumReports, 10, 10);
     const webkitReports = exactArray(fields.webkitReports, 16);
     if (webkitReports.length < 1) fail();
-    for (const report of chromiumReports) proofIdsFromReport(report, "chromium");
-    for (const report of webkitReports) proofIdsFromReport(report, "webkit");
+    for (const report of chromiumReports) proofIdsFromReport(report, "chromium", {
+        expectedIds: IDS_BY_BROWSER.get("chromium"), ownerById: OWNER_BY_ID,
+    });
+    for (const report of webkitReports) proofIdsFromReport(report, "webkit", {
+        expectedIds: IDS_BY_BROWSER.get("webkit"), ownerById: OWNER_BY_ID,
+    });
     return BROWSER_RELEASE_PROOF_IDS;
+}
+
+export function deriveHostedBrowserReleaseProofs(input) {
+    const fields = ownDataRecord(input, ["hostedReports"]);
+    const reports = exactArray(fields.hostedReports, 1, 1);
+    for (const report of reports) proofIdsFromReport(report, "chromium", {
+        expectedIds: HOSTED_BROWSER_RELEASE_PROOF_IDS,
+        ownerById: HOSTED_OWNER_BY_ID,
+        projectName: HOSTED_BROWSER_RELEASE_PROOF_CATALOG[0].projectName,
+    });
+    return HOSTED_BROWSER_RELEASE_PROOF_IDS;
 }

@@ -20,6 +20,10 @@ import {
 } from "../../scripts/release-quality-core.mjs";
 import {
     QUALIFICATION_BROWSER_PROOFS,
+    QUALIFICATION_HOSTED_BROWSER_PROOFS,
+    QUALIFICATION_LIVE_PG_PROOFS,
+    QUALIFICATION_LIVE_PG_ROLLBACK_PHASES,
+    QUALIFICATION_LIVE_PG_WITNESSES,
     QUALIFICATION_SOURCE_CATALOG,
     buildInitialOperationsQualification,
 } from "../../scripts/build-initial-operations-qualification.mjs";
@@ -249,6 +253,7 @@ function qualificationSourceMetrics(id: string, generatedAt: string) {
             chromiumRuns: 10, productionExpected: 6, productionFlaky: 0, productionSkipped: 0,
             productionUnexpected: 0, productionProjects: ["prod-chromium", "prod-webkit-ipad"],
             hostedExpected: 1, hostedFlaky: 0, hostedSkipped: 0, hostedUnexpected: 0,
+            hostedProofs: QUALIFICATION_HOSTED_BROWSER_PROOFS,
             proofs: QUALIFICATION_BROWSER_PROOFS,
             reportDigestSet: Array.from({ length: 10 }, (_, index) => createHash("sha256")
                 .update(`report-${index}`).digest("hex")),
@@ -256,7 +261,13 @@ function qualificationSourceMetrics(id: string, generatedAt: string) {
             webkitUnexpected: 0, workers: 1,
         },
         build: { build: "passed", budget: "passed", pwaSmoke: "passed" },
-        live_pg: { contract: "passed", postgresMajor: 17 },
+        live_pg: {
+            contract: "passed",
+            postgresMajor: 17,
+            proofs: QUALIFICATION_LIVE_PG_PROOFS,
+            rollbackPhases: QUALIFICATION_LIVE_PG_ROLLBACK_PHASES,
+            witnesses: QUALIFICATION_LIVE_PG_WITNESSES,
+        },
         hosted: {
             anonDenied: true, authenticatedDenied: true, boundary: "passed", cleanupHeartbeatFresh: "passed",
             deliveryProbe: "passed", healthSha: "passed", immutablePreview: "passed", readinessExact: "passed",

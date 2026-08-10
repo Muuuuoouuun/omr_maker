@@ -13,7 +13,15 @@ import {
     RELEASE_HARD_GATE_PREDICATES,
     RELEASE_HARD_GATES,
 } from "./release-quality-core.mjs";
-import { BROWSER_RELEASE_PROOF_IDS } from "./browser-release-proof-core.mjs";
+import {
+    BROWSER_RELEASE_PROOF_IDS,
+    HOSTED_BROWSER_RELEASE_PROOF_IDS,
+} from "./browser-release-proof-core.mjs";
+import {
+    LIVE_PG_RELEASE_PROOF_IDS,
+    LIVE_PG_RELEASE_WITNESS_IDS,
+    LIVE_PG_ROLLBACK_PHASES,
+} from "./live-pg-release-proof-core.mjs";
 import { parseStrictJson } from "./strict-json.mjs";
 
 const BUILD_SHA = /^[a-f0-9]{40}$/;
@@ -32,6 +40,10 @@ export const QUALIFICATION_SOURCE_CATALOG = Object.freeze(SOURCE_IDS.map((id) =>
 })));
 
 export const QUALIFICATION_BROWSER_PROOFS = BROWSER_RELEASE_PROOF_IDS;
+export const QUALIFICATION_HOSTED_BROWSER_PROOFS = HOSTED_BROWSER_RELEASE_PROOF_IDS;
+export const QUALIFICATION_LIVE_PG_PROOFS = LIVE_PG_RELEASE_PROOF_IDS;
+export const QUALIFICATION_LIVE_PG_WITNESSES = LIVE_PG_RELEASE_WITNESS_IDS;
+export const QUALIFICATION_LIVE_PG_ROLLBACK_PHASES = LIVE_PG_ROLLBACK_PHASES;
 
 function atomicSourceRule(id) {
     const [dimension, name] = RELEASE_DIMENSIONS
@@ -42,10 +54,26 @@ function atomicSourceRule(id) {
         return { sourceId: "browser", metricPredicate: `browser.proof:${id}` };
     }
     if (dimension === "provisioning_entitlement") {
-        return { sourceId: "live_pg", metricPredicate: "live_pg.exact_contract" };
+        if (name === "one_time_csv") {
+            return {
+                sourceId: "browser",
+                requirements: Object.freeze([
+                    Object.freeze({
+                        sourceId: "browser",
+                        metricPredicate: "browser.hosted-proof:provisioning_entitlement_one_time_csv",
+                    }),
+                    Object.freeze({
+                        sourceId: "live_pg",
+                        metricPredicate: "live_pg.witness:provisioning_entitlement_one_time_secret_nonpersistence",
+                    }),
+                ]),
+                metricPredicate: "all(browser.hosted-proof:provisioning_entitlement_one_time_csv,live_pg.witness:provisioning_entitlement_one_time_secret_nonpersistence)",
+            };
+        }
+        return { sourceId: "live_pg", metricPredicate: `live_pg.proof:${id}` };
     }
     if (dimension === "data_integrity_isolation") {
-        return { sourceId: "live_pg", metricPredicate: "live_pg.exact_contract" };
+        return { sourceId: "live_pg", metricPredicate: `live_pg.proof:${id}` };
     }
     if (dimension === "code_supply_chain") {
         const rules = {
@@ -188,7 +216,7 @@ function validateMetrics(id, value) {
     } else if (id === "browser") {
         const metrics = exactRecord(value, [
             "chromiumExpected", "chromiumFlaky", "chromiumRuns", "chromiumSkipped", "chromiumUnexpected",
-            "hostedExpected", "hostedFlaky", "hostedSkipped", "hostedUnexpected", "productionExpected",
+            "hostedExpected", "hostedFlaky", "hostedProofs", "hostedSkipped", "hostedUnexpected", "productionExpected",
             "productionFlaky", "productionProjects", "productionSkipped", "productionUnexpected", "proofs",
             "reportDigestSet", "retries", "webkitExpected",
             "webkitFlaky", "webkitSkipped", "webkitUnexpected", "workers",
@@ -211,7 +239,10 @@ function validateMetrics(id, value) {
         if (metrics.workers !== 1) fail();
         const proofs = exactArray(metrics.proofs, QUALIFICATION_BROWSER_PROOFS.length);
         if (proofs.some((proof, index) => proof !== QUALIFICATION_BROWSER_PROOFS[index])) fail();
+        const hostedProofs = exactArray(metrics.hostedProofs, QUALIFICATION_HOSTED_BROWSER_PROOFS.length);
+        if (hostedProofs.some((proof, index) => proof !== QUALIFICATION_HOSTED_BROWSER_PROOFS[index])) fail();
         predicates.push(...proofs.map((proof) => `browser.proof:${proof}`));
+        predicates.push(...hostedProofs.map((proof) => `browser.hosted-proof:${proof}`));
         predicates.push("browser.zero_failure_full_suite", "browser.chromium_repeat", "browser.webkit_core",
             "browser.production_e2e", "browser.zero_retry", "browser.zero_order_dependence", "browser.skip_accounting");
     } else if (id === "build") {
@@ -219,9 +250,17 @@ function validateMetrics(id, value) {
         passed(metrics.budget); passed(metrics.build); passed(metrics.pwaSmoke);
         predicates.push("build.budget", "build.pwa_smoke");
     } else if (id === "live_pg") {
-        const metrics = exactRecord(value, ["contract", "postgresMajor"]);
+        const metrics = exactRecord(value, ["contract", "postgresMajor", "proofs", "rollbackPhases", "witnesses"]);
         passed(metrics.contract); if (metrics.postgresMajor !== 17) fail();
-        predicates.push("live_pg.exact_contract", "live_pg.postgres17_exact_contract");
+        const proofs = exactArray(metrics.proofs, QUALIFICATION_LIVE_PG_PROOFS.length);
+        const witnesses = exactArray(metrics.witnesses, QUALIFICATION_LIVE_PG_WITNESSES.length);
+        const rollbackPhases = exactArray(metrics.rollbackPhases, QUALIFICATION_LIVE_PG_ROLLBACK_PHASES.length);
+        if (proofs.some((proof, index) => proof !== QUALIFICATION_LIVE_PG_PROOFS[index])) fail();
+        if (witnesses.some((witness, index) => witness !== QUALIFICATION_LIVE_PG_WITNESSES[index])) fail();
+        if (rollbackPhases.some((phase, index) => phase !== QUALIFICATION_LIVE_PG_ROLLBACK_PHASES[index])) fail();
+        predicates.push(...proofs.map((proof) => `live_pg.proof:${proof}`));
+        predicates.push(...witnesses.map((witness) => `live_pg.witness:${witness}`));
+        predicates.push("live_pg.postgres17_exact_contract");
     } else if (id === "hosted") {
         const metrics = exactRecord(value, [
             "anonDenied", "authenticatedDenied", "boundary", "cleanupHeartbeatFresh", "deliveryProbe", "healthSha",
@@ -327,12 +366,15 @@ export function buildInitialOperationsQualification(input) {
     const ruleByCheck = new Map(QUALIFICATION_ATOMIC_SOURCE_CATALOG.map((rule) => [rule.id, rule]));
     const checks = RELEASE_DIMENSIONS.flatMap((dimension) => RELEASE_ATOMIC_CHECKS[dimension].map(({ id }) => {
         const rule = ruleByCheck.get(id);
-        if (!rule || !sourceIds.has(rule.sourceId)
-            || (!UNVERIFIED_CHECKS.has(id) && !predicateBySource.get(rule.sourceId)?.has(rule.metricPredicate))) fail();
+        if (!rule) fail();
+        const requirements = rule.requirements ?? [rule];
+        if (requirements.some((requirement) => !sourceIds.has(requirement.sourceId)
+            || (!UNVERIFIED_CHECKS.has(id)
+                && !predicateBySource.get(requirement.sourceId)?.has(requirement.metricPredicate)))) fail();
         return Object.freeze({
             id,
             status: UNVERIFIED_CHECKS.has(id) ? "unverified" : "passed",
-            sourceAttestationIds: Object.freeze([rule.sourceId]),
+            sourceAttestationIds: Object.freeze([...new Set(requirements.map(({ sourceId }) => sourceId))]),
             metricPredicate: rule.metricPredicate,
         });
     }));
@@ -342,7 +384,10 @@ export function buildInitialOperationsQualification(input) {
         status: RELEASE_HARD_GATE_PREDICATES[id].every((checkId) => checkStatus.get(checkId) === "passed")
             ? "passed" : "failed",
         sourceAttestationIds: Object.freeze([...new Set(RELEASE_HARD_GATE_PREDICATES[id]
-            .map((checkId) => ruleByCheck.get(checkId)?.sourceId))]),
+            .flatMap((checkId) => {
+                const rule = ruleByCheck.get(checkId);
+                return (rule?.requirements ?? [rule]).map((requirement) => requirement?.sourceId);
+            }).filter(Boolean))]),
     }));
     const provenance = Object.freeze({
         schemaVersion: 1,
