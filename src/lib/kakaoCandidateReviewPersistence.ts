@@ -130,9 +130,25 @@ function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
-function cleanStringArray(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
-    return Array.from(new Set(value.map(clean).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ko"));
+function cleanStudentTargets(
+    idsValue: unknown,
+    namesValue: unknown,
+    targetCount: number,
+): { studentIds: string[]; studentNames: string[] } | null {
+    if (!Array.isArray(idsValue) || !Array.isArray(namesValue)
+        || idsValue.length !== namesValue.length || idsValue.length !== targetCount) return null;
+    const studentIds: string[] = [];
+    const studentNames: string[] = [];
+    const seenIds = new Set<string>();
+    for (let index = 0; index < idsValue.length; index += 1) {
+        const studentId = clean(idsValue[index]);
+        const displayName = clean(namesValue[index]);
+        if (!studentId || !displayName || seenIds.has(studentId)) return null;
+        seenIds.add(studentId);
+        studentIds.push(studentId);
+        studentNames.push(displayName);
+    }
+    return { studentIds, studentNames };
 }
 
 function isDispatchStatus(value: unknown): value is KakaoDispatchStatus {
@@ -147,7 +163,11 @@ function normalizeDispatchLog(value: unknown): KakaoDispatchLog | null {
     const status = value.status;
     const createdAt = clean(value.createdAt);
     const messagePreview = clean(value.messagePreview);
-    if (!id || !reviewId || !examId || !isDispatchStatus(status) || !createdAt || !messagePreview) return null;
+    const targetCount = Number(value.targetCount);
+    if (!id || !reviewId || !examId || !isDispatchStatus(status) || !createdAt || !messagePreview
+        || !Number.isSafeInteger(targetCount) || targetCount < 0) return null;
+    const targets = cleanStudentTargets(value.studentIds, value.studentNames, targetCount);
+    if (!targets) return null;
 
     const sentAt = clean(value.sentAt);
     const providerMessageId = clean(value.providerMessageId);
@@ -160,9 +180,9 @@ function normalizeDispatchLog(value: unknown): KakaoDispatchLog | null {
         channel: "kakao",
         provider: clean(value.provider) || "simulation",
         status,
-        targetCount: Math.max(0, Math.floor(Number(value.targetCount) || 0)),
-        studentIds: cleanStringArray(value.studentIds),
-        studentNames: cleanStringArray(value.studentNames),
+        targetCount,
+        studentIds: targets.studentIds,
+        studentNames: targets.studentNames,
         messagePreview,
         providerMessageId: providerMessageId || undefined,
         errorMessage: errorText || undefined,

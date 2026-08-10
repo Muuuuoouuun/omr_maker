@@ -71,6 +71,7 @@ const readyDatabaseProbe = {
     studentSessionGenerationReady: true,
     studentCredentialBatchReady: true,
     canonicalQuestionResultEvidenceReady: true,
+    kakaoReminderEntitlementReady: true,
     failedChecks: [],
 };
 

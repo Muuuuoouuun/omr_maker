@@ -293,12 +293,72 @@ grant select, insert, update, delete on
     public.omr_question_results,
     public.omr_assignment_submissions,
     public.omr_attempt_feedback,
-    public.omr_kakao_candidate_reviews,
-    public.omr_kakao_dispatch_logs,
     public.omr_comments
 to authenticated;
 
 grant select on public.omr_audit_logs to authenticated;
+grant select on
+    public.omr_kakao_candidate_reviews,
+    public.omr_kakao_dispatch_logs
+to authenticated;
+
+-- Kakao reminder writes remain behind the same-transaction entitlement RPCs.
+revoke all on table public.omr_kakao_candidate_reviews
+    from public, anon, service_role;
+revoke all on table public.omr_kakao_dispatch_logs
+    from public, anon, service_role;
+revoke all on table public.omr_kakao_reminder_legacy_quarantine
+    from public, anon, authenticated, service_role;
+revoke insert, update, delete, truncate, references, trigger, maintain on table public.omr_kakao_candidate_reviews
+    from authenticated;
+revoke insert, update, delete, truncate, references, trigger, maintain on table public.omr_kakao_dispatch_logs
+    from authenticated;
+grant select on table public.omr_kakao_candidate_reviews to service_role;
+grant select on table public.omr_kakao_dispatch_logs to service_role;
+grant select on table public.omr_kakao_reminder_legacy_quarantine to service_role;
+do $kakao_rpc_overload_acl$
+declare
+    routine record;
+begin
+    for routine in
+        select proc.proname, proc.prokind,
+               pg_catalog.pg_get_function_identity_arguments(proc.oid) as identity_arguments
+          from pg_catalog.pg_proc proc
+          join pg_catalog.pg_namespace namespace on namespace.oid = proc.pronamespace
+         where namespace.nspname = 'public'
+           and proc.proname in (
+               'omr_save_kakao_candidate_review_v1',
+               'omr_save_kakao_simulation_dispatch_v1',
+               'omr_kakao_reminder_legacy_inventory_v1',
+               'omr_quarantine_kakao_reminder_legacy_v1',
+               'omr_kakao_reminder_entitlement_ready_v1'
+           )
+    loop
+        execute pg_catalog.format(
+            'revoke all on %s public.%I(%s) from public, anon, authenticated, service_role',
+            case when routine.prokind = 'p' then 'procedure' else 'function' end,
+            routine.proname,
+            routine.identity_arguments
+        );
+    end loop;
+end
+$kakao_rpc_overload_acl$;
+alter function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    owner to postgres;
+alter function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    owner to postgres;
+revoke all on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    to service_role;
+revoke all on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    to service_role;
+grant execute on function public.omr_kakao_reminder_legacy_inventory_v1()
+    to service_role;
+grant execute on function public.omr_kakao_reminder_entitlement_ready_v1()
+    to service_role;
 
 alter table public.omr_organizations enable row level security;
 alter table public.omr_user_profiles enable row level security;
@@ -320,6 +380,7 @@ alter table public.omr_assignment_submissions enable row level security;
 alter table public.omr_attempt_feedback enable row level security;
 alter table public.omr_kakao_candidate_reviews enable row level security;
 alter table public.omr_kakao_dispatch_logs enable row level security;
+alter table public.omr_kakao_reminder_legacy_quarantine enable row level security;
 alter table public.omr_comments enable row level security;
 alter table public.omr_audit_logs enable row level security;
 
@@ -345,6 +406,7 @@ alter table public.omr_assignment_submissions force row level security;
 alter table public.omr_attempt_feedback force row level security;
 alter table public.omr_kakao_candidate_reviews force row level security;
 alter table public.omr_kakao_dispatch_logs force row level security;
+alter table public.omr_kakao_reminder_legacy_quarantine force row level security;
 alter table public.omr_comments force row level security;
 alter table public.omr_audit_logs force row level security;
 
@@ -714,30 +776,38 @@ create policy "prod kakao reviews read by staff"
     on public.omr_kakao_candidate_reviews
     for select
     to authenticated
-    using ((select public.omr_is_org_member(organization_id)));
+    using (
+        entitlement_state in ('trusted', 'validated_legacy')
+        and (select public.omr_is_org_member(organization_id))
+    );
 
 drop policy if exists "prod kakao reviews write by staff" on public.omr_kakao_candidate_reviews;
-create policy "prod kakao reviews write by staff"
-    on public.omr_kakao_candidate_reviews
-    for all
-    to authenticated
-    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])))
-    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod kakao logs read by staff" on public.omr_kakao_dispatch_logs;
 create policy "prod kakao logs read by staff"
     on public.omr_kakao_dispatch_logs
     for select
     to authenticated
-    using ((select public.omr_is_org_member(organization_id)));
+    using (
+        entitlement_state in ('trusted', 'validated_legacy')
+        and (select public.omr_is_org_member(organization_id))
+    );
 
 drop policy if exists "prod kakao logs write by staff" on public.omr_kakao_dispatch_logs;
-create policy "prod kakao logs write by staff"
-    on public.omr_kakao_dispatch_logs
-    for all
-    to authenticated
-    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])))
-    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
+
+drop policy if exists "Kakao reminder source reviews service read" on public.omr_kakao_candidate_reviews;
+create policy "Kakao reminder source reviews service read"
+    on public.omr_kakao_candidate_reviews for select to service_role
+    using (entitlement_state in ('trusted', 'validated_legacy'));
+drop policy if exists "Kakao reminder source dispatches service read" on public.omr_kakao_dispatch_logs;
+create policy "Kakao reminder source dispatches service read"
+    on public.omr_kakao_dispatch_logs for select to service_role
+    using (entitlement_state in ('trusted', 'validated_legacy'));
+drop policy if exists "Kakao reminder quarantine service read"
+    on public.omr_kakao_reminder_legacy_quarantine;
+create policy "Kakao reminder quarantine service read"
+    on public.omr_kakao_reminder_legacy_quarantine for select to service_role
+    using (current_user = 'service_role');
 
 drop policy if exists "prod comments read by staff or visible student" on public.omr_comments;
 create policy "prod comments read by staff or visible student"

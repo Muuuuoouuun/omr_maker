@@ -167,7 +167,7 @@ describe("student start-code batch migration contract", () => {
         expect(rollback).toContain("omr_issue_student_start_code_batch_v1");
         expect(rollback).toMatch(/revoke all on function public\.omr_rotate_student_start_credential_v1\([^)]+\)\s+from public, anon, authenticated, service_role/i);
         expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608090001"');
-        expect(docs).toContain("canonical 42개");
+        expect(docs).toContain("canonical 43개");
         expect(docs).toContain("202608090001");
     });
 });

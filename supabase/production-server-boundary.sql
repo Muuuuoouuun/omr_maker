@@ -142,6 +142,52 @@ grant select on table public.omr_remote_asset_cleanup_queue to service_role;
 grant select on table public.omr_plan_usage to service_role;
 grant select on table public.omr_plan_usage_reservations to service_role;
 grant select on table public.omr_student_start_credentials to service_role;
+revoke all on table public.omr_kakao_candidate_reviews from public, anon, authenticated, service_role;
+revoke all on table public.omr_kakao_dispatch_logs from public, anon, authenticated, service_role;
+revoke all on table public.omr_kakao_reminder_legacy_quarantine from public, anon, authenticated, service_role;
+grant select on table public.omr_kakao_candidate_reviews to service_role;
+grant select on table public.omr_kakao_dispatch_logs to service_role;
+grant select on table public.omr_kakao_reminder_legacy_quarantine to service_role;
+do $kakao_rpc_overload_acl$
+declare
+    routine record;
+begin
+    for routine in
+        select proc.proname,
+               proc.prokind,
+               pg_catalog.pg_get_function_identity_arguments(proc.oid) as identity_arguments
+          from pg_catalog.pg_proc proc
+          join pg_catalog.pg_namespace namespace on namespace.oid = proc.pronamespace
+         where namespace.nspname = 'public'
+           and proc.proname in (
+               'omr_save_kakao_candidate_review_v1',
+               'omr_save_kakao_simulation_dispatch_v1',
+               'omr_kakao_reminder_legacy_inventory_v1',
+               'omr_quarantine_kakao_reminder_legacy_v1',
+               'omr_kakao_reminder_entitlement_ready_v1'
+           )
+    loop
+        execute pg_catalog.format(
+            'revoke all on %s public.%I(%s) from public, anon, authenticated, service_role',
+            case when routine.prokind = 'p' then 'procedure' else 'function' end,
+            routine.proname,
+            routine.identity_arguments
+        );
+    end loop;
+end
+$kakao_rpc_overload_acl$;
+alter function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    owner to postgres;
+alter function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    owner to postgres;
+revoke all on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb) to service_role;
+revoke all on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb) to service_role;
+grant execute on function public.omr_kakao_reminder_legacy_inventory_v1() to service_role;
+grant execute on function public.omr_kakao_reminder_entitlement_ready_v1() to service_role;
 revoke all on sequence public.omr_remote_asset_cleanup_queue_id_seq from service_role;
 revoke all on function public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text) from public, anon, authenticated, service_role;
 revoke all on function public.omr_authorize_effective_teacher_plan_v1(text,text) from public, anon, authenticated, service_role;
@@ -436,6 +482,9 @@ drop policy if exists "prod kakao reviews read by staff" on public.omr_kakao_can
 drop policy if exists "prod kakao reviews write by staff" on public.omr_kakao_candidate_reviews;
 drop policy if exists "prod kakao logs read by staff" on public.omr_kakao_dispatch_logs;
 drop policy if exists "prod kakao logs write by staff" on public.omr_kakao_dispatch_logs;
+drop policy if exists "Kakao reminder source reviews service read" on public.omr_kakao_candidate_reviews;
+drop policy if exists "Kakao reminder source dispatches service read" on public.omr_kakao_dispatch_logs;
+drop policy if exists "Kakao reminder quarantine service read" on public.omr_kakao_reminder_legacy_quarantine;
 drop policy if exists "prod comments read by staff or visible student" on public.omr_comments;
 drop policy if exists "prod comments write by staff" on public.omr_comments;
 drop policy if exists "prod audit logs read by admins" on public.omr_audit_logs;
@@ -498,6 +547,8 @@ alter table if exists public.omr_kakao_candidate_reviews enable row level securi
 alter table if exists public.omr_kakao_candidate_reviews force row level security;
 alter table if exists public.omr_kakao_dispatch_logs enable row level security;
 alter table if exists public.omr_kakao_dispatch_logs force row level security;
+alter table if exists public.omr_kakao_reminder_legacy_quarantine enable row level security;
+alter table if exists public.omr_kakao_reminder_legacy_quarantine force row level security;
 alter table if exists public.omr_comments enable row level security;
 alter table if exists public.omr_comments force row level security;
 alter table if exists public.omr_audit_logs enable row level security;
@@ -600,6 +651,7 @@ declare
     v_student_credential_batch_ready boolean;
     v_canonical_question_result_evidence_ready boolean;
     v_assignment_generation_scope_ready boolean;
+    v_kakao_reminder_entitlement_ready boolean;
     v_ready boolean;
 begin
     v_previous := public.omr_service_readiness_v10_snapshot();
@@ -620,7 +672,8 @@ begin
         ('omr_initial_ops_metrics'), ('omr_teacher_accounts'), ('omr_teacher_account_tokens'),
         ('omr_teacher_notification_states'), ('omr_operational_job_status'),
         ('omr_pilot_plan_grants'), ('omr_student_credential_epochs'),
-        ('omr_student_credential_batch_receipts')
+        ('omr_student_credential_batch_receipts'),
+        ('omr_kakao_reminder_legacy_quarantine')
     ), actual(table_name, row_security, force_row_security) as (
         select relation.relname::text, relation.relrowsecurity, relation.relforcerowsecurity
           from pg_catalog.pg_class relation
@@ -659,7 +712,8 @@ begin
                    'omr_student_credential_epochs', 'omr_student_start_credentials',
                    'omr_remote_assets', 'omr_remote_asset_upload_intents',
                    'omr_remote_asset_cleanup_queue', 'omr_plan_usage',
-                   'omr_plan_usage_reservations'
+                   'omr_plan_usage_reservations', 'omr_kakao_candidate_reviews',
+                   'omr_kakao_dispatch_logs', 'omr_kakao_reminder_legacy_quarantine'
                )
                and (
                    not pg_catalog.has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -2853,11 +2907,161 @@ begin
         pg_catalog.to_regprocedure('public.omr_canonical_question_result_evidence_ready_v1()') is not null
         and public.omr_canonical_question_result_evidence_ready_v1();
 
+    -- Exact Kakao writes are service-role RPCs; direct DML, browser execution,
+    -- overloads, legacy ambiguity, or routine marker drift fail readiness.
+    v_kakao_reminder_entitlement_ready :=
+        pg_catalog.to_regprocedure(
+            'public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)'
+        ) is not null
+        and pg_catalog.to_regprocedure(
+            'public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)'
+        ) is not null
+        and pg_catalog.to_regprocedure('public.omr_kakao_reminder_legacy_inventory_v1()') is not null
+        and pg_catalog.to_regprocedure('public.omr_quarantine_kakao_reminder_legacy_v1(text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_kakao_reminder_entitlement_ready_v1()') is not null
+        and public.omr_kakao_reminder_entitlement_ready_v1()
+        and (
+            select pg_catalog.count(*) = 5
+              from pg_catalog.pg_proc routine
+              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+             where namespace.nspname = 'public'
+               and routine.proname in (
+                   'omr_save_kakao_candidate_review_v1',
+                   'omr_save_kakao_simulation_dispatch_v1',
+                   'omr_kakao_reminder_legacy_inventory_v1',
+                   'omr_quarantine_kakao_reminder_legacy_v1',
+                   'omr_kakao_reminder_entitlement_ready_v1'
+               )
+        )
+        and (
+            select pg_catalog.count(*) = 2
+              from pg_catalog.pg_proc routine
+              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+              join pg_catalog.pg_roles owner_role on owner_role.oid = routine.proowner
+             where namespace.nspname = 'public'
+               and routine.proname in (
+                   'omr_save_kakao_candidate_review_v1',
+                   'omr_save_kakao_simulation_dispatch_v1'
+               )
+               and routine.prokind = 'f'
+               and routine.prosecdef
+               and owner_role.rolname = 'postgres'
+               and (owner_role.rolsuper or owner_role.rolbypassrls)
+               and pg_catalog.oidvectortypes(routine.proargtypes) =
+                   'text, text, bigint, text, text, jsonb'
+               and pg_catalog.obj_description(routine.oid, 'pg_proc') like
+                   'kakao-reminder-entitlement:202608100002:%'
+        )
+        and (
+            select pg_catalog.count(*) = 3
+              from pg_catalog.pg_proc routine
+              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+              join pg_catalog.pg_roles owner_role on owner_role.oid = routine.proowner
+             where namespace.nspname = 'public'
+               and routine.proname in (
+                   'omr_kakao_reminder_legacy_inventory_v1',
+                   'omr_quarantine_kakao_reminder_legacy_v1',
+                   'omr_kakao_reminder_entitlement_ready_v1'
+               )
+               and routine.prokind = 'f'
+               and owner_role.rolname = 'postgres'
+               and (owner_role.rolsuper or owner_role.rolbypassrls)
+               and pg_catalog.obj_description(routine.oid, 'pg_proc') like
+                   'kakao-reminder-entitlement:202608100002:%'
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_kakao_candidate_reviews',
+            'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_kakao_dispatch_logs',
+            'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and pg_catalog.to_regclass('public.omr_kakao_reminder_legacy_quarantine') is not null
+        and exists (
+            select 1
+              from pg_catalog.pg_class relation
+              join pg_catalog.pg_roles owner_role on owner_role.oid = relation.relowner
+             where relation.oid = 'public.omr_kakao_reminder_legacy_quarantine'::pg_catalog.regclass
+               and relation.relrowsecurity
+               and relation.relforcerowsecurity
+               and owner_role.rolname = 'postgres'
+               and (owner_role.rolsuper or owner_role.rolbypassrls)
+        )
+        and pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_kakao_reminder_legacy_quarantine', 'SELECT'
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_kakao_reminder_legacy_quarantine',
+            'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and not exists (
+            select 1
+              from pg_catalog.pg_policy policy
+             where policy.polrelid =
+                       'public.omr_kakao_reminder_legacy_quarantine'::pg_catalog.regclass
+        )
+        and pg_catalog.has_function_privilege(
+            'service_role',
+            'public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)',
+            'EXECUTE'
+        )
+        and pg_catalog.has_function_privilege(
+            'service_role',
+            'public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)',
+            'EXECUTE'
+        )
+        and pg_catalog.has_function_privilege(
+            'service_role', 'public.omr_kakao_reminder_legacy_inventory_v1()', 'EXECUTE'
+        )
+        and pg_catalog.has_function_privilege(
+            'service_role', 'public.omr_kakao_reminder_entitlement_ready_v1()', 'EXECUTE'
+        )
+        and not pg_catalog.has_function_privilege(
+            'service_role', 'public.omr_quarantine_kakao_reminder_legacy_v1(text)', 'EXECUTE'
+        )
+        and not pg_catalog.has_function_privilege(
+            'anon',
+            'public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)',
+            'EXECUTE'
+        )
+        and not pg_catalog.has_function_privilege(
+            'authenticated',
+            'public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)',
+            'EXECUTE'
+        )
+        and not pg_catalog.has_function_privilege(
+            'authenticated',
+            'public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)',
+            'EXECUTE'
+        )
+        and not pg_catalog.has_function_privilege(
+            'anon',
+            'public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)',
+            'EXECUTE'
+        )
+        and not exists (
+            select 1
+              from pg_catalog.pg_proc routine
+              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+             where namespace.nspname = 'public'
+               and routine.proname in (
+                   'omr_kakao_reminder_legacy_inventory_v1',
+                   'omr_quarantine_kakao_reminder_legacy_v1',
+                   'omr_kakao_reminder_entitlement_ready_v1'
+               )
+               and (
+                   pg_catalog.has_function_privilege('anon', routine.oid, 'EXECUTE')
+                   or pg_catalog.has_function_privilege('authenticated', routine.oid, 'EXECUTE')
+               )
+        );
+
     v_server_gateway_capabilities_ready := v_legacy_gateway_catalog_ready
         and v_assignment_generation_scope_ready
         and v_student_session_generation_ready
         and v_student_credential_batch_ready
         and v_canonical_question_result_evidence_ready
+        and v_kakao_reminder_entitlement_ready
         and v_effective_workspace_plan_enforcement_ready
         and v_roster_snapshot_cas_ready
         and v_cleanup_epoch_ready
@@ -2922,6 +3126,7 @@ begin
             'studentSessionGenerationReady', v_student_session_generation_ready,
             'studentCredentialBatchReady', v_student_credential_batch_ready,
             'canonicalQuestionResultEvidenceReady', v_canonical_question_result_evidence_ready,
+            'kakaoReminderEntitlementReady', v_kakao_reminder_entitlement_ready,
             'operationalJobStatusReady', v_operational_job_status_ready,
             'operatorPilotProvisioningReady', v_operator_pilot_provisioning_ready,
             'provisionedTeacherLoginReady', v_provisioned_teacher_login_ready,
@@ -2968,6 +3173,48 @@ revoke all on table public.omr_student_credential_epochs from public, anon, auth
 revoke all on table public.omr_student_credential_batch_receipts from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_start_credentials from service_role;
 grant select on table public.omr_student_start_credentials to service_role;
+revoke all on table public.omr_kakao_candidate_reviews from public, anon, authenticated, service_role;
+revoke all on table public.omr_kakao_dispatch_logs from public, anon, authenticated, service_role;
+revoke all on table public.omr_kakao_reminder_legacy_quarantine from public, anon, authenticated, service_role;
+grant select on table public.omr_kakao_candidate_reviews to service_role;
+grant select on table public.omr_kakao_dispatch_logs to service_role;
+grant select on table public.omr_kakao_reminder_legacy_quarantine to service_role;
+do $kakao_rpc_overload_acl$
+declare
+    routine record;
+begin
+    for routine in
+        select proc.proname,
+               proc.prokind,
+               pg_catalog.pg_get_function_identity_arguments(proc.oid) as identity_arguments
+          from pg_catalog.pg_proc proc
+          join pg_catalog.pg_namespace namespace on namespace.oid = proc.pronamespace
+         where namespace.nspname = 'public'
+           and proc.proname in (
+               'omr_save_kakao_candidate_review_v1',
+               'omr_save_kakao_simulation_dispatch_v1',
+               'omr_kakao_reminder_legacy_inventory_v1',
+               'omr_quarantine_kakao_reminder_legacy_v1',
+               'omr_kakao_reminder_entitlement_ready_v1'
+           )
+    loop
+        execute pg_catalog.format(
+            'revoke all on %s public.%I(%s) from public, anon, authenticated, service_role',
+            case when routine.prokind = 'p' then 'procedure' else 'function' end,
+            routine.proname,
+            routine.identity_arguments
+        );
+    end loop;
+end
+$kakao_rpc_overload_acl$;
+revoke all on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb) to service_role;
+revoke all on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb) to service_role;
+grant execute on function public.omr_kakao_reminder_legacy_inventory_v1() to service_role;
+grant execute on function public.omr_kakao_reminder_entitlement_ready_v1() to service_role;
 revoke all on function public.omr_guard_student_credential_mutation_v1() from public, anon, authenticated, service_role;
 revoke all on function public.omr_guard_student_profile_generation_v1() from public, anon, authenticated, service_role;
 revoke all on function public.omr_guard_student_credential_mutation_v8_snapshot() from public, anon, authenticated, service_role;

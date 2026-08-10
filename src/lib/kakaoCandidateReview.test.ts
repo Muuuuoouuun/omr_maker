@@ -44,6 +44,42 @@ function candidate(overrides: Partial<KakaoNotificationCandidate> = {}): KakaoNo
 }
 
 describe("kakao candidate review", () => {
+    it("round-trips stable ID/display-name pairs in source order and permits duplicate names", () => {
+        const exact = {
+            candidateId: "kakao:missing:pair-order",
+            status: "ready",
+            channel: "kakao",
+            kind: "missing_exam",
+            examId: "exam-1",
+            title: "정확한 대상 쌍",
+            targetCount: 3,
+            studentIds: ["student-z", "student-a", "student-m"],
+            studentNames: ["김학생", "김학생", "이학생"],
+            updatedAt: "2026-08-10T00:00:00.000Z",
+        } as const;
+
+        expect(parseKakaoCandidateReviews(JSON.stringify([exact]))).toEqual({
+            [exact.candidateId]: exact,
+        });
+    });
+
+    it("rejects review rows whose target pairs are mismatched or IDs are duplicated", () => {
+        const base = {
+            candidateId: "kakao:missing:invalid-pairs",
+            status: "ready",
+            channel: "kakao",
+            kind: "missing_exam",
+            examId: "exam-1",
+            title: "잘못된 대상 쌍",
+            targetCount: 2,
+            studentIds: ["student-a", "student-b"],
+            studentNames: ["김학생", "이학생"],
+            updatedAt: "2026-08-10T00:00:00.000Z",
+        };
+        expect(parseKakaoCandidateReviews(JSON.stringify([{ ...base, studentNames: ["김학생"] }]))).toEqual({});
+        expect(parseKakaoCandidateReviews(JSON.stringify([{ ...base, studentIds: ["student-a", "student-a"] }]))).toEqual({});
+    });
+
     it("persists the latest pre-send review status by candidate id", () => {
         const localStorage = storage();
         const reviews = setKakaoCandidateReview(localStorage, candidate(), "ready", new Date("2026-06-16T10:00:00.000Z"));

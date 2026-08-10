@@ -1,5 +1,76 @@
 \set ON_ERROR_STOP on
 
+do $kakao_rollback_boundary$
+begin
+    if exists (
+        select 1
+          from pg_catalog.pg_proc routine
+          join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+         where namespace.nspname = 'public'
+           and routine.proname in (
+               'omr_save_kakao_candidate_review_v1',
+               'omr_save_kakao_simulation_dispatch_v1',
+               'omr_kakao_reminder_legacy_inventory_v1',
+               'omr_quarantine_kakao_reminder_legacy_v1',
+               'omr_kakao_reminder_entitlement_ready_v1'
+           )
+           and (
+               pg_catalog.has_function_privilege('anon', routine.oid, 'EXECUTE')
+               or pg_catalog.has_function_privilege('authenticated', routine.oid, 'EXECUTE')
+               or (
+                   pg_catalog.has_function_privilege('service_role', routine.oid, 'EXECUTE')
+                   and routine.oid not in (
+                       'public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)'::pg_catalog.regprocedure,
+                       'public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)'::pg_catalog.regprocedure,
+                       'public.omr_kakao_reminder_legacy_inventory_v1()'::pg_catalog.regprocedure,
+                       'public.omr_kakao_reminder_entitlement_ready_v1()'::pg_catalog.regprocedure
+                   )
+               )
+           )
+    ) then
+        raise exception 'rollback left a Kakao overload executable';
+    end if;
+    if not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_kakao_reminder_legacy_inventory_v1()', 'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_kakao_reminder_entitlement_ready_v1()', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_quarantine_kakao_reminder_legacy_v1(text)', 'EXECUTE'
+    ) then
+        raise exception 'rollback lost the exact Kakao service/helper ACL';
+    end if;
+    if exists (
+        select 1 from (values
+            ('public.omr_kakao_candidate_reviews'),
+            ('public.omr_kakao_dispatch_logs'),
+            ('public.omr_kakao_reminder_legacy_quarantine')
+        ) guarded(table_name)
+         where not pg_catalog.has_table_privilege('service_role', table_name, 'SELECT')
+            or pg_catalog.has_table_privilege(
+                'service_role', table_name,
+                'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+            )
+            or pg_catalog.has_table_privilege(
+                'anon', table_name, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+            )
+            or pg_catalog.has_table_privilege(
+                'authenticated', table_name,
+                'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+            )
+    ) then
+        raise exception 'rollback weakened Kakao source or quarantine table ACL';
+    end if;
+end
+$kakao_rollback_boundary$;
+
 do $$
 begin
     if not pg_catalog.has_schema_privilege('anon', 'public', 'USAGE')

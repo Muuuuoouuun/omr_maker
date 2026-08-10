@@ -146,7 +146,7 @@ self-signup이 제품 요구라면 현재는 미구현이다.
 
 - 100명 초기 운영 상한을 중앙 정책으로 관리한다. attempt 목록은 250건씩 안정된 최신순으로 최대 2,001건만 읽고, 초과 시 최근 2,000건과 partial metadata를 반환한다.
 - canonical 테이블은 production boundary에서 브라우저 권한을 회수하고 service-role RPC만 허용한다.
-- 조직 격리 preflight, 42개 canonical 테이블 FORCE RLS, private Storage 경계를 PostgreSQL에서 검사한다.
+- 조직 격리 preflight, 43개 canonical 테이블 FORCE RLS, private Storage 경계를 PostgreSQL에서 검사한다.
 - 시험·제출·피드백·세션·로스터에 revision/receipt/lease 기반 CAS와 replay 방어가 있다.
 - 로스터 load/save는 동일 advisory lock의 원자 RPC를 사용하고 stale writer를 거절한다.
 - 학생 로그인 조회는 활성·조직 범위와 DB 상한을 적용하고 overflow 시 credential work 전에 중단한다.

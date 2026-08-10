@@ -2,22 +2,45 @@
 
 import { cookies, headers } from "next/headers";
 import { createSupabaseAdminClient, getSupabaseServerConfigFromEnv } from "@/lib/supabaseServerAdmin";
+import {
+    saveKakaoCandidateReviewWithGateway,
+    saveKakaoSimulationDispatchWithGateway,
+    type KakaoReminderGatewayClient,
+    type KakaoReminderMutationResult,
+} from "@/lib/kakaoReminderGateway.server";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import { resolveAuthorizedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
 import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 
-type Result = { status: "saved" } | { status: "local_only" | "unauthorized" | "service_unavailable"; error?: string };
-type QueryResult = { data: unknown; error: { message?: string } | null };
-interface SelectQuery {
-    eq(column: string, value: string): SelectQuery;
-    maybeSingle(): Promise<QueryResult>;
-}
-type Client = { from(table: string): { select(columns: string): SelectQuery; upsert(row: unknown): Promise<QueryResult> } };
-type Context = { client: Client; workspace: ReturnType<typeof workspaceContextFromTeacherSession> } | { status: "local_only" | "unauthorized" | "service_unavailable" };
+type FailureStatus = Exclude<KakaoReminderMutationResult["status"], "saved"> | "local_only";
+type Result = { status: "saved" } | { status: FailureStatus; error?: string };
+type Context = {
+    client: KakaoReminderGatewayClient;
+    workspace: ReturnType<typeof workspaceContextFromTeacherSession>;
+} | { status: "local_only" | "unauthorized" | "service_unavailable" };
 
-function clean(value: unknown): string {
-    return typeof value === "string" ? value.trim() : "";
+function stableFailure(status: FailureStatus): Result {
+    if (status === "local_only" || status === "unauthorized") return { status };
+    if (status === "plan_denied") {
+        return { status, error: "현재 서버 플랜에서 카카오 리마인더를 사용할 수 없습니다." };
+    }
+    if (status === "legacy_reconciliation_required") {
+        return { status, error: "기존 카카오 리마인더 기록의 운영자 조정이 필요합니다." };
+    }
+    if (status === "invalid_request") {
+        return { status, error: "카카오 리마인더 저장 요청이 올바르지 않습니다." };
+    }
+    if (status === "scope_conflict") {
+        return { status, error: "카카오 리마인더 식별자 범위가 기존 기록과 충돌합니다." };
+    }
+    if (status === "not_found") {
+        return { status, error: "카카오 리마인더 검토 기록을 찾을 수 없습니다." };
+    }
+    if (status === "invalid_transition") {
+        return { status, error: "카카오 리마인더 상태 전이를 적용할 수 없습니다." };
+    }
+    return { status: "service_unavailable", error: "카카오 리마인더 서버 저장을 사용할 수 없습니다." };
 }
 
 async function context(): Promise<Context> {
@@ -28,60 +51,20 @@ async function context(): Promise<Context> {
     const session = await resolveAuthorizedTeacherSessionCookie((await cookies()).get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!session) return { status: "unauthorized" as const };
     if (!isTeacherMutationAuthorized(session)) return { status: "unauthorized" as const };
-    return { client: createSupabaseAdminClient(config) as unknown as Client, workspace: workspaceContextFromTeacherSession(session) };
-}
-
-async function verifyScopedRow(
-    client: Client,
-    table: string,
-    idColumn: string,
-    id: string,
-    organizationId: string,
-    extraFilters: Record<string, string> = {},
-): Promise<boolean> {
-    if (!clean(id) || !clean(organizationId)) return false;
-    let query = client.from(table).select(idColumn).eq("organization_id", organizationId).eq(idColumn, id);
-    for (const [column, value] of Object.entries(extraFilters)) query = query.eq(column, value);
-    const result = await query.maybeSingle();
-    if (result.error) throw new Error(result.error.message || "Scope verification failed");
-    return !!result.data;
-}
-
-async function canUpsertScopedId(
-    client: Client,
-    table: string,
-    id: string,
-    organizationId: string,
-): Promise<boolean> {
-    if (!clean(id) || !clean(organizationId)) return false;
-    const result = await client.from(table).select("organization_id").eq("id", id).maybeSingle();
-    if (result.error) throw new Error(result.error.message || "Target scope verification failed");
-    if (!result.data) return true;
-    return typeof result.data === "object"
-        && clean((result.data as { organization_id?: unknown }).organization_id) === organizationId;
+    return {
+        client: createSupabaseAdminClient(config) as unknown as KakaoReminderGatewayClient,
+        workspace: workspaceContextFromTeacherSession(session),
+    };
 }
 
 export async function saveTeacherKakaoReview(row: Record<string, unknown>): Promise<Result> {
     try {
         const gateway = await context();
         if ("status" in gateway) return gateway;
-        const reviewId = clean(row.id);
-        const examId = clean(row.exam_id);
-        const [examScoped, targetScoped] = await Promise.all([
-            verifyScopedRow(gateway.client, "omr_exams", "id", examId, gateway.workspace.organizationId),
-            canUpsertScopedId(gateway.client, "omr_kakao_candidate_reviews", reviewId, gateway.workspace.organizationId),
-        ]);
-        if (!examScoped || !targetScoped) return { status: "unauthorized" };
-        const result = await gateway.client.from("omr_kakao_candidate_reviews").upsert({
-            ...row,
-            id: reviewId,
-            exam_id: examId,
-            organization_id: gateway.workspace.organizationId,
-            reviewed_by_user_id: gateway.workspace.actorUserId || null,
-        });
-        return result.error ? { status: "service_unavailable" } : { status: "saved" };
+        const result = await saveKakaoCandidateReviewWithGateway(gateway.client, row, gateway.workspace);
+        return result.status === "saved" ? result : stableFailure(result.status);
     } catch {
-        return { status: "service_unavailable" };
+        return stableFailure("service_unavailable");
     }
 }
 
@@ -89,31 +72,9 @@ export async function saveTeacherKakaoDispatch(row: Record<string, unknown>): Pr
     try {
         const gateway = await context();
         if ("status" in gateway) return gateway;
-        const dispatchId = clean(row.id);
-        const examId = clean(row.exam_id);
-        const reviewId = clean(row.review_id);
-        const [examScoped, reviewScoped, targetScoped] = await Promise.all([
-            verifyScopedRow(gateway.client, "omr_exams", "id", examId, gateway.workspace.organizationId),
-            verifyScopedRow(
-                gateway.client,
-                "omr_kakao_candidate_reviews",
-                "id",
-                reviewId,
-                gateway.workspace.organizationId,
-                { exam_id: examId },
-            ),
-            canUpsertScopedId(gateway.client, "omr_kakao_dispatch_logs", dispatchId, gateway.workspace.organizationId),
-        ]);
-        if (!examScoped || !reviewScoped || !targetScoped) return { status: "unauthorized" };
-        const result = await gateway.client.from("omr_kakao_dispatch_logs").upsert({
-            ...row,
-            id: dispatchId,
-            review_id: reviewId,
-            exam_id: examId,
-            organization_id: gateway.workspace.organizationId,
-        });
-        return result.error ? { status: "service_unavailable" } : { status: "saved" };
+        const result = await saveKakaoSimulationDispatchWithGateway(gateway.client, row, gateway.workspace);
+        return result.status === "saved" ? result : stableFailure(result.status);
     } catch {
-        return { status: "service_unavailable" };
+        return stableFailure("service_unavailable");
     }
 }

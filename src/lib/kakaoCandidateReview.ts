@@ -28,9 +28,25 @@ function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
-function cleanStringArray(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
-    return Array.from(new Set(value.map(clean).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ko"));
+function cleanStudentTargets(
+    idsValue: unknown,
+    namesValue: unknown,
+    targetCount: number,
+): { studentIds: string[]; studentNames: string[] } | null {
+    if (!Array.isArray(idsValue) || !Array.isArray(namesValue)
+        || idsValue.length !== namesValue.length || idsValue.length !== targetCount) return null;
+    const studentIds: string[] = [];
+    const studentNames: string[] = [];
+    const seenIds = new Set<string>();
+    for (let index = 0; index < idsValue.length; index += 1) {
+        const studentId = clean(idsValue[index]);
+        const displayName = clean(namesValue[index]);
+        if (!studentId || !displayName || seenIds.has(studentId)) return null;
+        seenIds.add(studentId);
+        studentIds.push(studentId);
+        studentNames.push(displayName);
+    }
+    return { studentIds, studentNames };
 }
 
 function isReviewStatus(value: unknown): value is KakaoCandidateReviewStatus {
@@ -45,10 +61,13 @@ function normalizeReviewRecord(value: unknown): KakaoCandidateReviewRecord | nul
     const title = clean(value.title);
     const kind = clean(value.kind) as KakaoNotificationCandidateKind;
     const updatedAt = clean(value.updatedAt);
-    const targetCount = Math.max(0, Math.floor(Number(value.targetCount) || 0));
+    const targetCount = Number(value.targetCount);
 
-    if (!candidateId || !isReviewStatus(status) || !examId || !title || !updatedAt) return null;
+    if (!candidateId || !isReviewStatus(status) || !examId || !title || !updatedAt
+        || !Number.isSafeInteger(targetCount) || targetCount < 0) return null;
     if (kind !== "missing_exam" && kind !== "retake_recommendation" && kind !== "class_retake_recommendation") return null;
+    const targets = cleanStudentTargets(value.studentIds, value.studentNames, targetCount);
+    if (!targets) return null;
 
     return {
         candidateId,
@@ -58,8 +77,8 @@ function normalizeReviewRecord(value: unknown): KakaoCandidateReviewRecord | nul
         examId,
         title,
         targetCount,
-        studentIds: cleanStringArray(value.studentIds),
-        studentNames: cleanStringArray(value.studentNames),
+        studentIds: targets.studentIds,
+        studentNames: targets.studentNames,
         updatedAt,
     };
 }

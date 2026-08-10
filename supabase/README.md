@@ -219,7 +219,7 @@ idempotent, but its preflight is intentionally fail-closed. Use this order:
 7. Deploy the matching server build and verify teacher/student server-action
    journeys before reopening writes.
 
-The profile covers all canonical 42 tables under `public.omr_*`. Supabase requires entities
+The profile covers all canonical 43 tables under `public.omr_*`. Supabase requires entities
 under `storage` to remain owned by `supabase_storage_admin`; see
 [Supabase platform permissions](https://supabase.com/docs/guides/platform/permissions).
 Still in the `postgres` transaction, the profile verifies that `postgres` can

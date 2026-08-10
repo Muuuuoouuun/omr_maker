@@ -249,7 +249,7 @@ describe("restored staging environment verification", () => {
             environmentDigest: config.environmentDigest,
             targetDigest: config.targetDigest,
             verifierSourceSha256: "9".repeat(64),
-            databaseTableCount: 42,
+            databaseTableCount: CANONICAL_BACKUP_TABLES.length,
             storageObjectCount: 1,
             rpoMinutes: 60,
             rtoMinutes: 45,

@@ -59,6 +59,7 @@ const readyV22Payload = {
     studentSessionGenerationReady: true,
     studentCredentialBatchReady: true,
     canonicalQuestionResultEvidenceReady: true,
+    kakaoReminderEntitlementReady: true,
 };
 
 describe("Supabase deployment readiness probe", () => {
@@ -117,6 +118,7 @@ describe("Supabase deployment readiness probe", () => {
             studentSessionGenerationReady: true,
             studentCredentialBatchReady: true,
             canonicalQuestionResultEvidenceReady: true,
+            kakaoReminderEntitlementReady: true,
             failedChecks: [],
         });
     });

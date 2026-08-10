@@ -150,7 +150,10 @@ begin
                'omr_plan_usage_reservations',
                'omr_student_start_credentials',
                'omr_student_credential_epochs',
-               'omr_student_credential_batch_receipts'
+               'omr_student_credential_batch_receipts',
+               'omr_kakao_candidate_reviews',
+               'omr_kakao_dispatch_logs',
+               'omr_kakao_reminder_legacy_quarantine'
            )
            and (
                not has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -160,6 +163,24 @@ begin
            )
     ) then
         raise exception 'service_role lost an OMR table privilege';
+    end if;
+    if not has_table_privilege(
+        'service_role', 'public.omr_kakao_candidate_reviews', 'SELECT'
+    ) or has_table_privilege(
+        'service_role', 'public.omr_kakao_candidate_reviews',
+        'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) or not has_table_privilege(
+        'service_role', 'public.omr_kakao_dispatch_logs', 'SELECT'
+    ) or has_table_privilege(
+        'service_role', 'public.omr_kakao_dispatch_logs',
+        'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) or not has_table_privilege(
+        'service_role', 'public.omr_kakao_reminder_legacy_quarantine', 'SELECT'
+    ) or has_table_privilege(
+        'service_role', 'public.omr_kakao_reminder_legacy_quarantine',
+        'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) then
+        raise exception 'Kakao reminder tables are not RPC-write/select-read only';
     end if;
      if has_table_privilege(
         'service_role', 'public.omr_rate_limit_buckets',
@@ -336,6 +357,7 @@ begin
                ,'omr_revoke_withdrawn_student_credential_v8_snapshot()'
                ,'omr_revoke_student_session_on_delete_v2()'
                ,'omr_rotate_student_start_credential_v1(text, text, bigint, text, text, text, text)'
+               ,'omr_quarantine_kakao_reminder_legacy_v1(text)'
            )
     ) then
         raise exception 'service_role lost a public function execute privilege';

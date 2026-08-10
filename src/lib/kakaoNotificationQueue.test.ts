@@ -143,6 +143,30 @@ describe("kakao notification queue", () => {
         });
     });
 
+    it("keeps equal display names aligned one-to-one with distinct stable student IDs", () => {
+        const sameNameStudents: RosterStudent[] = [
+            { ...baseStudent, id: "class-a::student-1", name: "김학생", group: "A반", region: "서울" },
+            { ...baseStudent, id: "class-a::student-2", name: "김학생", group: "A반", region: "서울" },
+        ];
+        const summary = buildKakaoNotificationCandidates({
+            exams: [exam],
+            attempts: [
+                attempt({ id: "attempt-a", studentId: "class-a::student-1", studentName: "김학생" }),
+                attempt({ id: "attempt-b", studentId: "class-a::student-2", studentName: "김학생" }),
+            ],
+            students: sameNameStudents,
+            groups,
+            now: new Date("2026-06-15T10:30:00.000Z"),
+        });
+
+        expect(summary.candidates.find(candidate => candidate.kind === "retake_recommendation"))
+            .toMatchObject({
+                targetCount: 2,
+                studentIds: ["class-a::student-1", "class-a::student-2"],
+                studentNames: ["김학생", "김학생"],
+            });
+    });
+
     it("does not create missing-exam candidates before an exam starts", () => {
         const summary = buildKakaoNotificationCandidates({
             exams: [exam],

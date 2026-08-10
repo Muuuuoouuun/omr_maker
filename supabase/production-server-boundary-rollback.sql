@@ -151,6 +151,58 @@ revoke all on table public.omr_operational_job_status from public, anon, authent
 revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_credential_epochs from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_credential_batch_receipts from public, anon, authenticated, service_role;
+revoke all on table public.omr_kakao_candidate_reviews
+    from public, anon, authenticated, service_role;
+revoke all on table public.omr_kakao_dispatch_logs
+    from public, anon, authenticated, service_role;
+revoke all on table public.omr_kakao_reminder_legacy_quarantine
+    from public, anon, authenticated, service_role;
+grant select on table public.omr_kakao_candidate_reviews to service_role;
+grant select on table public.omr_kakao_dispatch_logs to service_role;
+grant select on table public.omr_kakao_reminder_legacy_quarantine to service_role;
+do $kakao_rpc_overload_acl$
+declare
+    routine record;
+begin
+    for routine in
+        select proc.proname, proc.prokind,
+               pg_catalog.pg_get_function_identity_arguments(proc.oid) as identity_arguments
+          from pg_catalog.pg_proc proc
+          join pg_catalog.pg_namespace namespace on namespace.oid = proc.pronamespace
+         where namespace.nspname = 'public'
+           and proc.proname in (
+               'omr_save_kakao_candidate_review_v1',
+               'omr_save_kakao_simulation_dispatch_v1',
+               'omr_kakao_reminder_legacy_inventory_v1',
+               'omr_quarantine_kakao_reminder_legacy_v1',
+               'omr_kakao_reminder_entitlement_ready_v1'
+           )
+    loop
+        execute pg_catalog.format(
+            'revoke all on %s public.%I(%s) from public, anon, authenticated, service_role',
+            case when routine.prokind = 'p' then 'procedure' else 'function' end,
+            routine.proname,
+            routine.identity_arguments
+        );
+    end loop;
+end
+$kakao_rpc_overload_acl$;
+alter function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    owner to postgres;
+alter function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    owner to postgres;
+revoke all on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    to service_role;
+revoke all on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    to service_role;
+grant execute on function public.omr_kakao_reminder_legacy_inventory_v1()
+    to service_role;
+grant execute on function public.omr_kakao_reminder_entitlement_ready_v1()
+    to service_role;
 revoke all on table public.omr_student_start_credentials from service_role;
 grant select on table public.omr_student_start_credentials to service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
@@ -565,8 +617,10 @@ alter table if exists public.omr_attempts no force row level security;
 alter table if exists public.omr_question_results no force row level security;
 alter table if exists public.omr_assignment_submissions no force row level security;
 alter table if exists public.omr_attempt_feedback no force row level security;
-alter table if exists public.omr_kakao_candidate_reviews no force row level security;
-alter table if exists public.omr_kakao_dispatch_logs no force row level security;
+-- This paid mutation boundary is permanent across compatibility rollback.
+alter table if exists public.omr_kakao_candidate_reviews force row level security;
+alter table if exists public.omr_kakao_dispatch_logs force row level security;
+alter table if exists public.omr_kakao_reminder_legacy_quarantine force row level security;
 alter table if exists public.omr_comments no force row level security;
 alter table if exists public.omr_audit_logs no force row level security;
 alter table if exists public.omr_remote_assets no force row level security;
@@ -622,13 +676,62 @@ create policy "OMR assignment submissions are publicly writable" on public.omr_a
 drop policy if exists "OMR attempt feedback is publicly writable" on public.omr_attempt_feedback;
 create policy "OMR attempt feedback is publicly writable" on public.omr_attempt_feedback for all using (true) with check (true);
 drop policy if exists "OMR Kakao candidate reviews are publicly writable" on public.omr_kakao_candidate_reviews;
-create policy "OMR Kakao candidate reviews are publicly writable" on public.omr_kakao_candidate_reviews for all using (true) with check (true);
 drop policy if exists "OMR Kakao dispatch logs are publicly writable" on public.omr_kakao_dispatch_logs;
-create policy "OMR Kakao dispatch logs are publicly writable" on public.omr_kakao_dispatch_logs for all using (true) with check (true);
 drop policy if exists "OMR comments are publicly writable" on public.omr_comments;
 create policy "OMR comments are publicly writable" on public.omr_comments for all using (true) with check (true);
 drop policy if exists "OMR audit logs are publicly writable" on public.omr_audit_logs;
 create policy "OMR audit logs are publicly writable" on public.omr_audit_logs for all using (true) with check (true);
+
+drop policy if exists "prod kakao reviews write by staff" on public.omr_kakao_candidate_reviews;
+drop policy if exists "prod kakao logs write by staff" on public.omr_kakao_dispatch_logs;
+revoke all on table public.omr_kakao_candidate_reviews
+    from public, anon, authenticated, service_role;
+revoke all on table public.omr_kakao_dispatch_logs
+    from public, anon, authenticated, service_role;
+revoke all on table public.omr_kakao_reminder_legacy_quarantine
+    from public, anon, authenticated, service_role;
+grant select on table public.omr_kakao_candidate_reviews to service_role;
+grant select on table public.omr_kakao_dispatch_logs to service_role;
+grant select on table public.omr_kakao_reminder_legacy_quarantine to service_role;
+do $kakao_rpc_overload_acl$
+declare
+    routine record;
+begin
+    for routine in
+        select proc.proname, proc.prokind,
+               pg_catalog.pg_get_function_identity_arguments(proc.oid) as identity_arguments
+          from pg_catalog.pg_proc proc
+          join pg_catalog.pg_namespace namespace on namespace.oid = proc.pronamespace
+         where namespace.nspname = 'public'
+           and proc.proname in (
+               'omr_save_kakao_candidate_review_v1',
+               'omr_save_kakao_simulation_dispatch_v1',
+               'omr_kakao_reminder_legacy_inventory_v1',
+               'omr_quarantine_kakao_reminder_legacy_v1',
+               'omr_kakao_reminder_entitlement_ready_v1'
+           )
+    loop
+        execute pg_catalog.format(
+            'revoke all on %s public.%I(%s) from public, anon, authenticated, service_role',
+            case when routine.prokind = 'p' then 'procedure' else 'function' end,
+            routine.proname,
+            routine.identity_arguments
+        );
+    end loop;
+end
+$kakao_rpc_overload_acl$;
+revoke all on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    to service_role;
+revoke all on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_save_kakao_simulation_dispatch_v1(text,text,bigint,text,text,jsonb)
+    to service_role;
+grant execute on function public.omr_kakao_reminder_legacy_inventory_v1()
+    to service_role;
+grant execute on function public.omr_kakao_reminder_entitlement_ready_v1()
+    to service_role;
 
 -- Durable student sessions did not exist in the alpha browser-access baseline.
 -- Keep their table and every RPC overload service-only even after the rollback's

@@ -90,6 +90,14 @@ begin
        ) then
         raise exception 'production boundary weakened atomic student credential batch ACL';
     end if;
+    if exists (
+        select 1
+          from pg_catalog.pg_policy policy
+         where policy.polrelid =
+                   'public.omr_kakao_reminder_legacy_quarantine'::pg_catalog.regclass
+    ) then
+        raise exception 'production boundary retained a Kakao quarantine policy';
+    end if;
     readiness := public.omr_service_readiness_v1();
     if readiness ->> 'version' <> '202608090001'
        or readiness ->> 'ready' <> 'true'
@@ -333,6 +341,53 @@ begin
     end if;
 end
 $$;
+
+create role kakao_non_bypass_owner nologin nosuperuser nobypassrls;
+alter function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    owner to kakao_non_bypass_owner;
+
+do $kakao_mutation_owner_readiness_drift$
+declare
+    readiness jsonb := public.omr_service_readiness_v1();
+begin
+    if readiness ->> 'kakaoReminderEntitlementReady' <> 'false'
+       or readiness ->> 'ready' <> 'false' then
+        raise exception 'Kakao mutation owner drift did not fail readiness: %', readiness;
+    end if;
+end
+$kakao_mutation_owner_readiness_drift$;
+
+set role service_role;
+do $kakao_mutation_owner_execution_drift$
+begin
+    begin
+        perform public.omr_save_kakao_candidate_review_v1(
+            'legacy_account', 'kakao-owner-drift-account', 1,
+            'kakao-owner-drift-org', 'kakao-owner-drift-account',
+            '{"id":"kakao:owner-drift","examId":"kakao-owner-drift-exam","candidateKind":"missing_exam","status":"ready","title":"Owner drift","targetCount":0,"studentIds":[],"studentNames":[],"groupNames":[],"regionNames":[],"messagePreview":"Owner drift","reason":null,"href":null}'::jsonb
+        );
+        raise exception 'Kakao mutation owner drift remained executable';
+    exception
+        when insufficient_privilege then null;
+    end;
+end
+$kakao_mutation_owner_execution_drift$;
+reset role;
+
+alter function public.omr_save_kakao_candidate_review_v1(text,text,bigint,text,text,jsonb)
+    owner to postgres;
+drop role kakao_non_bypass_owner;
+
+do $kakao_mutation_owner_readiness_recovered$
+declare
+    readiness jsonb := public.omr_service_readiness_v1();
+begin
+    if readiness ->> 'kakaoReminderEntitlementReady' <> 'true'
+       or readiness ->> 'ready' <> 'true' then
+        raise exception 'Kakao mutation owner restore did not recover readiness: %', readiness;
+    end if;
+end
+$kakao_mutation_owner_readiness_recovered$;
 
 begin;
 revoke execute on function public.omr_get_exam_entry_invite_metadata_v1(text,text,text)

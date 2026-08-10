@@ -19,8 +19,10 @@ const container = `omr-postgres-verify-${process.pid}`;
 const password = "omr-live-test-password";
 const migrationOwner = "postgres";
 const localDatabase = "omr_live_verify";
-const requiredPostgresBinaries = ["initdb", "pg_ctl", "createdb", "psql", "postgres"];
+const requiredPostgresBinaries = ["initdb", "pg_ctl", "createdb", "psql", "postgres", "pg_dump"];
 const dockerInfoTimeoutMs = 5_000;
+const kakaoEntitlementUpgradeFixture =
+    process.env.OMR_KAKAO_ENTITLEMENT_UPGRADE_FIXTURE === "1";
 const liveCanonicalTablesSql = `
 select coalesce(json_agg(canonical.table_name order by canonical.table_name), '[]'::json)::text
   from (
@@ -111,7 +113,7 @@ $probe$
     }
 }
 
-function runSqlMatrix(psqlFile, psqlQuery) {
+function runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip) {
     psqlFile("supabase/live-test-prelude.sql");
     psqlFile("supabase/schema.sql");
     psqlFile("supabase/live-test-alpha-generated-helpers.sql");
@@ -120,21 +122,40 @@ function runSqlMatrix(psqlFile, psqlQuery) {
         .filter(name => name.endsWith(".sql"))
         .sort();
     for (const migration of migrations) {
+        if (
+            kakaoEntitlementUpgradeFixture
+            && migration === "202608100002_kakao_reminder_entitlement_boundary.sql"
+        ) {
+            psqlFile("supabase/kakao-reminder-entitlement-upgrade-fixtures.sql");
+        }
         psqlFile(`supabase/migrations/${migration}`);
+        if (
+            kakaoEntitlementUpgradeFixture
+            && migration === "202608100002_kakao_reminder_entitlement_boundary.sql"
+        ) {
+            psqlFile("supabase/kakao-reminder-entitlement-upgrade-assertions.sql");
+        }
     }
     assertUnsupportedLiveRelationProbe(psqlQuery);
     assertLiveCanonicalTables(psqlQuery);
 
+    verifyKakaoQuarantineBackupRoundtrip();
+    psqlFile("supabase/kakao-reminder-entitlement-readiness-performance-assertions.sql");
     psqlFile("supabase/canonical-question-result-evidence-assertions.sql");
+    psqlFile("supabase/kakao-reminder-entitlement-assertions.sql");
+    psqlFile("supabase/kakao-reminder-entitlement-concurrency-lock.sql");
     psqlFile("supabase/individual-student-assignments-assertions.sql");
     psqlFile("supabase/teacher-force-finish-compact-assertions.sql");
     psqlFile("supabase/teacher-session-revocation-assertions.sql");
     psqlFile("supabase/production-server-boundary.sql");
     psqlFile("supabase/live-test-boundary-assertions.sql");
+    psqlFile("supabase/kakao-reminder-overload-fixtures.sql");
     psqlFile("supabase/production-server-boundary-rollback.sql", [
         "set omr.rollback_confirm = 'restore-browser-access'",
     ]);
     psqlFile("supabase/live-test-rollback-assertions.sql");
+    psqlFile("supabase/production-server-boundary.sql");
+    psqlFile("supabase/kakao-reminder-overload-boundary-assertions.sql");
     psqlFile("supabase/production-server-boundary.sql");
     psqlFile("supabase/live-test-boundary-assertions.sql");
     psqlFile("supabase/live-test-assertions.sql");
@@ -215,6 +236,7 @@ function runDockerVerification() {
             "exec", container,
             "psql", "-U", migrationOwner, "-d", "postgres",
             "-v", "ON_ERROR_STOP=1",
+            "-v", `kakao_dblink_password=${password}`,
             ...commands.flatMap(command => ["-c", command]),
             "-f", `/workspace/${path}`,
         ]);
@@ -226,6 +248,59 @@ function runDockerVerification() {
             "psql", "-U", migrationOwner, "-d", "postgres",
             "-v", "ON_ERROR_STOP=1", "-At", "-c", sql,
         ], { capture: true }).stdout;
+    }
+
+    function verifyKakaoQuarantineBackupRoundtrip() {
+        if (!CANONICAL_TABLES.includes("omr_kakao_reminder_legacy_quarantine")) {
+            throw new Error("Kakao quarantine is absent from the canonical backup allowlist");
+        }
+        const dumpPath = `/tmp/omr-kakao-quarantine-${process.pid}.sql`;
+        const exactRowsSql = `
+select coalesce(
+           jsonb_agg(to_jsonb(evidence) order by source_table, source_id),
+           '[]'::jsonb
+       )::text
+  from public.omr_kakao_reminder_legacy_quarantine evidence
+`;
+        psqlQuery(`
+insert into public.omr_kakao_reminder_legacy_quarantine (
+    source_table, source_id, organization_id, row_snapshot, reason, inventoried_at
+) values (
+    'omr_kakao_candidate_reviews', 'kakao:backup-roundtrip:source',
+    'kakao-backup-roundtrip-org',
+    '{"schemaVersion":1,"payload":{"opaque":"preserve-exactly"}}'::jsonb,
+    'operator forensic retention fixture',
+    '2026-08-10T00:00:00.123456Z'::timestamptz
+)
+on conflict (source_table, source_id) do update set
+    organization_id = excluded.organization_id,
+    row_snapshot = excluded.row_snapshot,
+    reason = excluded.reason,
+    inventoried_at = excluded.inventoried_at
+        `);
+        const before = psqlQuery(exactRowsSql).trim();
+        run("docker", [
+            "exec", container,
+            "pg_dump", "-U", migrationOwner, "-d", "postgres",
+            "--data-only", "--no-owner", "--no-privileges",
+            "--table=public.omr_kakao_reminder_legacy_quarantine",
+            `--file=${dumpPath}`,
+        ], { timeout: 30_000 });
+        psqlQuery("delete from public.omr_kakao_reminder_legacy_quarantine");
+        run("docker", [
+            "exec", container,
+            "psql", "-U", migrationOwner, "-d", "postgres",
+            "-v", "ON_ERROR_STOP=1", "-f", dumpPath,
+        ], { timeout: 30_000 });
+        const after = psqlQuery(exactRowsSql).trim();
+        if (after !== before) {
+            throw new Error("actual Kakao quarantine pg_dump/restore changed forensic evidence");
+        }
+        psqlQuery(`
+delete from public.omr_kakao_reminder_legacy_quarantine
+ where source_table = 'omr_kakao_candidate_reviews'
+   and source_id = 'kakao:backup-roundtrip:source'
+        `);
     }
 
     try {
@@ -251,7 +326,7 @@ function runDockerVerification() {
         }
         if (!ready) throw new Error("PostgreSQL container did not become ready in time.");
 
-        runSqlMatrix(psqlFile, psqlQuery);
+        runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip);
     } finally {
         run("docker", ["rm", "--force", container], { capture: true, allowFailure: true });
     }
@@ -295,6 +370,7 @@ async function runLocalVerification() {
                 "-U", migrationOwner,
                 "-d", localDatabase,
                 "-v", "ON_ERROR_STOP=1",
+                "-v", `kakao_dblink_password=${password}`,
                 ...commands.flatMap(command => ["-c", command]),
                 "-f", resolve(root, path),
             ], { env: localEnv });
@@ -309,6 +385,59 @@ async function runLocalVerification() {
                 "-v", "ON_ERROR_STOP=1",
                 "-At", "-c", sql,
             ], { capture: true, env: localEnv }).stdout;
+        }
+
+        function verifyKakaoQuarantineBackupRoundtrip() {
+            if (!CANONICAL_TABLES.includes("omr_kakao_reminder_legacy_quarantine")) {
+                throw new Error("Kakao quarantine is absent from the canonical backup allowlist");
+            }
+            const dumpPath = resolve(temporaryDirectory, "omr-kakao-quarantine.sql");
+            const exactRowsSql = `
+select coalesce(
+           jsonb_agg(to_jsonb(evidence) order by source_table, source_id),
+           '[]'::jsonb
+       )::text
+  from public.omr_kakao_reminder_legacy_quarantine evidence
+`;
+            psqlQuery(`
+insert into public.omr_kakao_reminder_legacy_quarantine (
+    source_table, source_id, organization_id, row_snapshot, reason, inventoried_at
+) values (
+    'omr_kakao_candidate_reviews', 'kakao:backup-roundtrip:source',
+    'kakao-backup-roundtrip-org',
+    '{"schemaVersion":1,"payload":{"opaque":"preserve-exactly"}}'::jsonb,
+    'operator forensic retention fixture',
+    '2026-08-10T00:00:00.123456Z'::timestamptz
+)
+on conflict (source_table, source_id) do update set
+    organization_id = excluded.organization_id,
+    row_snapshot = excluded.row_snapshot,
+    reason = excluded.reason,
+    inventoried_at = excluded.inventoried_at
+            `);
+            const before = psqlQuery(exactRowsSql).trim();
+            run(postgresBinary(postgresBin, "pg_dump"), [
+                "-h", "127.0.0.1", "-p", String(port),
+                "-U", migrationOwner, "-d", localDatabase,
+                "--data-only", "--no-owner", "--no-privileges",
+                "--table=public.omr_kakao_reminder_legacy_quarantine",
+                `--file=${dumpPath}`,
+            ], { env: localEnv, timeout: 30_000 });
+            psqlQuery("delete from public.omr_kakao_reminder_legacy_quarantine");
+            run(postgresBinary(postgresBin, "psql"), [
+                "-h", "127.0.0.1", "-p", String(port),
+                "-U", migrationOwner, "-d", localDatabase,
+                "-v", "ON_ERROR_STOP=1", "-f", dumpPath,
+            ], { env: localEnv, timeout: 30_000 });
+            const after = psqlQuery(exactRowsSql).trim();
+            if (after !== before) {
+                throw new Error("actual Kakao quarantine pg_dump/restore changed forensic evidence");
+            }
+            psqlQuery(`
+delete from public.omr_kakao_reminder_legacy_quarantine
+ where source_table = 'omr_kakao_candidate_reviews'
+   and source_id = 'kakao:backup-roundtrip:source'
+            `);
         }
 
         run(postgresBinary(postgresBin, "initdb"), [
@@ -336,7 +465,7 @@ async function runLocalVerification() {
             localDatabase,
         ], { env: localEnv });
 
-        runSqlMatrix(psqlFile, psqlQuery);
+        runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip);
     } finally {
         run(postgresBinary(postgresBin, "pg_ctl"), [
             "-D", resolve(temporaryDirectory, "data"),

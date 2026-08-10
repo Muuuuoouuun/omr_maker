@@ -41,7 +41,14 @@ describe("production boundary rollback contract", () => {
     it("restores exactly the alpha policies the boundary drops", () => {
         const dropped = droppedAlphaPolicies(boundary);
         const restored = createdPolicies(rollback);
-        expect(restored).toEqual(dropped);
+        const permanentlyClosed = new Set([
+            "OMR Kakao candidate reviews are publicly writable",
+            "OMR Kakao dispatch logs are publicly writable",
+        ]);
+        expect(restored).toEqual(dropped.filter(name => !permanentlyClosed.has(name)));
+        for (const name of permanentlyClosed) {
+            expect(rollback).not.toContain(`create policy "${name}"`);
+        }
     });
 
     it("restores policies that schema.sql actually defines", () => {
@@ -106,6 +113,9 @@ describe("production boundary rollback contract", () => {
             "omr_operational_job_status",
             "omr_pilot_plan_grants",
             "omr_student_credential_epochs",
+            "omr_kakao_candidate_reviews",
+            "omr_kakao_dispatch_logs",
+            "omr_kakao_reminder_legacy_quarantine",
         ]);
         const forcedByBoundary = new Set(
             [...boundary.matchAll(/alter table if exists public\.(omr_\w+) force row level security/g)]

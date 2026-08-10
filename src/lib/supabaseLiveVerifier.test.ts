@@ -15,8 +15,19 @@ describe("Supabase live verifier local PostgreSQL fallback", () => {
         expect(verifier).toContain('psqlFile("supabase/live-test-assertions.sql")');
         expect(verifier).toContain('psqlFile("supabase/production-server-boundary-rollback.sql",');
         expect(verifier).toContain('psqlFile("supabase/live-test-rollback-assertions.sql")');
-        expect(verifier.match(/psqlFile\("supabase\/production-server-boundary\.sql"\)/g)).toHaveLength(2);
+        expect(verifier.match(/psqlFile\("supabase\/production-server-boundary\.sql"\)/g)).toHaveLength(3);
         expect(verifier.match(/psqlFile\("supabase\/live-test-boundary-assertions\.sql"\)/g)).toHaveLength(2);
+        expect(verifier).toContain('psqlFile("supabase/kakao-reminder-entitlement-assertions.sql")');
+        expect(verifier).toContain('psqlFile("supabase/kakao-reminder-entitlement-concurrency-lock.sql")');
+        expect(verifier).toContain('psqlFile("supabase/kakao-reminder-overload-fixtures.sql")');
+        expect(verifier).toContain('psqlFile("supabase/kakao-reminder-overload-boundary-assertions.sql")');
+    });
+
+    it("can exercise the exact 100001 to 100002 Kakao legacy upgrade boundary", () => {
+        expect(verifier).toContain("OMR_KAKAO_ENTITLEMENT_UPGRADE_FIXTURE");
+        expect(verifier).toContain('migration === "202608100002_kakao_reminder_entitlement_boundary.sql"');
+        expect(verifier).toContain('psqlFile("supabase/kakao-reminder-entitlement-upgrade-fixtures.sql")');
+        expect(verifier).toContain('psqlFile("supabase/kakao-reminder-entitlement-upgrade-assertions.sql")');
     });
 
     it("compares the generated canonical manifest to live public base and partitioned tables", () => {
