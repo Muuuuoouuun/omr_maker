@@ -1,9 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { test, expect, type Page } from "@playwright/test";
-import { continueSolveEntryIfPresent, loginAsTeacher, resetBrowserState } from "./helpers";
+import { continueSolveEntryIfPresent, exactNextActionId, loginAsTeacher, resetBrowserState } from "./helpers";
 import { parseCsvRows } from "../src/lib/csv";
 import { formatKoreanDate } from "../src/lib/pure";
 import { mayRunMutatingE2E } from "./mutationSafety";
+import { buildTeacherCanonicalAnalyticsSnapshotMap } from "../src/lib/teacherCanonicalAnalyticsSnapshot.server";
+import { buildServerAttempt } from "../src/lib/studentExamServerGrading";
+import type { Attempt, Exam } from "../src/types/omr";
+import type { RosterSnapshot } from "../src/lib/rosterPersistence";
 
 const TEST_EXAM_ID = "e2e-korean-integrated-exam";
 const TEST_EXAM_TITLE = "E2E 국어 통합 시험";
@@ -30,6 +34,86 @@ const submissionRequestEntryKey = (attemptId: string) => (
 const submissionAliasEntryKey = (attemptId: string) => (
     `omr_student_submission_alias_v2:${encodeURIComponent(attemptId)}`
 );
+
+async function registerCanonicalTeacherDashboardFixtureRoute(page: Page) {
+    const observedActionIds = new Set<string>();
+    const rewrittenActionIds = new Set<string>();
+    const responses = new Map<string, unknown>();
+
+    await page.route("**/*", async route => {
+        const request = route.request();
+        const actionId = request.method() === "POST" ? request.headers()["next-action"] : undefined;
+        const replacement = actionId ? responses.get(actionId) : undefined;
+        if (!replacement) {
+            await route.continue();
+            return;
+        }
+        observedActionIds.add(actionId!);
+        const response = await route.fetch();
+        const body = await response.text();
+        const rewritten = body.replaceAll('{"status":"local_only"}', JSON.stringify(replacement));
+        expect(rewritten, `canonical fixture response for ${actionId}`).not.toBe(body);
+        rewrittenActionIds.add(actionId!);
+        await route.fulfill({ response, body: rewritten });
+    });
+    return {
+        observedActionIds,
+        rewrittenActionIds,
+        activate(fixture: { exam: Exam; attempt: Attempt; roster: RosterSnapshot }) {
+            const worker = "app/teacher/dashboard/page";
+            const actionIds = {
+                exams: exactNextActionId("src/app/actions/teacherExam.ts", "listTeacherCanonicalExams", worker),
+                summaries: exactNextActionId("src/app/actions/teacherAttempts.ts", "listTeacherCanonicalAttemptSummaries", worker),
+                roster: exactNextActionId("src/app/actions/teacherRoster.ts", "loadTeacherCanonicalRoster", worker),
+                attempts: exactNextActionId("src/app/actions/teacherAttempts.ts", "listTeacherCanonicalAttempts", worker),
+                analytics: exactNextActionId("src/app/actions/teacherAttempts.ts", "loadTeacherCanonicalAnalyticsSnapshots", worker),
+            };
+            const loadedAt = new Date().toISOString();
+            const meta = {
+                organizationId: "default",
+                loadedAt,
+                rawCount: 1,
+                parsedCount: 1,
+            };
+            const attemptPage = { partial: false, hasMore: false, itemCount: 1 };
+            const analyticsSnapshots = buildTeacherCanonicalAnalyticsSnapshotMap(
+                [fixture.exam],
+                [fixture.attempt],
+            );
+            responses.set(actionIds.exams, { status: "loaded", exams: [fixture.exam], meta });
+            responses.set(actionIds.summaries, {
+                status: "loaded",
+                attempts: [fixture.attempt],
+                page: attemptPage,
+                meta,
+            });
+            responses.set(actionIds.roster, {
+                status: "loaded",
+                snapshot: fixture.roster,
+                revision: 1,
+                meta: {
+                    ...meta,
+                    rawCount: fixture.roster.students.length
+                        + fixture.roster.groups.length
+                        + fixture.roster.invites.length,
+                    parsedCount: fixture.roster.students.length
+                        + fixture.roster.groups.length
+                        + fixture.roster.invites.length,
+                },
+            });
+            responses.set(actionIds.attempts, {
+                status: "loaded",
+                attempts: [fixture.attempt],
+                page: attemptPage,
+                meta,
+            });
+            responses.set(actionIds.analytics, { status: "loaded", analyticsSnapshots, meta });
+            observedActionIds.clear();
+            rewrittenActionIds.clear();
+            return actionIds;
+        },
+    };
+}
 
 async function seedStudentRoster(page: Page) {
     await page.evaluate((seed) => {
@@ -833,6 +917,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("covers creation entry, student submission, teacher analytics, and statistics CSV", async ({ page }) => {
+        const remoteFixture = await registerCanonicalTeacherDashboardFixtureRoute(page);
         await loginAsTeacher(page, "/create");
         await expect(page.getByRole("heading", { name: "새 시험 만들기" })).toBeVisible();
         await expect(page.getByRole("button", { name: "배포하기" })).toBeVisible();
@@ -878,8 +963,69 @@ test.describe("Teacher and student full journey", () => {
             return exam?.createdAt || "";
         }, TEST_EXAM_ID);
 
+        const canonicalFixture = await page.evaluate((examId) => ({
+            exam: JSON.parse(window.localStorage.getItem(`omr_exam_${examId}`) || "null"),
+            attempt: JSON.parse(window.localStorage.getItem("omr_attempts") || "[]")[0],
+            roster: {
+                students: JSON.parse(window.localStorage.getItem("omr_students") || "[]"),
+                groups: JSON.parse(window.localStorage.getItem("omr_groups") || "[]"),
+                invites: JSON.parse(window.localStorage.getItem("omr_invites") || "[]"),
+            },
+        }), TEST_EXAM_ID) as { exam: Exam; attempt: Attempt; roster: RosterSnapshot };
+        const submitted = canonicalFixture.attempt;
+        canonicalFixture.attempt = buildServerAttempt({
+            examId: canonicalFixture.exam.id,
+            submissionId: submitted.id,
+            answers: submitted.answers,
+            startedAt: submitted.startedAt,
+            autoSubmitted: submitted.autoSubmitted,
+            questionTimings: submitted.questionTimings,
+            focusLossEvents: submitted.focusLossEvents,
+            tabFociLostCount: submitted.tabFociLostCount,
+        }, canonicalFixture.exam, {
+            kind: "student",
+            studentId: submitted.studentId,
+            organizationId: "default",
+            name: submitted.studentName,
+            groupId: submitted.groupId,
+            groupName: submitted.groupName,
+            regionId: submitted.regionId,
+            regionName: submitted.regionName,
+            identityType: submitted.identityType || "temporary",
+            issuedAt: Date.now() - 60_000,
+            expiresAt: Date.now() + 60 * 60 * 1000,
+        }, submitted.id, submitted.finishedAt);
+        expect(canonicalFixture.exam.organizationId).toBe("default");
+        expect(canonicalFixture.attempt.organizationId).toBe("default");
         await loginAsTeacher(page, "/teacher/dashboard");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        // Compile the dashboard worker before resolving its exact action IDs.
+        // The first identity-less render is intentionally discarded. The event
+        // below exercises the canonical fixture after binding the exact teacher
+        // identity generation required by the remote collection boundary.
+        const actionIds = remoteFixture.activate(canonicalFixture);
+        await expect(page.getByTestId("canonical-error-no-cache")).toBeVisible();
+        remoteFixture.observedActionIds.clear();
+        remoteFixture.rewrittenActionIds.clear();
+        await page.evaluate(() => {
+            const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+            if (!rawSession) throw new Error("teacher session missing");
+            const session = JSON.parse(rawSession) as Record<string, unknown>;
+            session.teacherId = "admin";
+            session.organizationId = "default";
+            session.accountSessionGeneration = 1;
+            session.sessionAuthority = "legacy_account";
+            window.sessionStorage.setItem("omr_teacher_session", JSON.stringify(session));
+            window.dispatchEvent(new Event("omr:teacher-session-identity-changed"));
+        });
+        await expect.poll(() => remoteFixture.observedActionIds.size).toBeGreaterThanOrEqual(3);
+        expect([...remoteFixture.observedActionIds]).toEqual(expect.arrayContaining([
+            actionIds.exams,
+            actionIds.summaries,
+            actionIds.roster,
+        ]));
+        expect(remoteFixture.observedActionIds.size).toBeGreaterThanOrEqual(3);
+        expect(remoteFixture.rewrittenActionIds.size).toBeGreaterThanOrEqual(3);
         await page.getByRole("tab", { name: "완료", exact: true }).click();
         await expect(page.getByRole("button", { name: `${TEST_EXAM_TITLE} 분석 보기` })).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
