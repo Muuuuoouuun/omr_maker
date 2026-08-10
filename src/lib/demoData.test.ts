@@ -49,6 +49,25 @@ describe("demo data gating", () => {
         expect(buildDemoDashboardData(now)).toEqual(buildDemoDashboardData(now));
     }, 10_000);
 
+    it("accepts only bounded ASCII demo attempt identifiers", async () => {
+        const demoModule = await import("./demoData");
+        expect(demoModule).toHaveProperty("isBoundedDemoAttemptId");
+        const isBoundedDemoAttemptId = (demoModule as typeof demoModule & {
+            isBoundedDemoAttemptId: (value: string) => boolean;
+        }).isBoundedDemoAttemptId;
+
+        expect(isBoundedDemoAttemptId("mock-attempt-mock-final-comprehensive-class-2-1--student-1")).toBe(true);
+        for (const malformed of [
+            "missing",
+            "mock-attempt-",
+            `mock-attempt-${"a".repeat(188)}`,
+            "mock-attempt-한글",
+            "mock-attempt-valid/id",
+        ]) {
+            expect(isBoundedDemoAttemptId(malformed)).toBe(false);
+        }
+    });
+
     it("resolves a coherent showcase attempt detail only for the signed demo identity", async () => {
         const demoModule = await import("./demoData");
         expect(demoModule).toHaveProperty("resolveDemoAttemptDetail");

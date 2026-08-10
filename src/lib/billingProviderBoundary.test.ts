@@ -14,10 +14,21 @@ const releaseMasterPlan = readFileSync(join(
     process.cwd(),
     "docs/superpowers/plans/2026-08-08-initial-operations-100-release-master.md",
 ), "utf8");
-const billingBoundaryPlan = readFileSync(join(
-    process.cwd(),
+const executionPlanSection = releaseMasterPlan.slice(
+    releaseMasterPlan.indexOf("## Execution plans"),
+    releaseMasterPlan.indexOf("## Dependency graph"),
+);
+const referencedExecutionPlanPaths = Array.from(
+    executionPlanSection.matchAll(/`(docs\/superpowers\/plans\/[^`]+\.md)`/g),
+    match => match[1],
+);
+const referencedExecutionPlans = new Map(referencedExecutionPlanPaths.map(path => [
+    path,
+    readFileSync(join(process.cwd(), path), "utf8"),
+]));
+const billingBoundaryPlan = referencedExecutionPlans.get(
     "docs/superpowers/plans/2026-08-08-billing-connection-boundary.md",
-), "utf8");
+) || "";
 
 function productionTypeScriptFiles(directory: string): string[] {
     return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
@@ -72,6 +83,13 @@ describe("billing provider module boundary", () => {
     });
 
     it("keeps the initial release billing scope to an unused server-only seam", () => {
+        expect(referencedExecutionPlanPaths).toEqual([
+            "docs/superpowers/plans/2026-08-08-release-runtime-operations.md",
+            "docs/superpowers/plans/2026-08-08-provisioned-identity-roster.md",
+            "docs/superpowers/plans/2026-08-08-core-distribution-load-states.md",
+            "docs/superpowers/plans/2026-08-08-billing-connection-boundary.md",
+            "docs/superpowers/plans/2026-08-08-release-qualification.md",
+        ]);
         expect(releaseDesign.replace(/\s+/g, " ")).toContain(
             "Retain only the disabled server-only provider-neutral adapter, catalog, and authority contracts as an integration seam.",
         );
@@ -83,15 +101,20 @@ describe("billing provider module boundary", () => {
         );
 
         for (const forbiddenDurablePlan of [
+            "202608080012",
             "omr_billing_checkout_intents",
             "omr_apply_billing_event_v1",
             "src/app/api/billing/checkout/route.ts",
             "src/lib/billingStore.server.ts",
             "supabase/migrations/202608080012_billing_connection_boundary.sql",
         ]) {
-            expect(releaseDesign).not.toContain(forbiddenDurablePlan);
-            expect(releaseMasterPlan).not.toContain(forbiddenDurablePlan);
-            expect(billingBoundaryPlan).not.toContain(forbiddenDurablePlan);
+            for (const [path, source] of [
+                ["docs/superpowers/specs/2026-08-08-initial-operations-100-release-design.md", releaseDesign],
+                ["docs/superpowers/plans/2026-08-08-initial-operations-100-release-master.md", releaseMasterPlan],
+                ...referencedExecutionPlans.entries(),
+            ]) {
+                expect(source, `${path} retains ${forbiddenDurablePlan}`).not.toContain(forbiddenDurablePlan);
+            }
         }
 
         const sourceRoot = new URL("..", import.meta.url).pathname;
@@ -102,11 +125,19 @@ describe("billing provider module boundary", () => {
         expect(serverSeamCallSites).toEqual([]);
         expect(existsSync(join(process.cwd(), "src/app/api/billing"))).toBe(false);
 
-        const durableBillingMigrations = readdirSync(join(process.cwd(), "supabase/migrations"))
-            .filter(file => file.endsWith(".sql"))
-            .filter(file => /omr_billing_|omr_apply_billing_event/.test(
-                readFileSync(join(process.cwd(), "supabase/migrations", file), "utf8"),
-            ));
-        expect(durableBillingMigrations).toEqual([]);
+        const billingDurabilitySql = /\bomr_billing_(?:checkout_intents|customers|subscriptions|webhook_events)\b|\bomr_apply_billing_event_v\d+\b/;
+        const protectedSqlPaths = [
+            "supabase/schema.sql",
+            "supabase/production-rls.sql",
+            "supabase/production-server-boundary.sql",
+            "supabase/production-server-boundary-rollback.sql",
+            ...readdirSync(join(process.cwd(), "supabase/migrations"))
+                .filter(file => file.endsWith(".sql"))
+                .map(file => `supabase/migrations/${file}`),
+        ];
+        const durableBillingSqlFiles = protectedSqlPaths.filter(path => billingDurabilitySql.test(
+            readFileSync(join(process.cwd(), path), "utf8"),
+        ));
+        expect(durableBillingSqlFiles).toEqual([]);
     });
 });

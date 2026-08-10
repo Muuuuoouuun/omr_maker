@@ -7,6 +7,9 @@ import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionRes
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
+const DEMO_ATTEMPT_ID_PREFIX = "mock-attempt-";
+const MAX_DEMO_ATTEMPT_ID_LENGTH = 200;
+const DEMO_ATTEMPT_ID_SUFFIX = /^[a-z0-9-]+$/;
 
 const DEMO_CLASSES = [
     { id: "class-2-1", name: "2학년 1반", region: "본관", color: "#1769e0", avgScore: 87 },
@@ -131,6 +134,13 @@ export interface DemoAttemptDetail {
 
 export function shouldUseDemoData(identity: Partial<TeacherSessionIdentity> | null | undefined): boolean {
     return isMockupTeacherIdentity(identity);
+}
+
+export function isBoundedDemoAttemptId(value: string): boolean {
+    return value.length > DEMO_ATTEMPT_ID_PREFIX.length
+        && value.length <= MAX_DEMO_ATTEMPT_ID_LENGTH
+        && value.startsWith(DEMO_ATTEMPT_ID_PREFIX)
+        && DEMO_ATTEMPT_ID_SUFFIX.test(value.slice(DEMO_ATTEMPT_ID_PREFIX.length));
 }
 
 function stableUnitInterval(...values: number[]): number {
@@ -323,6 +333,7 @@ export function resolveDemoAttemptDetail(
     now = Date.now(),
 ): DemoAttemptDetail | null {
     if (!shouldUseDemoData(identity)) return null;
+    if (!isBoundedDemoAttemptId(attemptId)) return null;
 
     const demo = buildDemoDashboardData(now);
     const attempt = demo.attempts.find(candidate => candidate.id === attemptId);

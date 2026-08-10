@@ -130,8 +130,10 @@ Implementation update: Phase B uses `202608080007_provisioned_teacher_login.sql`
 provisioned login/request bridge. Phase C uses
 `202608080008_effective_workspace_plan_enforcement.sql` for in-transaction paid mutation/asset
 entitlement enforcement; release remains verification-pending until the PG17 behavior, concurrency,
-ACL drift/restore, rollback, and full application gates are green. Future student session, batch credential, invite lifecycle,
-and billing migrations are `202608080009`, `202608080010`, `202608080011`, and `202608080012`.
+ACL drift/restore, rollback, and full application gates are green. Subsequent student session, batch
+credential, invite lifecycle, and assignment-generation migrations are `202608080009`, `202608080010`,
+`202608080011`, and `202608090001`. Durable billing persistence and routes remain outside this release;
+only the unused disabled server-only adapter, catalog, and authority contract seam is retained.
 
 Update the canonical manifest expectation from 39 to 40 because the pilot grant ledger is canonical;
 the backup and boundary tests must discover and protect the new table.
