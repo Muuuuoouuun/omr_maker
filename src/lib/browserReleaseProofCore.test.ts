@@ -133,7 +133,7 @@ describe("browser release proof core", () => {
         });
         expect(PROOF_CATALOG.find(({ id }) => id === "teacher_core_live_monitor")).toMatchObject({
             file: "e2e/teacher-pages.spec.ts",
-            title: "renders timer, stat tiles, students grid, heatmap, and controls refresh",
+            title: "renders concrete live values, student grid, heatmap, and a countdown while controlling refresh",
         });
     });
 

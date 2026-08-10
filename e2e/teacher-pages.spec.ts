@@ -871,13 +871,22 @@ test.describe("Live Results page", () => {
         await authenticateTeacher(page, baseURL, MOCKUP_TEACHER_IDENTITY);
     });
 
-    test("renders timer, stat tiles, students grid, heatmap, and controls refresh", async ({ page }) => {
+    test("renders concrete live values, student grid, heatmap, and a countdown while controlling refresh", async ({ page }) => {
         test.info().annotations.push({ type: "release-proof", description: "teacher_core_live_monitor" });
+        await page.clock.install({ time: new Date() });
         await page.goto("/teacher/live");
-        await expect(page.getByText("REMAINING TIME")).toBeVisible();
-        // Stat labels
-        for (const label of ["제출 완료", "응시 중", "미응시", "제출 평균"]) {
-            await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
+
+        const countdown = page.getByText("REMAINING TIME").locator("..").locator(".numeric-emphasis");
+        await expect(countdown).toHaveText("60:00");
+        for (const [label, value] of [
+            ["제출 완료", "4"],
+            ["응시 중", "4"],
+            ["미응시", "0"],
+            ["제출 평균", "86점"],
+        ] as const) {
+            const statLabel = page.getByText(label, { exact: true }).first();
+            await expect(statLabel).toBeVisible();
+            await expect(statLabel.locator("xpath=following-sibling::div[1]")).toHaveText(value);
         }
         const studentGrid = page.getByRole("heading", { name: "학생별 제출 현황" })
             .locator("xpath=ancestor::div[contains(@class, 'bento-card')]");
@@ -895,6 +904,8 @@ test.describe("Live Results page", () => {
         await pauseButton.click();
         const resumeButton = page.getByRole("button", { name: "화면 갱신 재개" });
         await expect(resumeButton).toHaveAttribute("aria-pressed", "true");
+        await page.clock.runFor(1_000);
+        await expect(countdown).toHaveText("59:59");
         await resumeButton.click();
         await expect(page.getByRole("button", { name: "화면 갱신 일시정지" })).toHaveAttribute("aria-pressed", "false");
     });

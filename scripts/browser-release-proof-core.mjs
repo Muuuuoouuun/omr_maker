@@ -32,7 +32,7 @@ const OWNERSHIP = Object.freeze({
     teacher_core_truthful_load_states: ["chromium", "e2e/teacher-canonical-load-state.spec.ts", "teacher dashboard keeps a scoped degraded snapshot strictly read only"],
     teacher_core_draft_create: ["chromium", "e2e/full-journey.spec.ts", "creates an exam through the teacher UI before student submission and analytics"],
     teacher_core_publish_distribution: ["chromium", "e2e/full-journey.spec.ts", "creates an exam through the teacher UI before student submission and analytics"],
-    teacher_core_live_monitor: ["chromium", "e2e/teacher-pages.spec.ts", "renders timer, stat tiles, students grid, heatmap, and controls refresh"],
+    teacher_core_live_monitor: ["chromium", "e2e/teacher-pages.spec.ts", "renders concrete live values, student grid, heatmap, and a countdown while controlling refresh"],
     teacher_core_results_feedback: ["chromium", "e2e/teacher-pages.spec.ts", "returns plain-text feedback through the teacher result flow and shows it in student review"],
     teacher_core_statistics: ["chromium", "e2e/full-journey.spec.ts", "covers creation entry, student submission, teacher analytics, and statistics CSV"],
     teacher_core_csv_export: ["chromium", "e2e/full-journey.spec.ts", "covers creation entry, student submission, teacher analytics, and statistics CSV"],
