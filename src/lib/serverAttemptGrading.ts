@@ -173,6 +173,12 @@ export function gradeStudentAttemptOnServer(
 
     const graded = gradeAttempt(activeQuestions, sanitizedAnswers);
     const finishedAt = new Date(now).toISOString();
+    const retakeSourceAttemptId = clean(ticket.retakeSourceAttemptId);
+    const retakeMode = ticket.retakeMode === "wrong"
+        || ticket.retakeMode === "similar"
+        || ticket.retakeMode === "custom"
+        ? ticket.retakeMode
+        : undefined;
     const attempt: Attempt = {
         id: `attempt_${ticket.ticketId}`,
         examId: exam.id,
@@ -199,6 +205,16 @@ export function gradeStudentAttemptOnServer(
             : undefined,
         questionTimings: sanitizeQuestionTimings(submission.questionTimings, allowedQuestionIds),
         focusLossEvents: sanitizeFocusLossEvents(submission.focusLossEvents),
+        ...(retakeSourceAttemptId && retakeMode
+            ? {
+                retake: {
+                    sourceAttemptId: retakeSourceAttemptId,
+                    questionIds: activeQuestions.map(question => question.id),
+                    mode: retakeMode,
+                    createdAt: finishedAt,
+                },
+            }
+            : {}),
     };
     attempt.questionResults = buildQuestionResults(
         { ...exam, questions: activeQuestions },

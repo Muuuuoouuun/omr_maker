@@ -5,6 +5,7 @@ import {
     gradeStudentAttemptOnServer,
     gradeTeacherForcedAttemptOnServer,
 } from "./serverAttemptGrading";
+import { attestCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 
 const exam: Exam = {
     id: "exam-1",
@@ -95,6 +96,43 @@ describe("server attempt grading", () => {
             }),
         ]));
         expect(result.attempt.questionResultsFullEvidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    });
+
+    it("binds an exact retake scope from the trusted ticket into canonical evidence", () => {
+        const retakeTicket: StudentAttemptTicketClaims = {
+            ...ticket,
+            ticketId: "ticket-retake",
+            allowedQuestionIds: [2],
+            retakeSourceAttemptId: "attempt-source",
+            retakeMode: "wrong",
+        };
+        const result = gradeStudentAttemptOnServer(
+            exam,
+            retakeTicket,
+            { ticket: "signed-ticket", answers: { 2: 1 } },
+            2_000,
+        );
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.attempt.retake).toEqual({
+            sourceAttemptId: "attempt-source",
+            questionIds: [2],
+            mode: "wrong",
+            createdAt: new Date(2_000).toISOString(),
+        });
+        expect(result.attempt.questionResults?.map(row => row.questionId)).toEqual([2]);
+        expect(result.attempt.questionResults).toEqual([
+            expect.objectContaining({
+                retakeSourceAttemptId: "attempt-source",
+                retakeMode: "wrong",
+            }),
+        ]);
+        expect(result.attempt.questionResultsFullEvidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+        expect(() => attestCanonicalQuestionResultEvidence(
+            result.attempt as Parameters<typeof attestCanonicalQuestionResultEvidence>[0],
+            result.attempt.questionResults || [],
+        )).not.toThrow();
     });
 
     it("rejects answers for unissued questions and invalid choices", () => {
