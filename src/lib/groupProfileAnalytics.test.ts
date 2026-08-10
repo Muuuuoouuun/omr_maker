@@ -4,7 +4,10 @@ import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildGroupProfileInsight } from "./groupProfileAnalytics";
 import { buildStudentProfileInsight } from "./studentProfileAnalytics";
 import { buildQuestionResults, summarizeQuestionResults } from "./premiumAnalytics";
-import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
+import {
+    attestCanonicalQuestionResultEvidence,
+    buildCanonicalQuestionResultEvidence,
+} from "./canonicalQuestionResultManifest";
 
 const exam: Exam = {
     id: "exam-1",
@@ -118,7 +121,13 @@ describe("group profile analytics", () => {
                 status: "completed",
             };
             const questionResults = buildQuestionResults(maxExam, base);
-            return { ...base, questionResults, ...buildCanonicalQuestionResultEvidence(base, questionResults) };
+            const finalAttempt = {
+                ...base,
+                questionResults,
+                ...buildCanonicalQuestionResultEvidence(base, questionResults),
+            };
+            attestCanonicalQuestionResultEvidence(finalAttempt, questionResults);
+            return finalAttempt;
         });
         const examById = new Map([[maxExam.id, maxExam]]);
         const startedAt = performance.now();

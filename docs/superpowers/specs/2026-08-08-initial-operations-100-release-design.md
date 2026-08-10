@@ -29,8 +29,9 @@ Use a **release-first, provisioned-only architecture**:
 4. Let teachers batch-provision up to 100 student start codes and export them once as CSV.
 5. Complete only the teacher-create/distribute/monitor/review and student-enter/solve/submit/review
    journeys.
-6. Keep live payment unavailable while implementing a complete provider-neutral persistence and API
-   boundary that a future adapter can connect to without changing entitlement semantics.
+6. Keep all real payment work, durable billing persistence, and billing HTTP routes out of this
+   release. Retain only the disabled server-only provider-neutral adapter, catalog, and authority
+   contracts as an integration seam.
 7. Promote only the exact preview build that passed browser, database, load, observability, and
    recovery gates.
 
@@ -56,11 +57,14 @@ failure modes. PostgreSQL is the durable coordination layer for this release.
   necessary for the core workflow.
 - Server-only production boundary, readiness, logging, rate limiting, backup/restore, storage
   cleanup, capacity verification, and release evidence.
-- Provider-neutral billing storage, webhook normalization, ordering, idempotency, and a fake adapter.
+- Disabled server-only provider-neutral adapter, catalog, and authority contracts with no production
+  call sites. Test-only fakes may verify those contracts without enabling payment behavior.
 
 ### 2.4 Excluded
 
 - Real checkout, charges, refunds, invoices, payment-provider credentials, and provider-specific UI.
+- Durable billing tables or migrations, customer/subscription/event persistence, checkout or webhook
+  handlers, and billing HTTP routes.
 - Public teacher self-signup until delivery and abuse-handling evidence exists.
 - Kakao, web push, email campaigns, or other notification delivery providers.
 - Advanced analytics, AI recommendations, multi-teacher collaboration, SSO, custom domains,
@@ -212,22 +216,16 @@ transaction.
 
 ### 4.8 Billing connection boundary
 
-The release contains provider-neutral canonical records:
+The release keeps only a compiler-enforced server-only contract seam. It defines provider adapters,
+a closed internal price catalog, normalized provider events, and an authority-store interface. The
+browser cannot import the seam, production code has no seam call site, the provider registry does not
+exist, and live checkout remains hard-disabled independently of configuration.
 
-- `omr_billing_checkout_intents`
-- `omr_billing_customers`
-- `omr_billing_subscriptions`
-- `omr_billing_webhook_events` with unique `(provider, event_id)`
-
-An atomic `omr_apply_billing_event_v1` operation records an event, enforces ordering, reconciles the
-subscription, and changes organization entitlement once. Stored webhook data is normalized and
-hashed; long-lived raw provider payloads or unnecessary PII are not retained.
-
-A same-origin checkout endpoint and a bounded raw-body webhook endpoint depend on a server-only
-adapter interface and price catalog. With no real adapter configured, checkout returns a stable 503
-disabled response, webhook routes reject unknown providers, and the canonical plan cannot change.
-Tests use a fake adapter to prove duplicates, concurrent delivery, out-of-order events, cancellation,
-and replay behavior. Implementing Stripe or another real provider is outside this release.
+The seam is deliberately non-durable and non-routable in this release. It creates no billing table,
+migration, checkout handler, webhook handler, or API route, and it cannot update an organization plan.
+Test-only fakes may prove deterministic event normalization, duplicate classification, and ordering at
+the interface level. Durable persistence, HTTP exposure, and every real provider adapter require a
+separate future design and release qualification.
 
 ## 5. Error and security model
 
@@ -389,7 +387,8 @@ The release is currently **NO-GO** because:
 5. There is no retained, dated 100-user load, sink/alert, or isolated restore artifact.
 6. Batch student provisioning, persistent invite metadata UX, explicit assignment states, truthful
    load-state handling, student session revocation, and audited pilot granting are incomplete.
-7. Billing has a disabled provider interface but not the complete durable provider-neutral boundary.
+7. Billing is intentionally limited to an unused disabled server-only contract seam; durable billing
+   work is not a release gap and must not be added to this release.
 
 Implementation is complete only when each gap is closed in source and the corresponding exact-SHA
 evidence passes. A local green unit suite alone cannot change the release decision.
@@ -406,7 +405,7 @@ review checkpoint:
 5. Invite lifecycle metadata and assignment-state UX.
 6. Truthful canonical load states across core screens.
 7. Operational events, health/readiness, alerts, and cleanup heartbeat.
-8. Provider-neutral billing persistence and disabled endpoints.
+8. Disabled provider-neutral adapter, catalog, and authority contract seam only.
 9. Browser determinism and accessibility closure.
 10. Staging load, backup/restore, immutable promotion, and final score audit.
 

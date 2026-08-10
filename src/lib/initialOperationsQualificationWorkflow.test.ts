@@ -17,7 +17,7 @@ const productionPlaywrightSource = readFileSync(join(process.cwd(), "playwright.
 const workflow = load(workflowSource) as {
     on?: {
         workflow_dispatch?: {
-            inputs?: Record<string, { required?: boolean; type?: string }>;
+            inputs?: Record<string, { default?: string; required?: boolean; type?: string }>;
         };
     };
     permissions?: Record<string, string>;
@@ -50,6 +50,11 @@ describe("initial operations qualification workflow", () => {
         const inputs = workflow.on?.workflow_dispatch?.inputs;
 
         expect(inputs?.build_sha).toMatchObject({ required: true, type: "string" });
+        expect(inputs?.expected_readiness_version).toMatchObject({
+            default: "202608090001",
+            required: true,
+            type: "string",
+        });
         expect(workflow.permissions).toEqual({ contents: "read" });
         expect(workflow.concurrency).toEqual({
             group: "initial-operations-qualification",

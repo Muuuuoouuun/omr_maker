@@ -22,7 +22,7 @@ on:
       expected_readiness_version:
         description: Exact readiness contract version
         required: true
-        default: "202608080010"
+        default: "202608090001"
         type: string
 
 concurrency:

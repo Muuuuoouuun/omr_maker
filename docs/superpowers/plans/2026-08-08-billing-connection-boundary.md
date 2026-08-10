@@ -1,356 +1,73 @@
-# Billing Connection Boundary Implementation Plan
+# Disabled Billing Connection Seam Scope Guard
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** This document is a release scope guard. It does not authorize payment,
+> persistence, route, or provider implementation.
 
-**Goal:** Leave real payments disabled while completing durable provider-neutral storage, HTTP, idempotency, ordering, and entitlement boundaries so a future provider requires only an adapter and secrets.
+**Goal:** Keep real payment and durable billing work outside the initial-operations release while
+preserving a disabled provider-neutral integration seam for a separately designed future release.
 
-**Architecture:** Provider adapters may create checkout sessions and verify raw webhooks, but they never select an organization or plan. Customer bindings identify organizations and a server-only price catalog selects plans. PostgreSQL atomically writes the normalized event ledger, subscription state, and organization entitlement. Production registry remains empty and all live endpoints fail closed.
+**Architecture:** This release retains only the disabled server-only provider-neutral adapter,
+catalog, and authority seam. The seam is compiler-poisoned against browser imports, has no production
+call site, and cannot become live through configuration.
 
-**Tech Stack:** TypeScript server-only modules, Next.js route handlers, PostgreSQL 17, Vitest, fake adapter dependency injection.
+**Tech Stack:** TypeScript server-only contracts and Vitest contract tests only.
 
 ---
 
-### Task 1: Remove organization and plan authority from provider events
+## Authoritative release scope
 
-**Files:**
-- Modify: `src/lib/paymentProvider.ts`
-- Modify: `src/lib/billingProviderContract.server.ts`
-- Modify: `src/lib/billingProviderContract.server.test.ts`
-- Create: `src/lib/billingPriceCatalog.server.ts`
-- Create: `src/lib/billingPriceCatalog.server.test.ts`
+The user superseded the earlier durable billing plan. For this release:
 
-- [ ] **Step 1: Write failing provider-authority tests**
+- live checkout and every real payment provider remain unimplemented and disabled;
+- no billing table, migration, RPC, durable store, customer binding, subscription ledger, or webhook
+  event ledger is added;
+- no checkout handler, webhook handler, provider registry, or billing API route is added;
+- no browser or production server module imports or calls the seam;
+- no browser intent can change canonical plan or entitlement state;
+- test-only fakes may validate the contracts but are forbidden from production call sites.
 
-```ts
-const event = verifiedEnvelope().event;
-expect(event).not.toHaveProperty("organizationId");
-expect(event).not.toHaveProperty("targetPlan");
-expect(event).toMatchObject({
-  providerCustomerId: "cus_provider_01",
-  providerSubscriptionId: "sub_provider_01",
-  priceKey: "omr_pro_monthly_v1",
-});
-expect(resolveBillingPrice("omr_pro_monthly_v1")).toEqual({ plan: "pro", cycle: "monthly" });
-expect(resolveBillingPrice("provider_supplied_unknown")).toBeNull();
-```
+Any earlier task text in repository history that asks for durable billing persistence or HTTP exposure
+is historical and must not be executed as part of this release.
 
-- [ ] **Step 2: Run RED**
+## Retained seam
 
-```sh
-npx vitest run src/lib/billingProviderContract.server.test.ts src/lib/billingPriceCatalog.server.test.ts
-```
+The bounded seam consists of:
 
-- [ ] **Step 3: Implement server-authoritative normalized types**
+- `src/lib/paymentProvider.ts` for public provider labels and disabled readiness display;
+- `src/lib/billingCheckoutGate.ts` for the hard-off live-checkout gate;
+- `src/lib/billingProviderContract.server.ts` for server-only adapter, closed catalog, normalized event,
+  and authority-store interfaces;
+- `src/lib/billingProviderContract.fake.server.ts` for deterministic test-only adapters and stores;
+- `src/lib/billingProviderBoundary.test.ts` and focused unit tests for scope enforcement.
 
-```ts
-export interface NormalizedSubscriptionWebhookEvent {
-  eventId: string;
-  eventType: SubscriptionWebhookEventType;
-  occurredAt: string;
-  providerCustomerId: string;
-  providerSubscriptionId: string;
-  subscriptionStatus: SubscriptionLifecycleStatus;
-  priceKey: string;
-}
-```
+These are contracts, not a partial payment backend. `BillingAuthorityStore` describes a future
+authority boundary but has no durable implementation in this release. `SERVER_PRICE_CATALOG` is
+validation metadata inside the isolated server-only contract and is not exposed to the browser.
 
-The price catalog is a frozen server-only map whose keys are internal aliases, not browser plans:
+## Release contract
 
-```ts
-export const BILLING_PRICE_CATALOG = Object.freeze({
-  omr_pro_monthly_v1: { plan: "pro", cycle: "monthly" },
-  omr_pro_annual_v1: { plan: "pro", cycle: "annual" },
-  omr_academy_monthly_v1: { plan: "academy", cycle: "monthly" },
-  omr_academy_annual_v1: { plan: "academy", cycle: "annual" },
-} as const);
-```
+The release remains conformant only while all of the following hold:
 
-Checkout browser intent is validated against this catalog on the server. Webhook processing passes
-provider identifiers and price key to the store; it never constructs a target plan from event input.
+1. `LIVE_CHECKOUT_IMPLEMENTED` is `false`, and configuration cannot enable a checkout CTA.
+2. Browser-importable provider code contains no adapter, webhook, authority, organization, plan, or
+   cryptographic server contract.
+3. The server-only seam and test fake have no production call site.
+4. No billing API directory or durable billing migration exists.
+5. The authoritative release design and master plan continue to state this seam-only scope.
 
-- [ ] **Step 4: Run GREEN**
+Verify the contract with:
 
 ```sh
-npx vitest run src/lib/billingProviderContract.server.test.ts src/lib/billingPriceCatalog.server.test.ts
+npx vitest run src/lib/billingProviderBoundary.test.ts \
+  src/lib/billingProviderContract.server.test.ts \
+  src/lib/paymentProvider.test.ts \
+  src/lib/settingsBillingSimplificationSurface.test.ts
 ```
 
-- [ ] **Step 5: Commit**
-
-```sh
-git add src/lib/paymentProvider.ts src/lib/billingProviderContract.server.ts src/lib/billingProviderContract.server.test.ts src/lib/billingPriceCatalog.server.ts src/lib/billingPriceCatalog.server.test.ts
-git commit -m "refactor(billing): make price mapping server authoritative"
-```
-
-### Task 2: Add a deterministic fake adapter for tests only
-
-**Files:**
-- Create: `src/lib/testing/fakePaymentProviderAdapter.ts`
-- Create: `src/lib/testing/fakePaymentProviderAdapter.test.ts`
-- Modify: `src/lib/billingCheckoutGate.ts`
-
-- [ ] **Step 1: Write failing fake-adapter tests**
-
-```ts
-expect(fake.key).toBe("toss");
-await expect(fake.createCheckoutSession(request)).resolves.toMatchObject({
-  status: "created",
-  provider: "toss",
-  checkoutSessionId: "checkout_test_0001",
-});
-await expect(fake.verifyWebhook({ headers: { "x-test-signature": "invalid" }, body }))
-  .resolves.toEqual({ ok: false, error: "invalid_signature" });
-expect(LIVE_CHECKOUT_IMPLEMENTED).toBe(false);
-```
-
-- [ ] **Step 2: Run RED**
-
-```sh
-npx vitest run src/lib/testing/fakePaymentProviderAdapter.test.ts
-```
-
-- [ ] **Step 3: Implement test-only deterministic behavior**
-
-The module accepts a fixed secret and injected clock, signs `timestamp.rawBody` with HMAC-SHA256,
-returns monotonically numbered checkout IDs, and emits only valid normalized events. It must throw when
-`NODE_ENV === "production"` and must not be imported by the production registry.
-
-- [ ] **Step 4: Run GREEN**
-
-```sh
-npx vitest run src/lib/testing/fakePaymentProviderAdapter.test.ts src/lib/billingProviderContract.server.test.ts
-```
-
-- [ ] **Step 5: Commit**
-
-```sh
-git add src/lib/testing/fakePaymentProviderAdapter.ts src/lib/testing/fakePaymentProviderAdapter.test.ts src/lib/billingCheckoutGate.ts
-git commit -m "test(billing): add deterministic fake adapter"
-```
-
-### Task 3: Add the four durable billing tables and atomic apply RPC
-
-**Files:**
-- Create: `supabase/migrations/202608080012_billing_connection_boundary.sql`
-- Create: `src/lib/billingConnectionBoundaryMigrationContract.test.ts`
-- Modify: `supabase/production-server-boundary.sql`
-- Modify: `supabase/production-server-boundary-rollback.sql`
-- Modify: `supabase/live-test-assertions.sql`
-- Modify: `supabase/live-test-rollback-assertions.sql`
-- Modify: `scripts/backup-restore-core.mjs`
-- Modify: `src/lib/backupRestoreCore.test.ts`
-- Modify: `src/lib/productionServerBoundaryContract.test.ts`
-
-- [ ] **Step 1: Write the failing migration contract**
-
-Require exact tables:
-
-```ts
-expect(canonicalTables).toEqual(expect.arrayContaining([
-  "omr_billing_checkout_intents",
-  "omr_billing_customers",
-  "omr_billing_subscriptions",
-  "omr_billing_webhook_events",
-]));
-expect(sql).toContain("omr_apply_billing_event_v1");
-expect(sql).not.toMatch(/raw_payload|email|student_name/i);
-expect(sql).not.toMatch(/grant execute[^;]+\bto\s+(anon|authenticated)\b/i);
-```
-
-- [ ] **Step 2: Run RED**
-
-```sh
-npx vitest run src/lib/billingConnectionBoundaryMigrationContract.test.ts src/lib/productionServerBoundaryContract.test.ts src/lib/backupRestoreCore.test.ts
-```
-
-- [ ] **Step 3: Create the durable schema**
-
-Use hashed provider identifiers and these bounded states:
-
-```text
-checkout intent: pending | created | failed | expired
-subscription: trialing | active | past_due | canceled | expired
-event result: applied | duplicate | stale | rejected
-```
-
-Enforce unique organization/idempotency hash, provider/customer hash, provider/subscription hash, and
-provider/event hash. Store payload SHA-256 and normalized bounded fields only.
-
-- [ ] **Step 4: Implement `omr_apply_billing_event_v1`**
-
-The service-role-only `SECURITY DEFINER` function validates exact JSON keys, binds customer hash to an
-organization, resolves the server price key, locks the organization and subscription, inserts the event
-once, rejects distinct events with `occurred_at <= last_event_at` as stale, and atomically applies:
-
-```text
-trialing or active -> catalog plan
-past_due, canceled, or expired -> free
-```
-
-The function never trusts organization ID or target plan from the webhook. Same-timestamp distinct
-events are stale/conflict and cannot change the plan.
-
-- [ ] **Step 5: Add PostgreSQL concurrency and boundary evidence**
-
-Live assertions use two `dblink` sessions for duplicate concurrency and active/cancel ordering. They
-prove one ledger row, deterministic final plan, stale replay, unknown customer/price no-op,
-anon/authenticated denial, service-role success, and absence of raw identifiers or payloads.
-
-- [ ] **Step 6: Update canonical manifests and readiness version**
-
-After operator grant and operational job-status tables, the four billing tables make the expected final
-canonical count 46. Set readiness version to `202608080012`, add `billingBoundaryReady`, and update every
-exact-version consumer found by:
-
-```sh
-rg -l '202608060029' src scripts supabase docs .github
-```
-
-- [ ] **Step 7: Run GREEN and live SQL**
-
-```sh
-npx vitest run src/lib/billingConnectionBoundaryMigrationContract.test.ts src/lib/productionServerBoundaryContract.test.ts src/lib/backupRestoreCore.test.ts
-npm run test:supabase:live
-```
-
-- [ ] **Step 8: Commit**
-
-```sh
-git add supabase/migrations/202608080012_billing_connection_boundary.sql src/lib/billingConnectionBoundaryMigrationContract.test.ts supabase/production-server-boundary.sql supabase/production-server-boundary-rollback.sql supabase/live-test-assertions.sql supabase/live-test-rollback-assertions.sql scripts/backup-restore-core.mjs src/lib/backupRestoreCore.test.ts src/lib/productionServerBoundaryContract.test.ts src/lib/supabaseReadinessProbe.ts scripts/verify-initial-operations.mjs scripts/initial-operations-core.mjs scripts/backup-production.mjs .github/workflows/production-readiness.yml docs/production-readiness.md
-git commit -m "feat(billing): add atomic durable provider boundary"
-```
-
-### Task 4: Implement the Supabase billing store
-
-**Files:**
-- Create: `src/lib/billingStore.server.ts`
-- Create: `src/lib/billingStore.server.test.ts`
-
-- [ ] **Step 1: Write failing store tests**
-
-```ts
-expect(hashProviderReference("cus_live_123")).toMatch(/^[a-f0-9]{64}$/);
-expect(await store.createCheckoutIntent(input)).toMatchObject({ status: "created" });
-expect(await store.createCheckoutIntent(input)).toMatchObject({ status: "duplicate" });
-expect(client.rpc).toHaveBeenCalledWith("omr_apply_billing_event_v1", {
-  p_event: expect.objectContaining({ customer_id_hash: expect.stringMatching(/^[a-f0-9]{64}$/) }),
-  p_payload_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-});
-```
-
-- [ ] **Step 2: Run RED**
-
-```sh
-npx vitest run src/lib/billingStore.server.test.ts
-```
-
-- [ ] **Step 3: Implement stable server-only methods**
-
-Expose create/finalize checkout intent, bind customer, and apply verified event. Hash provider customer,
-subscription, checkout, event, idempotency, and raw-body references before database calls. Map database
-responses to `applied`, `duplicate`, `stale`, `rejected`, or `dependency_unavailable`; never expose raw
-database errors.
-
-- [ ] **Step 4: Run GREEN**
-
-```sh
-npx vitest run src/lib/billingStore.server.test.ts src/lib/billingProviderContract.server.test.ts
-```
-
-- [ ] **Step 5: Commit**
-
-```sh
-git add src/lib/billingStore.server.ts src/lib/billingStore.server.test.ts
-git commit -m "feat(billing): implement durable supabase store"
-```
-
-### Task 5: Add a production-empty provider registry and bounded handlers
-
-**Files:**
-- Create: `src/lib/paymentProviderRegistry.server.ts`
-- Create: `src/lib/paymentProviderRegistry.server.test.ts`
-- Create: `src/lib/billingHttpHandlers.server.ts`
-- Create: `src/lib/billingHttpHandlers.server.test.ts`
-
-- [ ] **Step 1: Write failing registry and HTTP tests**
-
-```ts
-expect(resolvePaymentProviderAdapter("toss", productionEnv)).toBeNull();
-expect(await handleCheckout(request, dependencies)).toMatchObject({ status: 503, body: { code: "dependency_unavailable" } });
-expect(await handleWebhook("unknown", request, dependencies)).toMatchObject({ status: 404, body: { code: "not_found" } });
-expect(await handleWebhook("toss", oversizedRequest, fakeDependencies)).toMatchObject({ status: 413, body: { code: "invalid_input" } });
-```
-
-- [ ] **Step 2: Run RED**
-
-```sh
-npx vitest run src/lib/paymentProviderRegistry.server.test.ts src/lib/billingHttpHandlers.server.test.ts
-```
-
-- [ ] **Step 3: Implement checkout handler safety**
-
-Require same origin, JSON content type, body ≤4 KiB, signed generation-validated teacher session,
-organization membership, and role `owner`. Resolve plan/cycle through the catalog. With no adapter,
-return 503 before a checkout intent or plan mutation.
-
-- [ ] **Step 4: Implement webhook handler safety**
-
-Do not apply same-origin checks to external webhooks. Stream at most 256 KiB, resolve known provider,
-require an adapter, and pass raw bytes to signature verification before JSON parsing. Unknown provider is
-404; known but unconfigured is 503; bad signature is 401; malformed normalized event is 400.
-
-- [ ] **Step 5: Run GREEN**
-
-```sh
-npx vitest run src/lib/paymentProviderRegistry.server.test.ts src/lib/billingHttpHandlers.server.test.ts
-```
-
-- [ ] **Step 6: Commit**
-
-```sh
-git add src/lib/paymentProviderRegistry.server.ts src/lib/paymentProviderRegistry.server.test.ts src/lib/billingHttpHandlers.server.ts src/lib/billingHttpHandlers.server.test.ts
-git commit -m "feat(billing): add disabled bounded handlers"
-```
-
-### Task 6: Expose fail-closed billing routes
-
-**Files:**
-- Create: `src/app/api/billing/checkout/route.ts`
-- Create: `src/app/api/billing/checkout/route.test.ts`
-- Create: `src/app/api/billing/webhooks/[provider]/route.ts`
-- Create: `src/app/api/billing/webhooks/[provider]/route.test.ts`
-- Modify: `src/app/teacher/billing/page.tsx`
-- Modify: `src/app/teacher/billing/page.test.ts`
-
-- [ ] **Step 1: Write failing route tests**
-
-```ts
-expect(await checkoutPost(validRequest)).toMatchObject({ status: 503 });
-expect(await checkoutPost(validRequest).then(response => response.json())).toEqual({ code: "dependency_unavailable" });
-expect(await webhookPost({ provider: "unknown" }, request)).toMatchObject({ status: 404 });
-expect(LIVE_CHECKOUT_IMPLEMENTED).toBe(false);
-```
-
-- [ ] **Step 2: Run RED**
-
-```sh
-npx vitest run src/app/api/billing/checkout/route.test.ts 'src/app/api/billing/webhooks/[provider]/route.test.ts' src/app/teacher/billing/page.test.ts
-```
-
-- [ ] **Step 3: Wire routes to production dependencies**
-
-Routes set `Cache-Control: no-store`, use stable JSON codes, never follow provider redirects, and never
-instantiate the fake adapter. The billing page presents a read-only `결제 연결 준비 중` state and does
-not offer local simulation that appears to change canonical entitlement.
-
-- [ ] **Step 4: Run GREEN and regression tests**
-
-```sh
-npx vitest run src/app/api/billing/checkout/route.test.ts 'src/app/api/billing/webhooks/[provider]/route.test.ts' src/app/teacher/billing/page.test.ts src/lib/billingStatusSurface.test.ts
-```
-
-- [ ] **Step 5: Commit**
-
-```sh
-git add src/app/api/billing/checkout/route.ts src/app/api/billing/checkout/route.test.ts 'src/app/api/billing/webhooks/[provider]/route.ts' 'src/app/api/billing/webhooks/[provider]/route.test.ts' src/app/teacher/billing/page.tsx src/app/teacher/billing/page.test.ts
-git commit -m "feat(billing): expose disabled provider routes"
-```
+## Deferred future work
+
+A future payment release must start with a new approved design and threat model before it may add any
+provider secret, checkout or webhook route, durable customer/subscription/event storage, entitlement
+mutation, refund behavior, reconciliation job, or operational runbook. That future release must use
+its own migrations, readiness version, hosted security evidence, provider sandbox evidence, recovery
+drill, and rollback plan. None of those items is an unfinished task for initial operations.

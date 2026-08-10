@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { LIVE_CHECKOUT_IMPLEMENTED, isLiveCheckoutUiEnabled } from "./billingCheckoutGate";
@@ -6,6 +6,18 @@ import { LIVE_CHECKOUT_IMPLEMENTED, isLiveCheckoutUiEnabled } from "./billingChe
 const publicProvider = readFileSync(new URL("./paymentProvider.ts", import.meta.url), "utf8");
 const serverContract = readFileSync(new URL("./billingProviderContract.server.ts", import.meta.url), "utf8");
 const billingPage = readFileSync(new URL("../app/teacher/billing/page.tsx", import.meta.url), "utf8");
+const releaseDesign = readFileSync(join(
+    process.cwd(),
+    "docs/superpowers/specs/2026-08-08-initial-operations-100-release-design.md",
+), "utf8");
+const releaseMasterPlan = readFileSync(join(
+    process.cwd(),
+    "docs/superpowers/plans/2026-08-08-initial-operations-100-release-master.md",
+), "utf8");
+const billingBoundaryPlan = readFileSync(join(
+    process.cwd(),
+    "docs/superpowers/plans/2026-08-08-billing-connection-boundary.md",
+), "utf8");
 
 function productionTypeScriptFiles(directory: string): string[] {
     return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
@@ -57,5 +69,44 @@ describe("billing provider module boundary", () => {
         expect(LIVE_CHECKOUT_IMPLEMENTED).toBe(false);
         expect(isLiveCheckoutUiEnabled(true)).toBe(false);
         expect(isLiveCheckoutUiEnabled(false)).toBe(false);
+    });
+
+    it("keeps the initial release billing scope to an unused server-only seam", () => {
+        expect(releaseDesign.replace(/\s+/g, " ")).toContain(
+            "Retain only the disabled server-only provider-neutral adapter, catalog, and authority contracts as an integration seam.",
+        );
+        expect(releaseMasterPlan.replace(/\s+/g, " ")).toContain(
+            "No durable billing persistence, billing HTTP routes, or real payment integration belongs to this release.",
+        );
+        expect(billingBoundaryPlan.replace(/\s+/g, " ")).toContain(
+            "This release retains only the disabled server-only provider-neutral adapter, catalog, and authority seam.",
+        );
+
+        for (const forbiddenDurablePlan of [
+            "omr_billing_checkout_intents",
+            "omr_apply_billing_event_v1",
+            "src/app/api/billing/checkout/route.ts",
+            "src/lib/billingStore.server.ts",
+            "supabase/migrations/202608080012_billing_connection_boundary.sql",
+        ]) {
+            expect(releaseDesign).not.toContain(forbiddenDurablePlan);
+            expect(releaseMasterPlan).not.toContain(forbiddenDurablePlan);
+            expect(billingBoundaryPlan).not.toContain(forbiddenDurablePlan);
+        }
+
+        const sourceRoot = new URL("..", import.meta.url).pathname;
+        const serverSeamCallSites = productionTypeScriptFiles(sourceRoot)
+            .filter(path => !path.endsWith("billingProviderContract.server.ts"))
+            .filter(path => !path.endsWith("billingProviderContract.fake.server.ts"))
+            .filter(path => readFileSync(path, "utf8").includes("billingProviderContract.server"));
+        expect(serverSeamCallSites).toEqual([]);
+        expect(existsSync(join(process.cwd(), "src/app/api/billing"))).toBe(false);
+
+        const durableBillingMigrations = readdirSync(join(process.cwd(), "supabase/migrations"))
+            .filter(file => file.endsWith(".sql"))
+            .filter(file => /omr_billing_|omr_apply_billing_event/.test(
+                readFileSync(join(process.cwd(), "supabase/migrations", file), "utf8"),
+            ));
+        expect(durableBillingMigrations).toEqual([]);
     });
 });

@@ -4,7 +4,7 @@
 
 **Goal:** Qualify one immutable browser deployment for at most 100 active users with a mean evidence score of at least 9.3/10, no dimension below 8.7/10, no live payments, and no open hard release gate.
 
-**Architecture:** Preserve the existing Next.js server boundary and Supabase canonical data plane. Execute five bounded plans in dependency order, with release identity first, canonical identity and roster second, core distribution UX third, the disabled provider-neutral billing seam fourth, and exact-SHA qualification last. Every mutation slice uses PostgreSQL transactions, stable public errors, redacted events, and TDD.
+**Architecture:** Preserve the existing Next.js server boundary and Supabase canonical data plane. Execute the bounded release, identity/roster, core-distribution, and exact-SHA qualification plans in dependency order. Keep the disabled provider-neutral billing contract seam isolated and unused; it is a scope guard, not a release implementation slice. Every mutation slice uses PostgreSQL transactions, stable public errors, redacted events, and TDD.
 
 **Tech Stack:** Next.js 16, React 19, TypeScript, Supabase/PostgreSQL 17, Vitest, Playwright, GitHub Actions, Vercel-compatible immutable deployment.
 
@@ -29,8 +29,8 @@ where it differs, this master plan and the approved specification win.
    - Invite metadata, honest raw-link capability, assignment lifecycle, and truthful canonical load
      states.
 4. `docs/superpowers/plans/2026-08-08-billing-connection-boundary.md`
-   - Provider-neutral billing persistence, price catalog, atomic webhook apply, disabled HTTP routes,
-     and fake adapter tests. No real payment provider is connected.
+   - Scope guard for the disabled server-only adapter, catalog, and authority contracts. No durable
+     billing persistence, billing HTTP routes, or real payment integration belongs to this release.
 5. `docs/superpowers/plans/2026-08-08-release-qualification.md`
    - Deterministic browser repair, quality manifest, staging load, alert drill, isolated restore,
      immutable promotion, hosted verification, and final score audit.
@@ -44,7 +44,7 @@ operator provisioning ──┼─> session generation ─> credential batch
                         │
                         ├─> invite lifecycle ─> assignment/load-state UI
                         │
-                        └─> billing boundary (still disabled)
+                        └─> billing contract seam (unused and disabled)
 
 all source slices ─> browser determinism ─> staging load/restore ─> immutable promotion ─> hosted score
 ```
@@ -60,6 +60,8 @@ all source slices ─> browser determinism ─> staging load/restore ─> immuta
 - [ ] Dispatch a fresh code-quality reviewer and resolve every important issue before the next task.
 - [ ] Preserve live checkout as disabled. Any test or implementation that changes an organization plan
       from browser intent without a verified server event fails the plan.
+- [ ] Reject durable billing migrations, stores, handlers, or routes from this release. The retained
+      server-only adapter/catalog/authority contracts must have no production call site.
 - [ ] Treat absent external credentials as `unverified` and a failed release gate, never as a pass.
 - [ ] Keep real student data prohibited until exact production boundary and hosted evidence pass.
 
@@ -76,7 +78,7 @@ feat(roster): issue student codes atomically
 feat(invites): expose safe invite lifecycle metadata
 feat(assignments): show canonical assignment lifecycle
 fix(ui): distinguish empty cached and failed loads
-feat(billing): add disabled durable provider seam
+test(billing): seal disabled provider contract seam
 fix(e2e): remove core browser nondeterminism
 feat(release): seal initial operations evidence
 ```

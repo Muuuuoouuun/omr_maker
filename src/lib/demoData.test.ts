@@ -41,10 +41,13 @@ describe("demo data gating", () => {
         expect(matrixRows.some(row => row.recommendations.length > 0)).toBe(true);
     });
 
+    // Full-suite measurement is ~2.9s because this constructs and deeply compares
+    // two complete 572-attempt evidence graphs. Keep that proof bounded without
+    // making unrelated tests inherit a larger timeout under shared-worker contention.
     it("keeps the generated showcase deterministic for a fixed clock", () => {
         const now = Date.UTC(2026, 6, 15, 9, 0, 0);
         expect(buildDemoDashboardData(now)).toEqual(buildDemoDashboardData(now));
-    });
+    }, 10_000);
 
     it("resolves a coherent showcase attempt detail only for the signed demo identity", async () => {
         const demoModule = await import("./demoData");
@@ -61,16 +64,14 @@ describe("demo data gating", () => {
             };
         }).resolveDemoAttemptDetail;
         const now = Date.parse("2026-08-05T00:00:00.000Z");
-        const demo = buildDemoDashboardData(now);
-        const target = demo.attempts.find(attempt => attempt.examId === "mock-final-comprehensive");
+        const targetAttemptId = "mock-attempt-mock-final-comprehensive-class-2-1--student-1";
 
-        expect(target).toBeDefined();
-        const detail = resolveDemoAttemptDetail({ teacherId: "omr-showcase" }, target!.id, now);
-        expect(detail?.attempt.id).toBe(target!.id);
+        const detail = resolveDemoAttemptDetail({ teacherId: "omr-showcase" }, targetAttemptId, now);
+        expect(detail?.attempt.id).toBe(targetAttemptId);
         expect(detail?.exam.id).toBe("mock-final-comprehensive");
         expect(detail?.peerAttempts.length).toBe(84);
         expect(detail?.peerAttempts.every(attempt => attempt.examId === detail.exam.id)).toBe(true);
-        expect(resolveDemoAttemptDetail({ teacherId: "admin" }, target!.id, now)).toBeNull();
+        expect(resolveDemoAttemptDetail({ teacherId: "admin" }, targetAttemptId, now)).toBeNull();
         expect(resolveDemoAttemptDetail({ teacherId: "omr-showcase" }, "missing", now)).toBeNull();
     });
 });
