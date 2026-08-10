@@ -1,5 +1,15 @@
 begin;
 
+set local lock_timeout = '2s';
+set local statement_timeout = '120s';
+
+-- Runtime writers lock the durable session before inserting/updating the
+-- parent attempt, which then materializes question-result children. Take the
+-- cutover locks in that same global order so neither side can form a cycle.
+lock table public.omr_attempt_sessions in access exclusive mode;
+lock table public.omr_attempts in access exclusive mode;
+lock table public.omr_question_results in access exclusive mode;
+
 do $$
 begin
     if pg_catalog.to_regprocedure('extensions.digest(text,text)') is null then
@@ -615,6 +625,12 @@ revoke all on function public.omr_finalize_canonical_attempt_evidence_dirty_v1()
 
 drop trigger if exists omr_attempts_deferred_canonical_child_evidence_guard_v1 on public.omr_attempts;
 drop trigger if exists omr_question_results_deferred_canonical_evidence_guard_v1 on public.omr_question_results;
+drop trigger if exists omr_question_results_canonical_dirty_insert_v1 on public.omr_question_results;
+drop trigger if exists omr_question_results_canonical_dirty_update_v1 on public.omr_question_results;
+drop trigger if exists omr_question_results_canonical_dirty_delete_v1 on public.omr_question_results;
+drop trigger if exists omr_attempts_canonical_dirty_insert_v1 on public.omr_attempts;
+drop trigger if exists omr_attempts_canonical_dirty_update_v1 on public.omr_attempts;
+drop trigger if exists omr_canonical_evidence_dirty_attempt_finalize_v1 on omr_internal.canonical_evidence_dirty_attempts;
 
 create trigger omr_question_results_canonical_dirty_insert_v1
 after insert on public.omr_question_results

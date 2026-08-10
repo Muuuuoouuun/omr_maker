@@ -39,6 +39,73 @@ function parsedFunctionParameters(sql: string): Map<string, string[]> {
 }
 
 describe("canonical question-result evidence database contract", () => {
+    it("bounds the cutover and takes every DDL lock in the runtime writer order before probing", () => {
+        const sql = readFileSync(migrationPath, "utf8");
+        expect(sql).toMatch(/^\s*begin;\s*set local lock_timeout = '2s';\s*set local statement_timeout = '120s';/i);
+
+        const lockOrder = [
+            "lock table public.omr_attempt_sessions in access exclusive mode;",
+            "lock table public.omr_attempts in access exclusive mode;",
+            "lock table public.omr_question_results in access exclusive mode;",
+        ].map(statement => sql.toLowerCase().indexOf(statement));
+        expect(lockOrder.every(index => index >= 0)).toBe(true);
+        expect(lockOrder).toEqual([...lockOrder].sort((left, right) => left - right));
+
+        const firstProbeOrDdl = Math.min(
+            ...["do $$", "alter table", "create "]
+                .map(statement => sql.toLowerCase().indexOf(statement))
+                .filter(index => index >= 0),
+        );
+        expect(sql.toLowerCase().indexOf("set local lock_timeout = '2s';")).toBeLessThan(firstProbeOrDdl);
+        expect(sql.toLowerCase().indexOf("set local statement_timeout = '120s';")).toBeLessThan(firstProbeOrDdl);
+        expect(lockOrder[2]).toBeLessThan(firstProbeOrDdl);
+        expect(sql).not.toMatch(/create\s+(?:unique\s+)?index\s+concurrently/i);
+    });
+
+    it("makes every trigger replacement idempotent for the bounded reapply", () => {
+        const sql = readFileSync(migrationPath, "utf8").toLowerCase();
+        const triggerCreations = /create\s+(?:constraint\s+)?trigger\s+([a-z_][a-z0-9_]*)[\s\S]*?\son\s+((?:public|omr_internal)\.[a-z_][a-z0-9_]*)/g;
+        let creation = triggerCreations.exec(sql);
+        let count = 0;
+        while (creation) {
+            const prefix = sql.slice(0, creation.index);
+            expect(prefix).toContain(`drop trigger if exists ${creation[1]} on ${creation[2]};`);
+            count += 1;
+            creation = triggerCreations.exec(sql);
+        }
+        expect(count).toBe(10);
+    });
+
+    it("runs a bounded pre-apply writer blocker, proves exact rollback, then applies and reapplies", () => {
+        const runner = readFileSync(`${root}/scripts/verify-supabase-live.mjs`, "utf8");
+        expect(runner).toMatch(/import\s*{[\s\S]*?\bspawn\b[\s\S]*?\bspawnSync\b[\s\S]*?}\s*from\s*"node:child_process"/);
+        expect(runner).toContain("verifyCanonicalQuestionResultEvidenceContention");
+        expect(runner).toContain("canonicalQuestionResultEvidenceMigrationStateSql");
+        expect(runner).not.toContain("pg_catalog.coalesce(");
+        expect(runner).toContain("pg_catalog.obj_description(procedure.oid, 'pg_proc') as comment");
+        expect(runner).toContain("lock table public.omr_attempt_sessions in row exclusive mode;");
+        expect(runner).toContain("lock table public.omr_attempts in row exclusive mode;");
+        expect(runner.indexOf("lock table public.omr_attempt_sessions in row exclusive mode;")).toBeLessThan(
+            runner.indexOf("lock table public.omr_attempts in row exclusive mode;"),
+        );
+        expect(runner).toContain("set statement_timeout = '10s';");
+        expect(runner).toContain("OMR_CANONICAL_EVIDENCE_WRITER_LOCKS_READY");
+        expect(runner).toContain("canonicalEvidenceBlockerReadyTimeoutMs");
+        expect(runner).toContain("canonicalEvidenceContentionProcessTimeoutMs");
+        expect(runner).toContain("allowFailure: true");
+        expect(runner).toMatch(/lock timeout/i);
+        expect(runner).toMatch(/beforeState\s*!==\s*afterState/);
+        expect(runner).toContain("pg_terminate_backend");
+        expect(runner).toMatch(/with\s+blocker_backend\s+as\s+materialized\s*\([\s\S]*?pid\s*<>\s*pg_catalog\.pg_backend_pid\(\)[\s\S]*?\)[\s\S]*?pg_catalog\.pg_terminate_backend\(blocker_backend\.pid\)/i);
+        expect(runner).toMatch(/finally\s*{[\s\S]*?stopCanonicalEvidenceWriterBlocker/);
+        expect(runner).toMatch(/await\s+startCanonicalEvidenceWriterBlocker\([^)]*\)[\s\S]*?psqlFile\(/);
+        expect(runner).toMatch(/verifyCanonicalQuestionResultEvidenceContention\([^)]*\);[\s\S]*?psqlFile\(`supabase\/migrations\/\$\{migration\}`\);[\s\S]*?psqlFile\(`supabase\/migrations\/\$\{migration\}`\);/);
+
+        const live = readFileSync(liveBehaviorPath, "utf8");
+        expect(live).toContain("canonical_evidence_contention_verified");
+        expect(runner).toContain("canonical_evidence_contention_verified=1");
+    });
+
     it("parses every exact public function signature without duplicate parameters", () => {
         const parsed = parsedFunctionParameters(readFileSync(migrationPath, "utf8"));
         expect([...parsed.keys()]).toEqual([

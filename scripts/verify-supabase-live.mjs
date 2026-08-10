@@ -10,7 +10,7 @@ import {
 import { createServer } from "node:net";
 import { delimiter, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import { CANONICAL_TABLES } from "./canonical-table-manifest.mjs";
 import { deriveLivePgReleaseProofs } from "./live-pg-release-proof-core.mjs";
@@ -23,6 +23,23 @@ const localDatabase = "omr_live_verify";
 const requiredPostgresBinaries = ["initdb", "pg_ctl", "createdb", "psql", "postgres", "pg_dump"];
 const dockerInfoTimeoutMs = 5_000;
 const liveSqlTimeoutMs = 120_000;
+const canonicalEvidenceBlockerReadyTimeoutMs = 5_000;
+const canonicalEvidenceContentionProcessTimeoutMs = 8_000;
+const canonicalEvidenceBlockerProcessTimeoutMs = 12_000;
+const canonicalEvidenceBlockerStopTimeoutMs = 3_000;
+const canonicalEvidenceBlockerOutputLimit = 16_384;
+const canonicalEvidenceWriterReadyMarker = "OMR_CANONICAL_EVIDENCE_WRITER_LOCKS_READY";
+const canonicalEvidenceWriterApplicationName = `omr_canonical_evidence_writer_${process.pid}`;
+const canonicalQuestionResultEvidenceMigration = "202608100001_canonical_question_result_evidence.sql";
+const canonicalEvidenceWriterBlockerCommands = [
+    `begin;
+set statement_timeout = '10s';
+lock table public.omr_attempt_sessions in row exclusive mode;
+lock table public.omr_attempts in row exclusive mode;
+select '${canonicalEvidenceWriterReadyMarker}';`,
+    "select pg_catalog.pg_sleep(10);",
+    "rollback;",
+];
 const kakaoEntitlementUpgradeFixture =
     process.env.OMR_KAKAO_ENTITLEMENT_UPGRADE_FIXTURE === "1";
 const liveCanonicalTablesSql = `
@@ -50,6 +67,110 @@ select coalesce(
    and relation.relkind in ('f', 'v', 'm')
    and relation.relname like 'omr\\_%' escape '\\'
 `;
+const canonicalQuestionResultEvidenceMigrationStateSql = `
+with target_relations as (
+    select relation.oid, namespace.nspname, relation.relname,
+           relation.relkind, relation.relpersistence, relation.relrowsecurity,
+           relation.relforcerowsecurity, relation.relacl,
+           pg_catalog.pg_get_userbyid(relation.relowner) as owner_name,
+           pg_catalog.obj_description(relation.oid, 'pg_class') as comment
+      from pg_catalog.pg_class relation
+      join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+     where (namespace.nspname, relation.relname) in (
+         ('public', 'omr_attempt_sessions'),
+         ('public', 'omr_attempts'),
+         ('public', 'omr_question_results'),
+         ('omr_internal', 'canonical_evidence_dirty_attempts')
+     )
+), target_functions as (
+    select procedure.oid, namespace.nspname, procedure.proname,
+           pg_catalog.pg_get_function_identity_arguments(procedure.oid) as identity_arguments,
+           pg_catalog.pg_get_functiondef(procedure.oid) as definition,
+           procedure.proacl, procedure.proconfig,
+           pg_catalog.pg_get_userbyid(procedure.proowner) as owner_name,
+           pg_catalog.obj_description(procedure.oid, 'pg_proc') as comment
+      from pg_catalog.pg_proc procedure
+      join pg_catalog.pg_namespace namespace on namespace.oid = procedure.pronamespace
+     where namespace.nspname = 'public'
+       and procedure.proname in (
+           'omr_assert_canonical_question_result_json_v1',
+           'omr_canonical_json_text_v1',
+           'omr_compute_canonical_question_result_evidence_v1',
+           'omr_bind_attempt_evidence_generation_v1',
+           'omr_guard_canonical_question_result_evidence_v1',
+           'omr_question_result_assignment_generation_guard_v2',
+           'omr_canonical_attempt_child_evidence_matches_v1',
+           'omr_assert_canonical_attempt_child_evidence_v1',
+           'omr_mark_canonical_attempt_evidence_dirty_v1',
+           'omr_finalize_canonical_attempt_evidence_dirty_v1',
+           'omr_guard_completed_question_result_grading_immutability_v1',
+           'omr_force_finish_attempt_sessions_compact_v2',
+           'omr_canonical_question_result_evidence_ready_v1',
+           'omr_service_readiness_v1'
+       )
+)
+select pg_catalog.jsonb_build_object(
+    'namespaces', (
+        select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(
+                   namespace.nspname, namespace.nspacl,
+                   pg_catalog.pg_get_userbyid(namespace.nspowner)
+               ) order by namespace.nspname), '[]'::jsonb)
+          from pg_catalog.pg_namespace namespace
+         where namespace.nspname in ('public', 'omr_internal')
+    ),
+    'relations', (
+        select coalesce(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(relation)
+                   order by relation.nspname, relation.relname), '[]'::jsonb)
+          from target_relations relation
+    ),
+    'columns', (
+        select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(
+                   relation.nspname, relation.relname, attribute.attnum, attribute.attname,
+                   pg_catalog.format_type(attribute.atttypid, attribute.atttypmod),
+                   attribute.attnotnull, attribute.attidentity, attribute.attgenerated,
+                   pg_catalog.pg_get_expr(default_value.adbin, default_value.adrelid)
+               ) order by relation.nspname, relation.relname, attribute.attnum), '[]'::jsonb)
+          from target_relations relation
+          join pg_catalog.pg_attribute attribute on attribute.attrelid = relation.oid
+               and attribute.attnum > 0 and not attribute.attisdropped
+          left join pg_catalog.pg_attrdef default_value on default_value.adrelid = relation.oid
+               and default_value.adnum = attribute.attnum
+    ),
+    'constraints', (
+        select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(
+                   relation.nspname, relation.relname, constraint_row.conname,
+                   constraint_row.contype, constraint_row.condeferrable,
+                   constraint_row.condeferred, constraint_row.convalidated,
+                   pg_catalog.pg_get_constraintdef(constraint_row.oid, true)
+               ) order by relation.nspname, relation.relname, constraint_row.conname), '[]'::jsonb)
+          from target_relations relation
+          join pg_catalog.pg_constraint constraint_row on constraint_row.conrelid = relation.oid
+    ),
+    'indexes', (
+        select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(
+                   relation.nspname, relation.relname, index_relation.relname,
+                   pg_catalog.pg_get_indexdef(index_row.indexrelid)
+               ) order by relation.nspname, relation.relname, index_relation.relname), '[]'::jsonb)
+          from target_relations relation
+          join pg_catalog.pg_index index_row on index_row.indrelid = relation.oid
+          join pg_catalog.pg_class index_relation on index_relation.oid = index_row.indexrelid
+    ),
+    'triggers', (
+        select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(
+                   relation.nspname, relation.relname, trigger_row.tgname,
+                   pg_catalog.pg_get_triggerdef(trigger_row.oid, true)
+               ) order by relation.nspname, relation.relname, trigger_row.tgname), '[]'::jsonb)
+          from target_relations relation
+          join pg_catalog.pg_trigger trigger_row on trigger_row.tgrelid = relation.oid
+               and not trigger_row.tgisinternal
+    ),
+    'functions', (
+        select coalesce(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(procedure)
+                   order by procedure.nspname, procedure.proname, procedure.identity_arguments), '[]'::jsonb)
+          from target_functions procedure
+    )
+)::text
+`;
 
 function run(command, args, options = {}) {
     const result = spawnSync(command, args, {
@@ -68,6 +189,162 @@ function run(command, args, options = {}) {
         throw new Error(`${command} ${args.join(" ")} failed${detail ? `\n${detail}` : ""}`);
     }
     return result;
+}
+
+function waitForDelay(milliseconds) {
+    return new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
+}
+
+function appendBoundedBlockerOutput(current, chunk, child) {
+    const next = current + chunk.toString("utf8");
+    if (next.length > canonicalEvidenceBlockerOutputLimit) {
+        child.kill("SIGKILL");
+        throw new Error("canonical evidence writer blocker output exceeded its bound");
+    }
+    return next;
+}
+
+function startCanonicalEvidenceWriterBlocker(command, args, options = {}) {
+    const child = spawn(command, args, {
+        cwd: root,
+        env: options.env || process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let ready = false;
+    let readySettled = false;
+    let resolveCompletion;
+    const completion = new Promise(resolveChild => {
+        resolveCompletion = resolveChild;
+    });
+    const hardTimeout = setTimeout(() => child.kill("SIGKILL"), canonicalEvidenceBlockerProcessTimeoutMs);
+    const readyTimeout = setTimeout(() => {
+        if (!readySettled) child.kill("SIGKILL");
+    }, canonicalEvidenceBlockerReadyTimeoutMs);
+
+    child.once("close", (code, signal) => {
+        clearTimeout(hardTimeout);
+        resolveCompletion({ code, signal });
+    });
+
+    const readiness = new Promise((resolveReady, rejectReady) => {
+        const failReadiness = error => {
+            if (readySettled) return;
+            readySettled = true;
+            clearTimeout(readyTimeout);
+            rejectReady(error);
+        };
+        child.once("error", error => failReadiness(error));
+        child.once("close", (code, signal) => {
+            if (!ready) {
+                failReadiness(new Error(
+                    `canonical evidence writer blocker exited before its lock sentinel: code=${code}, signal=${signal}, stderr=${stderr}`,
+                ));
+            }
+        });
+        child.stdout.on("data", chunk => {
+            try {
+                stdout = appendBoundedBlockerOutput(stdout, chunk, child);
+            } catch (error) {
+                failReadiness(error);
+                return;
+            }
+            if (!ready && stdout.includes(canonicalEvidenceWriterReadyMarker)) {
+                ready = true;
+                readySettled = true;
+                clearTimeout(readyTimeout);
+                resolveReady({
+                    child,
+                    completion,
+                    hardTimeout,
+                    output: () => ({ stdout, stderr }),
+                });
+            }
+        });
+        child.stderr.on("data", chunk => {
+            try {
+                stderr = appendBoundedBlockerOutput(stderr, chunk, child);
+            } catch (error) {
+                failReadiness(error);
+            }
+        });
+    });
+
+    return readiness;
+}
+
+async function stopCanonicalEvidenceWriterBlocker(blocker, psqlQuery) {
+    try {
+        psqlQuery(`
+with blocker_backend as materialized (
+    select activity.pid
+      from pg_catalog.pg_stat_activity activity
+     where activity.application_name = '${canonicalEvidenceWriterApplicationName}'
+       and activity.pid <> pg_catalog.pg_backend_pid()
+)
+select pg_catalog.count(*)
+  from blocker_backend
+ where pg_catalog.pg_terminate_backend(blocker_backend.pid)
+        `);
+    } finally {
+        blocker.child.kill("SIGTERM");
+        let stopped = await Promise.race([
+            blocker.completion.then(() => true),
+            waitForDelay(canonicalEvidenceBlockerStopTimeoutMs).then(() => false),
+        ]);
+        if (!stopped) {
+            blocker.child.kill("SIGKILL");
+            stopped = await Promise.race([
+                blocker.completion.then(() => true),
+                waitForDelay(1_000).then(() => false),
+            ]);
+        }
+        clearTimeout(blocker.hardTimeout);
+        if (!stopped) throw new Error("canonical evidence writer blocker did not stop within its bound");
+    }
+}
+
+async function verifyCanonicalQuestionResultEvidenceContention(
+    psqlFile,
+    psqlQuery,
+    startWriterBlocker,
+) {
+    const beforeState = psqlQuery(canonicalQuestionResultEvidenceMigrationStateSql).trim();
+    const blocker = await startWriterBlocker();
+    let migrationResult;
+    const startedAt = Date.now();
+    try {
+        migrationResult = psqlFile(
+            `supabase/migrations/${canonicalQuestionResultEvidenceMigration}`,
+            [],
+            {
+                allowFailure: true,
+                capture: true,
+                timeout: canonicalEvidenceContentionProcessTimeoutMs,
+            },
+        );
+    } finally {
+        await stopCanonicalEvidenceWriterBlocker(blocker, psqlQuery);
+    }
+    const elapsedMs = Date.now() - startedAt;
+    const afterState = psqlQuery(canonicalQuestionResultEvidenceMigrationStateSql).trim();
+    if (beforeState !== afterState) {
+        throw new Error("canonical evidence migration contention left a partial schema");
+    }
+    if (migrationResult.status === 0) {
+        throw new Error("canonical evidence migration unexpectedly bypassed the writer blocker");
+    }
+    if (migrationResult.error) {
+        throw new Error(`canonical evidence migration contention process failed: ${migrationResult.error.message}`);
+    }
+    const failureOutput = `${migrationResult.stdout || ""}\n${migrationResult.stderr || ""}`;
+    if (!/canceling statement due to lock timeout/i.test(failureOutput)) {
+        throw new Error(`canonical evidence migration failed for a non-lock reason: ${failureOutput}`);
+    }
+    if (elapsedMs > canonicalEvidenceContentionProcessTimeoutMs) {
+        throw new Error(`canonical evidence migration exceeded contention budget: ${elapsedMs}ms`);
+    }
 }
 
 function releaseProofReport(result) {
@@ -119,7 +396,12 @@ $probe$
     }
 }
 
-function runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip) {
+async function runSqlMatrix(
+    psqlFile,
+    psqlQuery,
+    verifyKakaoQuarantineBackupRoundtrip,
+    startWriterBlocker,
+) {
     const releaseProofReports = [];
     psqlFile("supabase/live-test-prelude.sql");
     psqlFile("supabase/schema.sql");
@@ -135,7 +417,17 @@ function runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip)
         ) {
             psqlFile("supabase/kakao-reminder-entitlement-upgrade-fixtures.sql");
         }
-        psqlFile(`supabase/migrations/${migration}`);
+        if (migration === canonicalQuestionResultEvidenceMigration) {
+            await verifyCanonicalQuestionResultEvidenceContention(
+                psqlFile,
+                psqlQuery,
+                startWriterBlocker,
+            );
+            psqlFile(`supabase/migrations/${migration}`);
+            psqlFile(`supabase/migrations/${migration}`);
+        } else {
+            psqlFile(`supabase/migrations/${migration}`);
+        }
         if (
             kakaoEntitlementUpgradeFixture
             && migration === "202608100002_kakao_reminder_entitlement_boundary.sql"
@@ -148,7 +440,9 @@ function runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip)
 
     verifyKakaoQuarantineBackupRoundtrip();
     psqlFile("supabase/kakao-reminder-entitlement-readiness-performance-assertions.sql");
-    psqlFile("supabase/canonical-question-result-evidence-assertions.sql");
+    psqlFile("supabase/canonical-question-result-evidence-assertions.sql", [], {
+        variables: ["canonical_evidence_contention_verified=1"],
+    });
     psqlFile("supabase/kakao-reminder-entitlement-assertions.sql");
     psqlFile("supabase/kakao-reminder-entitlement-concurrency-lock.sql");
     psqlFile("supabase/individual-student-assignments-assertions.sql");
@@ -254,7 +548,7 @@ function getFreePort(host) {
     });
 }
 
-function runDockerVerification() {
+async function runDockerVerification() {
     function psqlFile(path, commands = [], options = {}) {
         return run("docker", [
             "exec", container,
@@ -264,7 +558,12 @@ function runDockerVerification() {
             ...(options.variables ?? []).flatMap(variable => ["-v", variable]),
             ...commands.flatMap(command => ["-c", command]),
             "-f", `/workspace/${path}`,
-        ], { capture: options.capture === true, timeout: liveSqlTimeoutMs });
+        ], {
+            allowFailure: options.allowFailure === true,
+            capture: options.capture === true,
+            timeout: liveSqlTimeoutMs,
+            ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
+        });
     }
 
     function psqlQuery(sql) {
@@ -273,6 +572,17 @@ function runDockerVerification() {
             "psql", "-U", migrationOwner, "-d", "postgres",
             "-v", "ON_ERROR_STOP=1", "-At", "-c", sql,
         ], { capture: true, timeout: liveSqlTimeoutMs }).stdout;
+    }
+
+    async function startWriterBlocker() {
+        return await startCanonicalEvidenceWriterBlocker("docker", [
+            "exec",
+            "--env", `PGAPPNAME=${canonicalEvidenceWriterApplicationName}`,
+            container,
+            "psql", "-U", migrationOwner, "-d", "postgres",
+            "-v", "ON_ERROR_STOP=1",
+            ...canonicalEvidenceWriterBlockerCommands.flatMap(command => ["-c", command]),
+        ]);
     }
 
     function verifyKakaoQuarantineBackupRoundtrip() {
@@ -351,7 +661,12 @@ delete from public.omr_kakao_reminder_legacy_quarantine
         }
         if (!ready) throw new Error("PostgreSQL container did not become ready in time.");
 
-        return runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip);
+        return await runSqlMatrix(
+            psqlFile,
+            psqlQuery,
+            verifyKakaoQuarantineBackupRoundtrip,
+            startWriterBlocker,
+        );
     } finally {
         run("docker", ["rm", "--force", container], { capture: true, allowFailure: true });
     }
@@ -399,7 +714,13 @@ async function runLocalVerification() {
                 ...(options.variables ?? []).flatMap(variable => ["-v", variable]),
                 ...commands.flatMap(command => ["-c", command]),
                 "-f", resolve(root, path),
-            ], { capture: options.capture === true, env: localEnv, timeout: liveSqlTimeoutMs });
+            ], {
+                allowFailure: options.allowFailure === true,
+                capture: options.capture === true,
+                env: localEnv,
+                timeout: liveSqlTimeoutMs,
+                ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
+            });
         }
 
         function psqlQuery(sql) {
@@ -411,6 +732,26 @@ async function runLocalVerification() {
                 "-v", "ON_ERROR_STOP=1",
                 "-At", "-c", sql,
             ], { capture: true, env: localEnv, timeout: liveSqlTimeoutMs }).stdout;
+        }
+
+        async function startWriterBlocker() {
+            return await startCanonicalEvidenceWriterBlocker(
+                postgresBinary(postgresBin, "psql"),
+                [
+                    "-h", "127.0.0.1",
+                    "-p", String(port),
+                    "-U", migrationOwner,
+                    "-d", localDatabase,
+                    "-v", "ON_ERROR_STOP=1",
+                    ...canonicalEvidenceWriterBlockerCommands.flatMap(command => ["-c", command]),
+                ],
+                {
+                    env: {
+                        ...localEnv,
+                        PGAPPNAME: canonicalEvidenceWriterApplicationName,
+                    },
+                },
+            );
         }
 
         function verifyKakaoQuarantineBackupRoundtrip() {
@@ -491,7 +832,12 @@ delete from public.omr_kakao_reminder_legacy_quarantine
             localDatabase,
         ], { env: localEnv });
 
-        return runSqlMatrix(psqlFile, psqlQuery, verifyKakaoQuarantineBackupRoundtrip);
+        return await runSqlMatrix(
+            psqlFile,
+            psqlQuery,
+            verifyKakaoQuarantineBackupRoundtrip,
+            startWriterBlocker,
+        );
     } finally {
         run(postgresBinary(postgresBin, "pg_ctl"), [
             "-D", resolve(temporaryDirectory, "data"),
@@ -524,7 +870,7 @@ async function main() {
     let evidence;
     if (dockerCheck.status === 0) {
         console.log("Supabase live verification backend: Docker PostgreSQL 17");
-        evidence = runDockerVerification();
+        evidence = await runDockerVerification();
     } else {
         console.log("Supabase live verification backend: ephemeral local PostgreSQL 17");
         evidence = await runLocalVerification();

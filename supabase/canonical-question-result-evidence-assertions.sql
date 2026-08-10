@@ -1,5 +1,16 @@
 \set ON_ERROR_STOP on
 
+\if :{?canonical_evidence_contention_verified}
+\else
+\echo 'canonical evidence contention verification was not provided'
+\quit 3
+\endif
+\if :canonical_evidence_contention_verified
+\else
+\echo 'canonical evidence contention verification did not pass'
+\quit 3
+\endif
+
 -- Exercise the two production writers at the maximum canonical question
 -- count. Deferred validation is forced before each timer stops so the bound
 -- includes the authoritative parent/child seal, not only row insertion.
