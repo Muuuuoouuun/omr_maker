@@ -126,6 +126,17 @@ describe("browser release proof core", () => {
         expect(PROOF_CATALOG.map(({ id }) => id)).toEqual(PROOF_IDS);
     });
 
+    it("binds teacher feedback and live-monitor proofs to complete behavioral owners", () => {
+        expect(PROOF_CATALOG.find(({ id }) => id === "teacher_core_results_feedback")).toMatchObject({
+            file: "e2e/teacher-pages.spec.ts",
+            title: "returns plain-text feedback through the teacher result flow and shows it in student review",
+        });
+        expect(PROOF_CATALOG.find(({ id }) => id === "teacher_core_live_monitor")).toMatchObject({
+            file: "e2e/teacher-pages.spec.ts",
+            title: "renders timer, stat tiles, students grid, heatmap, and controls refresh",
+        });
+    });
+
     it("rejects a generic all-green report with no release-proof annotations", () => {
         const chromium = report("chromium");
         for (const spec of allSpecs(chromium)) {

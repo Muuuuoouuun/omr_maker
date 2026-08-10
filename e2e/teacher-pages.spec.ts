@@ -28,6 +28,8 @@ const BILLING_TEACHER_IDENTITY: TeacherSessionIdentity = {
     displayName: "Billing Teacher",
 };
 
+const RESULT_HUB_FEEDBACK = "핵심 개념은 잘 이해했습니다. 응용 문항의 풀이 근거를 한 줄 더 적어보세요.";
+
 function cookieOrigin(baseURL?: string): string {
     try {
         return new URL(baseURL || "http://localhost:3003").origin;
@@ -327,10 +329,7 @@ async function seedAwaySeverityAttempts(page: Page) {
 }
 
 test("opens one student result hub and preserves the selected view across attempts", async ({ page, baseURL }) => {
-    test.info().annotations.push(
-        { type: "release-proof", description: "teacher_core_results_feedback" },
-        { type: "release-proof", description: "teacher_core_retest" },
-    );
+    test.info().annotations.push({ type: "release-proof", description: "teacher_core_retest" });
     await authenticateTeacher(page, baseURL);
     await seedStudentResultHub(page);
     await page.goto("/teacher/exam/result-hub-exam");
@@ -372,6 +371,43 @@ test("opens one student result hub and preserves the selected view across attemp
 
     await page.goto("/teacher/attempt/result-hub-original?view=invalid");
     await expect(page.getByRole("tab", { name: "답안" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("returns plain-text feedback through the teacher result flow and shows it in student review", async ({ page, baseURL }) => {
+    test.info().annotations.push({ type: "release-proof", description: "teacher_core_results_feedback" });
+    await authenticateTeacher(page, baseURL);
+    await seedStudentResultHub(page);
+    await page.goto("/teacher/exam/result-hub-exam");
+
+    const originalRow = page.getByRole("row").filter({ hasText: "필기 저장됨" });
+    await originalRow.getByRole("link", { name: "결과 허브 학생 결과 보기" }).click();
+    await expect(page).toHaveURL(/\/teacher\/attempt\/result-hub-original/);
+    await page.getByRole("tab", { name: "필기" }).click();
+
+    const feedbackHeading = page.getByRole("heading", { name: "교사 피드백" });
+    const feedbackSection = feedbackHeading.locator("../..");
+    await feedbackSection.getByLabel("전체 피드백").fill(RESULT_HUB_FEEDBACK);
+    await feedbackSection.getByRole("button", { name: "학생에게 반환" }).click();
+    await expect(feedbackSection.getByRole("status")).toHaveText("학생에게 피드백을 반환했습니다.");
+    await expect(feedbackSection.getByText("반환됨", { exact: true })).toBeVisible();
+
+    await page.evaluate(() => {
+        const session = {
+            studentId: "result-hub-student",
+            loginId: "result-hub-student",
+            name: "결과 허브 학생",
+            groupId: "result-hub-group",
+            groupName: "결과 허브반",
+            isGuest: false,
+            identityType: "temporary",
+            createdAt: "2026-07-22T00:00:00.000Z",
+        };
+        window.localStorage.setItem("omr_student_session_backup", JSON.stringify(session));
+        window.sessionStorage.setItem("omr_student_session", JSON.stringify(session));
+    });
+    await page.goto("/student/review/result-hub-original");
+    await expect(page.getByText("교사 피드백", { exact: true })).toBeVisible();
+    await expect(page.getByText(RESULT_HUB_FEEDBACK, { exact: true })).toBeVisible();
 });
 
 test("connects the editorial exam overview to a dense personal growth report", async ({ page }) => {
@@ -835,19 +871,35 @@ test.describe("Live Results page", () => {
         await authenticateTeacher(page, baseURL, MOCKUP_TEACHER_IDENTITY);
     });
 
-    test("renders timer, stat tiles, students grid, heatmap", async ({ page }) => {
+    test("renders timer, stat tiles, students grid, heatmap, and controls refresh", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "teacher_core_live_monitor" });
         await page.goto("/teacher/live");
         await expect(page.getByText("REMAINING TIME")).toBeVisible();
         // Stat labels
         for (const label of ["제출 완료", "응시 중", "미응시", "제출 평균"]) {
             await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
         }
-        await expect(page.getByRole("heading", { name: "학생별 제출 현황" })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "문항별 정답률" })).toBeVisible();
+        const studentGrid = page.getByRole("heading", { name: "학생별 제출 현황" })
+            .locator("xpath=ancestor::div[contains(@class, 'bento-card')]");
+        await expect(studentGrid).toBeVisible();
+        await expect(studentGrid.locator(".card-hover")).toHaveCount(8);
+        await expect(studentGrid.getByText("민준", { exact: true })).toBeVisible();
+
+        const heatmap = page.getByRole("heading", { name: "문항별 정답률" })
+            .locator("xpath=ancestor::div[contains(@class, 'bento-card')]");
+        await expect(heatmap).toBeVisible();
+        await expect(heatmap.locator('[title^="Q"]')).toHaveCount(35);
+        await expect(heatmap.locator('[title^="Q1:"]')).toBeVisible();
+        const pauseButton = page.getByRole("button", { name: "화면 갱신 일시정지" });
+        await expect(pauseButton).toHaveAttribute("aria-pressed", "false");
+        await pauseButton.click();
+        const resumeButton = page.getByRole("button", { name: "화면 갱신 재개" });
+        await expect(resumeButton).toHaveAttribute("aria-pressed", "true");
+        await resumeButton.click();
+        await expect(page.getByRole("button", { name: "화면 갱신 일시정지" })).toHaveAttribute("aria-pressed", "false");
     });
 
     test("screen refresh pause is explicitly scoped and exposes its pressed state", async ({ page }) => {
-        test.info().annotations.push({ type: "release-proof", description: "teacher_core_live_monitor" });
         await page.goto("/teacher/live");
         const pauseBtn = page.getByRole("button", { name: "화면 갱신 일시정지" });
         await expect(pauseBtn).toBeVisible();
