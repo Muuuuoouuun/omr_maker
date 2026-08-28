@@ -258,6 +258,8 @@ describe("service UI surface", () => {
         const mockupOverview = readProjectFile("src/components/dashboard/MockupOverview.tsx");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
         const statCard = readProjectFile("src/components/dashboard/StatCard.tsx");
+        const studentAnalyticsTab = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
+        const studentAnalyticsCss = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.module.css");
         const css = readProjectFile("src/app/globals.css");
 
         expect(mockupOverview).toContain("직전 시험보다");
@@ -273,6 +275,21 @@ describe("service UI surface", () => {
         expect(css).toContain(".overview-action-brief");
         expect(css).toContain(".mockup-metric-change.is-negative");
         expect(css).toMatch(/\.mockup-dashboard-shell\s*\{[\s\S]*?--text: #10203b;[\s\S]*?color: var\(--foreground\);/);
+        expect(studentAnalyticsTab).toContain('aria-label={`${activeStudentLabel} 우선 지도 요약`}');
+        expect(studentAnalyticsTab).toContain("최근 원시험");
+        expect(studentAnalyticsTab).toContain("선택 범위 평균보다");
+        expect(studentAnalyticsTab).toContain("최우선 지도");
+        expect(studentAnalyticsTab).toContain("지도 근거 보기");
+        expect(studentAnalyticsTab).toContain("최우선 유형 재시험");
+        expect(studentAnalyticsCss).toContain(".actionSummary");
+        expect(studentAnalyticsCss).toContain("@media (max-width: 720px)");
+        expect(studentAnalyticsCss).toContain("@media (prefers-reduced-motion: reduce)");
+
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        expect(teacherAttemptPage).toContain("buildDemoDashboardData");
+        expect(teacherAttemptPage).toContain('const currentPlan = isMockupAccount ? "academy" : serverPlan');
+        expect(teacherAttemptPage).toContain("demoData.attempts.find(item => item.id === id)");
+        expect(teacherAttemptPage).toContain("setCumulativeExams(demoData.exams)");
     });
 
     it("keeps the app install prompt reachable on touch tablets", () => {

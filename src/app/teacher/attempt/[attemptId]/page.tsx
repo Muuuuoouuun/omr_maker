@@ -48,6 +48,7 @@ import {
     matchRosterStudentForAttempt,
     parseStudentResultView,
 } from "@/lib/studentResultHub";
+import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
 import StudentResultHeader from "@/components/teacher/student-results/StudentResultHeader";
 import StudentResultTabs from "@/components/teacher/student-results/StudentResultTabs";
 import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";
@@ -107,7 +108,7 @@ export default function TeacherAttemptPage() {
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [handwritingStatus, setHandwritingStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
     const [accessDenied, setAccessDenied] = useState(false);
-    const { plan: currentPlan } = useServerPlan();
+    const { plan: serverPlan } = useServerPlan();
     const [feedback, setFeedback] = useState<AttemptFeedback | null>(null);
     const [feedbackSummary, setFeedbackSummary] = useState("");
     const [feedbackPolicy, setFeedbackPolicy] = useState<FeedbackDownloadPolicy>(DEFAULT_FEEDBACK_DOWNLOAD_POLICY);
@@ -127,10 +128,16 @@ export default function TeacherAttemptPage() {
     const [cumulativeLoadRequest, setCumulativeLoadRequest] = useState(0);
     const [subQuestionFilter, setSubQuestionFilter] = useState<'needs_review' | 'all'>('needs_review');
     const [savingSubQuestionKey, setSavingSubQuestionKey] = useState<string | null>(null);
+    const isMockupAccount = shouldUseDemoData(readTeacherSession());
+    const currentPlan = isMockupAccount ? "academy" : serverPlan;
     const pdfExportEnabled = hasPlanEntitlement(currentPlan, "pdfExport");
     const handwritingArchiveEnabled = hasPlanEntitlement(currentPlan, "handwritingArchive");
     const feedbackEnabled = hasPlanEntitlement(currentPlan, "feedbackMarkup");
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
+    const demoData = useMemo(
+        () => isMockupAccount ? buildDemoDashboardData() : null,
+        [isMockupAccount],
+    );
 
     useEffect(() => {
         let cancelled = false;
@@ -167,6 +174,24 @@ export default function TeacherAttemptPage() {
 
             if (!hasTeacherAccess()) {
                 setAccessDenied(true);
+                setLoaded(true);
+                return;
+            }
+
+            if (demoData) {
+                const found = demoData.attempts.find(item => item.id === id);
+                if (!found) {
+                    setLoaded(true);
+                    return;
+                }
+                const parsedExam = demoData.exams.find(item => item.id === found.examId) || null;
+                const nextFeedback = createAttemptFeedbackDraft(found);
+                setAttempt(found);
+                setPeerAttempts(demoData.attempts.filter(item => item.examId === found.examId));
+                setExam(parsedExam);
+                setFeedback(nextFeedback);
+                setFeedbackSummary(nextFeedback.summary || "");
+                setFeedbackPolicy(nextFeedback.downloadPolicy);
                 setLoaded(true);
                 return;
             }
@@ -218,7 +243,7 @@ export default function TeacherAttemptPage() {
         void loadTeacherAttempt();
 
         return () => { cancelled = true; };
-    }, [id]);
+    }, [demoData, id]);
 
     const loadHandwritingResources = useCallback(async () => {
         if (!attempt || handwritingStatus === "loading" || handwritingStatus === "ready") return;
@@ -298,6 +323,23 @@ export default function TeacherAttemptPage() {
 
         void (async () => {
             try {
+                if (demoData) {
+                    const matchedStudent = matchRosterStudentForAttempt(attempt, demoData.rosterStudents);
+                    const filteredAttempts = filterCumulativeAttemptsForStudent(
+                        attempt,
+                        demoData.attempts,
+                        demoData.rosterStudents,
+                        matchedStudent,
+                    );
+                    if (activeAttemptIdRef.current !== targetAttemptId) return;
+                    setCumulativeAttempts(filteredAttempts);
+                    setCumulativeExams(demoData.exams);
+                    setRosterStudent(matchedStudent || null);
+                    cumulativeSettledAttemptIdRef.current = targetAttemptId;
+                    setCumulativeStatus("ready");
+                    return;
+                }
+
                 const [attemptResult, examResult, rosterResult] = await Promise.all([
                     loadTeacherAttempts(),
                     loadTeacherExams(),
@@ -333,7 +375,7 @@ export default function TeacherAttemptPage() {
                 }
             }
         })();
-    }, [activeView, attempt, cumulativeLoadRequest, loaded, studentGrowthReportsEnabled]);
+    }, [activeView, attempt, cumulativeLoadRequest, demoData, loaded, studentGrowthReportsEnabled]);
 
     const analytics = useMemo(() => {
         if (!attempt || !exam) return null;

@@ -9,7 +9,7 @@ import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
     ResponsiveContainer, Legend
 } from 'recharts';
-import { Bell, Lock, MapPin, Target, TrendingUp } from "lucide-react";
+import { ArrowRight, Bell, Lock, MapPin, Target, TrendingUp } from "lucide-react";
 import { PremiumActionLink, PremiumFeatureCard } from "@/components/PremiumFeatureGate";
 import { formatKoreanDate } from "@/lib/pure";
 import {
@@ -32,6 +32,7 @@ import { resolveScopedSelection } from "@/lib/dashboardSelection";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
+import styles from "./StudentAnalyticsTab.module.css";
 
 interface StudentAnalyticsTabProps {
     exams: Exam[];
@@ -359,6 +360,24 @@ export default function StudentAnalyticsTab({
             .slice(0, 4);
     }, [detailedAnalysis]);
 
+    const latestAnalysis = detailedAnalysis[0];
+    const priorityLearningItem = learningQueue[0];
+    const evidenceAnalysis = priorityLearningItem || latestAnalysis;
+    const latestRangeAverage = latestAnalysis
+        ? (averageScoreByExamId.get(latestAnalysis.examId) ?? 0)
+        : 0;
+    const latestScoreDelta = latestAnalysis
+        ? latestAnalysis.scoreRate - latestRangeAverage
+        : 0;
+    const latestComparisonText = latestScoreDelta === 0
+        ? "선택 범위 평균과 같아요"
+        : `선택 범위 평균보다 ${Math.abs(latestScoreDelta)}점 ${latestScoreDelta > 0 ? "높아요" : "낮아요"}`;
+    const priorityQuestionNumbers = priorityLearningItem
+        ? (priorityLearningItem.weakQuestionNumbers.length > 0
+            ? priorityLearningItem.weakQuestionNumbers
+            : priorityLearningItem.retakeIds)
+        : [];
+
     if (students.length === 0) {
         return <div className="text-center p-8 text-muted">아직 응시 기록이 있는 학생이 없습니다.</div>;
     }
@@ -427,6 +446,72 @@ export default function StudentAnalyticsTab({
                     {activeRegionLabel} 기준 원시험 {baseScopedAttempts.length}건 · 재시험 {retakeScopedAttempts.length}건
                 </span>
             </div>
+
+            <section
+                className={styles.actionSummary}
+                aria-label={`${activeStudentLabel} 우선 지도 요약`}
+                aria-live="polite"
+            >
+                <div className={styles.summaryIdentity}>
+                    <span className={styles.eyebrow}>지금 볼 학생</span>
+                    <strong className={styles.studentName}>{activeStudentLabel}</strong>
+                    <span className={styles.supportingText}>
+                        {latestAnalysis
+                            ? `${latestAnalysis.examTitle} · ${latestAnalysis.date}`
+                            : "원시험 기록을 확인해 주세요"}
+                    </span>
+                </div>
+
+                <div className={styles.summaryMetric}>
+                    <span className={styles.metricLabel}>
+                        <TrendingUp size={16} aria-hidden="true" />
+                        최근 원시험
+                    </span>
+                    <strong className={styles.scoreValue}>
+                        {latestAnalysis ? `${latestAnalysis.scoreRate}점` : "-"}
+                    </strong>
+                    <span className={`${styles.supportingText} ${latestScoreDelta < 0 ? styles.isNegative : styles.isPositive}`}>
+                        {latestAnalysis ? latestComparisonText : "비교할 기록이 없습니다"}
+                    </span>
+                </div>
+
+                <div className={styles.summaryMetric}>
+                    <span className={styles.metricLabel}>
+                        <Target size={16} aria-hidden="true" />
+                        최우선 지도
+                    </span>
+                    <strong className={styles.priorityValue}>
+                        {priorityLearningItem?.weakPoint || "추가 보강 없음"}
+                    </strong>
+                    <span className={styles.supportingText}>
+                        {priorityLearningItem
+                            ? `${typeof priorityLearningItem.weakRate === "number" ? `오답 ${priorityLearningItem.weakRate}% · ` : ""}${priorityQuestionNumbers.join(", ")}번 문항`
+                            : "현재 학습 큐에 남은 오답 유형이 없습니다"}
+                    </span>
+                </div>
+
+                <div className={styles.summaryActions} aria-label="학생 지도 바로가기">
+                    {evidenceAnalysis && (
+                        <Link
+                            href={buildStudentResultHref(evidenceAnalysis.attemptId, "analytics")}
+                            className={`${styles.actionLink} ${styles.primaryAction}`}
+                        >
+                            지도 근거 보기
+                            <ArrowRight size={16} aria-hidden="true" />
+                        </Link>
+                    )}
+                    {priorityLearningItem && (
+                        <PremiumActionLink
+                            enabled={retakeAssignmentsEnabled}
+                            href={priorityLearningItem.retakeHref}
+                            className={`${styles.actionLink} ${styles.secondaryAction}`}
+                            lockedTitle="Pro 이상에서 최우선 유형 재시험 링크를 만들 수 있습니다."
+                        >
+                            최우선 유형 재시험
+                        </PremiumActionLink>
+                    )}
+                </div>
+            </section>
 
             {(!retakeAssignmentsEnabled || !remindersEnabled) && (
                 <PremiumFeatureCard
