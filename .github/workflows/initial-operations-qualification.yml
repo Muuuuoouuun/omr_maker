@@ -19,6 +19,14 @@ on:
         description: HMAC-SHA256 immutable preview identity signature
         required: true
         type: string
+      physical_device_evidence_b64:
+        description: Canonical base64 of the HMAC-attested Android and iOS physical-device evidence JSON
+        required: true
+        type: string
+      physical_device_evidence_sha256:
+        description: sha256-prefixed digest of the decoded physical-device evidence JSON bytes
+        required: true
+        type: string
       expected_readiness_version:
         description: Exact readiness contract version
         required: true
@@ -51,6 +59,7 @@ jobs:
           PREVIEW_DEPLOYMENT_ID: ${{ inputs.preview_deployment_id }}
           PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}
           PREVIEW_ATTESTATION_SIGNATURE: ${{ inputs.preview_attestation_signature }}
+          OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET: ${{ secrets.OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET }}
           EXPECTED_READINESS_VERSION: ${{ inputs.expected_readiness_version }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           OMR_STAGING_BASE_URL: ${{ secrets.OMR_STAGING_BASE_URL }}
@@ -145,6 +154,7 @@ jobs:
             OMR_RESTORE_TARGET_APP_URL OMR_RESTORE_TARGET_SERVICE_ROLE_KEY
             OMR_RESTORE_TARGET_DB_HOST OMR_RESTORE_TARGET_DB_PORT OMR_RESTORE_TARGET_DB_USER
             OMR_RESTORE_TARGET_DB_NAME OMR_RESTORE_TARGET_DB_PASSWORD
+            OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET
           )
           for name in "${required[@]}"; do
             test -n "${!name:-}" || exit 1
@@ -905,6 +915,18 @@ jobs:
           })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
           NODE
 
+      - name: Verify exact-SHA physical Android and iOS evidence
+        env:
+          OMR_BUILD_SHA: ${{ inputs.build_sha }}
+          OMR_PHYSICAL_DEVICE_EVIDENCE_B64: ${{ inputs.physical_device_evidence_b64 }}
+          OMR_PHYSICAL_DEVICE_EVIDENCE_SHA256: ${{ inputs.physical_device_evidence_sha256 }}
+          OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET: ${{ secrets.OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET }}
+          OMR_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-physical-device-evidence.mjs \
+            --output="$EVIDENCE_DIR/raw/physical-device-evidence.json"
+
       - name: Generate release score
         env:
           OMR_BUILD_SHA: ${{ inputs.build_sha }}
@@ -951,10 +973,15 @@ jobs:
       - name: Seal qualification success
         env:
           OMR_BUILD_SHA: ${{ inputs.build_sha }}
+          OMR_PHYSICAL_DEVICE_EVIDENCE_SHA256: ${{ inputs.physical_device_evidence_sha256 }}
+          OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET: ${{ secrets.OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET }}
+          OMR_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}
         run: |
           set -euo pipefail
           test -f "$EVIDENCE_DIR/.INCOMPLETE"
           test -f "$RELEASE_DIR/release-quality-score.json"
+          node scripts/verify-physical-device-evidence.mjs \
+            --file="$EVIDENCE_DIR/raw/physical-device-evidence.json"
           SCORE_SHA256="$(sha256sum "$RELEASE_DIR/release-quality-score.json" | cut -d ' ' -f 1)"
           node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({schemaVersion:1,status:"qualified",qualificationPhase:"pre_promotion",buildSha:process.env.OMR_BUILD_SHA,environmentDigest:process.env.ENVIRONMENT_DIGEST,scoreSha256:process.argv[2],qualifiedAt:new Date().toISOString()})+"\n",{mode:0o600,flag:"wx"});' \
             "$EVIDENCE_DIR/.QUALIFICATION_COMPLETE.tmp" "$SCORE_SHA256"

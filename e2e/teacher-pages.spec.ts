@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import path from "node:path";
+import { registerCanonicalRemoteFixture } from "./fixtures/canonical-remote-fixture";
 import { mintTeacherToken } from "../src/lib/teacherAuth";
 import { MOCKUP_TEACHER_IDENTITY } from "../src/lib/mockupAccount";
 import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
@@ -10,6 +11,7 @@ import {
     TEACHER_SESSION_KEY,
     type TeacherSessionIdentity,
 } from "../src/lib/teacherSession";
+import type { RosterSnapshot } from "../src/lib/rosterPersistence";
 
 test.describe.configure({ timeout: 45_000 });
 
@@ -20,6 +22,8 @@ const TEACHER_IDENTITY: TeacherSessionIdentity = {
     organizationId: "default",
     organizationName: "E2E Workspace",
     memberRole: "admin",
+    sessionAuthority: "bootstrap",
+    accountSessionGeneration: 1,
 };
 
 const BILLING_TEACHER_IDENTITY: TeacherSessionIdentity = {
@@ -94,11 +98,14 @@ async function authenticateTeacher(
     });
 }
 
-async function seedStoredRoster(page: Page) {
-    await page.addInitScript(({ groups, students }) => {
-        window.localStorage.setItem("omr_groups", JSON.stringify(groups));
-        window.localStorage.setItem("omr_students", JSON.stringify(students));
-    }, {
+async function settleHydratedPage(page: Page) {
+    await page.evaluate(() => new Promise<void>(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+}
+
+async function seedStoredRoster(page: Page): Promise<RosterSnapshot> {
+    const snapshot = {
         groups: [{
             id: "e2e-class-a",
             name: "E2E A반",
@@ -118,8 +125,8 @@ async function seedStoredRoster(page: Page) {
                 avgScore: 0,
                 examsTaken: 0,
                 lastActive: "기록 없음",
-                trend: "flat",
-                status: "active",
+                trend: "flat" as const,
+                status: "active" as const,
             },
             {
                 id: "e2e-class-a::이학생",
@@ -131,18 +138,21 @@ async function seedStoredRoster(page: Page) {
                 avgScore: 0,
                 examsTaken: 0,
                 lastActive: "기록 없음",
-                trend: "flat",
-                status: "active",
+                trend: "flat" as const,
+                status: "active" as const,
             },
         ],
-    });
-}
-
-async function seedDistributionCountRegressionRoster(page: Page) {
+        invites: [],
+    } satisfies RosterSnapshot;
     await page.addInitScript(({ groups, students }) => {
         window.localStorage.setItem("omr_groups", JSON.stringify(groups));
         window.localStorage.setItem("omr_students", JSON.stringify(students));
-    }, {
+    }, snapshot);
+    return snapshot;
+}
+
+async function seedDistributionCountRegressionRoster(page: Page): Promise<RosterSnapshot> {
+    const snapshot = {
         groups: [{
             id: "distribution-count-regression-group",
             name: "배포 집계 검증반",
@@ -181,7 +191,13 @@ async function seedDistributionCountRegressionRoster(page: Page) {
                 status: "active" as const,
             },
         ],
-    });
+        invites: [],
+    } satisfies RosterSnapshot;
+    await page.addInitScript(({ groups, students }) => {
+        window.localStorage.setItem("omr_groups", JSON.stringify(groups));
+        window.localStorage.setItem("omr_students", JSON.stringify(students));
+    }, snapshot);
+    return snapshot;
 }
 
 async function seedStudentResultHub(page: Page) {
@@ -318,7 +334,7 @@ async function seedAwaySeverityAttempts(page: Page) {
             name: studentAttempt.studentName,
             isGuest: false,
             identityType: "temporary",
-            createdAt: "2026-07-28T00:00:00.000Z",
+            createdAt: new Date().toISOString(),
         };
 
         window.localStorage.setItem(`omr_exam_${exam.id}`, JSON.stringify(exam));
@@ -327,6 +343,31 @@ async function seedAwaySeverityAttempts(page: Page) {
         window.sessionStorage.setItem("omr_student_session", JSON.stringify(studentSession));
     });
 }
+
+test("keeps cold-load role choices disabled until the client has hydrated", async ({ page }) => {
+    let releaseHydration!: () => void;
+    const hydrationGate = new Promise<void>(resolve => { releaseHydration = resolve; });
+    await page.route("**/_next/static/**/*.js", async route => {
+        await hydrationGate;
+        await route.continue();
+    });
+
+    try {
+        await page.goto("/", { waitUntil: "commit" });
+        const roleCards = page.locator(".home-role-card");
+        await expect(roleCards).toHaveCount(2);
+        await expect(roleCards.nth(0)).toBeDisabled();
+        await expect(roleCards.nth(1)).toBeDisabled();
+
+        releaseHydration();
+        await expect(roleCards.nth(0)).toBeEnabled();
+        await expect(roleCards.nth(1)).toBeEnabled();
+        await roleCards.nth(0).click();
+        await expect(page.locator("[data-home-role=student]")).toBeVisible();
+    } finally {
+        releaseHydration();
+    }
+});
 
 test("opens one student result hub and preserves the selected view across attempts", async ({ page, baseURL }) => {
     test.info().annotations.push({ type: "release-proof", description: "teacher_core_retest" });
@@ -400,7 +441,7 @@ test("returns plain-text feedback through the teacher result flow and shows it i
             groupName: "결과 허브반",
             isGuest: false,
             identityType: "temporary",
-            createdAt: "2026-07-22T00:00:00.000Z",
+            createdAt: new Date().toISOString(),
         };
         window.localStorage.setItem("omr_student_session_backup", JSON.stringify(session));
         window.sessionStorage.setItem("omr_student_session", JSON.stringify(session));
@@ -470,7 +511,16 @@ test.describe("Teacher dashboard", () => {
     });
 
     test("shows focused onboarding when the real workspace is empty", async ({ page }) => {
+        await page.request.get("/teacher/dashboard");
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
+        const actionIds = remoteFixture.activateEmptyTeacherDashboard();
         await page.goto("/teacher/dashboard");
+        await expect.poll(() => [...remoteFixture.requestedActionIds]).toEqual(
+            expect.arrayContaining(Object.values(actionIds)),
+        );
+        await expect.poll(() => [...remoteFixture.rewrittenActionIds].sort()).toEqual(
+            Object.values(actionIds).sort(),
+        );
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         const onboarding = page.getByRole("region", { name: "첫 시험부터 시작해보세요" });
         await expect(onboarding).toBeVisible();
@@ -823,7 +873,10 @@ test.describe("Create page label memory", () => {
 
     test("derives group distribution counts from the matching roster", async ({ page }) => {
         await page.setViewportSize({ width: 320, height: 800 });
-        await seedDistributionCountRegressionRoster(page);
+        const roster = await seedDistributionCountRegressionRoster(page);
+        await page.request.get("/create");
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
+        remoteFixture.activateCreate(roster);
         await page.goto("/create");
 
         const title = page.getByLabel("시험 제목");
@@ -873,7 +926,9 @@ test.describe("Live Results page", () => {
 
     test("renders concrete live values, student grid, heatmap, and a countdown while controlling refresh", async ({ page }) => {
         test.info().annotations.push({ type: "release-proof", description: "teacher_core_live_monitor" });
-        await page.clock.install({ time: new Date() });
+        const clockStart = new Date();
+        await page.clock.install({ time: clockStart });
+        await page.clock.pauseAt(new Date(clockStart.getTime() + 1_000));
         await page.goto("/teacher/live");
 
         const countdown = page.getByText("REMAINING TIME").locator("..").locator(".numeric-emphasis");
@@ -1022,8 +1077,13 @@ test.describe("Manage Users page", () => {
 
     test("bulk selection banner appears after checking boxes", async ({ page, baseURL }) => {
         await authenticateTeacher(page, baseURL);
-        await seedStoredRoster(page);
+        const roster = await seedStoredRoster(page);
+        await page.request.get("/teacher/users");
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
+        const { loadRoster } = remoteFixture.activateRoster(roster);
         await page.goto("/teacher/users");
+        await expect.poll(() => [...remoteFixture.requestedActionIds]).toContain(loadRoster);
+        await expect.poll(() => [...remoteFixture.rewrittenActionIds]).toContain(loadRoster);
         const firstBox = page.locator('tbody input[type="checkbox"]').first();
         await firstBox.check();
         await expect(page.getByText(/\d+명 선택됨/)).toBeVisible();
@@ -1032,7 +1092,10 @@ test.describe("Manage Users page", () => {
     test("Escape closes the mobile student action menu and restores its trigger focus", async ({ page, baseURL }) => {
         await page.setViewportSize({ width: 320, height: 568 });
         await authenticateTeacher(page, baseURL);
-        await seedStoredRoster(page);
+        const roster = await seedStoredRoster(page);
+        await page.request.get("/teacher/users");
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
+        remoteFixture.activateRoster(roster);
         await page.goto("/teacher/users");
 
         const trigger = page.locator(
@@ -1062,14 +1125,28 @@ test.describe("Manage Users page", () => {
 
     test("switching to groups tab shows group cards", async ({ page, baseURL }) => {
         await authenticateTeacher(page, baseURL);
+        await page.request.get("/teacher/users");
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
+        const { loadRoster } = remoteFixture.activateRoster({ students: [], groups: [], invites: [] });
         await page.goto("/teacher/users");
-        await page.getByRole("button", { name: /반 · 그룹/ }).click();
+        await expect.poll(() => remoteFixture.rewrittenActionIds.has(loadRoster)).toBe(true);
+        await settleHydratedPage(page);
+        const groupTab = page.getByRole("button", { name: /반 · 그룹/ });
+        await groupTab.click();
+        await expect(page).toHaveURL(/tab=groups/);
+        await expect(groupTab).toHaveAttribute("aria-pressed", "true");
         await expect(page.getByRole("button", { name: "새 반 만들기" }).first()).toBeVisible();
     });
 
     test("teacher can create, edit, and delete an empty group", async ({ page, baseURL }) => {
         await authenticateTeacher(page, baseURL);
+        await page.request.get("/teacher/users?tab=groups");
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
+        const { loadRoster, saveRoster } = remoteFixture.activateRoster({ students: [], groups: [], invites: [] });
         await page.goto("/teacher/users?tab=groups");
+        await expect.poll(() => remoteFixture.rewrittenActionIds.has(loadRoster)).toBe(true);
+        await settleHydratedPage(page);
+        await expect(page.getByRole("button", { name: /반 · 그룹/ })).toHaveAttribute("aria-pressed", "true");
 
         await page.getByRole("button", { name: "새 반 만들기" }).first().click();
         const createDialog = page.getByRole("dialog", { name: "새 반 만들기" });
@@ -1077,6 +1154,8 @@ test.describe("Manage Users page", () => {
         await page.getByLabel("반 이름").fill("E2E 신규반");
         await page.getByLabel("반 지역").fill("온라인");
         await createDialog.getByRole("button", { name: "만들기", exact: true }).click();
+        await expect.poll(() => remoteFixture.rewrittenActionCounts.get(saveRoster) || 0).toBe(1);
+        await expect.poll(() => page.evaluate(() => localStorage.getItem("omr_roster_revision"))).toBe("2");
 
         await expect(page.getByRole("heading", { name: "E2E 신규반" })).toBeVisible();
         await expect(page.getByText("0명 등록 · 온라인")).toBeVisible();
@@ -1087,6 +1166,8 @@ test.describe("Manage Users page", () => {
         await page.getByLabel("반 이름").fill("E2E 편집반");
         await page.getByLabel("반 지역").fill("서울");
         await editDialog.getByRole("button", { name: "저장", exact: true }).click();
+        await expect.poll(() => remoteFixture.rewrittenActionCounts.get(saveRoster) || 0).toBe(2);
+        await expect.poll(() => page.evaluate(() => localStorage.getItem("omr_roster_revision"))).toBe("3");
 
         await expect(page.getByRole("heading", { name: "E2E 편집반" })).toBeVisible();
         await expect(page.getByText("0명 등록 · 서울")).toBeVisible();
@@ -1095,12 +1176,17 @@ test.describe("Manage Users page", () => {
         const deleteDialog = page.getByRole("dialog", { name: "반 삭제" });
         await expect(deleteDialog).toBeVisible();
         await deleteDialog.getByRole("button", { name: "반 삭제" }).click();
+        await expect.poll(() => remoteFixture.rewrittenActionCounts.get(saveRoster) || 0).toBe(3);
+        await expect.poll(() => page.evaluate(() => localStorage.getItem("omr_roster_revision"))).toBe("4");
         await expect(page.getByRole("heading", { name: "E2E 편집반" })).not.toBeVisible();
     });
 
     test("student credential issuance is one-time and fails closed without a database", async ({ page, baseURL }) => {
         await authenticateTeacher(page, baseURL);
-        await seedStoredRoster(page);
+        const roster = await seedStoredRoster(page);
+        await page.request.get("/teacher/users");
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
+        remoteFixture.activateRoster(roster);
         await page.goto("/teacher/users");
 
         const studentRow = page.locator('tbody tr:has-text("kim.student@example.com")');
@@ -1130,7 +1216,10 @@ test.describe("Manage Users page", () => {
         const dialog = page.getByRole("dialog", { name: "학생 시작 코드 일괄 발급" });
         await expect(dialog).toContainText("기존 로그인 세션도 즉시 종료됩니다");
         await dialog.getByRole("button", { name: "1명 발급" }).click();
-        await expect(dialog).toContainText("발급을 시작하지 못했습니다");
+        // The first invocation may compile the Server Action in the serial dev
+        // server. Keep the assertion exact while allowing that cold path to
+        // settle under the full Chromium qualification load.
+        await expect(dialog).toContainText("발급을 시작하지 못했습니다", { timeout: 15_000 });
         expect(await page.evaluate(() => window.localStorage.getItem("omr_student_codes"))).toBeNull();
         await expect(page.getByTestId("student-login-guide-panel")).not.toContainText(/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/);
     });

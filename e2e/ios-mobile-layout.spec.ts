@@ -783,6 +783,7 @@ test.describe("iPhone WebKit mobile layout", () => {
     });
 
     test("teacher live keeps factual status and KPI results before its stacked control group", async ({ page }) => {
+        test.setTimeout(60_000);
         await loginAsShowcaseTeacher(page);
         await page.goto("/teacher/live");
 

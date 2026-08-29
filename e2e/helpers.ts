@@ -50,21 +50,28 @@ function escapeRegExp(value: string): string {
 
 export async function loginAsTeacher(page: Page, nextPath = "/teacher/dashboard") {
     await page.goto(`/?role=teacher&next=${encodeURIComponent(nextPath)}`);
-    await expect(page.getByPlaceholder("admin 또는 teacher@example.com")).toBeVisible();
+    // The server-rendered form is inert until React hydration completes. Wait
+    // for that product signal before entering credentials or submitting.
+    const submitButton = page.getByRole("button", { name: "대시보드 입장" });
+    await expect(submitButton).toBeEnabled({ timeout: 30_000 });
     await page.getByPlaceholder("admin 또는 teacher@example.com").fill("admin");
     await page.getByPlaceholder("비밀번호 입력").fill("admin123");
-    await page.getByRole("button", { name: "대시보드 입장" }).click();
-    await expect(page).toHaveURL(new RegExp(`${escapeRegExp(nextPath)}(?:[?#].*)?$`), { timeout: 15_000 });
+    await submitButton.click();
+    await expect(page).toHaveURL(new RegExp(`${escapeRegExp(nextPath)}(?:[?#].*)?$`), { timeout: 25_000 });
 }
 
 export async function loginAsShowcaseTeacher(page: Page) {
     await page.goto("/?role=teacher");
-    await page.getByRole("button", { name: "데모 계정으로 둘러보기" }).click();
-    await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1(?:#.*)?$/, { timeout: 15_000 });
+    // The server-rendered button remains disabled until its React handler is
+    // hydrated, so a cold WebKit worker cannot silently discard the click.
+    const showcaseButton = page.getByRole("button", { name: "데모 계정으로 둘러보기" });
+    await expect(showcaseButton).toBeEnabled({ timeout: 30_000 });
+    await showcaseButton.click();
+    await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1(?:#.*)?$/, { timeout: 25_000 });
     // The URL changes before the showcase dashboard's dynamic overview chunk
     // has finished rendering. Replacing that navigation immediately can abort
     // the chunk request in WebKit and surface a false application runtime error.
-    await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible({ timeout: 30_000 });
     await page.waitForLoadState("networkidle");
 }
 

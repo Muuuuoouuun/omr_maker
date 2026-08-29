@@ -1,6 +1,9 @@
 # 프로덕션 릴리스 증거
 
 이 문서는 한 번의 프로덕션 승인을 위한 기록입니다. 빈 항목, `unverified`, 수동 추정은 승인 증거가 아닙니다.
+초기 운영 qualification 작성 순서는
+[운영자 가이드](initial-operations-qualification.md)를 따릅니다. protected artifact가 아직 없으면 이 기록의
+상태는 `UNVERIFIED/NO-GO`이며 로컬 결과를 아래 빈칸에 대신 넣지 않습니다.
 
 ## 변경 식별
 
@@ -33,7 +36,7 @@
 ## 외부 합성 경보 전달 훈련
 
 실제 외부 경보 시스템에 연결된 어댑터로만 실행합니다. 로컬·staging 모의 응답, credential 누락,
-`unverified` 종료는 통과나 생략으로 기록할 수 없습니다. 증거는 릴리스 승인 시점 기준 30일 이내여야 합니다.
+`unverified` 종료는 통과나 생략으로 기록할 수 없습니다. 증거는 릴리스 승인 시점 기준 24시간 이내여야 합니다.
 
 정확한 실행 명령(출력은 기존에 존재하지 않는 정규화된 절대 경로이며, 부모는 실행 uid 소유의 정확한 `0700` 실제 디렉터리여야 함):
 
@@ -85,7 +88,7 @@ Provider-neutral HTTP 계약:
 - 증거 `buildSha`와 배포 SHA 일치: 예 / 아니오
 - 증거 `resolvedAt`(UTC):
 - 증거 `verifiedAt`(로컬 UTC):
-- `verifiedAt` 기준 승인 시점 freshness 30일 이내: 예 / 아니오
+- `verifiedAt` 기준 승인 시점 freshness 24시간 이내: 예 / 아니오
 - artifact `integrity` 재계산 일치: 예 / 아니오
 - artifact `attestation` HMAC 검증 일치: 예 / 아니오
 
@@ -115,6 +118,22 @@ file handle의 `writeFile`/`sync`/`stat`/`close`와 directory handle의 `sync`/`
 - 100명 staging 부하 evidence bundle 위치:
 - 최근 staging 복원 훈련 evidence 위치:
 - 실제 Android/iOS 다중 기기 증거 위치:
+
+## Initial operations qualification 증거
+
+- protected workflow artifact: `initial-operations-qualification-<SHA>` / `UNVERIFIED`
+- artifact digest와 workflow run URL:
+- immutable preview deployment/artifact/host digest 일치: 예 / 아니오 / `UNVERIFIED`
+- exact **80+10+10**(학생 80 + live poller 10 + uploader 10) 부하: 통과 / 실패 / `UNVERIFIED`
+- 외부 alert sink→receipt→ack→resolve: 통과 / 실패 / `UNVERIFIED`
+- repository-owned streaming restore와 RPO/RTO: 통과 / 실패 / `UNVERIFIED`
+- disposable teacher/student credential revocation: 통과 / 실패 / `UNVERIFIED`
+- physical Android/iOS evidence: 통과 / 실패 / `UNVERIFIED`
+- production promotion lineage: 통과 / 실패 / `UNVERIFIED`
+- rollback evidence와 담당자:
+- restore target·temporary backup·credential disposal: 통과 / 실패 / `UNVERIFIED`
+
+한 항목이라도 `UNVERIFIED`, 누락, 만료, wrong-SHA이면 최종 판정은 `NO-GO`입니다.
 
 ## 승인 판정
 

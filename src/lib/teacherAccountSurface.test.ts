@@ -60,4 +60,12 @@ describe("teacher account lifecycle surface", () => {
         expect(page).toContain('visibleTeacherAccountMode === "reset_complete" ? "새 비밀번호 저장"');
         expect(page).toContain(': "대시보드 입장"');
     });
+
+    it("keeps the teacher submit action inert until the login surface hydrates", () => {
+        const page = source("src/app/page.tsx");
+
+        expect(page).toContain(
+            'disabled={!isHydrated || teacherLifecyclePending}',
+        );
+    });
 });

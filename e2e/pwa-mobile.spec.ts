@@ -1,6 +1,15 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { studentAssignmentDraftStorageKey } from "../src/lib/studentAssignmentClassification";
 
 const VALID_PROOF_EPOCH = Date.now();
+const MOBILE_SOLVE_DRAFT_KEY = studentAssignmentDraftStorageKey(
+    "mobile-qa-exam",
+    "mobile-qa-student",
+    { assignmentId: undefined, assignmentRevision: undefined },
+    "base",
+);
+
+if (!MOBILE_SOLVE_DRAFT_KEY) throw new Error("mobile solve draft fixture key is invalid");
 
 async function clearStorage(page: Page) {
     await page.addInitScript(() => {
@@ -289,7 +298,6 @@ async function seedMobileSolveExam(page: Page) {
             isGuest: false,
             name: "모바일학생",
             studentId: "mobile-qa-student",
-            createdAt: "2026-06-22T00:00:00.000Z",
         };
         const sessionPayload = JSON.stringify(studentSession);
         try {
@@ -301,14 +309,14 @@ async function seedMobileSolveExam(page: Page) {
 }
 
 async function readMobileSolveDraft(page: Page) {
-    return page.evaluate(() => {
+    return page.evaluate((draftKey) => {
         const keys = Object.keys(window.localStorage)
-            .filter(key => key.startsWith("omr_draft_mobile-qa-exam_") && key.endsWith("_base"));
+            .filter(key => key === draftKey);
         const draft = keys.length === 1
             ? JSON.parse(window.localStorage.getItem(keys[0]) || "{}")
             : {};
         return { draft, keys };
-    });
+    }, MOBILE_SOLVE_DRAFT_KEY);
 }
 
 test.describe("Mobile PWA entry", () => {
@@ -465,6 +473,7 @@ test.describe("Mobile PWA entry", () => {
     });
 
     test("lets students answer and submit an exam in the phone and tablet app shell", async ({ page }) => {
+        test.setTimeout(45_000);
         test.info().annotations.push(
             { type: "release-proof", description: "student_core_autosave_resume" },
             { type: "release-proof", description: "ux_accessibility_responsiveness_student_mobile" },
@@ -683,7 +692,7 @@ test.describe("Mobile PWA entry", () => {
 
         await submitDialog.getByRole("button", { name: "제출하기" }).click();
 
-        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+(?:[?#]|$)/);
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+(?:[?#]|$)/, { timeout: 15_000 });
         await expect(page.getByRole("heading", { name: "모바일 실전 시험" })).toBeVisible();
         await expect(page.getByText("100%")).toBeVisible();
         await expectNoHorizontalOverflow(page);
@@ -723,11 +732,11 @@ test.describe("Mobile PWA entry", () => {
             examId: "mobile-qa-exam",
             score: 100,
             status: "completed",
+            studentId: "mobile-qa-student",
             studentName: "모바일학생",
             totalScore: 100,
         });
-        expect(savedAttempt.guestId).toEqual(expect.any(String));
-        expect(savedAttempt.studentId).toBe(`guest:${savedAttempt.guestId}`);
+        expect(savedAttempt.guestId).toBeUndefined();
         expect(consoleProblems).toEqual([]);
     });
 
@@ -748,7 +757,7 @@ test.describe("Mobile PWA entry", () => {
         await expectTouchTarget(page.getByRole("link", { name: "앱 상태 체크" }));
 
         await page.getByRole("link", { name: "앱 상태 체크" }).click();
-        await expect(page).toHaveURL(/\/pwa-check$/);
+        await expect(page).toHaveURL(/\/pwa-check$/, { timeout: 15_000 });
         await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
         await expectNoHorizontalOverflow(page);
         await page.waitForLoadState("load");
@@ -808,7 +817,7 @@ test.describe("Mobile PWA entry", () => {
         await page.goto("/pwa-check");
 
         await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
-        await expect(page.getByTestId("pwa-device-verdict")).toContainText("설치 실행 전");
+        await expect(page.getByTestId("pwa-device-verdict")).toContainText("설치 실행 전", { timeout: 15_000 });
         const passedChecks = page.getByTestId("pwa-passed-checks");
         await expect(passedChecks).not.toHaveAttribute("open", "");
         await page.getByTestId("pwa-passed-checks-summary").click();

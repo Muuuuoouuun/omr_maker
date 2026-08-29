@@ -9,6 +9,7 @@ import {
     type StudentServerIdentity,
 } from "../../src/lib/studentServerSession";
 import type { RosterSnapshot } from "../../src/lib/rosterPersistence";
+import { INITIAL_OPERATIONS_LIMITS } from "../../src/lib/initialOperationsPolicy";
 import type { Attempt, Exam } from "../../src/types/omr";
 
 interface ActionReplacement {
@@ -21,6 +22,24 @@ type ActionHandler = (
     response: APIResponse,
     body: string,
 ) => ActionReplacement | Promise<ActionReplacement>;
+
+function isConnectionReset(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const code = (error as Error & { code?: unknown }).code;
+    return code === "ECONNRESET" || /\bECONNRESET\b/.test(error.message);
+}
+
+export async function canonicalFixtureFetchUpstream<T>(
+    fetchUpstream: () => Promise<T>,
+    readOnly: boolean,
+): Promise<T> {
+    try {
+        return await fetchUpstream();
+    } catch (error) {
+        if (!readOnly || !isConnectionReset(error)) throw error;
+        return fetchUpstream();
+    }
+}
 
 const E2E_STUDENT_SESSION_ENV = {
     NODE_ENV: "test",
@@ -72,6 +91,65 @@ function decodeFlightValue(value: unknown): unknown {
         if (decodedChild !== undefined) decoded[key] = decodedChild;
     }
     return decoded;
+}
+
+function isRosterSnapshot(value: unknown): value is RosterSnapshot {
+    return ownObject(value)
+        && Array.isArray(value.students)
+        && Array.isArray(value.groups)
+        && Array.isArray(value.invites);
+}
+
+function rosterSaveTuple(value: unknown): { snapshot: RosterSnapshot; expectedRevision: number | null } | null {
+    const decoded = decodeFlightValue(value);
+    if (Array.isArray(decoded)) {
+        for (let index = 0; index < decoded.length - 1; index += 1) {
+            const snapshot = decoded[index];
+            const expectedRevision = decoded[index + 1];
+            if (
+                isRosterSnapshot(snapshot)
+                && (expectedRevision === null || (Number.isSafeInteger(expectedRevision) && Number(expectedRevision) >= 0))
+            ) {
+                return { snapshot, expectedRevision: expectedRevision === null ? null : Number(expectedRevision) };
+            }
+        }
+        for (const child of decoded) {
+            const found = rosterSaveTuple(child);
+            if (found) return found;
+        }
+    } else if (ownObject(decoded)) {
+        for (const child of Object.values(decoded)) {
+            const found = rosterSaveTuple(child);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+export function canonicalFixtureRosterSaveArguments(
+    raw: string,
+): { snapshot: RosterSnapshot; expectedRevision: number | null } {
+    for (const value of parseJsonCandidates(raw)) {
+        const found = rosterSaveTuple(value);
+        if (found) return found;
+    }
+    throw new Error("canonical fixture could not decode roster save arguments");
+}
+
+export function canonicalFixtureRosterSaveTransition(
+    raw: string,
+    currentRevision: number,
+): { status: "saved"; snapshot: RosterSnapshot; revision: number } | { status: "conflict"; error: string } {
+    const { snapshot, expectedRevision } = canonicalFixtureRosterSaveArguments(raw);
+    if (
+        snapshot.students.length > INITIAL_OPERATIONS_LIMITS.students
+        || snapshot.groups.length > INITIAL_OPERATIONS_LIMITS.classes
+        || snapshot.invites.length > INITIAL_OPERATIONS_LIMITS.invites
+    ) throw new Error("canonical fixture roster exceeds the bounded test contract");
+    if (expectedRevision !== currentRevision) {
+        return { status: "conflict", error: "roster revision conflict" };
+    }
+    return { status: "saved", snapshot, revision: currentRevision + 1 };
 }
 
 function actionArgument(request: Request, predicate: (candidate: Record<string, unknown>) => boolean): Record<string, unknown> {
@@ -152,8 +230,12 @@ function exactMeta(rawCount: number) {
 
 export async function registerCanonicalRemoteFixture(page: Page) {
     const handlers = new Map<string, ActionHandler>();
+    const retryableReadActionIds = new Set<string>();
+    const requestedActionIds = new Set<string>();
     const observedActionIds = new Set<string>();
     const rewrittenActionIds = new Set<string>();
+    const actionInvocationCounts = new Map<string, number>();
+    const rewrittenActionCounts = new Map<string, number>();
     const exams = new Map<string, Exam>();
     const attempts = new Map<string, Attempt>();
     let roster: RosterSnapshot = { students: [], groups: [], invites: [] };
@@ -163,19 +245,25 @@ export async function registerCanonicalRemoteFixture(page: Page) {
     await page.route("**/*", async route => {
         const request = route.request();
         const actionId = request.method() === "POST" ? request.headers()["next-action"] : undefined;
+        if (actionId) requestedActionIds.add(actionId);
         const handler = actionId ? handlers.get(actionId) : undefined;
         if (!handler) {
             await route.continue();
             return;
         }
         observedActionIds.add(actionId!);
-        const response = await route.fetch();
+        actionInvocationCounts.set(actionId!, (actionInvocationCounts.get(actionId!) || 0) + 1);
+        const response = await canonicalFixtureFetchUpstream(
+            () => route.fetch(),
+            retryableReadActionIds.has(actionId!),
+        );
         const body = await response.text();
         const action = await handler(request, response, body);
         const rewritten = rewriteActionResult(body, action.upstream, action.replacement);
         expect(rewritten, `authoritative fixture response for ${actionId}`).not.toBe(body);
-        rewrittenActionIds.add(actionId!);
         await route.fulfill({ response, body: rewritten });
+        rewrittenActionIds.add(actionId!);
+        rewrittenActionCounts.set(actionId!, (rewrittenActionCounts.get(actionId!) || 0) + 1);
     });
 
     function activateStudentSubmission(
@@ -261,13 +349,88 @@ export async function registerCanonicalRemoteFixture(page: Page) {
         roster = nextRoster;
     }
 
+    function activateRoster(
+        nextRoster: RosterSnapshot,
+        worker = "app/teacher/users/page",
+    ) {
+        roster = nextRoster;
+        let rosterRevision = revision;
+        const loadRoster = exactNextActionId(
+            "src/app/actions/teacherRoster.ts",
+            "loadTeacherCanonicalRoster",
+            worker,
+        );
+        const saveRoster = exactNextActionId(
+            "src/app/actions/teacherRoster.ts",
+            "saveTeacherCanonicalRoster",
+            worker,
+        );
+        handlers.set(loadRoster, (_request, _response, body) => ({
+            upstream: canonicalFixtureUpstreamResult(body, ["local_only"]),
+            replacement: {
+                status: "loaded",
+                snapshot: roster,
+                revision: rosterRevision,
+                meta: exactMeta(roster.students.length + roster.groups.length + roster.invites.length),
+            },
+        }));
+        retryableReadActionIds.add(loadRoster);
+        handlers.set(saveRoster, (request, _response, body) => {
+            const upstream = canonicalFixtureUpstreamResult(body, ["local_only"]);
+            const replacement = canonicalFixtureRosterSaveTransition(request.postData() || "", rosterRevision);
+            if (replacement.status === "saved") {
+                roster = replacement.snapshot;
+                rosterRevision = replacement.revision;
+            }
+            return {
+                upstream,
+                replacement,
+            };
+        });
+        return { loadRoster, saveRoster };
+    }
+
+    function activateEmptyTeacherDashboard(
+        nextRoster: RosterSnapshot = { students: [], groups: [], invites: [] },
+        worker = "app/teacher/dashboard/page",
+    ) {
+        roster = nextRoster;
+        const actionIds = {
+            exams: exactNextActionId("src/app/actions/teacherExam.ts", "listTeacherCanonicalExams", worker),
+            summaries: exactNextActionId("src/app/actions/teacherAttempts.ts", "listTeacherCanonicalAttemptSummaries", worker),
+            roster: exactNextActionId("src/app/actions/teacherRoster.ts", "loadTeacherCanonicalRoster", worker),
+        };
+        const meta = exactMeta(0);
+        const loaded = (replacement: unknown): ActionHandler => (_request, _response, body) => ({
+            upstream: canonicalFixtureUpstreamResult(body, ["local_only"]),
+            replacement,
+        });
+        handlers.set(actionIds.exams, loaded({ status: "loaded", exams: [], meta }));
+        handlers.set(actionIds.summaries, loaded({
+            status: "loaded",
+            attempts: [],
+            page: { partial: false, hasMore: false, itemCount: 0 },
+            meta,
+        }));
+        handlers.set(actionIds.roster, loaded({
+            status: "loaded",
+            snapshot: roster,
+            revision,
+            meta: exactMeta(roster.students.length + roster.groups.length + roster.invites.length),
+        }));
+        retryableReadActionIds.add(actionIds.exams);
+        retryableReadActionIds.add(actionIds.summaries);
+        retryableReadActionIds.add(actionIds.roster);
+        return actionIds;
+    }
+
     function activateCreate(nextRoster: RosterSnapshot, worker = "app/create/page") {
         roster = nextRoster;
         const loadRoster = exactNextActionId("src/app/actions/teacherRoster.ts", "loadTeacherCanonicalRoster", worker);
         const saveExam = exactNextActionId("src/app/actions/teacherExam.ts", "saveTeacherCanonicalExam", worker);
         const saveAssignment = exactNextActionId("src/app/actions/teacherAssignment.ts", "saveTeacherIndividualAssignment", worker);
         handlers.set(loadRoster, (_request, _response, body) => ({
-            upstream: canonicalFixtureUpstreamResult(body, ["local_only", "service_unavailable"]),
+            upstream: canonicalFixtureUpstreamResult(body, ["local_only"]),
             replacement: {
                 status: "loaded",
                 snapshot: roster,
@@ -275,8 +438,9 @@ export async function registerCanonicalRemoteFixture(page: Page) {
                 meta: exactMeta(roster.students.length + roster.groups.length + roster.invites.length),
             },
         }));
+        retryableReadActionIds.add(loadRoster);
         handlers.set(saveExam, (request, _response, body) => {
-            const upstream = canonicalFixtureUpstreamResult(body, ["local_only", "service_unavailable"]);
+            const upstream = canonicalFixtureUpstreamResult(body, ["local_only"]);
             const rawExam = actionArgument(request, candidate => (
                 typeof candidate.id === "string"
                 && typeof candidate.title === "string"
@@ -292,7 +456,7 @@ export async function registerCanonicalRemoteFixture(page: Page) {
             return { upstream, replacement: { status: "saved", exam } };
         });
         handlers.set(saveAssignment, (request, _response, body) => {
-            const upstream = canonicalFixtureUpstreamResult(body, ["local_only", "service_unavailable"]);
+            const upstream = canonicalFixtureUpstreamResult(body, ["local_only"]);
             const input = actionArgument(request, candidate => (
                 typeof candidate.examId === "string"
                 && Array.isArray(candidate.targetStudentIds)
@@ -343,7 +507,7 @@ export async function registerCanonicalRemoteFixture(page: Page) {
         const pageResult = { partial: false, hasMore: false, itemCount: 1 };
         const analyticsSnapshots = buildTeacherCanonicalAnalyticsSnapshotMap([exam], [attempt]);
         const loaded = (replacement: unknown): ActionHandler => (_request, _response, body) => ({
-            upstream: canonicalFixtureUpstreamResult(body, ["local_only", "service_unavailable"]),
+            upstream: canonicalFixtureUpstreamResult(body, ["local_only"]),
             replacement,
         });
         handlers.set(actionIds.exams, loaded({ status: "loaded", exams: [exam], meta }));
@@ -361,16 +525,26 @@ export async function registerCanonicalRemoteFixture(page: Page) {
             meta,
         }));
         handlers.set(actionIds.analytics, loaded({ status: "loaded", analyticsSnapshots, meta }));
+        retryableReadActionIds.add(actionIds.exams);
+        retryableReadActionIds.add(actionIds.summaries);
+        retryableReadActionIds.add(actionIds.roster);
+        retryableReadActionIds.add(actionIds.attempts);
+        retryableReadActionIds.add(actionIds.analytics);
         return actionIds;
     }
 
     return {
         activateStudentSubmission,
         setRoster,
+        activateRoster,
         activateCreate,
+        activateEmptyTeacherDashboard,
         activateTeacherDashboard,
+        requestedActionIds,
         observedActionIds,
         rewrittenActionIds,
+        actionInvocationCounts,
+        rewrittenActionCounts,
         confirmedExam: () => [...exams.values()].at(-1) || null,
         confirmedAttempt: () => [...attempts.values()].at(-1) || null,
         confirmedAttempts: () => [...attempts.values()],

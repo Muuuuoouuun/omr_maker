@@ -50,6 +50,22 @@ describe("production readiness workflow release identity", () => {
         },
     );
 
+    it("revalidates the fresh exact-SHA physical device artifact before promotion", () => {
+        expect(workflow).toMatch(
+            /      physical_device_evidence_sha256:\n(?:        .+\n)*?        required: true\n/,
+        );
+        const deviceGate = workflow.indexOf("- name: Revalidate exact-SHA physical Android and iOS evidence");
+        const rebind = workflow.indexOf("- name: Rebind qualification manifest to private restore");
+        expect(deviceGate).toBeGreaterThan(-1);
+        expect(deviceGate).toBeLessThan(rebind);
+        const gate = workflow.slice(deviceGate, rebind);
+        expect(gate).toContain("node scripts/verify-physical-device-evidence.mjs");
+        expect(gate).toContain("OMR_PHYSICAL_DEVICE_EVIDENCE_SHA256: ${{ inputs.physical_device_evidence_sha256 }}");
+        expect(gate).toContain("OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET: ${{ secrets.OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET }}");
+        expect(gate).toContain("OMR_BUILD_SHA: ${{ inputs.expected_build }}");
+        expect(gate).toContain("OMR_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}");
+    });
+
     it("requires a target-bound scheduler-pause confirmation before repository execution", () => {
         expect(workflow).toMatch(
             /      asset_gc_scheduler_pause_confirmation:\n(?:        .+\n)*?        required: true\n/,

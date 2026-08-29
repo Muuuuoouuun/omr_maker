@@ -50,6 +50,8 @@ describe("initial operations qualification workflow", () => {
         const inputs = workflow.on?.workflow_dispatch?.inputs;
 
         expect(inputs?.build_sha).toMatchObject({ required: true, type: "string" });
+        expect(inputs?.physical_device_evidence_b64).toMatchObject({ required: true, type: "string" });
+        expect(inputs?.physical_device_evidence_sha256).toMatchObject({ required: true, type: "string" });
         expect(inputs?.expected_readiness_version).toMatchObject({
             default: "202608090001",
             required: true,
@@ -97,6 +99,7 @@ describe("initial operations qualification workflow", () => {
             "Exercise external alert roundtrip",
             "Create staging backup",
             "Verify disposable restore and core journey",
+            "Verify exact-SHA physical Android and iOS evidence",
             "Generate release score",
             "Seal qualification success",
         ].map(stepIndex);
@@ -114,6 +117,15 @@ describe("initial operations qualification workflow", () => {
         );
         expect(String(namedStep("Exercise external alert roundtrip").run)).toContain("npm run ops:alert:verify");
         expect(String(namedStep("Verify disposable restore and core journey").run)).toContain("npm run ops:restore:verify");
+        const device = namedStep("Verify exact-SHA physical Android and iOS evidence");
+        expect(device.env).toMatchObject({
+            OMR_BUILD_SHA: "${{ inputs.build_sha }}",
+            OMR_PHYSICAL_DEVICE_EVIDENCE_B64: "${{ inputs.physical_device_evidence_b64 }}",
+            OMR_PHYSICAL_DEVICE_EVIDENCE_SHA256: "${{ inputs.physical_device_evidence_sha256 }}",
+            OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET: "${{ secrets.OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET }}",
+        });
+        expect(String(device.run)).toContain("node scripts/verify-physical-device-evidence.mjs");
+        expect(String(device.run)).toContain("$EVIDENCE_DIR/raw/physical-device-evidence.json");
         expect(String(namedStep("Generate release score").run)).toContain("npm run release:score");
 
         for (const step of qualificationSteps().filter((candidate) => typeof candidate.run === "string")) {
@@ -200,6 +212,7 @@ describe("initial operations qualification workflow", () => {
         expect(score).toContain("release-quality-score.json");
         expect(score).toContain("validatePublishedReleaseScore");
         expect(seal).toContain("QUALIFICATION_COMPLETE");
+        expect(seal).toContain("verify-physical-device-evidence.mjs");
         expect(seal).toContain("chmod 600");
         expect(stepIndex("Seal qualification success")).toBeGreaterThan(stepIndex("Generate release score"));
     });

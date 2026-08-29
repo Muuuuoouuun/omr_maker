@@ -990,7 +990,7 @@ describe("provider-neutral operational alert exercise", () => {
         const template = await readFile(join(process.cwd(), "docs/operations/release-evidence-template.md"), "utf8");
         expect(packageJson.scripts["ops:alert:verify"]).toBe("node scripts/verify-operational-alert.mjs");
         expect(template).toContain("npm run ops:alert:verify -- --output /absolute/private/path/operational-alert-evidence.json");
-        expect(template).toContain("freshness 30일 이내");
+        expect(template).toContain("freshness 24시간 이내");
         expect(template).toContain("외부 시스템 실행만 `verified` 가능");
         expect(template).toContain("최대 2048자");
     });

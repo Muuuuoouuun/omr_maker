@@ -39,6 +39,10 @@ on:
         description: Exact qualified staging environment digest
         required: true
         type: string
+      physical_device_evidence_sha256:
+        description: Exact sha256-prefixed digest of the qualified Android and iOS physical-device evidence
+        required: true
+        type: string
       expected_database_project_ref_hash:
         description: SHA-256 hash of the target production database project ref
         required: true
@@ -178,6 +182,17 @@ jobs:
           run-id: ${{ inputs.qualification_run_id }}
           path: ${{ runner.temp }}/qualified-promotion
           merge-multiple: true
+      - name: Revalidate exact-SHA physical Android and iOS evidence
+        env:
+          OMR_BUILD_SHA: ${{ inputs.expected_build }}
+          OMR_PHYSICAL_DEVICE_EVIDENCE_SHA256: ${{ inputs.physical_device_evidence_sha256 }}
+          OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET: ${{ secrets.OMR_PHYSICAL_DEVICE_EVIDENCE_HMAC_SECRET }}
+          OMR_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}
+        run: |
+          set -euo pipefail
+          chmod 600 "$RUNNER_TEMP/qualified-promotion/raw/physical-device-evidence.json"
+          node scripts/verify-physical-device-evidence.mjs \
+            --file="$RUNNER_TEMP/qualified-promotion/raw/physical-device-evidence.json"
       - name: Rebind qualification manifest to private restore
         env:
           OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}

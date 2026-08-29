@@ -57,6 +57,23 @@ hosted 배포 검증, staging 복구 검증, 결제 공급자 연결용 서버 �
 공개 배포의 일반 페이지는 열렸지만 `/api/healthz`와 `/api/readyz`가 모두 404였고, 확인된 배포본은 이
 릴리스 후보보다 오래됐다. hosted Supabase·staging 부하/복구·물리 기기·외부 알림 증거는 여전히 없다.
 
+## 5차 초기 운영 qualification 보강 결과 (2026-08-10)
+
+저장소 소유의 릴리스 증거 경계를 추가로 보강했다. 브라우저와 PostgreSQL atomic proof는 실제 report/SQL
+assertion marker에서만 파생되며 generic all-green 결과를 여러 항목으로 재사용하지 않는다. full journey는
+authoritative Next Action fixture를 통해 생성→배포→제출→재시험→통계를 연결한다. canonical evidence migration은
+배포 lock 대기 상한, deterministic lock order, contention rollback, 즉시 reapply를 PostgreSQL 17에서 검증한다.
+
+복원 절차는 외부 B64 runner를 제거하고 repository-owned roles→schema→data streaming apply, bounded private
+Storage upload, exact health/build, fresh invite context, submit/feedback, disposable credential revocation을 사용한다.
+verifier는 manifest와 동일한 Storage metadata를 복원 전후 두 PostgreSQL snapshot과 streaming body SHA로
+검사하고, 원래 apply marker·RTO·evidence SHA를 원자 publication에 결속한다.
+
+이 보강은 강한 로컬 릴리스 후보의 코드·증거 품질을 높였지만 외부 증거를 생성하지는 않는다. 현재 exact-SHA
+immutable staging deployment, hosted **80+10+10** 부하, external alert roundtrip, disposable restore rehearsal,
+Vercel promotion lineage, 실제 Android/iOS, operator approvals는 모두 **`UNVERIFIED`**다. 따라서 공식 판정은
+계속 **`NO-GO`**이며, 로컬 결과를 평균 9.3/최저 8.7의 운영 점수로 substitute하지 않는다.
+
 ## 증거 등급
 
 | 등급 | 의미 |

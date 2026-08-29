@@ -5,6 +5,10 @@
 exit 0, pre-promotion release score `go`, 그리고 `QUALIFICATION_COMPLETE` 게시가 함께 확인된 경우뿐입니다.
 secret·외부 환경·복원 대상이 없으면 `unverified` 실패이며 skip이나 수동 추정으로 대체하지 않습니다.
 이 결과의 `qualificationPhase`는 정확히 `pre_promotion`이며 production release 완료 증거가 아닙니다.
+운영 준비·승격·rollback·disposal의 전체 순서는
+[initial operations operator qualification guide](operations/initial-operations-qualification.md)를 따릅니다.
+현재 protected hosted/load/alert/restore/device evidence가 제공되지 않은 로컬 상태는
+**`UNVERIFIED/NO-GO`**이며, 아래 절차의 구현 존재나 로컬 통과를 외부 증거의 substitute로 사용하지 않습니다.
 
 ## 1. 실행 전 경계
 

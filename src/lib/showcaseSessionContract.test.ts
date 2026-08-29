@@ -16,6 +16,24 @@ describe("production showcase session contract", () => {
         expect(page).not.toMatch(/handleMockupLogin[\s\S]*saveTeacherSessionWithIdentity\(res\.token, res\.teacher\)/);
     });
 
+    it("does not expose an interactive showcase login button before hydration", () => {
+        const page = source("src/app/page.tsx");
+
+        expect(page).toContain("const [isHydrated, setIsHydrated] = useState(false)");
+        expect(page).toMatch(/useEffect\(\(\) => \{[\s\S]*?setIsHydrated\(true\)/);
+        expect(page).toContain("disabled={!isHydrated || mockupLoginPending}");
+    });
+
+    it("keeps both server-rendered role entry cards inert until hydration", () => {
+        const page = source("src/app/page.tsx");
+        const roleSelection = page.slice(
+            page.indexOf("{/* ── Role Selection"),
+            page.indexOf('{role === "none" && recentStudentSession'),
+        );
+
+        expect(roleSelection.match(/disabled=\{!isHydrated\}/g)).toHaveLength(2);
+    });
+
     it("keeps showcase out of workspace bootstrap and the direct create surface", () => {
         const teacherLayout = source("src/app/teacher/layout.tsx");
         const createLayout = source("src/app/create/layout.tsx");

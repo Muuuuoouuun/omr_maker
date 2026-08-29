@@ -185,6 +185,10 @@ function CreatePdfMenu({ problemFileName, answerFileName, onChooseProblem, onCho
             const target = event.target as Node;
             if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setIsOpen(false);
         };
+        const handleFocusIn = (event: FocusEvent) => {
+            const target = event.target as Node | null;
+            if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setIsOpen(false);
+        };
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === "Escape") {
                 event.preventDefault();
@@ -214,11 +218,13 @@ function CreatePdfMenu({ problemFileName, answerFileName, onChooseProblem, onCho
         const handleViewportChange = () => updateMenuPosition();
 
         document.addEventListener("pointerdown", handlePointerDown);
+        document.addEventListener("focusin", handleFocusIn);
         document.addEventListener("keydown", handleKeyDown);
         window.addEventListener("resize", handleViewportChange);
         window.addEventListener("scroll", handleViewportChange, true);
         return () => {
             document.removeEventListener("pointerdown", handlePointerDown);
+            document.removeEventListener("focusin", handleFocusIn);
             document.removeEventListener("keydown", handleKeyDown);
             window.removeEventListener("resize", handleViewportChange);
             window.removeEventListener("scroll", handleViewportChange, true);

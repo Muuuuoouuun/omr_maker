@@ -294,13 +294,31 @@ function ManageUsersInner() {
     const initialStudentId = searchParams?.get("studentId") || null;
     const initialGroupId = searchParams?.get("groupId") || null;
     const [tab, setTab] = useState<TabType>(initialTab);
+    const lastInitialTabRef = useRef<TabType>(initialTab);
+    const tabSyncMountedRef = useRef(false);
+    const selectTab = useCallback((nextTab: TabType) => {
+        setTab(nextTab);
+        const url = new URL(window.location.href);
+        const nextParams = url.searchParams;
+        nextParams.set("tab", nextTab);
+        if (nextTab !== "students") nextParams.delete("studentId");
+        if (nextTab !== "groups") nextParams.delete("groupId");
+        window.history.replaceState(
+            window.history.state,
+            "",
+            `${url.pathname}?${nextParams.toString()}${url.hash}`,
+        );
+    }, []);
     useEffect(() => {
         // Keep deep links like /teacher/users?tab=groups on the requested workflow.
-        let cancelled = false;
-        queueMicrotask(() => {
-            if (!cancelled) setTab(initialTab);
-        });
-        return () => { cancelled = true; };
+        if (!tabSyncMountedRef.current) {
+            tabSyncMountedRef.current = true;
+            lastInitialTabRef.current = initialTab;
+            return;
+        }
+        if (lastInitialTabRef.current === initialTab) return;
+        lastInitialTabRef.current = initialTab;
+        setTab(initialTab);
     }, [initialTab]);
     const [query, setQuery] = useState("");
     const deferredQuery = useDeferredValue(query);
@@ -2006,7 +2024,7 @@ function ManageUsersInner() {
                             type="button"
                             aria-pressed={tab === t.key}
                             className={tab === t.key ? "is-active" : undefined}
-                            onClick={() => setTab(t.key)}
+                            onClick={() => selectTab(t.key)}
                             style={{
                                 padding: '0.65rem 1.4rem', borderRadius: 'var(--radius-md)',
                                 background: tab === t.key ? 'var(--primary)' : 'transparent',

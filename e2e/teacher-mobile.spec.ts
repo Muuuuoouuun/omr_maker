@@ -1,7 +1,28 @@
 import { devices, expect, test, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { registerCanonicalRemoteFixture } from "./fixtures/canonical-remote-fixture";
 import { loginAsShowcaseTeacher, loginAsTeacher } from "./helpers";
+import { mintTeacherToken } from "../src/lib/teacherAuth";
+import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
+import {
+    createTeacherSession,
+    LEGACY_TEACHER_TOKEN_KEY,
+    TEACHER_SESSION_KEY,
+    type TeacherSessionIdentity,
+} from "../src/lib/teacherSession";
+import type { RosterSnapshot } from "../src/lib/rosterPersistence";
+
+const CANONICAL_TEACHER_IDENTITY: TeacherSessionIdentity = {
+    teacherId: "admin",
+    email: "admin@example.com",
+    displayName: "E2E Admin",
+    organizationId: "default",
+    organizationName: "E2E Workspace",
+    memberRole: "admin",
+    sessionAuthority: "bootstrap",
+    accountSessionGeneration: 1,
+};
 
 function isLocalBaseURL(baseURL?: string): boolean {
     const url = new URL(baseURL || "http://localhost:3003");
@@ -25,6 +46,69 @@ async function expectNoHorizontalOverflow(page: Page) {
     await expect.poll(async () => page.evaluate(() => (
         document.documentElement.scrollWidth > document.documentElement.clientWidth
     ))).toBe(false);
+}
+
+async function authenticateCanonicalTeacher(page: Page, baseURL?: string) {
+    const token = mintTeacherToken();
+    const session = createTeacherSession(token, Date.now(), CANONICAL_TEACHER_IDENTITY);
+    const signedCookie = createSignedTeacherSessionCookie(token, CANONICAL_TEACHER_IDENTITY);
+    if (!signedCookie) throw new Error("canonical teacher fixture cookie is invalid");
+    const origin = new URL(baseURL || "http://localhost:3003").origin;
+
+    await page.context().clearCookies();
+    await page.context().addCookies([{
+        name: TEACHER_SERVER_SESSION_COOKIE,
+        value: signedCookie,
+        url: origin,
+        httpOnly: true,
+        sameSite: "Lax",
+        secure: false,
+    }]);
+    const seedSession = ({ storedSession, sessionKey, legacyTokenKey }: {
+        storedSession: ReturnType<typeof createTeacherSession>;
+        sessionKey: string;
+        legacyTokenKey: string;
+    }) => {
+        window.sessionStorage.setItem(sessionKey, JSON.stringify(storedSession));
+        window.sessionStorage.setItem(legacyTokenKey, storedSession.token);
+    };
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.evaluate(seedSession, {
+        storedSession: session,
+        sessionKey: TEACHER_SESSION_KEY,
+        legacyTokenKey: LEGACY_TEACHER_TOKEN_KEY,
+    });
+    await page.addInitScript(seedSession, {
+        storedSession: session,
+        sessionKey: TEACHER_SESSION_KEY,
+        legacyTokenKey: LEGACY_TEACHER_TOKEN_KEY,
+    });
+}
+
+async function loginWithCanonicalDashboard(page: Page, baseURL: string | undefined, roster: RosterSnapshot) {
+    await authenticateCanonicalTeacher(page, baseURL);
+    await page.request.get("/teacher/dashboard");
+    const remoteFixture = await registerCanonicalRemoteFixture(page);
+    const actionIds = remoteFixture.activateEmptyTeacherDashboard(roster);
+    await page.goto("/teacher/dashboard");
+    for (const actionId of Object.values(actionIds)) {
+        await expect.poll(
+            () => remoteFixture.rewrittenActionIds.has(actionId),
+            { timeout: 15_000 },
+        ).toBe(true);
+    }
+}
+
+async function loginWithCanonicalRoster(page: Page, baseURL: string | undefined, roster: RosterSnapshot) {
+    await authenticateCanonicalTeacher(page, baseURL);
+    await page.request.get("/teacher/users");
+    const remoteFixture = await registerCanonicalRemoteFixture(page);
+    const { loadRoster } = remoteFixture.activateRoster(roster);
+    await page.goto("/teacher/users");
+    await expect.poll(
+        () => remoteFixture.rewrittenActionIds.has(loadRoster),
+        { timeout: 15_000 },
+    ).toBe(true);
 }
 
 async function drawingOverlayPixelCount(locator: Locator): Promise<number> {
@@ -261,8 +345,8 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("collapses an empty teacher dashboard to one onboarding action", async ({ page }) => {
-        await loginAsTeacher(page, "/teacher/dashboard");
+    test("collapses an empty teacher dashboard to one onboarding action", async ({ page, baseURL }) => {
+        await loginWithCanonicalDashboard(page, baseURL, { students: [], groups: [], invites: [] });
 
         const main = page.getByRole("main");
         await expect(main.getByRole("link", { name: "첫 시험 만들기" })).toBeVisible();
@@ -273,19 +357,19 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("keeps dashboard analytics available for a groups-only roster", async ({ page }) => {
-        await loginAsTeacher(page, "/teacher/dashboard");
-        await page.evaluate(() => {
-            window.localStorage.setItem("omr_groups", JSON.stringify([{
+    test("keeps dashboard analytics available for a groups-only roster", async ({ page, baseURL }) => {
+        await loginWithCanonicalDashboard(page, baseURL, {
+            students: [],
+            groups: [{
                 id: "group-without-students",
                 name: "신규 등록반",
                 region: "서울",
                 count: 0,
                 avgScore: 0,
                 color: "#4f46e5",
-            }]));
+            }],
+            invites: [],
         });
-        await page.reload();
 
         const main = page.getByRole("main");
         await expect(main.getByRole("group", { name: "대시보드 보기" })).toBeVisible();
@@ -294,26 +378,28 @@ test.describe("Teacher phone and tablet app surfaces", () => {
     });
 
     test("connects dashboard metrics to the next analysis action", async ({ page }) => {
-        await loginAsTeacher(page, "/teacher/dashboard?showcase=1");
+        test.setTimeout(60_000);
+        await loginAsShowcaseTeacher(page);
 
         await expect(page.getByRole("heading", { name: /김하늘 선생님/ })).toBeVisible();
         const scoreMetric = page.getByRole("button", { name: /전체 평균 점수.*점수 원인 보기/ });
         await expectTouchTarget(scoreMetric);
         await expect(scoreMetric).toContainText(/직전 시험보다 .*점 (상승|하락)/);
         await scoreMetric.click();
-        await expect(page).toHaveURL(/tab=exam/);
+        await expect(page).toHaveURL(/tab=exam/, { timeout: 25_000 });
         await expect(page.getByRole("button", { name: "시험별 분석" })).toHaveAttribute("aria-pressed", "true");
 
         await page.getByRole("button", { name: "개요", exact: true }).click();
         const studentMetric = page.getByRole("button", { name: /명단 학생.*학생별 성취 보기/ });
         await expectTouchTarget(studentMetric);
         await studentMetric.click();
-        await expect(page).toHaveURL(/tab=student/);
+        await expect(page).toHaveURL(/tab=student/, { timeout: 25_000 });
         await expect(page.getByRole("button", { name: "학생별 분석" })).toHaveAttribute("aria-pressed", "true");
         await expectNoHorizontalOverflow(page);
     });
 
     test("progressively reveals showcase exam results on a 390px phone", async ({ page }) => {
+        test.setTimeout(60_000);
         await page.setViewportSize({ width: 390, height: 844 });
         await loginAsShowcaseTeacher(page);
         await page.goto("/teacher/exam/mock-final-comprehensive");
@@ -363,9 +449,9 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("shows only empty-state roster actions when no students exist", async ({ page }) => {
+    test("shows only empty-state roster actions when no students exist", async ({ page, baseURL }) => {
         await page.setViewportSize({ width: 390, height: 844 });
-        await loginAsTeacher(page, "/teacher/users");
+        await loginWithCanonicalRoster(page, baseURL, { students: [], groups: [], invites: [] });
 
         await expect(page.getByText("아직 등록된 학생이 없습니다")).toBeVisible();
         await expect(page.getByRole("button", { name: "학생 추가" })).toHaveCount(1);
@@ -377,6 +463,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
     });
 
     test("keeps mobile roster search and detail actions clear of data-source toasts", async ({ page }) => {
+        test.setTimeout(45_000);
         await page.setViewportSize({ width: 390, height: 844 });
         await loginAsShowcaseTeacher(page);
         await page.goto("/teacher/users");
@@ -387,7 +474,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expect(cards).toHaveCount(1);
         await expect(cards.first()).toContainText("이서연");
         await cards.first().getByRole("button", { name: "이서연 상세 보기" }).click();
-        await expect(page.getByRole("heading", { name: "학생 상세" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학생 상세" })).toBeVisible({ timeout: 15_000 });
 
         // Showcase/demo already has a persistent inline source notice. Startup
         // fallback information must not stack fixed toasts over mobile actions.
@@ -689,6 +776,7 @@ test.describe("Teacher desktop Chromium result tab accessibility", () => {
     });
 
     test("moves focus across result tabs before keyboard activation", async ({ page }) => {
+        test.setTimeout(60_000);
         await seedTeacherAttemptReview(page);
         await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
 
@@ -704,7 +792,7 @@ test.describe("Teacher desktop Chromium result tab accessibility", () => {
         await expect(page).toHaveURL(urlBeforeArrowRight);
 
         await page.keyboard.press("Enter");
-        await expect(page).toHaveURL(/view=handwriting/);
+        await expect(page).toHaveURL(/view=handwriting/, { timeout: 15_000 });
         await expect(page.getByRole("tab", { name: "답안" })).toHaveAttribute("aria-selected", "false");
         await expect(page.getByRole("tab", { name: "필기" })).toHaveAttribute("aria-selected", "true");
     });

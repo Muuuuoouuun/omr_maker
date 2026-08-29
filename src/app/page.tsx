@@ -256,6 +256,7 @@ export default function Home() {
   const [teacherResetToken, setTeacherResetToken] = useState("");
   const [teacherLegacyLinkBlocked, setTeacherLegacyLinkBlocked] = useState(false);
   const [teacherLifecyclePending, setTeacherLifecyclePending] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
   const [mockupLoginPending, setMockupLoginPending] = useState(false);
   const [error, setError] = useState("");
   const studentNameInputRef = useRef<HTMLInputElement>(null);
@@ -310,6 +311,7 @@ export default function Home() {
   };
 
   useEffect(() => {
+    setIsHydrated(true);
     let cancelled = false;
     let localGroups: RosterGroup[] = [];
     try {
@@ -1087,6 +1089,7 @@ export default function Home() {
             {/* Student */}
             <button
               type="button"
+              disabled={!isHydrated}
               onClick={() => setRole("student")}
               className="glass-panel card-hover home-role-card"
               style={{
@@ -1161,6 +1164,7 @@ export default function Home() {
             {/* Teacher */}
             <button
               type="button"
+              disabled={!isHydrated}
               onClick={() => setRole("teacher")}
               className="glass-panel card-hover home-role-card"
               style={{
@@ -1476,7 +1480,7 @@ export default function Home() {
                     )}
                   </div>
 
-                  <button type="submit" className="btn btn-primary" style={{ width: "100%" }} disabled={teacherLifecyclePending}>
+                  <button type="submit" className="btn btn-primary" style={{ width: "100%" }} disabled={!isHydrated || teacherLifecyclePending}>
                     {teacherLifecyclePending ? teacherAccountPendingLabel : teacherAccountSubmitLabel}
                   </button>
                 </form>
@@ -1540,7 +1544,7 @@ export default function Home() {
                     type="button"
                     className="mockup-login-button"
                     onClick={() => void handleMockupLogin()}
-                    disabled={mockupLoginPending}
+                    disabled={!isHydrated || mockupLoginPending}
                   >
                     {mockupLoginPending ? "데모 준비 중…" : "데모 계정으로 둘러보기"}
                     {!mockupLoginPending && <ChevronRight />}

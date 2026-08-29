@@ -33,6 +33,7 @@
     "test:ops:initial": "node scripts/run-initial-operations.mjs",
     "ops:verify:production": "node scripts/verify-production-deployment.mjs",
     "ops:alert:verify": "node scripts/verify-operational-alert.mjs",
+    "ops:device:attest": "node scripts/attest-physical-device-evidence.mjs",
     "ops:teacher:provision": "node scripts/provision-initial-teacher.mjs",
     "ops:backup:inventory": "node scripts/backup-production.mjs --inventory-only",
     "ops:backup:create": "node scripts/backup-production.mjs --create",
