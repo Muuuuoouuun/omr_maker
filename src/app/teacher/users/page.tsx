@@ -2719,7 +2719,7 @@ function WeaknessRetakeLink({ weakness, enabled }: { weakness: StudentProfileWea
         <PremiumActionLink
             enabled={enabled}
             href={weaknessRetakeHref(weakness)}
-            lockedTitle="Pro 이상에서 약점 유형 재시험 링크를 만들 수 있습니다."
+            lockedTitle="Pro 이상에서 약점 유형의 오답 다시 풀기 링크를 만들 수 있습니다."
             style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -2735,7 +2735,7 @@ function WeaknessRetakeLink({ weakness, enabled }: { weakness: StudentProfileWea
                 whiteSpace: 'nowrap',
             }}
         >
-            재추천 {weakness.retakeQuestionIds.length}문항
+            오답 다시 풀기 {weakness.retakeQuestionIds.length}문항
         </PremiumActionLink>
     );
 }

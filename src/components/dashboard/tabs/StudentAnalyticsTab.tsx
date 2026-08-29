@@ -505,9 +505,9 @@ export default function StudentAnalyticsTab({
                             enabled={retakeAssignmentsEnabled}
                             href={priorityLearningItem.retakeHref}
                             className={`${styles.actionLink} ${styles.secondaryAction}`}
-                            lockedTitle="Pro 이상에서 최우선 유형 재시험 링크를 만들 수 있습니다."
+                            lockedTitle="Pro 이상에서 최우선 유형의 오답 다시 풀기 링크를 만들 수 있습니다."
                         >
-                            최우선 유형 재시험
+                            최우선 유형 오답 다시 풀기
                         </PremiumActionLink>
                     )}
                 </div>
@@ -516,7 +516,7 @@ export default function StudentAnalyticsTab({
             {(!retakeAssignmentsEnabled || !remindersEnabled) && (
                 <PremiumFeatureCard
                     title="학생별 액션 잠금"
-                    description="Free에서는 점수 추이와 응시 기록을 확인하고, Pro 이상에서 유형 재시험 링크와 카카오 발송 후보·큐 관리를 사용할 수 있습니다. 실제 메시지 발송은 아직 지원하지 않습니다."
+                    description="Free에서는 점수 추이와 응시 기록을 확인하고, Pro 이상에서 유형별 오답 다시 풀기 링크와 카카오 발송 후보·큐 관리를 사용할 수 있습니다. 실제 메시지 발송은 아직 지원하지 않습니다."
                     badge="Pro"
                     style={{ marginTop: '-0.25rem' }}
                 />
@@ -643,9 +643,9 @@ export default function StudentAnalyticsTab({
                                             href={item.retakeHref}
                                             className="btn btn-secondary"
                                             style={{ fontSize: '0.75rem', padding: '0.34rem 0.65rem' }}
-                                            lockedTitle="Pro 이상에서 학생별 유형 재시험 링크를 만들 수 있습니다."
+                                            lockedTitle="Pro 이상에서 학생별 유형 오답 다시 풀기 링크를 만들 수 있습니다."
                                         >
-                                            유형 재시험
+                                            유형별 오답 다시 풀기
                                         </PremiumActionLink>
                                     </div>
                                 ))}

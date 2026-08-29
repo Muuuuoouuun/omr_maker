@@ -1109,9 +1109,9 @@ export default function ReviewPage() {
                         <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '230ms' }}>
                             <div className="student-review-section-title">
                                 <Target size={17} />
-                                <strong>오답 재시험</strong>
+                                <strong>오답 회복 학습</strong>
                             </div>
-                            <p>오답과 같은 유형을 바로 다시 풉니다.</p>
+                            <p>이번 시험의 오답을 그대로 또는 유형별로 묶어 다시 풉니다.</p>
                             {sourceRecovery && sourceRecovery.recoveredQuestionIds.length > 0 && (
                                 <p className="student-review-success-note" style={{ marginBottom: '0.6rem' }}>
                                     이미 재시험으로 {sourceRecovery.recoveredQuestionIds.length}문항을 회복했어요.
@@ -1137,7 +1137,7 @@ export default function ReviewPage() {
                             {recommendationGroups.length > 0 && (
                                 <div className="student-review-recommendations">
                                     <div className="student-review-recommendation-head">
-                                        <span>유형 큐</span>
+                                        <span>유형별 오답</span>
                                         <strong>{recommendationGroups.length}개 유형</strong>
                                     </div>
                                     {recommendationGroups.map(group => {
@@ -1154,7 +1154,7 @@ export default function ReviewPage() {
                                             >
                                                 <span>{group.title}</span>
                                                 <small>
-                                                    {retakeNumbers || group.questionNumbers.join(", ")}번 · {group.wrongCount > 0
+                                                    {group.evidenceLabel} · {retakeNumbers || group.questionNumbers.join(", ")}번 · {group.wrongCount > 0
                                                         ? `오답 ${group.wrongCount}/${group.totalCount}`
                                                         : `시간 지연 ${group.slowCorrectCount}문항`}
                                                 </small>

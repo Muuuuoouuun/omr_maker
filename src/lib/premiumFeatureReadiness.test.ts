@@ -17,7 +17,7 @@ describe("premium feature readiness", () => {
         expect(buildBillingFeatureView(entitlement())).toMatchObject({
             status: "available",
             statusLabel: "사용 가능",
-            displayLabel: "고급 오답 분석",
+            displayLabel: "오답·회복 분석",
         });
         expect(buildBillingFeatureView(entitlement({
             key: "advancedQuestionDesign",
@@ -77,6 +77,13 @@ describe("premium feature readiness", () => {
         expect(BILLING_PLAN_FEATURES.pro).toEqual(expect.arrayContaining([
             expect.objectContaining({ label: "하위 질문 · 심화 응답", status: "available" }),
             expect.objectContaining({ detail: "서버 플랜·월 사용량 기준" }),
+        ]));
+    });
+
+    it("separates delivered recovery analysis from planned new similar questions", () => {
+        expect(BILLING_PLAN_FEATURES.pro).toEqual(expect.arrayContaining([
+            expect.objectContaining({ label: "오답 유형·재시험 회복 분석", status: "available" }),
+            expect.objectContaining({ label: "새 유사문항 추천", status: "planned" }),
         ]));
     });
 });

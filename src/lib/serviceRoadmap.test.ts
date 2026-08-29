@@ -6,6 +6,10 @@ import {
     PRODUCT_PRIORITY_ORDER,
     QUESTION_DB_ROADMAP,
     RECOMMENDATION_ROADMAP,
+    PREMIUM_LEARNING_LOOP,
+    ANALYSIS_EVIDENCE_THRESHOLDS,
+    DEFAULT_RECOVERY_POLICY,
+    LOW_FRICTION_SERVICE_PRIORITIES,
     formatPaymentProviderRoadmap,
 } from "./serviceRoadmap";
 
@@ -48,5 +52,46 @@ describe("service roadmap", () => {
             "question",
             "type",
         ]);
+    });
+
+    it("does not market same-exam retakes as newly sourced similar questions", () => {
+        expect(PREMIUM_LEARNING_LOOP.find(item => item.key === "typed_retake")).toMatchObject({
+            status: "available_if_data_ready",
+            label: "유형별 오답 다시 풀기",
+        });
+        expect(PREMIUM_LEARNING_LOOP.find(item => item.key === "new_similar_questions")).toMatchObject({
+            status: "planned",
+            label: "새 유사문항 추천",
+        });
+    });
+
+    it("defines conservative evidence thresholds for academy-facing analysis", () => {
+        expect(ANALYSIS_EVIDENCE_THRESHOLDS).toEqual({
+            minTaggedQuestionsPerType: 2,
+            minOriginalAttemptsForTrend: 3,
+            minResultsPerTypeForRepeatedWeakness: 6,
+            minStudentsForClassPattern: 5,
+            minAlternativeQuestionsForSimilarSet: 3,
+        });
+    });
+
+    it("keeps the default recovery assignment short and teacher-approved", () => {
+        expect(DEFAULT_RECOVERY_POLICY).toMatchObject({
+            teacherApprovalRequired: true,
+            maxQuestionsPerAssignment: 10,
+            defaultDueInHours: 48,
+            maxAttempts: 2,
+            autoAssignSlowCorrect: false,
+        });
+    });
+
+    it("prioritizes low-effort service moments that reuse delivered workflows", () => {
+        const nextItems = LOW_FRICTION_SERVICE_PRIORITIES.filter(item => item.stage === "next");
+        expect(nextItems.length).toBeGreaterThanOrEqual(4);
+        expect(nextItems.every(item => item.effort === "low")).toBe(true);
+        expect(LOW_FRICTION_SERVICE_PRIORITIES.find(item => item.key === "one_click_recovery")).toMatchObject({
+            value: "very_high",
+            userDecisionCount: 1,
+        });
     });
 });

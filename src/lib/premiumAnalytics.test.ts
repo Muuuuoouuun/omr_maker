@@ -835,6 +835,8 @@ describe("premium analytics", () => {
             title: "화자의 정서",
             basis: "같은 개념",
             severity: "urgent",
+            evidence: "supported",
+            evidenceLabel: "유형 경향",
             sourceAttemptId: "attempt-1",
             retakeMode: "similar",
             retakeQuestionIds: [2, 3],
@@ -866,6 +868,8 @@ describe("premium analytics", () => {
             wrongCount: 3,
             totalCount: 4,
             studentCount: 2,
+            evidence: "limited",
+            evidenceLabel: "참고 경향",
         });
 
         expect(buildLearningRecommendations(exam, [attempt, secondAttempt], {

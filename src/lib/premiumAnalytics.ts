@@ -3,6 +3,7 @@ import { canonicalQuestionIdFor } from "@/lib/questionBank";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { rosterGroupMatchesStudent } from "@/lib/rosterStorage";
 import { computePointBiserialCorrelation, type PointBiserialSample } from "@/lib/scoreDistribution";
+import { ANALYSIS_EVIDENCE_THRESHOLDS } from "@/lib/serviceRoadmap";
 import type {
     Attempt,
     Exam,
@@ -82,6 +83,7 @@ export interface TypeWeaknessGroup {
 
 export type LearningRecommendationScope = "attempt" | "student" | "class" | "exam";
 export type LearningRecommendationSeverity = "watch" | "review" | "urgent";
+export type LearningRecommendationEvidence = "single" | "limited" | "supported";
 
 export interface LearningRecommendationOptions {
     scope: LearningRecommendationScope;
@@ -103,6 +105,8 @@ export interface LearningRecommendationOptions {
 export interface LearningRecommendation extends TypeWeaknessGroup {
     scope: LearningRecommendationScope;
     severity: LearningRecommendationSeverity;
+    evidence: LearningRecommendationEvidence;
+    evidenceLabel: "단일 오답" | "참고 경향" | "유형 경향";
     priorityScore: number;
     reason: string;
     sourceAttemptId: string;
@@ -622,6 +626,28 @@ function recommendationPriority(group: TypeWeaknessGroup): number {
     );
 }
 
+function recommendationEvidence(
+    group: TypeWeaknessGroup,
+    scope: LearningRecommendationScope,
+): Pick<LearningRecommendation, "evidence" | "evidenceLabel"> {
+    if (group.questionIds.length < ANALYSIS_EVIDENCE_THRESHOLDS.minTaggedQuestionsPerType) {
+        return { evidence: "single", evidenceLabel: "단일 오답" };
+    }
+    if (
+        scope === "student"
+        && (
+            group.attemptCount < ANALYSIS_EVIDENCE_THRESHOLDS.minOriginalAttemptsForTrend
+            || group.totalCount < ANALYSIS_EVIDENCE_THRESHOLDS.minResultsPerTypeForRepeatedWeakness
+        )
+    ) {
+        return { evidence: "limited", evidenceLabel: "참고 경향" };
+    }
+    if (scope === "class" && group.studentCount < ANALYSIS_EVIDENCE_THRESHOLDS.minStudentsForClassPattern) {
+        return { evidence: "limited", evidenceLabel: "참고 경향" };
+    }
+    return { evidence: "supported", evidenceLabel: "유형 경향" };
+}
+
 function sourceAttemptIdForRecommendation(
     exam: Exam,
     options: LearningRecommendationOptions,
@@ -1048,6 +1074,7 @@ export function buildLearningRecommendations(
                 ...group,
                 scope: options.scope,
                 severity: recommendationSeverity(group),
+                ...recommendationEvidence(group, options.scope),
                 priorityScore: recommendationPriority(group),
                 reason: recommendationReason(group, options.scope),
                 sourceAttemptId,

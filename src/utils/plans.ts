@@ -169,7 +169,7 @@ export const PLAN_ENTITLEMENT_COPY: Record<PlanEntitlementKey, PlanEntitlementCo
     },
     advancedAnalytics: {
         label: "고급 오답 분석",
-        description: "학생별, 반별, 시험별 약점 유형을 비교합니다.",
+        description: "문항 태그와 누적 결과를 바탕으로 학생별, 반별, 시험별 약점과 회복을 비교합니다.",
     },
     advancedQuestionDesign: {
         label: "고급 문항 구성",
@@ -192,8 +192,8 @@ export const PLAN_ENTITLEMENT_COPY: Record<PlanEntitlementKey, PlanEntitlementCo
         description: "미응시, 재응시, 보충 대상 알림 후보를 만듭니다.",
     },
     retakeAssignments: {
-        label: "재추천/재응시 링크",
-        description: "틀린 문제와 약점 유형 기반 재응시 링크를 만듭니다.",
+        label: "오답 회복 과제",
+        description: "원시험의 오답·미응답을 그대로 또는 유형별로 묶은 재응시 링크를 만듭니다.",
     },
     multiTeacher: {
         label: "다중 선생님",

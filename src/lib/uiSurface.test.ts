@@ -280,7 +280,7 @@ describe("service UI surface", () => {
         expect(studentAnalyticsTab).toContain("선택 범위 평균보다");
         expect(studentAnalyticsTab).toContain("최우선 지도");
         expect(studentAnalyticsTab).toContain("지도 근거 보기");
-        expect(studentAnalyticsTab).toContain("최우선 유형 재시험");
+        expect(studentAnalyticsTab).toContain("최우선 유형 오답 다시 풀기");
         expect(studentAnalyticsCss).toContain(".actionSummary");
         expect(studentAnalyticsCss).toContain("@media (max-width: 720px)");
         expect(studentAnalyticsCss).toContain("@media (prefers-reduced-motion: reduce)");

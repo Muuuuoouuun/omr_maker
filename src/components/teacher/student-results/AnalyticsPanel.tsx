@@ -162,17 +162,23 @@ export default function AnalyticsPanel({
                 <div className={styles.sectionHeading}>
                     <h2 id="recommendations-title">약점과 추천 학습</h2>
                 </div>
+                <p style={{ margin: "0 0 0.7rem", color: "var(--muted)", fontSize: "0.74rem", lineHeight: 1.5 }}>
+                    교사가 입력한 태그로 같은 시험의 오답을 묶습니다. 새 유사문항을 생성하는 기능은 아닙니다.
+                </p>
                 {data.recommendations.length > 0 ? (
                     <div className={styles.rowList}>
                         {data.recommendations.map(group => (
                             <article key={group.key} style={{ padding: "0.85rem", borderRadius: "var(--radius-sm)", border: "1px solid #c7d2fe", background: "#eef2ff", color: "#312e81" }}>
-                                <strong style={{ fontSize: "0.86rem" }}>{group.title}</strong>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", flexWrap: "wrap" }}>
+                                    <strong style={{ fontSize: "0.86rem" }}>{group.title}</strong>
+                                    <span className={styles.signalChip}>{group.evidenceLabel}</span>
+                                </div>
                                 <p style={{ margin: "0.2rem 0 0", color: "#4338ca", fontSize: "0.75rem", fontWeight: 700 }}>
                                     {group.questionNumbers.join(", ")}번 · 오답/미답 {group.wrongCount}/{group.totalCount}
                                 </p>
                                 <p style={{ margin: "0.3rem 0 0", fontSize: "0.76rem", lineHeight: 1.5 }}>{group.reason || group.recommendedAction}</p>
                                 <Link href={buildRetakeHref(attempt.examId, group.sourceAttemptId, group.retakeQuestionIds, group.retakeMode, { labels: group.retakeLabels, concepts: group.retakeConcepts })} className="btn btn-secondary" style={{ marginTop: "0.6rem", fontSize: "0.76rem", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
-                                    <Repeat2 size={14} aria-hidden="true" /> 유형 재시험
+                                    <Repeat2 size={14} aria-hidden="true" /> 유형별 오답 다시 풀기
                                 </Link>
                             </article>
                         ))}
@@ -183,7 +189,7 @@ export default function AnalyticsPanel({
                             <article key={group.key} style={{ padding: "0.8rem", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--background)" }}>
                                 <strong style={{ fontSize: "0.84rem" }}>{group.title}</strong>
                                 <p style={{ margin: "0.2rem 0 0", color: "var(--muted)", fontSize: "0.74rem" }}>{group.questionNumbers.join(", ")}번 · {group.recommendedAction}</p>
-                                <Link href={buildRetakeHref(attempt.examId, attempt.id, group.questionIds, "similar", { labels: group.labels, concepts: group.concepts })} className="btn btn-secondary" style={{ marginTop: "0.55rem", fontSize: "0.76rem" }}>비슷한 유형 재시험</Link>
+                                <Link href={buildRetakeHref(attempt.examId, attempt.id, group.questionIds, "similar", { labels: group.labels, concepts: group.concepts })} className="btn btn-secondary" style={{ marginTop: "0.55rem", fontSize: "0.76rem" }}>같은 유형 오답 다시 풀기</Link>
                             </article>
                         ))}
                     </div>

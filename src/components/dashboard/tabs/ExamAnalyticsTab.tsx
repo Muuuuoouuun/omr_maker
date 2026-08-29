@@ -697,7 +697,7 @@ export default function ExamAnalyticsTab({
             borderlineStudents,
             advancedStudents,
             actionCopy: weakConcept
-                ? `${weakConcept.concept} 보강 후 ${weakConcept.questionNumbers.slice(0, 4).join(", ")}번 유사문항 재응시`
+                ? `${weakConcept.concept} 보강 후 ${weakConcept.questionNumbers.slice(0, 4).join(", ")}번 관련 오답 재응시`
                 : "응시 데이터가 쌓이면 보강 우선순위를 계산합니다.",
         };
     }, [conceptAnalytics, examStats, questionAnalytics, studentScores]);

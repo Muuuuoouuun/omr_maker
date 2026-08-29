@@ -136,7 +136,7 @@ describe("billing usage", () => {
             level: "watch",
             title: "프리미엄 기능 잠금",
             upgradeTarget: "pro",
-            lockedEntitlementSummary: "필기 원본 보관, 고급 오답 분석, 재추천/재응시 링크",
+            lockedEntitlementSummary: "필기 원본 보관, 고급 오답 분석, 오답 회복 과제",
         });
         expect(freeHealth.description).toContain("Pro에서 열립니다");
         expect(freeHealth.lockedEntitlements.map(entitlement => entitlement.key)).toEqual([
