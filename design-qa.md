@@ -1,37 +1,48 @@
-# Design QA — 문항 수 입력 겹침 수정
+# Design QA — 홈 및 교사 대시보드 UI 개선
 
-- Source visual truth: `/var/folders/l6/tx5c_hw97452y83gkpgpnxcr0000gn/T/TemporaryItems/NSIRD_screencaptureui_T9tL4A/스크린샷 2026-07-22 오전 9.14.39.png`
-- Implementation screenshot: `/tmp/omr-question-count-overlap-fixed-mobile.png`
-- Viewport: 320 × 800 CSS px
-- Source pixels: 330 × 183 px
-- Implementation pixels: 320 × 800 px
-- Density normalization: implementation capture is 1 CSS px per image px; the source is a focused crop, so the comparison used the matching visible control region rather than full-frame scale.
-- State: create editor settings, 45 questions, five-choice mode, direct-count input focused.
+- Home reference: `/Users/clmagi/Desktop/Projects/omr_maker/public/design-concepts/omr-home-concept-c-learning-coach.png`
+- Dashboard reference: `/Users/clmagi/.codex/generated_images/01a060ce-9c07-7bb2-a7e4-c28feecbc413/exec-61405696-b361-4d6a-9e55-13a1a47b6b90.png`
+- Home implementation capture: `/tmp/omr-home-after-full.png`
+- Dashboard implementation capture: `/tmp/omr-dashboard-final.png`
+- Mobile home capture: `/tmp/omr-home-mobile.png`
+- Mobile dashboard capture: `/tmp/omr-dashboard-mobile.png`
+- Desktop viewport: 1672 × 941 CSS px
+- Mobile viewport: 390 × 844 CSS px
+- State: light theme, role selection home, demo teacher overview
 
-## Full-view comparison evidence
+## Reference comparison
 
-The implementation preserves the existing hierarchy, typography, button styling, colors, labels, and five-choice controls. At 320 px wide, all five presets and the direct input remain on one line without horizontal page overflow.
+### Home
 
-## Focused region comparison evidence
+- Preserved the centered brand-mark, eyebrow, large product title, supporting copy, two role cards, and pink/violet CTA hierarchy from the selected learning-coach reference.
+- Increased the role-card scale and whitespace to match the reference composition while retaining the product's existing logo, Lucide icons, tokens, theme control, and login flows.
+- Decorative artwork from the generated reference was intentionally not copied as a flattened screenshot; the implementation uses the approved product assets and surface system.
 
-The source shows the `50` preset extending 11.95 px into the direct input (preset right edge 212.95 px; input left edge 201 px). After the fix, the `50` preset ends at 211.41 px and the input starts at 217 px, leaving 5.59 px of visible separation. Preset buttons remain approximately 34 × 34 px and the direct input remains 44 px high.
+### Teacher dashboard
 
-## Required fidelity surfaces
+- Matched the editorial reference structure: persistent left navigation, simple dashboard heading, top-right create CTA, four KPI cards, a dominant analysis chart, and a compact recent-exams panel.
+- Replaced the single-series trend chart with a functional score-line and participation-bar comparison sourced from existing demo data.
+- Kept the existing exam/student analytics routes, data synchronization UI, search, session, notification, export, and detailed panels available.
 
-- Fonts and typography: unchanged; labels, button numerals, weight, line height, and input text remain consistent with the existing editor.
-- Spacing and layout rhythm: passed; the collision is removed and the intended 0.35rem inter-control gap is visible.
-- Colors and visual tokens: unchanged; selected, neutral, border, and focus tokens remain intact.
-- Image quality and asset fidelity: no image assets are part of this control group; existing app iconography is unchanged.
-- Copy and content: unchanged; presets remain `20/25/30/40/50`, direct input remains `45`, and `선택지 수` controls retain their labels.
+## Responsive and interaction evidence
 
-## Comparison history
+- Home teacher role card opened the teacher login form and returned successfully to role selection.
+- Mobile dashboard `시험별 분석` tab changed `aria-selected` to `true` and updated the URL to `?tab=exam&showcase=1`; `개요` returned to overview.
+- At 390 px, home and dashboard document widths remained within the viewport with no horizontal overflow.
+- Desktop and mobile captures showed no Next.js error overlay; browser logs contained development info/HMR events only and no error or warning entries.
 
-1. P1 — The `50` preset and direct-count input overlapped at 320 px, obscuring both controls.
-2. Fix — Reduced the direct-input grid track from 5.25rem to 4.25rem and made the five preset tracks shrinkable with `minmax(0, 2.15rem)`.
-3. Post-fix evidence — no bounding-box intersection, no horizontal overflow, `45` input commits successfully, and browser console has no errors or warnings on a fresh tab.
+## Verification
+
+- ESLint: passed for the four changed TypeScript/TSX files.
+- TypeScript (`tsc --noEmit`): passed.
+- Vitest: 140 files, 1059 tests passed.
+- Next.js production build: passed; all 16 static/dynamic routes compiled.
+- `git diff --check`: passed for the implementation files.
 
 ## Findings
 
-No actionable P0, P1, or P2 findings remain in the requested control area.
+1. P1 fixed — initial sidebar layout inherited the shared column direction and moved dashboard content below the fold. A late, scoped dashboard shell rule now keeps sidebar and workspace in one row on desktop.
+2. P2 fixed — the original mockup density buried the primary chart and recent exams among secondary analysis panels. The first fold now reflects the selected hierarchy; detailed tables remain below.
+3. No actionable P0, P1, or P2 findings remain in the requested home and teacher dashboard surfaces.
 
 final result: passed

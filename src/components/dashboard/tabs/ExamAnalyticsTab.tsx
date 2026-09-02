@@ -64,6 +64,7 @@ import { formatRegionScopedLabel, resolveExamSelection, resolveExamSelectionInpu
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { serializeCsvRows } from "@/lib/csv";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import { buildRecoveryAssignmentBatch } from "@/lib/recoveryAssignments";
 import { buildKakaoNotificationCandidates, type KakaoNotificationCandidate, type KakaoNotificationCandidateKind } from "@/lib/kakaoNotificationQueue";
 import {
     buildKakaoCandidateMessagePreview,
@@ -87,6 +88,7 @@ import { hasPlanEntitlement } from "@/utils/plans";
 import CountUp from "@/components/dashboard/CountUp";
 import WaveBar from "@/components/dashboard/WaveBar";
 import StatusPill from "@/components/dashboard/StatusPill";
+import RecoveryAssignmentBatchCard from "@/components/dashboard/RecoveryAssignmentBatchCard";
 
 interface ExamAnalyticsTabProps {
     exams: Exam[];
@@ -417,6 +419,10 @@ export default function ExamAnalyticsTab({
     const questionBankReadiness = useMemo(() => {
         if (!selectedExam) return null;
         return buildQuestionBankReadiness(selectedExam, examAttempts);
+    }, [selectedExam, examAttempts]);
+    const recoveryAssignmentBatch = useMemo(() => {
+        if (!selectedExam) return null;
+        return buildRecoveryAssignmentBatch(selectedExam, examAttempts);
     }, [selectedExam, examAttempts]);
 
     const regionalActionPlans = useMemo(() => {
@@ -1193,6 +1199,13 @@ export default function ExamAnalyticsTab({
                 aria-label="시험 운영"
                 className={styles.legacyStack}
             >
+            {recoveryAssignmentBatch && (
+                <RecoveryAssignmentBatchCard
+                    key={`${recoveryAssignmentBatch.examId}:${activeRegionKey}`}
+                    batch={recoveryAssignmentBatch}
+                    enabled={retakeAssignmentsEnabled}
+                />
+            )}
             {activeWorkspaceView === "operations" && selectedExam && visibleRegionalActionPlans.length > 0 && (
                 <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.35rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>

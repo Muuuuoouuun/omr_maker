@@ -790,6 +790,7 @@ describe("service UI surface", () => {
     it("keeps premium analytics actions gated by the current plan", () => {
         const dashboardPage = readProjectFile("src/app/teacher/dashboard/page.tsx");
         const examAnalyticsTab = readProjectFile("src/components/dashboard/tabs/ExamAnalyticsTab.tsx");
+        const recoveryAssignmentCard = readProjectFile("src/components/dashboard/RecoveryAssignmentBatchCard.tsx");
         const studentAnalyticsTab = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
         const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
@@ -815,6 +816,11 @@ describe("service UI surface", () => {
         expect(dashboardPage).toContain("NotificationBell");
         expect(examAnalyticsTab).toContain("advancedAnalyticsEnabled");
         expect(examAnalyticsTab).toContain("retakeAssignmentsEnabled");
+        expect(examAnalyticsTab).toContain("RecoveryAssignmentBatchCard");
+        expect(examAnalyticsTab).toContain("buildRecoveryAssignmentBatch");
+        expect(recoveryAssignmentCard).toContain("오늘의 오답 회복 과제");
+        expect(recoveryAssignmentCard).toContain("링크 묶음 복사");
+        expect(recoveryAssignmentCard).toContain('href="/teacher/billing"');
         expect(examAnalyticsTab).toContain("시험 분석 지역 필터");
         expect(examAnalyticsTab).toContain("filterAttemptsByRegion");
         expect(examAnalyticsTab).toContain("formatRegionScopedLabel");

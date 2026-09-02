@@ -773,10 +773,10 @@ export default function Home() {
 
       <div
         className="container animate-fade-in home-container"
-        style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
+        style={{ maxWidth: "1240px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
       >
         {/* ── Hero ───────────────────────────── */}
-        <div className="home-hero" style={{ textAlign: "center", marginBottom: "4rem" }}>
+        <div className="home-hero" style={{ textAlign: "center", marginBottom: "3rem" }}>
           <div
             className="stagger-1 animate-fade-in home-logo"
             style={{ marginBottom: "1.4rem", opacity: 0 }}
@@ -789,8 +789,18 @@ export default function Home() {
             />
           </div>
 
+          <div
+            className="badge badge-primary stagger-2 animate-fade-in home-eyebrow"
+            style={{ marginBottom: "1.15rem", opacity: 0 }}
+          >
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
+              <circle cx="4" cy="4" r="4" />
+            </svg>
+            Smart Evaluation Platform
+          </div>
+
           <h1
-            className="title-gradient stagger-2 animate-fade-in home-title"
+            className="title-gradient stagger-3 animate-fade-in home-title"
             style={{
               fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
               lineHeight: 1.04,
@@ -802,16 +812,6 @@ export default function Home() {
           >
             OMR Maker
           </h1>
-
-          <div
-            className="badge badge-primary stagger-3 animate-fade-in home-eyebrow"
-            style={{ marginBottom: "1.15rem", opacity: 0 }}
-          >
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
-              <circle cx="4" cy="4" r="4" />
-            </svg>
-            Smart Evaluation Platform
-          </div>
 
           <p
             className="stagger-4 animate-fade-in home-subtitle"
@@ -846,7 +846,7 @@ export default function Home() {
             <button
               type="button"
               onClick={() => setRole("student")}
-              className="glass-panel card-hover home-role-card"
+              className="glass-panel card-hover home-role-card home-role-card--student"
               style={{
                 padding: "2.75rem 2.25rem",
                 textAlign: "left",
@@ -859,19 +859,6 @@ export default function Home() {
                 overflow: "hidden",
               }}
             >
-              <div
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  right: 0,
-                  width: "180px",
-                  height: "180px",
-                  background:
-                    "radial-gradient(circle at top right, rgba(236,72,153,0.1), transparent 70%)",
-                  pointerEvents: "none",
-                }}
-              />
-
               <div className="icon-wrap icon-wrap-secondary home-role-icon" style={{ marginBottom: "1.5rem" }}>
                 <StudentIcon size={38} />
               </div>
@@ -920,7 +907,7 @@ export default function Home() {
             <button
               type="button"
               onClick={() => setRole("teacher")}
-              className="glass-panel card-hover home-role-card"
+              className="glass-panel card-hover home-role-card home-role-card--teacher"
               style={{
                 padding: "2.75rem 2.25rem",
                 textAlign: "left",
@@ -933,19 +920,6 @@ export default function Home() {
                 overflow: "hidden",
               }}
             >
-              <div
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  right: 0,
-                  width: "180px",
-                  height: "180px",
-                  background:
-                    "radial-gradient(circle at top right, rgba(99,102,241,0.1), transparent 70%)",
-                  pointerEvents: "none",
-                }}
-              />
-
               <div className="icon-wrap icon-wrap-primary home-role-icon" style={{ marginBottom: "1.5rem" }}>
                 <TeacherIcon size={38} />
               </div>
