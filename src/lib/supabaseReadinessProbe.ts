@@ -5,7 +5,7 @@ import {
 
 type Env = Record<string, string | undefined>;
 
-export const SUPABASE_READINESS_VERSION = "202607140018";
+export const SUPABASE_READINESS_VERSION = "202609040003";
 
 export interface SupabaseDeploymentProbe {
     ready: boolean;
@@ -16,6 +16,8 @@ export interface SupabaseDeploymentProbe {
     teacherExamDeleteRpc?: boolean;
     teacherAttemptRpc?: boolean;
     teacherRosterRpc?: boolean;
+    teacherRosterRevisionRpc?: boolean;
+    sharedLoginRateLimitRpc?: boolean;
     handwritingRpc?: boolean;
     feedbackSaveRpc?: boolean;
     feedbackReturnRpc?: boolean;
@@ -30,6 +32,8 @@ export interface SupabaseDeploymentProbe {
     remoteAssetsForceRls?: boolean;
     rosterInvitesForceRls?: boolean;
     attemptFeedbackForceRls?: boolean;
+    rosterRevisionsForceRls?: boolean;
+    authRateLimitsForceRls?: boolean;
     error?: string;
 }
 
@@ -58,6 +62,8 @@ export function parseSupabaseDeploymentProbe(value: unknown): SupabaseDeployment
         teacherExamDeleteRpc: row.teacherExamDeleteRpc === true,
         teacherAttemptRpc: row.teacherAttemptRpc === true,
         teacherRosterRpc: row.teacherRosterRpc === true,
+        teacherRosterRevisionRpc: row.teacherRosterRevisionRpc === true,
+        sharedLoginRateLimitRpc: row.sharedLoginRateLimitRpc === true,
         handwritingRpc: row.handwritingRpc === true,
         feedbackSaveRpc: row.feedbackSaveRpc === true,
         feedbackReturnRpc: row.feedbackReturnRpc === true,
@@ -72,6 +78,8 @@ export function parseSupabaseDeploymentProbe(value: unknown): SupabaseDeployment
         remoteAssetsForceRls: row.remoteAssetsForceRls === true,
         rosterInvitesForceRls: row.rosterInvitesForceRls === true,
         attemptFeedbackForceRls: row.attemptFeedbackForceRls === true,
+        rosterRevisionsForceRls: row.rosterRevisionsForceRls === true,
+        authRateLimitsForceRls: row.authRateLimitsForceRls === true,
     };
     return {
         ready: row.ready === true

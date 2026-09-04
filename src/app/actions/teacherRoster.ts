@@ -47,7 +47,7 @@ export async function loadTeacherCanonicalRoster(): Promise<
 
 export async function saveTeacherCanonicalRoster(snapshot: RosterSnapshot): Promise<
     { status: "saved"; snapshot: RosterSnapshot }
-    | { status: "invalid_roster" | "local_only" | "unauthorized" | "service_unavailable" | "plan_denied"; error?: string }
+    | { status: "conflict" | "invalid_roster" | "local_only" | "unauthorized" | "service_unavailable" | "plan_denied"; error?: string }
 > {
     try {
         const gateway = await actionContext();

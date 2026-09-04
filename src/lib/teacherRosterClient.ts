@@ -41,7 +41,11 @@ export async function saveTeacherRosterSnapshot(
     if (result.status === "saved") {
         const localSaved = writeLocalRosterSnapshot(storage, result.snapshot);
         writeRosterTombstones(storage, { students: {}, groups: {} });
-        return { localSaved, remoteSaved: true };
+        return {
+            localSaved,
+            remoteSaved: true,
+            ...(result.snapshot.revision !== undefined ? { revision: result.snapshot.revision } : {}),
+        };
     }
     if (result.status === "local_only") {
         const tombstones = nextRosterTombstones(previous, snapshot, readRosterTombstones(storage));
@@ -52,6 +56,7 @@ export async function saveTeacherRosterSnapshot(
     return {
         localSaved: false,
         remoteSaved: false,
+        ...(result.status === "conflict" ? { conflict: true } : {}),
         remoteError: result.status === "unauthorized"
             ? "Teacher server session is missing"
             : result.error || (result.status === "invalid_roster" ? "Invalid roster payload" : "Canonical roster gateway unavailable"),

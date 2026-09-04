@@ -9,13 +9,15 @@ describe("Supabase deployment readiness probe", () => {
     it("accepts only explicit live DB readiness evidence", () => {
         expect(parseSupabaseDeploymentProbe({
             ready: true,
-            version: "202607140018",
+            version: "202609040003",
             attemptRpc: true,
             sessionAttemptRpc: true,
             teacherExamRpc: true,
             teacherExamDeleteRpc: true,
             teacherAttemptRpc: true,
             teacherRosterRpc: true,
+            teacherRosterRevisionRpc: true,
+            sharedLoginRateLimitRpc: true,
             handwritingRpc: true,
             feedbackSaveRpc: true,
             feedbackReturnRpc: true,
@@ -30,15 +32,19 @@ describe("Supabase deployment readiness probe", () => {
             remoteAssetsForceRls: true,
             rosterInvitesForceRls: true,
             attemptFeedbackForceRls: true,
+            rosterRevisionsForceRls: true,
+            authRateLimitsForceRls: true,
         })).toEqual({
             ready: true,
-            version: "202607140018",
+            version: "202609040003",
             attemptRpc: true,
             sessionAttemptRpc: true,
             teacherExamRpc: true,
             teacherExamDeleteRpc: true,
             teacherAttemptRpc: true,
             teacherRosterRpc: true,
+            teacherRosterRevisionRpc: true,
+            sharedLoginRateLimitRpc: true,
             handwritingRpc: true,
             feedbackSaveRpc: true,
             feedbackReturnRpc: true,
@@ -53,6 +59,8 @@ describe("Supabase deployment readiness probe", () => {
             remoteAssetsForceRls: true,
             rosterInvitesForceRls: true,
             attemptFeedbackForceRls: true,
+            rosterRevisionsForceRls: true,
+            authRateLimitsForceRls: true,
         });
         expect(parseSupabaseDeploymentProbe({ ready: "true" })).toMatchObject({ ready: false });
         expect(parseSupabaseDeploymentProbe({ ready: true })).toMatchObject({ ready: false });

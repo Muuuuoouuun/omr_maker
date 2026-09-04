@@ -7895,31 +7895,55 @@ body:has(.create-workspace.is-resizing) {
 
 /* ─── 2026 reference-led home and teacher dashboard refresh ────────── */
 .home-page[data-home-role="none"] {
-  background: color-mix(in srgb, var(--primary) 3%, var(--background));
+  --background: #ffffff;
+  --surface: #ffffff;
+  --surface-glass: rgba(255, 255, 255, 0.86);
+  --foreground: #111827;
+  --muted: #53627a;
+  --border: #e4e7f1;
+  --primary: #4637e7;
+  --primary-dark: #3628cf;
+  --secondary: #ef2c83;
+  color-scheme: light;
+  background: var(--background);
+}
+
+.home-learning-coach-backdrop {
+  z-index: 0;
+  object-fit: cover;
+  object-position: center center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.home-page[data-home-role="none"] .home-theme-toggle {
+  display: none;
 }
 
 .home-page[data-home-role="none"] .home-container {
-  padding-top: 4.25rem !important;
-  padding-bottom: 2.75rem !important;
+  padding-top: 3.75rem !important;
+  padding-bottom: 2.45rem !important;
 }
 
 .home-page[data-home-role="none"] .home-hero {
-  margin-bottom: 3.15rem !important;
+  margin-bottom: 2.8rem !important;
 }
 
 .home-page[data-home-role="none"] .brand-logo--hero .brand-logo__mark {
-  width: 7.4rem;
-  height: 7.4rem;
-  border-radius: 2rem;
+  width: 7.7rem;
+  height: 7.7rem;
+  border-radius: 2.25rem;
+  filter: drop-shadow(0 18px 30px rgba(40, 55, 90, 0.18));
 }
 
 .home-page[data-home-role="none"] .home-logo {
-  margin-bottom: 1.55rem !important;
+  margin-bottom: 1.75rem !important;
 }
 
 .home-page[data-home-role="none"] .home-eyebrow {
-  min-height: 2.5rem;
-  padding: 0.5rem 1.05rem;
+  min-height: 2.35rem;
+  margin-bottom: 1.9rem !important;
+  padding: 0.45rem 1.05rem;
   border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 8%, var(--surface));
@@ -7929,9 +7953,15 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .home-page[data-home-role="none"] .home-title {
-  margin-bottom: 1rem !important;
-  font-size: clamp(4.25rem, 6.9vw, 6.6rem) !important;
-  letter-spacing: -0.035em !important;
+  margin-bottom: 0.5rem !important;
+  background: linear-gradient(145deg, #284bea 2%, #4930d9 92%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: clamp(4.5rem, 7.5vw, 7.45rem) !important;
+  line-height: 0.94 !important;
+  letter-spacing: -0.04em !important;
+  filter: drop-shadow(0 5px 10px rgba(64, 55, 220, 0.12));
 }
 
 .home-page[data-home-role="none"] .home-subtitle {
@@ -7942,19 +7972,21 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .home-page[data-home-role="none"] .home-role-grid {
-  max-width: 1120px;
+  max-width: 1220px;
   margin-inline: auto;
   grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  gap: 2rem !important;
+  gap: 2.5rem !important;
 }
 
 .home-page[data-home-role="none"] .home-role-card {
-  min-height: 19.5rem;
-  padding: 3rem !important;
+  min-height: 22.5rem;
+  padding: 3rem 2.65rem 2.25rem !important;
   border: 1px solid color-mix(in srgb, var(--border), transparent 8%) !important;
-  border-radius: 2rem !important;
-  background: var(--surface) !important;
-  box-shadow: 0 22px 56px rgba(41, 52, 99, 0.1), var(--shadow-sm);
+  border-radius: 2.5rem !important;
+  background: rgba(255, 255, 255, 0.72) !important;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  box-shadow: 0 22px 56px rgba(41, 52, 99, 0.11), var(--shadow-sm);
 }
 
 .home-page[data-home-role="none"] .home-role-card:hover {
@@ -7967,11 +7999,24 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .home-page[data-home-role="none"] .home-role-icon {
-  min-width: 4.75rem;
-  min-height: 4.75rem;
+  min-width: 6.45rem;
+  min-height: 6.45rem;
   margin-bottom: 1.4rem !important;
   border: 2px solid currentColor;
-  border-radius: 1.45rem !important;
+  border-radius: 1.75rem !important;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.home-page[data-home-role="none"] .home-role-card--student .home-role-icon {
+  color: var(--secondary);
+  border-color: color-mix(in srgb, var(--secondary) 32%, transparent);
+  background: color-mix(in srgb, var(--secondary) 7%, rgba(255, 255, 255, 0.76));
+}
+
+.home-page[data-home-role="none"] .home-role-card--teacher .home-role-icon {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  background: color-mix(in srgb, var(--primary) 7%, rgba(255, 255, 255, 0.76));
 }
 
 .home-page[data-home-role="none"] .home-role-card h2 {
@@ -7987,6 +8032,7 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .home-page[data-home-role="none"] .home-role-action {
+  min-width: 10.35rem;
   min-height: 3.25rem;
   justify-content: center;
   gap: 0.65rem !important;
@@ -8488,9 +8534,9 @@ body:has(.create-workspace.is-resizing) {
   }
 
   .home-page[data-home-role="none"] .brand-logo--hero .brand-logo__mark {
-    width: 4.15rem;
-    height: 4.15rem;
-    border-radius: 1.2rem;
+    width: 4.5rem;
+    height: 4.5rem;
+    border-radius: 1.25rem;
   }
 
   .home-page[data-home-role="none"] .home-logo {
@@ -8506,7 +8552,7 @@ body:has(.create-workspace.is-resizing) {
 
   .home-page[data-home-role="none"] .home-title {
     margin-bottom: 0.45rem !important;
-    font-size: 2.4rem !important;
+    font-size: 2.55rem !important;
   }
 
   .home-page[data-home-role="none"] .home-subtitle {
@@ -8518,14 +8564,14 @@ body:has(.create-workspace.is-resizing) {
   }
 
   .home-page[data-home-role="none"] .home-role-card {
-    min-height: 10.6rem;
+    min-height: 12rem;
     padding: 1rem 0.85rem !important;
     border-radius: var(--radius-lg) !important;
   }
 
   .home-page[data-home-role="none"] .home-role-icon {
-    min-width: 2.55rem;
-    min-height: 2.55rem;
+    min-width: 3rem;
+    min-height: 3rem;
     margin-bottom: 0.7rem !important;
     padding: 0.5rem !important;
     border-width: 1px;

@@ -110,13 +110,15 @@ describe("deployment readiness", () => {
             OMR_PRODUCTION_RLS_APPLIED: "true",
         }, {
             ready: true,
-            version: "202607140018",
+            version: "202609040003",
             attemptRpc: true,
             sessionAttemptRpc: true,
             teacherExamRpc: true,
             teacherExamDeleteRpc: true,
             teacherAttemptRpc: true,
             teacherRosterRpc: true,
+            teacherRosterRevisionRpc: true,
+            sharedLoginRateLimitRpc: true,
             handwritingRpc: true,
             feedbackSaveRpc: true,
             feedbackReturnRpc: true,
@@ -131,6 +133,8 @@ describe("deployment readiness", () => {
             remoteAssetsForceRls: true,
             rosterInvitesForceRls: true,
             attemptFeedbackForceRls: true,
+            rosterRevisionsForceRls: true,
+            authRateLimitsForceRls: true,
         });
 
         expect(summary.checks).toContainEqual(expect.objectContaining({

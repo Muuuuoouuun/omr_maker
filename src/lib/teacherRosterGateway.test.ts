@@ -28,6 +28,7 @@ const snapshot: RosterSnapshot = {
         status: "active",
     }],
     invites: [{ id: "invite-1", email: "invite@example.com", sentAt: "오늘", status: "pending" }],
+    revision: 7,
 };
 
 function mockClient(options: { loadErrorTable?: string; rpcError?: string } = {}) {
@@ -51,6 +52,7 @@ function mockClient(options: { loadErrorTable?: string; rpcError?: string } = {}
         omr_roster_invites: [{
             id: "invite-1", organization_id: "org-1", email: "invite@example.com", sent_at: "오늘", status: "pending",
         }],
+        omr_roster_revisions: [{ organization_id: "org-1", revision: 7 }],
     };
     const client: TeacherRosterGatewayClient = {
         from(table) {
@@ -71,7 +73,7 @@ function mockClient(options: { loadErrorTable?: string; rpcError?: string } = {}
             rpcCalls.push({ name, params });
             return options.rpcError
                 ? { data: null, error: { message: options.rpcError } }
-                : { data: { saved: true }, error: null };
+                : { data: { saved: true, revision: 8 }, error: null };
         },
     };
     return { client, filters, rpcCalls };
@@ -81,18 +83,22 @@ describe("teacher roster gateway", () => {
     it("loads every roster table through the teacher organization scope", async () => {
         const { client, filters } = mockClient();
         await expect(loadTeacherRosterWithGateway(client, context)).resolves.toEqual({ status: "loaded", snapshot });
-        expect(filters).toHaveLength(4);
+        expect(filters).toHaveLength(5);
         expect(filters.every(filter => filter.column === "organization_id" && filter.value === "org-1")).toBe(true);
     });
 
     it("saves one organization-scoped atomic RPC payload", async () => {
         const { client, rpcCalls } = mockClient();
-        await expect(saveTeacherRosterWithGateway(client, snapshot, context)).resolves.toEqual({ status: "saved", snapshot });
+        await expect(saveTeacherRosterWithGateway(client, snapshot, context)).resolves.toEqual({
+            status: "saved",
+            snapshot: { ...snapshot, revision: 8 },
+        });
         expect(rpcCalls).toHaveLength(1);
         expect(rpcCalls[0]).toMatchObject({
-            name: "omr_save_roster_v1",
+            name: "omr_save_roster_v2",
             params: {
                 p_organization_id: "org-1",
+                p_expected_revision: 7,
                 p_classes: [expect.objectContaining({ id: "class-a", organization_id: "org-1" })],
                 p_students: [expect.objectContaining({ id: "student-1", organization_id: "org-1" })],
                 p_enrollments: [expect.objectContaining({ class_id: "class-a", student_profile_id: "student-1" })],
@@ -108,10 +114,28 @@ describe("teacher roster gateway", () => {
         expect(rpcCalls).toHaveLength(0);
     });
 
+    it("rejects a student whose region does not match exactly one class", async () => {
+        const { client, rpcCalls } = mockClient();
+        const invalid = {
+            ...snapshot,
+            students: [{ ...snapshot.students[0], region: "부산" }],
+        };
+        await expect(saveTeacherRosterWithGateway(client, invalid, context)).resolves.toEqual({ status: "invalid_roster" });
+        expect(rpcCalls).toHaveLength(0);
+    });
+
     it("propagates read and atomic write failures without claiming success", async () => {
         await expect(loadTeacherRosterWithGateway(mockClient({ loadErrorTable: "omr_student_profiles" }).client, context))
             .resolves.toEqual({ status: "service_unavailable", error: "db down" });
         await expect(saveTeacherRosterWithGateway(mockClient({ rpcError: "write failed" }).client, snapshot, context))
             .resolves.toEqual({ status: "service_unavailable", error: "write failed" });
+    });
+
+    it("surfaces a stale snapshot as a conflict", async () => {
+        await expect(saveTeacherRosterWithGateway(
+            mockClient({ rpcError: "roster revision conflict" }).client,
+            snapshot,
+            context,
+        )).resolves.toEqual({ status: "conflict", error: "roster revision conflict" });
     });
 });

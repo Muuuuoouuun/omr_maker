@@ -13,7 +13,10 @@ The dev server runs on [http://localhost:3003](http://localhost:3003).
 
 ## Authentication setup
 
-Teacher accounts are server configuration, not source-controlled signup records. Configure development accounts in `.env.local` with `TEACHER_ACCOUNTS`; do not publish shared test credentials in documentation or commit environment files.
+Teachers can use either administrator-provisioned password accounts or self-serve Supabase Auth. Students continue to use roster/student-number/start-code quick entry and do not need signup.
+
+- Self-serve teacher signup: configure `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (or `NEXT_PUBLIC_SUPABASE_ANON_KEY`), and `SUPABASE_SERVICE_ROLE_KEY`. Add `<app-origin>/auth/callback` to the Supabase Auth redirect allow-list. `/signup` supports email magic links and Google OAuth and creates a free owner workspace after verification.
+- Provisioned password accounts: configure development accounts in `.env.local` with `TEACHER_ACCOUNTS`; do not publish shared test credentials in documentation or commit environment files.
 
 With no `TEACHER_ACCOUNTS`/`TEACHER_PASSWORD` configured, the app falls back to `admin` / `admin123`. The `admin` account is bound to the Academy plan and can use every feature without quota limits.
 

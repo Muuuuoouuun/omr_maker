@@ -114,7 +114,8 @@ describe("persistence integration", () => {
         expect(source).toContain("운영 보안 점검");
         expect(source).toContain("HttpOnly 서명 쿠키");
         expect(source).toContain("5회 이후 10분");
-        expect(source).toContain("Supabase Auth, 조직 멤버십, production-rls.sql 정책");
+        expect(source).toContain("Supabase 이메일·Google 가입");
+        expect(source).toContain("auth.uid() 기반 RLS");
         expect(teacherSession).toContain("만료 시각");
         expect(source).toContain("세션 종료");
         expect(source).not.toContain('placeholder="현재 비밀번호"');

@@ -7,7 +7,14 @@ import {
     type SupabaseRosterClassStudentRow,
     type SupabaseRosterStudentProfileRow,
 } from "@/lib/rosterPersistence";
-import { normalizeRosterInvite, type RosterGroup, type RosterInvite, type RosterStudent } from "@/lib/rosterStorage";
+import {
+    normalizeRosterInvite,
+    rosterGroupMatchesStudent,
+    rosterGroupScopeKey,
+    type RosterGroup,
+    type RosterInvite,
+    type RosterStudent,
+} from "@/lib/rosterStorage";
 import type { WorkspaceContext } from "@/lib/workspaceContext";
 
 interface GatewayResult<T> {
@@ -32,7 +39,7 @@ export type TeacherRosterLoadResult =
 
 export type TeacherRosterSaveResult =
     | { status: "saved"; snapshot: RosterSnapshot }
-    | { status: "invalid_roster" | "service_unavailable"; error?: string };
+    | { status: "conflict" | "invalid_roster" | "service_unavailable"; error?: string };
 
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
@@ -43,12 +50,17 @@ function validSnapshot(snapshot: RosterSnapshot): boolean {
         return false;
     }
     const groupIds = new Set(snapshot.groups.map(group => clean(group.id)));
+    const groupScopes = new Set(snapshot.groups.map(group => rosterGroupScopeKey(group.name, group.region)));
     const studentIds = new Set(snapshot.students.map(student => clean(student.id)));
     const inviteIds = new Set(snapshot.invites.map(invite => clean(invite.id)));
     return groupIds.size === snapshot.groups.length
+        && groupScopes.size === snapshot.groups.length
         && studentIds.size === snapshot.students.length
         && inviteIds.size === snapshot.invites.length
-        && ![...groupIds, ...studentIds, ...inviteIds].some(id => !id);
+        && ![...groupIds, ...groupScopes, ...studentIds, ...inviteIds].some(id => !id)
+        && snapshot.students.every(student => (
+            snapshot.groups.filter(group => rosterGroupMatchesStudent(group, student)).length === 1
+        ));
 }
 
 export async function loadTeacherRosterWithGateway(
@@ -58,13 +70,14 @@ export async function loadTeacherRosterWithGateway(
     const organizationId = clean(context.organizationId);
     if (!organizationId) return { status: "service_unavailable", error: "Teacher organization is missing" };
 
-    const [classResult, studentResult, enrollmentResult, inviteResult] = await Promise.all([
+    const [classResult, studentResult, enrollmentResult, inviteResult, revisionResult] = await Promise.all([
         client.from("omr_classes").select("id, organization_id, name, campus, status, metadata, updated_at").eq("organization_id", organizationId),
         client.from("omr_student_profiles").select("id, organization_id, display_name, external_id, email, status, metadata, updated_at").eq("organization_id", organizationId),
         client.from("omr_class_students").select("class_id, organization_id, student_profile_id, enrollment_status").eq("organization_id", organizationId),
         client.from("omr_roster_invites").select("id, organization_id, email, sent_at, status").eq("organization_id", organizationId),
+        client.from("omr_roster_revisions").select("organization_id, revision").eq("organization_id", organizationId),
     ]);
-    const failed = [classResult, studentResult, enrollmentResult, inviteResult].find(result => result.error);
+    const failed = [classResult, studentResult, enrollmentResult, inviteResult, revisionResult].find(result => result.error);
     if (failed?.error) return { status: "service_unavailable", error: failed.error.message };
 
     const groups = (classResult.data || [])
@@ -92,7 +105,11 @@ export async function loadTeacherRosterWithGateway(
         })
         .filter((invite): invite is RosterInvite => !!invite);
 
-    return { status: "loaded", snapshot: { students, groups, invites } };
+    const revisionRow = (revisionResult.data?.[0] || null) as { revision?: unknown } | null;
+    const parsedRevision = Number(revisionRow?.revision);
+    const revision = Number.isSafeInteger(parsedRevision) && parsedRevision >= 0 ? parsedRevision : 0;
+
+    return { status: "loaded", snapshot: { students, groups, invites, revision } };
 }
 
 export async function saveTeacherRosterWithGateway(
@@ -103,8 +120,11 @@ export async function saveTeacherRosterWithGateway(
     const organizationId = clean(context.organizationId);
     if (!organizationId || !validSnapshot(snapshot)) return { status: "invalid_roster" };
     const rows = rosterSnapshotToSupabaseRows(snapshot, organizationId, undefined, context.organizationName);
-    const result = await client.rpc("omr_save_roster_v1", {
+    const expectedRevision = Number(snapshot.revision ?? 0);
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return { status: "invalid_roster" };
+    const result = await client.rpc("omr_save_roster_v2", {
         p_organization_id: organizationId,
+        p_expected_revision: expectedRevision,
         p_classes: rows.classes,
         p_students: rows.students,
         p_enrollments: rows.enrollments,
@@ -117,7 +137,17 @@ export async function saveTeacherRosterWithGateway(
         })),
     });
     if (result.error) {
+        if (/roster revision conflict/i.test(result.error.message || "")) {
+            return { status: "conflict", error: result.error.message };
+        }
         return { status: "service_unavailable", error: result.error.message || "Canonical roster save failed" };
     }
-    return { status: "saved", snapshot };
+    const response = result.data && typeof result.data === "object" && !Array.isArray(result.data)
+        ? result.data as { revision?: unknown }
+        : null;
+    const parsedRevision = Number(response?.revision);
+    const revision = Number.isSafeInteger(parsedRevision) && parsedRevision > expectedRevision
+        ? parsedRevision
+        : expectedRevision + 1;
+    return { status: "saved", snapshot: { ...snapshot, revision } };
 }

@@ -41,6 +41,12 @@ export interface WorkspaceBootstrapResult {
     error?: string;
 }
 
+export interface VerifiedSupabaseAuthUser {
+    id: string;
+    email: string;
+    displayName: string;
+}
+
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
@@ -59,6 +65,29 @@ export function createSupabaseAdminClient(config: SupabaseServerConfig): Supabas
             autoRefreshToken: false,
         },
     }) as unknown as SupabaseAdminClientLike;
+}
+
+export async function verifySupabaseAuthAccessToken(
+    accessToken: string,
+    env: Env = process.env,
+): Promise<{ user?: VerifiedSupabaseAuthUser; error?: string }> {
+    const token = clean(accessToken);
+    if (!token || token.length > 8192) return { error: "유효한 인증 정보가 없습니다." };
+    const config = getSupabaseServerConfigFromEnv(env);
+    if (!config) return { error: "교사 회원가입 서버가 아직 설정되지 않았습니다." };
+
+    const client = createClient(config.url, config.serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error } = await client.auth.getUser(token);
+    const id = clean(data.user?.id);
+    const email = clean(data.user?.email).toLowerCase();
+    if (error || !id || !email) {
+        return { error: "이메일 인증이 만료되었거나 유효하지 않습니다. 다시 시도해주세요." };
+    }
+    const metadata = data.user?.user_metadata as Record<string, unknown> | undefined;
+    const displayName = clean(metadata?.full_name) || clean(metadata?.name) || email.split("@")[0] || "교사";
+    return { user: { id, email, displayName } };
 }
 
 function errorMessage(error: { message?: string } | null, fallback: string): string {

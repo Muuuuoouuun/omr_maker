@@ -26,7 +26,16 @@ import {
     recordStudentLoginFailure,
     recordStudentLoginSuccess,
     STUDENT_LOGIN_RATE_LIMIT_ERROR,
+    STUDENT_LOGIN_LOCKOUT_MS,
+    STUDENT_LOGIN_MAX_FAILURES,
+    STUDENT_LOGIN_WINDOW_MS,
 } from "@/lib/studentLoginRateLimit";
+import {
+    checkSharedLoginRateLimit,
+    clearSharedLoginRateLimit,
+    recordSharedLoginFailure,
+    type SharedLoginRateLimitOptions,
+} from "@/lib/sharedLoginRateLimit";
 import {
     resolveServerStudentLogin,
     studentRegionFromProfile,
@@ -41,6 +50,25 @@ import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 
 const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
 const MAX_CODE_SYNC_ENTRIES = 500;
+
+function studentSharedRateLimitOptions(keys: string[]): SharedLoginRateLimitOptions {
+    return {
+        keys,
+        maxFailures: STUDENT_LOGIN_MAX_FAILURES,
+        windowMs: STUDENT_LOGIN_WINDOW_MS,
+        lockoutMs: STUDENT_LOGIN_LOCKOUT_MS,
+    };
+}
+
+async function recordStudentFailure(keys: string[]): Promise<void> {
+    await recordSharedLoginFailure(studentSharedRateLimitOptions(keys));
+    recordStudentLoginFailure(keys);
+}
+
+async function recordStudentSuccess(keys: string[]): Promise<void> {
+    await clearSharedLoginRateLimit(keys);
+    recordStudentLoginSuccess(keys);
+}
 
 type QueryError = { message?: string } | null;
 
@@ -221,11 +249,12 @@ export async function issueStudentSession(input: {
         studentLookup,
         clientFingerprint: clientFingerprintFromHeaders(headerStore),
     });
-    if (!checkStudentLoginRateLimit(rateLimitKeys).allowed) {
+    const sharedRateLimit = await checkSharedLoginRateLimit(studentSharedRateLimitOptions(rateLimitKeys));
+    if (!(sharedRateLimit ?? checkStudentLoginRateLimit(rateLimitKeys)).allowed) {
         return { ok: false, status: "rate_limited", error: STUDENT_LOGIN_RATE_LIMIT_ERROR };
     }
     if (!name || !groupId || !studentLookup) {
-        recordStudentLoginFailure(rateLimitKeys);
+        await recordStudentFailure(rateLimitKeys);
         return { ok: false, status: "invalid_credentials" };
     }
 
@@ -252,7 +281,7 @@ export async function issueStudentSession(input: {
         }
         const classRow = asRecord(classResult.data);
         if (!clean(classRow.id) || (clean(classRow.status) || "active") !== "active") {
-            recordStudentLoginFailure(rateLimitKeys);
+            await recordStudentFailure(rateLimitKeys);
             return { ok: false, status: "invalid_credentials" };
         }
 
@@ -265,13 +294,13 @@ export async function issueStudentSession(input: {
             studentLookup,
         });
         if (!profile) {
-            recordStudentLoginFailure(rateLimitKeys);
+            await recordStudentFailure(rateLimitKeys);
             return { ok: false, status: "invalid_credentials" };
         }
 
         const accessCodeRecord = readStudentAccessCodeRecord(profile.metadata);
         if (!accessCodeRecord) {
-            recordStudentLoginFailure(rateLimitKeys);
+            await recordStudentFailure(rateLimitKeys);
             return { ok: false, status: "code_not_issued" };
         }
         const secret = resolveStudentSessionSecret();
@@ -282,7 +311,7 @@ export async function issueStudentSession(input: {
             organizationId: workspaceId,
             secret,
         })) {
-            recordStudentLoginFailure(rateLimitKeys);
+            await recordStudentFailure(rateLimitKeys);
             return { ok: false, status: "invalid_credentials" };
         }
 
@@ -302,7 +331,7 @@ export async function issueStudentSession(input: {
             identityType: "temporary",
         });
         if (!cookieResult.ok) return { ok: false, status: "error" };
-        recordStudentLoginSuccess(rateLimitKeys);
+        await recordStudentSuccess(rateLimitKeys);
         return { ok: true, status: "ok", identity };
     } catch (error) {
         console.error("issueStudentSession failed", error);
@@ -448,8 +477,13 @@ export async function issueGuestSession(name?: string): Promise<{ ok: boolean; g
 }
 
 /** Logout clears the HttpOnly cookie so shared devices cannot inherit identity. */
-export async function clearStudentServerSession(): Promise<{ ok: boolean }> {
-    const cookieStore = await cookies();
-    cookieStore.delete(STUDENT_SERVER_SESSION_COOKIE);
-    return { ok: true };
+export async function clearStudentServerSession(): Promise<{ ok: boolean; error?: string }> {
+    try {
+        const cookieStore = await cookies();
+        cookieStore.delete(STUDENT_SERVER_SESSION_COOKIE);
+        return { ok: true };
+    } catch (error) {
+        console.error("Student session cookie delete failed", error);
+        return { ok: false, error: "학생 세션을 종료하지 못했습니다. 연결을 확인한 뒤 다시 시도해주세요." };
+    }
 }

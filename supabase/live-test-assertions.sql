@@ -166,13 +166,16 @@ begin
     if not has_function_privilege('service_role', 'public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)', 'execute') then
         raise exception 'service_role must have teacher attempt RPC execute privilege';
     end if;
-    if has_function_privilege('anon', 'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)', 'execute')
-        or has_function_privilege('authenticated', 'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)', 'execute')
+    if has_function_privilege('anon', 'public.omr_save_roster_v2(text,bigint,jsonb,jsonb,jsonb,jsonb)', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_save_roster_v2(text,bigint,jsonb,jsonb,jsonb,jsonb)', 'execute')
     then
         raise exception 'browser roles unexpectedly have teacher roster RPC execute privilege';
     end if;
-    if not has_function_privilege('service_role', 'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)', 'execute') then
+    if not has_function_privilege('service_role', 'public.omr_save_roster_v2(text,bigint,jsonb,jsonb,jsonb,jsonb)', 'execute') then
         raise exception 'service_role must have teacher roster RPC execute privilege';
+    end if;
+    if has_function_privilege('service_role', 'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)', 'execute') then
+        raise exception 'service_role must not bypass roster revision checks through v1';
     end if;
     if has_function_privilege('anon', 'public.omr_save_feedback_v1(text,jsonb)', 'execute')
         or has_function_privilege('authenticated', 'public.omr_save_feedback_v1(text,jsonb)', 'execute')
@@ -202,8 +205,9 @@ $$;
 
 set role service_role;
 
-select public.omr_save_roster_v1(
+select public.omr_save_roster_v2(
     'live-org-a',
+    0,
     '[{"id":"live-class-a","organization_id":"live-org-a","name":"A반","status":"active","metadata":{}}]',
     '[{"id":"live-student-a","organization_id":"live-org-a","display_name":"학생 A","external_id":"A-001","status":"active","metadata":{}}]',
     '[{"class_id":"live-class-a","organization_id":"live-org-a","student_profile_id":"live-student-a","enrollment_status":"active"}]',
@@ -232,8 +236,9 @@ insert into public.omr_student_profiles (id, organization_id, display_name) valu
 do $$
 begin
     begin
-        perform public.omr_save_roster_v1(
+        perform public.omr_save_roster_v2(
             'live-org-a',
+            1,
             '[]',
             '[]',
             '[{"class_id":"live-class-b","organization_id":"live-org-a","student_profile_id":"live-student-b","enrollment_status":"active"}]',
@@ -704,7 +709,7 @@ declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202607140018' or readiness->>'ready' <> 'true' then
+    if readiness->>'version' <> '202609040003' or readiness->>'ready' <> 'true' then
         raise exception 'live readiness probe did not confirm the complete production data plane: %', readiness;
     end if;
 end

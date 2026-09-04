@@ -4,12 +4,12 @@ This document tracks the baseline product logic needed before OMR Maker handles 
 
 ## Current State
 
-- Teacher access now requires a teacher identifier plus password through local/server env credentials.
-- Teacher sessions store `teacherId`, `email`, and `displayName` when available, but they are still app-managed browser sessions rather than Supabase Auth sessions.
+- Teacher access supports administrator-provisioned password accounts plus Supabase email magic-link and Google OAuth signup.
+- Verified Supabase users are exchanged for the existing HttpOnly signed app session after their owner workspace and membership are created.
 - Local/server env supports a single teacher via `TEACHER_LOGIN_ID`/`TEACHER_PASSWORD` or multiple teachers via `TEACHER_ACCOUNTS` JSON.
 - Teacher login also issues an HttpOnly signed server session cookie so `/teacher/*` and `/create` can be blocked before client hydration.
-- Teacher login has an in-process failure limiter keyed by hashed identifier/client fingerprint; this is an interim guard until Supabase Auth or a shared rate-limit store owns it.
-- Supabase is currently used for roster/exam/attempt sync only; it is not the source of teacher login credentials yet.
+- Password and student-code login use a Supabase-backed shared failure limiter when the server gateway is configured, with an in-process development fallback.
+- Supabase Auth owns self-serve teacher identities; environment credentials remain available for provisioned and development accounts.
 - Supabase sync currently uses the publishable key and alpha RLS policies that are intentionally public read/write.
 - `supabase/production-rls.sql` now records the production RLS handoff: authenticated users only, organization membership checks, forced RLS, and no anonymous table access.
 - Roster, exam, attempt, and question-result sync now derive an interim `teacher_<hash>` organization/user scope from the active teacher session. Anonymous/no-session flows still fall back to `default` until real organization membership is connected.
@@ -19,8 +19,8 @@ This document tracks the baseline product logic needed before OMR Maker handles 
 
 ## Deployment Login Triage
 
-- If production login says the ID or password is invalid, first check the deployment provider env vars, not Supabase.
-- If production login says the teacher account is not configured, the app found zero valid server-side teacher credentials; adding Supabase env vars alone will not fix teacher login.
+- If a provisioned production login says the ID or password is invalid, first check the deployment provider env vars.
+- For self-serve signup, configure the public Supabase URL/key, server-only service role key, Auth email/Google provider, and the `/auth/callback` redirect allow-list.
 - For one teacher, set `TEACHER_LOGIN_ID=admin` and `TEACHER_PASSWORD=<strong password>`; optionally add `TEACHER_NAME` and `TEACHER_EMAIL`.
 - For multiple teachers, set `TEACHER_ACCOUNTS` to a JSON array with unique `id` values and per-teacher passwords.
 - Add `TEACHER_SESSION_SECRET` so signed route-guard cookies do not depend on a password value.
@@ -33,7 +33,7 @@ This document tracks the baseline product logic needed before OMR Maker handles 
 - Every teacher-owned row must be scoped by `organization_id`; mutable rows should also carry `created_by_user_id` or an audit actor.
 - Staff authorization should come from `omr_organization_members.role`, not from UI state.
 - Server-side route guards must use a signed session secret such as `TEACHER_SESSION_SECRET` until Supabase Auth replaces env-backed credentials.
-- Login throttling should move to Supabase Auth protections or a shared server store before multi-instance production traffic.
+- Keep Supabase Auth provider limits and the shared server rate-limit RPC enabled for multi-instance production traffic.
 - Students should not need full accounts to take a test. They should enter through assignment links, roster matching, student number, PIN, or start code.
 - Same-name students in the same class must remain separate roster profiles and require student ID/email confirmation before their records can merge.
 - Public student submission writes should go through server validation or a narrow pending-submission RLS policy.
@@ -41,14 +41,13 @@ This document tracks the baseline product logic needed before OMR Maker handles 
 
 ## Implementation Order
 
-1. Replace env-backed teacher credential login with Supabase Auth email/password or Google OAuth.
-2. On first teacher login, create or join an `omr_organizations` row and an `owner`/`teacher` membership.
-3. Replace the interim `teacher_<hash>` app-managed scope with Supabase Auth `auth.uid()` and real `omr_organization_members` rows across exam, roster, material, assignment, attempt, and audit writes.
-4. Replace the interim signed-cookie server guards with Supabase Auth session checks, then keep client guards only for UX.
-5. Move workspace bootstrap writes from publishable-key client sync to server/service-role code.
-6. Apply `supabase/production-rls.sql` after `organization_id`, staff membership, and server-side bootstrap paths are ready.
-7. Add staff management for owner/admin invites, suspension, and role changes.
-8. Add a pending-review lane for weak student matches and duplicate submissions.
+1. Apply and verify the Supabase Auth signup, roster revision, and shared login-rate-limit migrations.
+2. Replace the interim `teacher_<hash>` app-managed scope with Supabase Auth `auth.uid()` and real `omr_organization_members` rows across exam, roster, material, assignment, attempt, and audit writes.
+3. Replace the interim signed-cookie server guards with Supabase Auth session checks, then keep client guards only for UX.
+4. Move remaining workspace bootstrap writes from publishable-key client sync to server/service-role code.
+5. Apply `supabase/production-rls.sql` after `organization_id`, staff membership, and server-side bootstrap paths are ready.
+6. Add staff management for owner/admin invites, suspension, and role changes.
+7. Add a pending-review lane for weak student matches and duplicate submissions.
 
 ## Usability Checks
 

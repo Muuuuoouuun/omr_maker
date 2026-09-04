@@ -14,6 +14,7 @@ import { readTeacherSession } from "@/lib/teacherSession";
 import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
+import { createTeacherRosterSaveQueue } from "@/lib/teacherRosterSaveQueue";
 import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
 import { issueStudentStartCodeCredential } from "@/app/actions/studentAuth";
 import { authorizeRosterStudentSet } from "@/app/actions/premiumAccess";
@@ -278,6 +279,7 @@ function ManageUsersInner() {
     const [issuingStudentCode, setIssuingStudentCode] = useState(false);
     const rosterPlanSyncRef = useRef<Promise<void>>(Promise.resolve());
     const rosterMutationVersionRef = useRef(0);
+    const [rosterSaveQueue] = useState(() => createTeacherRosterSaveQueue());
     const { plan: currentPlan } = useServerPlan();
     const [hydrated, setHydrated] = useState(false);
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
@@ -335,6 +337,7 @@ function ManageUsersInner() {
 
                 const rosterResult = await loadTeacherRosterSnapshot(localStorage);
                 if (cancelled) return;
+                rosterSaveQueue.setRevision(rosterResult.revision ?? 0);
                 const hasRosterRows = rosterResult.students.length > 0
                     || rosterResult.groups.length > 0
                     || rosterResult.invites.length > 0;
@@ -378,7 +381,7 @@ function ManageUsersInner() {
 
         void hydrateRoster();
         return () => { cancelled = true; };
-    }, []);
+    }, [rosterSaveQueue]);
 
     useEffect(() => {
         let cancelled = false;
@@ -447,11 +450,27 @@ function ManageUsersInner() {
             return filteredIds.length === prev.size ? prev : new Set(filteredIds);
         });
         setSelectedGroupId(prev => nextGroups.some(group => group.id === prev) ? prev : null);
-        void saveTeacherRosterSnapshot(localStorage, {
+        const saveRun = rosterSaveQueue.enqueue(revision => saveTeacherRosterSnapshot(localStorage, {
             students: nextStudents,
             groups: nextGroups,
             invites: nextInvites,
-        }).then(result => {
+            revision,
+        }));
+        void saveRun.then(async result => {
+            if (result.conflict && mutationVersion === rosterMutationVersionRef.current) {
+                const latest = await loadTeacherRosterSnapshot(localStorage);
+                if (latest.remoteLoaded) {
+                    rosterSaveQueue.setRevision(latest.revision ?? 0);
+                    setStudents(latest.students);
+                    setGroups(latest.groups);
+                    setInvites(latest.invites);
+                    toast.error(
+                        "다른 교사가 먼저 명단을 변경했습니다",
+                        "최신 명단을 다시 불러왔습니다. 변경 내용을 확인한 뒤 다시 저장해주세요."
+                    );
+                    return;
+                }
+            }
             if (result.remoteError && !result.localSaved && mutationVersion === rosterMutationVersionRef.current) {
                 setStudents(previousSnapshot.students);
                 setGroups(previousSnapshot.groups);
@@ -461,6 +480,12 @@ function ManageUsersInner() {
                     "서버에 저장되지 않아 방금 변경을 되돌렸습니다. 연결 상태를 확인한 뒤 다시 시도해주세요."
                 );
             }
+        }).catch(() => {
+            if (mutationVersion !== rosterMutationVersionRef.current) return;
+            setStudents(previousSnapshot.students);
+            setGroups(previousSnapshot.groups);
+            setInvites(previousSnapshot.invites);
+            toast.error("명단 저장 실패", "연결 상태를 확인한 뒤 다시 시도해주세요.");
         });
         // The canonical server save now synchronizes reductions and same-size
         // edits atomically. Growth paths still preflight below for immediate UI
@@ -766,10 +791,10 @@ function ManageUsersInner() {
     };
 
     // ===== Student CRUD =====
-    const handleAddStudent = async (data: StudentFormData) => {
+    const handleAddStudent = async (data: StudentFormData): Promise<boolean> => {
         const idx = students.length;
         const selectedGroup = groups.find(group => group.id === data.groupId);
-        const resolvedRegion = data.region.trim() || selectedGroup?.region || "";
+        const resolvedRegion = selectedGroup?.region?.trim() || data.region.trim();
         const regionPatch = optionalRegion(resolvedRegion);
         const existingGroup = rosterGroupForStudentInput(data.group, resolvedRegion, groups, data.groupId);
         const baseGroups = existingGroup
@@ -794,7 +819,7 @@ function ManageUsersInner() {
         const id = uniqueStudentIdForRoster(baseId, emailKey, students);
         if (students.some(student => normalizeEmail(student.email) === emailKey || student.id === id)) {
             toast.info("이미 등록된 학생", "같은 이메일 또는 학생번호의 학생이 이미 있습니다.");
-            return;
+            return false;
         }
         const newStudent: RosterStudent = {
             id,
@@ -810,22 +835,27 @@ function ManageUsersInner() {
             status: "active",
         };
         const next = [newStudent, ...students];
-        if (!await authorizeRosterMutation(next)) return;
+        if (!await authorizeRosterMutation(next)) return false;
         persistRoster(next, recomputeGroups(next, baseGroups), invites);
+        return true;
     };
 
-    const handleEditStudent = (id: string, data: StudentFormData) => {
+    const handleEditStudent = (id: string, data: StudentFormData): boolean => {
         if (isDemoRoster) {
             toast.info("데모 명단은 편집되지 않음", "실제 학생을 추가하거나 CSV로 업로드하면 저장 가능한 명단으로 전환됩니다.");
-            return;
+            return false;
         }
         const selectedGroup = groups.find(group => group.id === data.groupId);
-        const resolvedRegion = data.region.trim() || selectedGroup?.region || "";
+        if (!selectedGroup) {
+            toast.error("학생 편집 실패", "소속 반을 다시 선택해주세요.");
+            return false;
+        }
+        const resolvedRegion = selectedGroup.region?.trim() || data.region.trim();
         const regionPatch = optionalRegion(resolvedRegion);
         const emailKey = normalizeEmail(data.email);
         if (students.some(student => student.id !== id && normalizeEmail(student.email) === emailKey)) {
             toast.info("이미 등록된 이메일", "다른 학생이 같은 이메일을 사용 중입니다.");
-            return;
+            return false;
         }
         const next = students.map(s => s.id === id ? {
             ...s,
@@ -841,6 +871,7 @@ function ManageUsersInner() {
                 : group
         ));
         persistRoster(next, recomputeGroups(next, nextGroups), invites);
+        return true;
     };
 
     const handleDeleteStudent = (id: string) => {
@@ -1044,7 +1075,7 @@ function ManageUsersInner() {
         setShowGroupMoveModal(true);
     };
 
-    const handleConfirmGroupMove = (targetGroupId: string, applyRegion: boolean) => {
+    const handleConfirmGroupMove = (targetGroupId: string) => {
         const targetGroup = groups.find(group => group.id === targetGroupId);
         if (!targetGroup) return;
         const ids = selectedIds;
@@ -1053,25 +1084,18 @@ function ManageUsersInner() {
             setShowGroupMoveModal(false);
             return;
         }
-        // Same semantics as handleEditStudent (M1): only the group/region
-        // fields move, the student's id stays stable. rosterGroupMatchesStudent
-        // now matches on those fields, so the old group's count drops to 0 and
-        // becomes deletable, and the new group's count picks the students up —
-        // no double-counting.
-        //
-        // T4: `applyRegion` (checkbox, default ON) controls whether the target
-        // group's region overwrites each student's region. When OFF, we leave
-        // the student's existing per-student region override untouched so a bulk
-        // reclass doesn't silently wipe campus/branch overrides.
+        // Class membership is region-scoped, so group and region must move as one
+        // unit. Keeping the previous region creates a student that no class can
+        // match and later persistence would synthesize a duplicate class.
         const next = students.map(s => (
             ids.has(s.id)
-                ? { ...s, group: targetGroup.name, ...(applyRegion ? { region: targetGroup.region } : {}) }
+                ? { ...s, group: targetGroup.name, region: targetGroup.region }
                 : s
         ));
         persistRoster(next, recomputeGroups(next, groups), invites);
         toast.success(
             "반 이동 완료",
-            `${movedCount}명을 ${groupOptionLabel(targetGroup)} 반으로 이동했습니다.${applyRegion ? "" : " 각 학생의 지역은 유지했습니다."}`,
+            `${movedCount}명을 ${groupOptionLabel(targetGroup)} 반으로 이동했습니다.`,
         );
         setShowGroupMoveModal(false);
         clearSelection();
@@ -2463,15 +2487,15 @@ function ManageUsersInner() {
                     initial={editingStudent}
                     defaultGroupId={studentModalDefaultGroupId}
                     onClose={() => { setShowStudentModal(false); setEditingStudent(null); setStudentModalDefaultGroupId(undefined); }}
-                    onSubmit={(data) => {
-                        if (editingStudent) {
-                            handleEditStudent(editingStudent.id, data);
-                        } else {
-                            handleAddStudent(data);
-                        }
+                    onSubmit={async (data) => {
+                        const saved = editingStudent
+                            ? handleEditStudent(editingStudent.id, data)
+                            : await handleAddStudent(data);
+                        if (!saved) return false;
                         setShowStudentModal(false);
                         setEditingStudent(null);
                         setStudentModalDefaultGroupId(undefined);
+                        return true;
                     }}
                 />
             )}
@@ -3228,6 +3252,65 @@ function ModalShell({
     children: React.ReactNode;
     maxWidth?: number | string;
 }) {
+    const dialogRef = useRef<HTMLDivElement | null>(null);
+    const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+    const onCloseRef = useRef(onClose);
+
+    useEffect(() => {
+        onCloseRef.current = onClose;
+    }, [onClose]);
+
+    useEffect(() => {
+        previouslyFocusedRef.current = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        const dialog = dialogRef.current;
+        if (!dialog) return;
+
+        const focusableSelector = [
+            'button:not([disabled])',
+            'input:not([disabled])',
+            'select:not([disabled])',
+            'textarea:not([disabled])',
+            '[href]',
+            '[tabindex]:not([tabindex="-1"])',
+        ].join(',');
+        const focusableElements = () => Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+        if (!dialog.contains(document.activeElement)) {
+            focusableElements()[0]?.focus();
+        }
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                onCloseRef.current();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+            const items = focusableElements();
+            if (items.length === 0) {
+                event.preventDefault();
+                dialog.focus();
+                return;
+            }
+            const first = items[0];
+            const last = items[items.length - 1];
+            if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+            previouslyFocusedRef.current?.focus();
+        };
+    }, []);
+
     return (
         <div
             onClick={onClose}
@@ -3238,10 +3321,12 @@ function ModalShell({
             }}
         >
             <div
+                ref={dialogRef}
                 onClick={(e) => e.stopPropagation()}
                 role="dialog"
                 aria-modal="true"
                 aria-label={title}
+                tabIndex={-1}
                 className="bento-card"
                 style={{
                     width: '100%', maxWidth, padding: '1.5rem',
@@ -3285,15 +3370,16 @@ function StudentModal({
     initial: RosterStudent | null;
     defaultGroupId?: string;
     onClose: () => void;
-    onSubmit: (data: StudentFormData) => void;
+    onSubmit: (data: StudentFormData) => Promise<boolean>;
 }) {
     const initialGroupIdValue = initial ? initialStudentGroupId(initial, groups) : (groups.some(group => group.id === defaultGroupId) ? defaultGroupId || "" : groups[0]?.id ?? "");
     const initialGroup = groups.find(item => item.id === initialGroupIdValue);
     const [name, setName] = useState(initial?.name ?? "");
     const [email, setEmail] = useState(initial?.email ?? "");
     const [groupId, setGroupId] = useState(initialGroupIdValue);
-    const [region, setRegion] = useState(initial?.region ?? initialGroup?.region ?? "");
+    const [region, setRegion] = useState(initialGroup?.region ?? initial?.region ?? "");
     const [formError, setFormError] = useState("");
+    const [submitting, setSubmitting] = useState(false);
     const selectedGroup = groups.find(item => item.id === groupId);
     const hasNoGroups = groups.length === 0;
 
@@ -3311,8 +3397,9 @@ function StudentModal({
     return (
         <ModalShell title={initial ? "학생 편집" : "학생 추가"} onClose={onClose}>
             <form
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                     e.preventDefault();
+                    if (submitting) return;
                     if (!name.trim()) { setFormError("학생 이름을 입력해주세요."); return; }
                     if (!email.trim()) { setFormError("학생 이메일을 입력해주세요."); return; }
                     if (!selectedGroup) {
@@ -3322,13 +3409,18 @@ function StudentModal({
                         return;
                     }
                     setFormError("");
-                    onSubmit({
-                        name: name.trim(),
-                        email: email.trim(),
-                        group: selectedGroup.name,
-                        groupId: selectedGroup.id,
-                        region: region.trim() || selectedGroup.region || "",
-                    });
+                    setSubmitting(true);
+                    try {
+                        await onSubmit({
+                            name: name.trim(),
+                            email: email.trim(),
+                            group: selectedGroup.name,
+                            groupId: selectedGroup.id,
+                            region: selectedGroup.region?.trim() || region.trim(),
+                        });
+                    } finally {
+                        setSubmitting(false);
+                    }
                 }}
             >
                 <div style={{ marginBottom: '1rem' }}>
@@ -3347,9 +3439,7 @@ function StudentModal({
                         onChange={e => {
                             const nextGroup = groups.find(item => item.id === e.target.value);
                             setGroupId(e.target.value);
-                            if (nextGroup?.region && !region.trim()) {
-                                setRegion(nextGroup.region);
-                            }
+                            setRegion(nextGroup?.region?.trim() || "");
                         }}
                         style={inputStyle}
                         required
@@ -3369,6 +3459,7 @@ function StudentModal({
                         aria-label="학생 지역"
                         value={region}
                         onChange={e => setRegion(e.target.value)}
+                        readOnly={Boolean(selectedGroup?.region?.trim())}
                         style={inputStyle}
                         placeholder="예: 서울, 부산, 온라인"
                     />
@@ -3388,9 +3479,10 @@ function StudentModal({
                     </button>
                     <button
                         type="submit"
-                        style={{ padding: '0.65rem 1.1rem', background: 'linear-gradient(135deg, #22c55e, #10b981)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem' }}
+                        disabled={submitting}
+                        style={{ padding: '0.65rem 1.1rem', background: 'linear-gradient(135deg, #22c55e, #10b981)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem', opacity: submitting ? 0.65 : 1 }}
                     >
-                        {initial ? "저장" : "추가"}
+                        {submitting ? "저장 중…" : initial ? "저장" : "추가"}
                     </button>
                 </div>
             </form>
@@ -3498,12 +3590,9 @@ function GroupMoveModal({
     /** Effective region of each selected student, for the override-impact note. */
     selectedRegions: string[];
     onClose: () => void;
-    onConfirm: (groupId: string, applyRegion: boolean) => void;
+    onConfirm: (groupId: string) => void;
 }) {
     const [groupId, setGroupId] = useState(groups[0]?.id ?? "");
-    // T4: default ON keeps the previous behavior (region follows the class),
-    // but the teacher can turn it off to preserve each student's region override.
-    const [applyRegion, setApplyRegion] = useState(true);
     const inputStyle: React.CSSProperties = {
         width: '100%', padding: '0.65rem 0.85rem', background: 'var(--background)',
         border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
@@ -3525,12 +3614,12 @@ function GroupMoveModal({
                 onSubmit={(e) => {
                     e.preventDefault();
                     if (!groupId) return;
-                    onConfirm(groupId, applyRegion);
+                    onConfirm(groupId);
                 }}
             >
                 <p style={{ color: 'var(--muted)', fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '1rem', wordBreak: 'keep-all' }}>
                     선택된 <strong style={{ color: 'var(--foreground)' }}>{count}명</strong>을 옮길 반을 선택하세요.
-                    {applyRegion ? " 반과 지역이 함께 이동됩니다." : " 반만 이동하고 각 학생의 지역은 유지됩니다."}
+                    반과 지역이 함께 이동됩니다.
                 </p>
                 <div style={{ marginBottom: '1rem' }}>
                     <label style={labelStyle}>이동할 반</label>
@@ -3546,41 +3635,16 @@ function GroupMoveModal({
                     </select>
                 </div>
 
-                <label
-                    style={{
-                        display: 'flex', alignItems: 'flex-start', gap: '0.6rem',
-                        padding: '0.6rem 0.7rem', marginBottom: '0.75rem',
-                        borderRadius: 'var(--radius-md)', border: '1px solid var(--border)',
-                        background: 'var(--background)', cursor: 'pointer', minHeight: 44,
-                    }}
-                >
-                    <input
-                        type="checkbox"
-                        aria-label="지역도 이동한 반 기준으로 변경"
-                        checked={applyRegion}
-                        onChange={e => setApplyRegion(e.target.checked)}
-                        style={{ marginTop: 3, accentColor: 'var(--primary)', cursor: 'pointer', flexShrink: 0 }}
-                    />
-                    <span style={{ fontSize: '0.85rem', color: 'var(--foreground)', lineHeight: 1.5, wordBreak: 'keep-all' }}>
-                        <span style={{ fontWeight: 700 }}>지역도 이동한 반 기준으로 변경</span>
-                        <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.15rem' }}>
-                            체크 해제 시 각 학생의 기존 지역을 그대로 유지합니다.
-                        </span>
-                    </span>
-                </label>
-
                 {differingCount > 0 && (
                     <p style={{
                         fontSize: '0.8rem', lineHeight: 1.55, wordBreak: 'keep-all',
-                        color: applyRegion ? 'var(--warning)' : 'var(--muted)',
-                        background: applyRegion ? 'rgba(245,158,11,0.09)' : 'var(--background)',
-                        border: `1px solid ${applyRegion ? 'rgba(245,158,11,0.28)' : 'var(--border)'}`,
+                        color: 'var(--warning)',
+                        background: 'rgba(245,158,11,0.09)',
+                        border: '1px solid rgba(245,158,11,0.28)',
                         borderRadius: 'var(--radius-md)', padding: '0.6rem 0.7rem', marginBottom: '1.25rem',
                     }}>
                         선택한 학생 중 <strong>{differingCount}명</strong>의 현재 지역이 이동할 반의 지역(<strong>{targetRegion}</strong>)과 다릅니다.
-                        {applyRegion
-                            ? " 확정하면 해당 학생의 지역이 덮어써집니다."
-                            : " 체크가 해제되어 이 학생들의 지역은 변경되지 않습니다."}
+                        확정하면 해당 학생의 지역이 반 기준으로 변경됩니다.
                     </p>
                 )}
                 {differingCount === 0 && <div style={{ marginBottom: '1.25rem' }} />}

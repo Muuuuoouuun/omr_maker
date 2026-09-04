@@ -93,7 +93,7 @@ const SECURITY_POSTURE_ITEMS = [
     {
         key: "credential-source",
         label: "교사 계정 원천",
-        detail: "현재 교사 계정은 서버 환경변수에서만 읽고 브라우저 설정에는 저장하지 않습니다.",
+        detail: "Supabase 이메일·Google 가입과 서버 환경변수 기반 운영 계정을 함께 지원하며 비밀번호는 브라우저 설정에 저장하지 않습니다.",
         tone: "ready",
     },
     {
@@ -116,8 +116,8 @@ const SECURITY_POSTURE_ITEMS = [
     },
     {
         key: "supabase-auth",
-        label: "운영 전환 대기",
-        detail: "실사용 전에는 Supabase Auth, 조직 멤버십, production-rls.sql 정책으로 계정 권한을 이관해야 합니다.",
+        label: "Supabase 가입 연결",
+        detail: "교사 가입·조직 멤버십 생성은 연결되었습니다. 전체 데이터 접근을 auth.uid() 기반 RLS로 직접 전환하는 작업은 운영 전 적용해야 합니다.",
         tone: "warning",
     },
 ] as const;
@@ -1207,12 +1207,25 @@ function SecuritySection({
         };
     }, []);
 
-    const handleEndCurrentSession = () => {
-        clearTeacherSession();
-        toast.success("세션 종료됨", "교사 세션을 종료했습니다. 다시 로그인해주세요.");
-        void clearTeacherAuthSession().finally(() => {
+    const [sessionEndPending, setSessionEndPending] = useState(false);
+
+    const handleEndCurrentSession = async () => {
+        if (sessionEndPending) return;
+        setSessionEndPending(true);
+        try {
+            const result = await clearTeacherAuthSession();
+            if (!result.success) {
+                toast.error("세션 종료 실패", result.error || "연결을 확인한 뒤 다시 시도해주세요.");
+                return;
+            }
+            clearTeacherSession();
+            toast.success("세션 종료됨", "교사 세션을 종료했습니다. 다시 로그인해주세요.");
             window.location.href = "/?role=teacher";
-        });
+        } catch {
+            toast.error("세션 종료 실패", "서버 세션이 남아 있을 수 있습니다. 연결을 확인한 뒤 다시 시도해주세요.");
+        } finally {
+            setSessionEndPending(false);
+        }
     };
 
     return (
@@ -1234,7 +1247,7 @@ function SecuritySection({
                         env-var tokens (TEACHER_LOGIN_ID/TEACHER_PASSWORD) break instead of
                         overflowing the card at narrow widths. */}
                     <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.65, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
-                        교사 계정 정보는 브라우저 설정에 저장하지 않습니다. 운영 환경에서는 <code style={{ fontWeight: 800 }}>TEACHER_ACCOUNTS</code> 또는 <code style={{ fontWeight: 800 }}>TEACHER_LOGIN_ID</code>/<code style={{ fontWeight: 800 }}>TEACHER_PASSWORD</code> 서버 환경변수를 변경한 뒤 다시 배포해 교체하세요.
+                        이메일·Google 계정은 Supabase Auth에서, 별도 운영 계정은 <code style={{ fontWeight: 800 }}>TEACHER_ACCOUNTS</code> 또는 <code style={{ fontWeight: 800 }}>TEACHER_LOGIN_ID</code>/<code style={{ fontWeight: 800 }}>TEACHER_PASSWORD</code> 서버 환경변수에서 관리합니다. 비밀번호는 브라우저 설정에 저장하지 않습니다.
                     </p>
                 </div>
             </Field>
@@ -1434,7 +1447,8 @@ function SecuritySection({
                     </div>
                     <button
                         type="button"
-                        onClick={handleEndCurrentSession}
+                        onClick={() => void handleEndCurrentSession()}
+                        disabled={sessionEndPending}
                         style={{
                             padding: '0.45rem 0.75rem',
                             borderRadius: 'var(--radius-md)',
@@ -1450,7 +1464,7 @@ function SecuritySection({
                         }}
                     >
                         <LogOut size={13} />
-                        세션 종료
+                        {sessionEndPending ? "종료 중…" : "세션 종료"}
                     </button>
                 </div>
             </Field>

@@ -29,10 +29,13 @@ export interface RosterSnapshot {
     students: RosterStudent[];
     groups: RosterGroup[];
     invites: RosterInvite[];
+    revision?: number;
 }
 export interface RosterPersistenceResult {
     localSaved: boolean;
     remoteSaved: boolean;
+    revision?: number;
+    conflict?: boolean;
     remoteError?: string;
 }
 

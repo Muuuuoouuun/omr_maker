@@ -40,4 +40,18 @@ describe("teacher roster server surface", () => {
         expect(migration).toContain("grant execute on function public.omr_save_roster_v1");
         expect(migration).toContain("revoke all on public.omr_roster_invites from anon, authenticated");
     });
+
+    it("rejects stale whole-roster snapshots with an organization revision", () => {
+        const gateway = source("src/lib/teacherRosterGateway.ts");
+        const migration = source("supabase/migrations/202609040001_roster_revision_guard.sql");
+        const users = source("src/app/teacher/users/page.tsx");
+
+        expect(gateway).toContain('client.rpc("omr_save_roster_v2"');
+        expect(migration).toContain("create table if not exists public.omr_roster_revisions");
+        expect(migration).toContain("roster revision conflict");
+        expect(migration).toContain("for update");
+        expect(migration).toContain("revoke execute on function public.omr_save_roster_v1");
+        expect(users).toContain("createTeacherRosterSaveQueue");
+        expect(users).toContain("최신 명단을 다시 불러왔습니다");
+    });
 });

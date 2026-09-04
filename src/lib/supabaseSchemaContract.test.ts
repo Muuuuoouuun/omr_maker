@@ -24,6 +24,10 @@ function readDataPlaneOptimizationMigration(): string {
     return readFileSync(path.join(rootDir, "supabase/migrations/202607140018_data_plane_optimization.sql"), "utf8");
 }
 
+function readCurrentSecurityReadinessMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202609040003_service_readiness_v2.sql"), "utf8");
+}
+
 function readTeacherExamGatewayMigration(): string {
     return readFileSync(path.join(rootDir, "supabase/migrations/202607140007_teacher_exam_gateway.sql"), "utf8");
 }
@@ -461,6 +465,15 @@ describe("Supabase schema contract", () => {
         expect(dataPlaneOptimization).toContain("drop function if exists public.omr_mark_feedback_opened(text, timestamptz)");
         expect(dataPlaneOptimization).toContain("revoke all on function public.omr_service_readiness_v1() from public, anon, authenticated");
         expect(dataPlaneOptimization).toContain("grant execute on function public.omr_service_readiness_v1() to service_role");
+    });
+
+    it("includes roster revision and shared login throttling in current readiness", () => {
+        const currentReadiness = readCurrentSecurityReadinessMigration();
+        expect(currentReadiness).toContain("omr_save_roster_v2(text,bigint,jsonb,jsonb,jsonb,jsonb)");
+        expect(currentReadiness).toContain("omr_check_login_rate_limit_v1(text[],integer)");
+        expect(currentReadiness).toContain("omr_roster_revisions");
+        expect(currentReadiness).toContain("omr_auth_rate_limits");
+        expect(currentReadiness).toContain("'version', '202609040003'");
     });
 
     it("keeps exam deletion and feedback mutations off browser roles", () => {

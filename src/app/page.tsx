@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, type MouseEvent } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { startMockupTeacherSession, verifyTeacherPassword } from "@/app/actions/auth";
-import { BarChart3, Sparkles, Users } from "lucide-react";
+import { BarChart3, ChevronLeft, ChevronRight, Circle, FileBadge2, GraduationCap, Sparkles, Users } from "lucide-react";
 import {
   issueGuestSession,
   issueStudentSession,
@@ -47,59 +48,6 @@ import {
 import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
 import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { setCurrentPlan } from "@/utils/plans";
-
-/* ─── SVG Icons ──────────────────────────────────────── */
-
-function StudentIcon({ size = 40 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
-      {/* Mortarboard top (diamond shape) */}
-      <path d="M24 8L43 18L24 28L5 18L24 8Z" strokeWidth="2.3" />
-      {/* Inner cap highlight line */}
-      <path d="M12 19L24 25L36 19" strokeWidth="1.5" strokeOpacity="0.4" />
-      {/* Hood/cap band under the mortarboard */}
-      <path d="M14 23V32C14 35.3 18.5 37 24 37C29.5 37 34 35.3 34 32V23" strokeWidth="2.3" />
-      {/* Tassel cord */}
-      <path d="M43 18V30" strokeWidth="2.3" />
-      {/* Tassel dot */}
-      <circle cx="43" cy="33" r="2.2" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-function TeacherIcon({ size = 40 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
-      {/* Book/clipboard base */}
-      <path d="M10 8C10 7 10.5 6.5 11.5 6.5H34.5C35.5 6.5 36 7 36 8V36C36 37 35.5 37.5 34.5 37.5H11.5C10.5 37.5 10 37 10 36V8Z" strokeWidth="2.2" />
-      {/* Book spine vertical line */}
-      <path d="M10 8V36" strokeWidth="2.2" strokeOpacity="0.4" />
-      {/* Content lines on book */}
-      <path d="M16 15H30" strokeWidth="2.2" />
-      <path d="M16 21H26" strokeWidth="2.2" />
-      <path d="M16 27H28" strokeWidth="2.2" />
-      {/* Pen / marker overlapping bottom-right */}
-      <path d="M36 32L42 38L40 41L34 35L36 32Z" strokeWidth="2.2" />
-      <path d="M34 35L31 41L37 39L36 32" strokeWidth="2.2" strokeOpacity="0.6" />
-    </svg>
-  );
-}
-
-function ChevronRight({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
-      <path d="M6 12L10 8L6 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function ChevronLeft({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
-      <path d="M10 12L6 8L10 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 /* ─── Page ───────────────────────────────────────────── */
 
@@ -347,7 +295,6 @@ export default function Home() {
       const identifier = teacherIdentifier.trim();
       if (!identifier || !password.trim()) {
         setError("아이디와 비밀번호를 모두 입력해주세요.");
-        setTimeout(() => setError(""), 2000);
         return;
       }
 
@@ -356,7 +303,6 @@ export default function Home() {
         const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
         if (!saved) {
           setError("브라우저 세션 저장을 사용할 수 없습니다.");
-          setTimeout(() => setError(""), 2000);
           return;
         }
         // Apply the account's bound plan only when one is configured, so accounts
@@ -366,11 +312,9 @@ export default function Home() {
         router.push(next);
       } else {
         setError(res.error || "잘못된 비밀번호입니다.");
-        setTimeout(() => setError(""), 2000);
       }
     } catch {
       setError("서버 인증 도중 오류가 발생했습니다.");
-      setTimeout(() => setError(""), 2000);
     }
   };
 
@@ -438,12 +382,10 @@ export default function Home() {
     if (!trimmedName) {
       setError("이름을 입력해주세요.");
       studentNameInputRef.current?.focus();
-      setTimeout(() => setError(""), 2000);
       return;
     }
     if (!selectedGroupId) {
       setError("반을 선택해주세요.");
-      setTimeout(() => setError(""), 2000);
       return;
     }
 
@@ -456,7 +398,6 @@ export default function Home() {
         setNeedsStudentLookup(true);
         setNeedsCode(true);
         setError("학생번호(또는 이메일)와 시작 코드를 모두 입력해주세요.");
-        setTimeout(() => setError(""), 2500);
         return;
       }
 
@@ -508,7 +449,6 @@ export default function Home() {
     if (identity.lookupMismatch) {
       setNeedsStudentLookup(true);
       setError("학생번호 또는 이메일이 명단과 일치하지 않습니다.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
     if (identity.requiresStudentLookup) {
@@ -516,7 +456,6 @@ export default function Home() {
       setError(identity.rosterMatchCount > 1
         ? "동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요."
         : "명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
-      setTimeout(() => setError(""), 3000);
       return;
     }
     const regionSnapshot = resolveSessionRegion({
@@ -545,18 +484,15 @@ export default function Home() {
     });
     if (codeDecision.codesChanged && !writeStudentCodes(localStorage, codeDecision.codes)) {
       setError("시작 코드 저장에 실패했습니다. 브라우저 저장소를 확인해주세요.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
     if (codeDecision.status === "code_required") {
       setNeedsCode(true);
       setError("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
     if (codeDecision.status === "code_mismatch") {
       setError("시작 코드가 일치하지 않습니다.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
 
@@ -632,7 +568,6 @@ export default function Home() {
     const guestGroup = resolveGuestGroupCode(guestGroupCode, studentGroupOptions);
     if (!guestGroup) {
       setError("반 코드를 입력해주세요.");
-      setTimeout(() => setError(""), 2000);
       return;
     }
 
@@ -697,8 +632,20 @@ export default function Home() {
 
   return (
     <div className="layout-main center-content home-page" data-home-role={role} style={{ position: "relative" }}>
+      {role === "none" && (
+        <Image
+          src="/assets/omr-home-learning-coach-bg-v2.png"
+          alt=""
+          fill
+          priority
+          sizes="100vw"
+          className="home-learning-coach-backdrop"
+          aria-hidden="true"
+        />
+      )}
+
       {/* Theme toggle */}
-      <div style={{ position: "fixed", top: "1.25rem", right: "1.25rem", zIndex: 10 }}>
+      <div className="home-theme-toggle" style={{ position: "fixed", top: "1.25rem", right: "1.25rem", zIndex: 10 }}>
         <ThemeToggle />
       </div>
 
@@ -773,7 +720,7 @@ export default function Home() {
 
       <div
         className="container animate-fade-in home-container"
-        style={{ maxWidth: "1240px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
+        style={{ maxWidth: "1320px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
       >
         {/* ── Hero ───────────────────────────── */}
         <div className="home-hero" style={{ textAlign: "center", marginBottom: "3rem" }}>
@@ -793,9 +740,7 @@ export default function Home() {
             className="badge badge-primary stagger-2 animate-fade-in home-eyebrow"
             style={{ marginBottom: "1.15rem", opacity: 0 }}
           >
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
-              <circle cx="4" cy="4" r="4" />
-            </svg>
+            <Circle size={8} fill="currentColor" strokeWidth={0} aria-hidden="true" />
             Smart Evaluation Platform
           </div>
 
@@ -860,7 +805,7 @@ export default function Home() {
               }}
             >
               <div className="icon-wrap icon-wrap-secondary home-role-icon" style={{ marginBottom: "1.5rem" }}>
-                <StudentIcon size={38} />
+                <GraduationCap size={48} strokeWidth={2} />
               </div>
 
               <h2
@@ -921,7 +866,7 @@ export default function Home() {
               }}
             >
               <div className="icon-wrap icon-wrap-primary home-role-icon" style={{ marginBottom: "1.5rem" }}>
-                <TeacherIcon size={38} />
+                <FileBadge2 size={48} strokeWidth={2} />
               </div>
 
               <h2
@@ -1043,7 +988,7 @@ export default function Home() {
                 {/* Teacher form */}
                 <div style={{ marginBottom: "2.25rem" }}>
                   <span className="badge badge-primary" style={{ marginBottom: "1rem" }}>
-                    <TeacherIcon size={12} />
+                    <FileBadge2 size={12} />
                     교사 포털
                   </span>
                   <h2
@@ -1087,7 +1032,7 @@ export default function Home() {
                     type="text"
                     className="input-field"
                     value={teacherIdentifier}
-                    onChange={(e) => setTeacherIdentifier(e.target.value)}
+                    onChange={(e) => { setTeacherIdentifier(e.target.value); setError(""); }}
                     placeholder="admin 또는 teacher@example.com"
                     autoFocus
                     autoComplete="username"
@@ -1118,7 +1063,7 @@ export default function Home() {
                     type="password"
                     className="input-field"
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => { setPassword(e.target.value); setError(""); }}
                     placeholder="비밀번호 입력"
                     autoComplete="current-password"
                     aria-invalid={Boolean(error)}
@@ -1153,6 +1098,11 @@ export default function Home() {
                 </button>
                 </form>
 
+                <p style={{ textAlign: "center", marginTop: "1rem", color: "var(--muted)", fontSize: "var(--type-label)" }}>
+                  처음이거나 이메일 계정으로 로그인하시나요?{" "}
+                  <a href="/signup" style={{ color: "var(--primary)", fontWeight: 750 }}>교사 계정 만들기·로그인</a>
+                </p>
+
                 <div className="mockup-login-divider" aria-hidden="true"><span>또는 바로 체험하기</span></div>
                 <section className="mockup-login-card" aria-label="데모 계정 체험">
                   <div className="mockup-login-card-heading">
@@ -1185,7 +1135,7 @@ export default function Home() {
                 {/* Student form */}
                 <div style={{ marginBottom: "2.25rem" }}>
                   <span className="badge badge-secondary" style={{ marginBottom: "1rem" }}>
-                    <StudentIcon size={12} />
+                    <GraduationCap size={12} />
                     학생 포털
                   </span>
                   <h2
@@ -1224,7 +1174,7 @@ export default function Home() {
                     aria-invalid={error === "이름을 입력해주세요."}
                     aria-describedby={error === "이름을 입력해주세요." ? "student-name-error" : undefined}
                     value={studentName}
-                    onChange={(e) => setStudentName(e.target.value)}
+                    onChange={(e) => { setStudentName(e.target.value); setError(""); }}
                     placeholder="이름을 입력하세요"
                     autoFocus
                     autoComplete="name"
@@ -1258,8 +1208,10 @@ export default function Home() {
                     type="text"
                     className="input-field"
                     aria-label="학생번호 또는 이메일"
+                    aria-invalid={Boolean(error && error !== "이름을 입력해주세요.")}
+                    aria-describedby={error && error !== "이름을 입력해주세요." ? "student-login-error" : undefined}
                     value={studentLookup}
-                    onChange={(e) => setStudentLookup(e.target.value)}
+                    onChange={(e) => { setStudentLookup(e.target.value); setError(""); }}
                     onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
                     placeholder="선생님이 알려준 학생번호 또는 이메일"
                     autoComplete="email"
@@ -1300,8 +1252,10 @@ export default function Home() {
                   {studentGroupOptions.length > 0 ? (
                     <select
                       aria-label="반 선택"
+                      aria-invalid={Boolean(error && error !== "이름을 입력해주세요.")}
+                      aria-describedby={error && error !== "이름을 입력해주세요." ? "student-login-error" : undefined}
                       value={selectedGroupId}
-                      onChange={(e) => setSelectedGroupId(e.target.value)}
+                      onChange={(e) => { setSelectedGroupId(e.target.value); setError(""); }}
                       className="input-field"
                       style={{ cursor: "pointer" }}
                     >
@@ -1317,8 +1271,10 @@ export default function Home() {
                       type="text"
                       className="input-field"
                       aria-label="반 코드"
+                      aria-invalid={Boolean(error && error !== "이름을 입력해주세요.")}
+                      aria-describedby={error && error !== "이름을 입력해주세요." ? "student-login-error" : undefined}
                       value={selectedGroupId}
-                      onChange={(e) => setSelectedGroupId(e.target.value.trim())}
+                      onChange={(e) => { setSelectedGroupId(e.target.value.trim()); setError(""); }}
                       placeholder="선생님이 알려준 반 코드"
                       autoCapitalize="none"
                       spellCheck={false}
@@ -1332,7 +1288,7 @@ export default function Home() {
                 </div>
 
                 {error && error !== "이름을 입력해주세요." && (
-                  <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
+                  <p id="student-login-error" role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
                     {error}
                   </p>
                 )}
@@ -1377,8 +1333,10 @@ export default function Home() {
                       type="text"
                       className="input-field"
                       aria-label="시작 코드"
+                      aria-invalid={Boolean(error && error !== "이름을 입력해주세요.")}
+                      aria-describedby={error && error !== "이름을 입력해주세요." ? "student-login-error" : undefined}
                       value={startCode}
-                      onChange={(e) => setStartCode(normalizeStartCodeInput(e.target.value))}
+                      onChange={(e) => { setStartCode(normalizeStartCodeInput(e.target.value)); setError(""); }}
                       onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
                       placeholder="6자리 코드 입력"
                       autoComplete="one-time-code"

@@ -180,8 +180,9 @@ export function buildDeploymentReadiness(
     const authConfig = inspectTeacherAuthConfig(env);
     const supabasePublicReady = publicSupabaseConfigured(env);
     const serviceRoleReady = !!getSupabaseServerConfigFromEnv(env);
+    const supabaseTeacherAuthReady = supabasePublicReady && serviceRoleReady;
     const isProduction = clean(env.NODE_ENV).toLowerCase() === "production";
-    const teacherCredentialsTone: DeploymentReadinessTone = !authConfig.ready
+    const teacherCredentialsTone: DeploymentReadinessTone = !authConfig.ready && !supabaseTeacherAuthReady
         ? "error"
         : authConfig.warnings.length > 0
             ? "warning"
@@ -190,8 +191,10 @@ export function buildDeploymentReadiness(
     const checks: DeploymentReadinessCheck[] = [
         {
             key: "teacher_credentials",
-            label: "교사 계정 환경변수",
-            detail: authConfig.ready
+            label: "교사 계정 제공",
+            detail: supabaseTeacherAuthReady
+                ? `Supabase 이메일·Google 교사 가입이 준비됐습니다.${authConfig.ready ? ` 환경변수 기반 운영 계정 ${authConfig.credentialCount}개도 함께 사용할 수 있습니다.` : ""}`
+                : authConfig.ready
                 ? `${authConfig.credentialCount}개 교사 계정이 서버 환경변수에서 인식됩니다. 로그인 판별은 Supabase가 아니라 이 값으로 수행됩니다.${authConfig.warnings.length > 0 ? ` ${describeIssues(authConfig.warnings)}` : ""}`
                 : describeIssues(authConfig.issues) || "운영 배포에는 TEACHER_ACCOUNTS 또는 TEACHER_LOGIN_ID/TEACHER_PASSWORD_HASH가 필요합니다.",
             tone: teacherCredentialsTone,

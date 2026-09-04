@@ -315,11 +315,25 @@ export default function StudentDashboard() {
         setGuestMergePreview(null);
     };
 
-    const handleLogout = () => {
+    const [logoutPending, setLogoutPending] = useState(false);
+
+    const handleLogout = async () => {
+        if (logoutPending) return;
+        setLogoutPending(true);
+        try {
+            const result = await clearStudentServerSession();
+            if (!result.ok) {
+                toast.error("로그아웃 실패", result.error || "연결을 확인한 뒤 다시 시도해주세요.");
+                return;
+            }
+        } catch {
+            toast.error("로그아웃 실패", "서버 세션이 남아 있을 수 있습니다. 연결을 확인한 뒤 다시 시도해주세요.");
+            return;
+        } finally {
+            setLogoutPending(false);
+        }
         const workspaceId = user?.workspaceId;
         clearSession();
-        // Also drop the httpOnly server session cookie (shared-device safety).
-        clearStudentServerSession().catch(() => { /* offline — cookie expires on TTL */ });
         setUser(null);
         setTodoExams([]);
         setDoneExams([]);
@@ -434,19 +448,21 @@ export default function StudentDashboard() {
                             ) : null}
                         </span>
                         <button
-                            onClick={handleLogout}
+                            onClick={() => void handleLogout()}
+                            disabled={logoutPending}
                             style={{
                                 minHeight: '2.75rem',
                                 padding: '0.45rem 0.2rem',
                                 borderRadius: 'var(--radius-md)',
                                 fontSize: '0.9rem',
                                 color: 'var(--muted)',
-                                cursor: 'pointer',
                                 transition: 'color 0.2s',
                                 fontWeight: 500,
+                                opacity: logoutPending ? 0.6 : 1,
+                                cursor: logoutPending ? 'wait' : 'pointer',
                             }}
                         >
-                            로그아웃
+                            {logoutPending ? "종료 중…" : "로그아웃"}
                         </button>
                         <ThemeToggle />
                     </div>

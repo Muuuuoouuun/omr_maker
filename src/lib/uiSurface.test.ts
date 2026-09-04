@@ -664,7 +664,8 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("로그인 시도 제한");
         expect(settingsPage).toContain("서버 워크스페이스 준비");
         expect(settingsPage).toContain("SUPABASE_SERVICE_ROLE_KEY");
-        expect(settingsPage).toContain("Supabase Auth, 조직 멤버십, production-rls.sql 정책");
+        expect(settingsPage).toContain("Supabase 이메일·Google 가입");
+        expect(settingsPage).toContain("auth.uid() 기반 RLS");
         expect(css).toContain(".teacher-session-chip");
         expect(css).toContain(".teacher-session-chip-prefix");
         expect(nextConfig).toContain('allowedDevOrigins: ["127.0.0.1"]');

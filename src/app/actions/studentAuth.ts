@@ -85,13 +85,18 @@ export async function loginStudentWithStartCode(input: {
     }
 }
 
-export async function logoutStudentServerSession(): Promise<{ success: true }> {
+export async function logoutStudentServerSession(): Promise<{ success: boolean; error?: string }> {
     const headerStore = await headers();
-    if (isSameOriginServerActionRequest(headerStore)) {
+    if (!isSameOriginServerActionRequest(headerStore)) {
+        return { success: false, error: "요청 출처를 확인할 수 없습니다." };
+    }
+    try {
         const cookieStore = await cookies();
         cookieStore.delete(STUDENT_SERVER_SESSION_COOKIE);
+        return { success: true };
+    } catch {
+        return { success: false, error: "학생 세션을 종료하지 못했습니다." };
     }
-    return { success: true };
 }
 
 export async function issueStudentStartCodeCredential(
