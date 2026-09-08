@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, type MouseEvent } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -12,7 +13,16 @@ import {
   requestTeacherPasswordReset,
   requestTeacherSignup,
 } from "@/app/actions/teacherAccount";
-import { BarChart3, Sparkles, Users } from "lucide-react";
+import {
+  BarChart3,
+  ChevronLeft,
+  ChevronRight,
+  Circle,
+  FileBadge2,
+  GraduationCap,
+  Sparkles,
+  Users,
+} from "lucide-react";
 import {
   issueGuestSession,
   issueStudentSession,
@@ -59,59 +69,6 @@ import { readGuestRecoveryState } from "@/lib/studentGuestRecovery";
 import { readExamEntryInviteHandoff } from "@/lib/examEntryInviteHandoff";
 import { useTeacherIdentityMode } from "@/components/TeacherIdentityModeProvider";
 import { buildTeacherRecoveryCanonicalUrl } from "@/lib/teacherRecoveryCanonical";
-
-/* ─── SVG Icons ──────────────────────────────────────── */
-
-function StudentIcon({ size = 40 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
-      {/* Mortarboard top (diamond shape) */}
-      <path d="M24 8L43 18L24 28L5 18L24 8Z" strokeWidth="2.3" />
-      {/* Inner cap highlight line */}
-      <path d="M12 19L24 25L36 19" strokeWidth="1.5" strokeOpacity="0.4" />
-      {/* Hood/cap band under the mortarboard */}
-      <path d="M14 23V32C14 35.3 18.5 37 24 37C29.5 37 34 35.3 34 32V23" strokeWidth="2.3" />
-      {/* Tassel cord */}
-      <path d="M43 18V30" strokeWidth="2.3" />
-      {/* Tassel dot */}
-      <circle cx="43" cy="33" r="2.2" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-function TeacherIcon({ size = 40 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
-      {/* Book/clipboard base */}
-      <path d="M10 8C10 7 10.5 6.5 11.5 6.5H34.5C35.5 6.5 36 7 36 8V36C36 37 35.5 37.5 34.5 37.5H11.5C10.5 37.5 10 37 10 36V8Z" strokeWidth="2.2" />
-      {/* Book spine vertical line */}
-      <path d="M10 8V36" strokeWidth="2.2" strokeOpacity="0.4" />
-      {/* Content lines on book */}
-      <path d="M16 15H30" strokeWidth="2.2" />
-      <path d="M16 21H26" strokeWidth="2.2" />
-      <path d="M16 27H28" strokeWidth="2.2" />
-      {/* Pen / marker overlapping bottom-right */}
-      <path d="M36 32L42 38L40 41L34 35L36 32Z" strokeWidth="2.2" />
-      <path d="M34 35L31 41L37 39L36 32" strokeWidth="2.2" strokeOpacity="0.6" />
-    </svg>
-  );
-}
-
-function ChevronRight({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
-      <path d="M6 12L10 8L6 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function ChevronLeft({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
-      <path d="M10 12L6 8L10 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 /* ─── Page ───────────────────────────────────────────── */
 
@@ -938,8 +895,20 @@ export default function Home() {
 
   return (
     <div className="layout-main center-content home-page" data-home-role={role} style={{ position: "relative" }}>
+      {role === "none" ? (
+        <Image
+          src="/assets/omr-home-learning-coach-bg-v2.png"
+          alt=""
+          fill
+          priority
+          sizes="100vw"
+          className="home-learning-coach-backdrop"
+          aria-hidden="true"
+        />
+      ) : null}
+
       {/* Theme toggle */}
-      <div style={{ position: "fixed", top: "1.25rem", right: "1.25rem", zIndex: 10 }}>
+      <div className="home-theme-toggle" style={{ position: "fixed", top: "1.25rem", right: "1.25rem", zIndex: 10 }}>
         <ThemeToggle />
       </div>
 
@@ -1015,7 +984,7 @@ export default function Home() {
       <main id="main-content" className="landing-main">
         <div
           className="container animate-fade-in home-container mobile-inline-surface mobile-section-stack"
-          style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
+          style={{ maxWidth: "1320px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
         >
           {/* ── Hero ───────────────────────────── */}
           {role === "none" && (
@@ -1032,8 +1001,16 @@ export default function Home() {
                 />
               </div>
 
+              <div
+                className="badge badge-primary stagger-2 animate-fade-in home-eyebrow"
+                style={{ marginBottom: "1.15rem", opacity: 0 }}
+              >
+                <Circle size={8} fill="currentColor" strokeWidth={0} aria-hidden="true" />
+                Smart Evaluation Platform
+              </div>
+
               <h1
-                className="title-gradient stagger-2 animate-fade-in home-title"
+                className="title-gradient stagger-3 animate-fade-in home-title"
                 style={{
                   fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
                   lineHeight: 1.04,
@@ -1045,16 +1022,6 @@ export default function Home() {
               >
                 OMR Maker
               </h1>
-
-              <div
-                className="badge badge-primary stagger-3 animate-fade-in home-eyebrow"
-                style={{ marginBottom: "1.15rem", opacity: 0 }}
-              >
-                <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
-                  <circle cx="4" cy="4" r="4" />
-                </svg>
-                Smart Evaluation Platform
-              </div>
 
               <p
                 className="stagger-4 animate-fade-in home-subtitle"
@@ -1091,7 +1058,7 @@ export default function Home() {
               type="button"
               disabled={!isHydrated}
               onClick={() => setRole("student")}
-              className="glass-panel card-hover home-role-card"
+              className="glass-panel card-hover home-role-card home-role-card--student"
               style={{
                 padding: "2.75rem 2.25rem",
                 textAlign: "left",
@@ -1104,21 +1071,8 @@ export default function Home() {
                 overflow: "hidden",
               }}
             >
-              <div
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  right: 0,
-                  width: "180px",
-                  height: "180px",
-                  background:
-                    "radial-gradient(circle at top right, rgba(236,72,153,0.1), transparent 70%)",
-                  pointerEvents: "none",
-                }}
-              />
-
               <div className="icon-wrap icon-wrap-secondary home-role-icon" style={{ marginBottom: "1.5rem" }}>
-                <StudentIcon size={38} />
+                <GraduationCap size={48} strokeWidth={2} />
               </div>
 
               <h2
@@ -1157,7 +1111,7 @@ export default function Home() {
                 }}
               >
                 시작하기
-                <ChevronRight />
+                <ChevronRight aria-hidden="true" />
               </div>
             </button>
 
@@ -1166,7 +1120,7 @@ export default function Home() {
               type="button"
               disabled={!isHydrated}
               onClick={() => setRole("teacher")}
-              className="glass-panel card-hover home-role-card"
+              className="glass-panel card-hover home-role-card home-role-card--teacher"
               style={{
                 padding: "2.75rem 2.25rem",
                 textAlign: "left",
@@ -1179,21 +1133,8 @@ export default function Home() {
                 overflow: "hidden",
               }}
             >
-              <div
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  right: 0,
-                  width: "180px",
-                  height: "180px",
-                  background:
-                    "radial-gradient(circle at top right, rgba(99,102,241,0.1), transparent 70%)",
-                  pointerEvents: "none",
-                }}
-              />
-
               <div className="icon-wrap icon-wrap-primary home-role-icon" style={{ marginBottom: "1.5rem" }}>
-                <TeacherIcon size={38} />
+                <FileBadge2 size={48} strokeWidth={2} />
               </div>
 
               <h2
@@ -1232,7 +1173,7 @@ export default function Home() {
                 }}
               >
                 대시보드
-                <ChevronRight />
+                <ChevronRight aria-hidden="true" />
               </div>
             </button>
           </div>
@@ -1306,7 +1247,7 @@ export default function Home() {
               onMouseEnter={(e) => (e.currentTarget.style.color = "var(--primary)")}
               onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
             >
-              <ChevronLeft />
+              <ChevronLeft aria-hidden="true" />
               역할 선택으로
             </button>
 
@@ -1315,7 +1256,7 @@ export default function Home() {
                 {/* Teacher form */}
                 <div style={{ marginBottom: "2.25rem" }}>
                   <span className="badge badge-primary" style={{ marginBottom: "1rem" }}>
-                    <TeacherIcon size={12} />
+                    <FileBadge2 size={12} aria-hidden="true" />
                     교사 포털
                   </span>
                   <h1

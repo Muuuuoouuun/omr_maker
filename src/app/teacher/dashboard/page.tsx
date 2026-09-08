@@ -5,10 +5,26 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import TeacherHeader from "@/components/TeacherHeader";
+import BrandLogo from "@/components/BrandLogo";
+import NotificationBell from "@/components/NotificationBell";
+import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import { Exam, Attempt } from "@/types/omr";
 import type { TeacherDataCapability } from "@/components/dashboard/tabs/OverviewTab";
 import StatusPill from "@/components/dashboard/StatusPill";
-import { AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw } from "lucide-react";
+import {
+    AlertTriangle,
+    BarChart2,
+    CheckCircle2,
+    CloudOff,
+    Database,
+    FilePlus2,
+    GraduationCap,
+    LayoutDashboard,
+    RadioTower,
+    RefreshCw,
+    Settings,
+    Users,
+} from "lucide-react";
 import { AnalyticsTabSkeleton, DashboardPageSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
 
 // Analytics tabs statically import recharts + thousands of lines of analytics code
@@ -1318,7 +1334,50 @@ function TeacherDashboard() {
     );
 
     return (
-        <div className={`layout-main${isMockupAccount ? " mockup-dashboard-shell" : ""}`}>
+        <div className={`layout-main teacher-dashboard-shell${isMockupAccount ? " mockup-dashboard-shell" : ""}`}>
+            <aside className="dashboard-sidebar" aria-label="교사 대시보드 내비게이션">
+                <BrandLogo className="dashboard-sidebar-brand" />
+                <nav className="dashboard-sidebar-nav">
+                    <button type="button" aria-current={activeTab === "overview" ? "page" : undefined} onClick={() => applyTab("overview")}>
+                        <LayoutDashboard size={20} aria-hidden="true" />
+                        <span>대시보드</span>
+                    </button>
+                    <Link href="/create">
+                        <FilePlus2 size={20} aria-hidden="true" />
+                        <span>시험 만들기</span>
+                    </Link>
+                    <button type="button" aria-current={activeTab === "exam" ? "page" : undefined} onClick={() => applyTab("exam", selectedExamIdForAnalytics)}>
+                        <BarChart2 size={20} aria-hidden="true" />
+                        <span>결과 분석</span>
+                    </button>
+                    <button type="button" aria-current={activeTab === "student" ? "page" : undefined} onClick={() => applyTab("student")}>
+                        <GraduationCap size={20} aria-hidden="true" />
+                        <span>학생 성취도</span>
+                    </button>
+                    <Link href="/teacher/users">
+                        <Users size={20} aria-hidden="true" />
+                        <span>학생 관리</span>
+                    </Link>
+                    <Link href="/teacher/live">
+                        <RadioTower size={20} aria-hidden="true" />
+                        <span>실시간 현황</span>
+                    </Link>
+                    <Link href="/teacher/settings">
+                        <Settings size={20} aria-hidden="true" />
+                        <span>설정</span>
+                    </Link>
+                </nav>
+                <div className="dashboard-sidebar-footer">
+                    <span className="dashboard-sidebar-avatar" aria-hidden="true">{isMockupAccount ? "김" : "교"}</span>
+                    <span className="dashboard-sidebar-profile">
+                        <strong>{isMockupAccount ? "김선생님" : "교사 계정"}</strong>
+                        <small>{isMockupAccount ? "수학교사" : "OMR Maker"}</small>
+                    </span>
+                    <NotificationBell />
+                    <TeacherLogoutButton size="small" />
+                </div>
+            </aside>
+            <div className="dashboard-workspace">
             {/* TeacherHeader also renders SkipToMainContent and GlobalSearch;
                 this replaced a hand-rolled copy of the same header that had
                 drifted from the shared one in search width and badge shape. */}
@@ -1330,19 +1389,24 @@ function TeacherDashboard() {
                 showThemeToggle={!isMockupAccount}
             />
 
-            <main id="main-content" tabIndex={-1} className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
+            <main id="main-content" tabIndex={-1} aria-label="분석 센터" className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
                 {/* Welcome Section */}
                 <div className="dashboard-welcome">
-                    <div className="mobile-section-stack" style={{ minWidth: 0 }}>
+                    <div className="dashboard-title-block mobile-section-stack" style={{ minWidth: 0 }}>
                         <h1 className="dashboard-title" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--foreground)' }}>
-                            {isMockupAccount ? "좋은아침이에요, 김하늘 선생님" : "분석 센터"}
+                            대시보드
                         </h1>
                         <p className="text-muted" style={{ fontSize: '1.1rem' }}>
-                            {isMockupAccount
-                                ? "완성된 예시 시험으로 OMR Maker의 통계와 분석을 편하게 둘러보세요."
-                                : "시험 현황과 학생 성취도를 한눈에 확인하고 다음 조치를 시작하세요."}
+                            시험 현황과 학생 성취도를 한눈에 확인하세요.
                         </p>
                     </div>
+                    <div className="dashboard-welcome-actions">
+                        {dashboardAllowsMutations && (
+                            <Link href="/create" className="dashboard-create-button">
+                                <FilePlus2 size={19} aria-hidden="true" />
+                                시험 만들기
+                            </Link>
+                        )}
                     {!isMockupAccount && <div className="dashboard-welcome-status">
                         <div
                             className="mobile-action-row"
@@ -1391,15 +1455,8 @@ function TeacherDashboard() {
                                 tone={dataHealthPillTone}
                             />
                         </div>}
-                        {dashboardAllowsMutations && <Link href="/create" className="dashboard-create-action" style={{
-                                padding: '0.55rem 1.1rem', background: 'var(--primary)',
-                                color: 'white', borderRadius: 'var(--radius-full)',
-                                fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem',
-                                boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
-                            }}>
-                                시험 출제하기
-                        </Link>}
                     </div>}
+                    </div>
                 </div>
 
                 {isDashboardDegraded && (
@@ -1794,6 +1851,7 @@ function TeacherDashboard() {
                 )}
 
             </main>
+            </div>
         </div>
     );
 }

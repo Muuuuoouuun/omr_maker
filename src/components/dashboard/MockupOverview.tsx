@@ -2,12 +2,12 @@
 
 import { useMemo, useRef } from "react";
 import {
-    Area,
-    AreaChart,
     Bar,
     BarChart,
     CartesianGrid,
     Cell,
+    ComposedChart,
+    Line,
     ResponsiveContainer,
     Tooltip,
     XAxis,
@@ -16,11 +16,11 @@ import {
 import {
     ArrowRight,
     CheckCircle2,
-    CircleAlert,
+    ChevronRight,
     Download,
     FileCheck2,
+    FileText,
     LineChart as LineChartIcon,
-    Target,
     TrendingUp,
     Users,
 } from "lucide-react";
@@ -214,12 +214,10 @@ export default function MockupOverview({
             onAction: () => onNavigateToExamAnalytics(lowestParticipationRow?.id || latestRow?.id || exams[0]?.id || ""),
         },
     ] as const;
-    const operationalMetrics = [metrics[2], metrics[3], metrics[1], metrics[0]] as const;
-
     return (
         <section className="mockup-overview" aria-label="데모 계정 대시보드 개요">
             <div className="mockup-metric-grid">
-                {operationalMetrics.map((metric, metricIndex) => {
+                {metrics.map((metric, metricIndex) => {
                     const Icon = metric.icon;
                     const countable = parseCountableValue(metric.value);
                     return (
@@ -262,65 +260,63 @@ export default function MockupOverview({
                 <article className="mockup-panel mockup-trend-panel">
                     <div className="mockup-panel-heading">
                         <div>
-                            <h2>시험별 평균 점수 추이</h2>
-                            <p>최근 7개 시험에서 성취도가 꾸준히 상승하고 있어요.</p>
+                            <h2>시험별 분석</h2>
+                            <p>시험별 평균 점수와 응시 학생 수를 함께 확인하세요.</p>
                         </div>
-                        <span className="mockup-legend"><i /> 평균 점수</span>
+                        <span className="mockup-chart-legends">
+                            <span className="mockup-legend"><i /> 평균 점수</span>
+                            <span className="mockup-legend is-bar"><i /> 응시 학생 수</span>
+                        </span>
                     </div>
-                    <div ref={trendChartRef} className="mockup-chart comet-chart-light" aria-label="최근 7개 시험 평균 점수 선 그래프">
+                    <div ref={trendChartRef} className="mockup-chart comet-chart-light" aria-label="시험별 평균 점수와 응시 학생 수 복합 그래프">
                         <ResponsiveContainer
                             width="100%"
                             height="100%"
                             minWidth={1}
                             minHeight={1}
-                            initialDimension={{ width: 860, height: 195 }}
+                            initialDimension={{ width: 860, height: 310 }}
                         >
-                            <AreaChart data={model.rows} margin={{ top: 18, right: 18, bottom: 4, left: -18 }}>
-                                <defs>
-                                    <linearGradient id="mockupScoreFill" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="0%" stopColor="#1769e0" stopOpacity={0.16} />
-                                        <stop offset="100%" stopColor="#1769e0" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
+                            <ComposedChart data={model.rows} margin={{ top: 24, right: 2, bottom: 4, left: -18 }}>
                                 <CartesianGrid stroke="#e8edf5" strokeDasharray="4 4" vertical={false} />
                                 <XAxis dataKey="shortTitle" axisLine={false} tickLine={false} tick={{ fill: "#718096", fontSize: 11, fontWeight: 700 }} dy={10} />
-                                <YAxis domain={[50, 100]} axisLine={false} tickLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                                <YAxis yAxisId="score" domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} unit="점" />
+                                <YAxis yAxisId="students" orientation="right" domain={[0, Math.max(totalStudents, 1)]} axisLine={false} tickLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} unit="명" />
                                 <Tooltip
                                     cursor={{ stroke: "#b9cdf0", strokeDasharray: "4 4" }}
-                                    formatter={(value) => [`${Number(value).toFixed(1)}점`, "평균 점수"]}
+                                    formatter={(value, name) => [name === "응시 학생 수" ? `${Number(value)}명` : `${Number(value).toFixed(1)}점`, name]}
                                     labelFormatter={(_, payload) => payload[0]?.payload?.title || ""}
                                     contentStyle={{ border: "1px solid #dfe7f1", borderRadius: 10, boxShadow: "0 10px 28px rgba(15,39,71,0.1)", fontSize: 12 }}
                                 />
-                                <Area type="monotone" dataKey="average" className="comet-target" stroke="#1769e0" strokeWidth={3} fill="url(#mockupScoreFill)" dot={{ r: 4, fill: "#fff", stroke: "#1769e0", strokeWidth: 3 }} activeDot={{ r: 6 }} isAnimationActive={false} />
-                            </AreaChart>
+                                <Bar yAxisId="students" dataKey="participants" name="응시 학생 수" fill="#d9dafe" maxBarSize={38} radius={[5, 5, 0, 0]} isAnimationActive={false} />
+                                <Line yAxisId="score" type="monotone" dataKey="average" name="평균 점수" className="comet-target" stroke="#4154f1" strokeWidth={3} dot={{ r: 4, fill: "#fff", stroke: "#4154f1", strokeWidth: 3 }} activeDot={{ r: 6 }} isAnimationActive={false} />
+                            </ComposedChart>
                         </ResponsiveContainer>
                     </div>
                 </article>
 
-                <article className="mockup-panel mockup-insights-panel">
+                <article className="mockup-panel mockup-quick-exams-panel">
                     <div className="mockup-panel-heading">
                         <div>
-                            <h2>오늘의 우선 조치</h2>
-                            <p>학습 영향이 큰 순서대로 바로 확인할 수 있어요.</p>
+                            <h2>최근 시험</h2>
+                            <p>최근 시험의 평균 점수를 빠르게 확인하세요.</p>
                         </div>
                     </div>
-                    <div className="mockup-insight-list">
-                        <button type="button" onClick={() => onNavigateToExamAnalytics("mock-calculus-limit")}>
-                            <span className="mockup-insight-icon is-mint"><Target size={18} /></span>
-                            <span><strong>함수의 극한 정답률 58%</strong><small>최근 3회 평균보다 9%p 낮아요 · 1순위 보완</small></span>
-                            <span className="mockup-insight-action">문항 분석 <ArrowRight size={15} /></span>
-                        </button>
-                        <button type="button" onClick={() => onNavigateToExamAnalytics("mock-final-comprehensive")}>
-                            <span className="mockup-insight-icon is-blue"><Users size={18} /></span>
-                            <span><strong>2학년 3반이 평균 대비 6.2점 낮아요</strong><small>반별 평균 점수 비교 기준 · 집중 지도 대상</small></span>
-                            <span className="mockup-insight-action">반 비교 <ArrowRight size={15} /></span>
-                        </button>
-                        <button type="button" onClick={() => onNavigateToExamAnalytics("mock-math-midterm")}>
-                            <span className="mockup-insight-icon is-coral"><CircleAlert size={18} /></span>
-                            <span><strong>서술형 12번 오답이 집중됐어요</strong><small>풀이 근거 누락 유형 · 재지도 권장</small></span>
-                            <span className="mockup-insight-action">오답 유형 <ArrowRight size={15} /></span>
-                        </button>
+                    <div className="mockup-quick-exam-list">
+                        {model.recentRows.slice(0, 2).map((row, index) => (
+                            <button type="button" key={row.id} onClick={() => onNavigateToExamAnalytics(row.id)}>
+                                <span className={`mockup-quick-exam-icon is-${index === 0 ? "pink" : "violet"}`} aria-hidden="true"><FileText size={21} /></span>
+                                <span className="mockup-quick-exam-copy">
+                                    <strong>{row.title}</strong>
+                                    <small>{row.participants}명 응시 · {row.archived ? "채점 완료" : "진행 중"}</small>
+                                </span>
+                                <strong className="mockup-quick-exam-score">{row.average.toFixed(1)}점</strong>
+                                <ChevronRight size={18} aria-hidden="true" />
+                            </button>
+                        ))}
                     </div>
+                    <button type="button" className="mockup-quick-exams-all" onClick={() => onNavigateToExamAnalytics(model.recentRows[0]?.id || exams[0]?.id || "")}>
+                        전체 리포트 보기 <ChevronRight size={18} aria-hidden="true" />
+                    </button>
                 </article>
             </div>
 
