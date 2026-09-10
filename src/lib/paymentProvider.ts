@@ -60,7 +60,19 @@ function paymentProvider(value: string | undefined): PaymentProviderConfig {
     return PAYMENT_PROVIDER_CONFIGS.find(provider => provider.key === normalized) || PAYMENT_PROVIDER_CONFIGS[0];
 }
 
-export function getPaymentProviderReadiness(env: Env = process.env): PaymentProviderReadiness {
+function publicPaymentEnvironment(): Env {
+    // Next.js only includes public values in the browser bundle when accessed
+    // through literal process.env properties; passing process.env loses them.
+    return {
+        NEXT_PUBLIC_PAYMENT_PROVIDER: process.env.NEXT_PUBLIC_PAYMENT_PROVIDER,
+        NEXT_PUBLIC_PAYMENT_PROVIDER_MODE: process.env.NEXT_PUBLIC_PAYMENT_PROVIDER_MODE,
+        NEXT_PUBLIC_TOSS_PAYMENTS_CLIENT_KEY: process.env.NEXT_PUBLIC_TOSS_PAYMENTS_CLIENT_KEY,
+        NEXT_PUBLIC_NAVER_PAY_CLIENT_ID: process.env.NEXT_PUBLIC_NAVER_PAY_CLIENT_ID,
+        NEXT_PUBLIC_KAKAO_PAY_PUBLIC_KEY: process.env.NEXT_PUBLIC_KAKAO_PAY_PUBLIC_KEY,
+    };
+}
+
+export function getPaymentProviderReadiness(env: Env = publicPaymentEnvironment()): PaymentProviderReadiness {
     const provider = paymentProvider(env.NEXT_PUBLIC_PAYMENT_PROVIDER);
     const mode = paymentMode(env.NEXT_PUBLIC_PAYMENT_PROVIDER_MODE);
     const publicKeyPresent = !!clean(env[provider.publicEnvKey]);
@@ -121,7 +133,7 @@ export function getPaymentProviderReadiness(env: Env = process.env): PaymentProv
     };
 }
 
-export function getPaymentProviderRolloutReadiness(env: Env = process.env): PaymentProviderRolloutReadiness[] {
+export function getPaymentProviderRolloutReadiness(env: Env = publicPaymentEnvironment()): PaymentProviderRolloutReadiness[] {
     const activeProvider = paymentProvider(env.NEXT_PUBLIC_PAYMENT_PROVIDER);
 
     return PAYMENT_PROVIDER_CONFIGS.map(provider => {

@@ -93,6 +93,7 @@ describe("teacher account service-role gateway", () => {
 });
 
 describe("provisioned teacher account gateway", () => {
+    const now = Date.parse("2026-08-08T00:00:00Z");
     const valid = {
         accountId: "teacher_0123456789abcdef",
         email: "teacher@example.com",
@@ -108,20 +109,20 @@ describe("provisioned teacher account gateway", () => {
 
     it("accepts only an exact getter-free provisioned login envelope", async () => {
         const client = clientWith({ omr_lookup_provisioned_teacher_login_v1: valid });
-        await expect(lookupProvisionedTeacherLogin(client, " Teacher@Example.com ")).resolves.toEqual(valid);
+        await expect(lookupProvisionedTeacherLogin(client, " Teacher@Example.com ", now)).resolves.toEqual(valid);
         expect(client.rpc).toHaveBeenCalledWith("omr_lookup_provisioned_teacher_login_v1", {
             p_identifier: "teacher@example.com",
         });
         expect(client.rpc).toHaveBeenCalledTimes(1);
         await expect(lookupProvisionedTeacherLogin(clientWith({
             omr_lookup_provisioned_teacher_login_v1: { ...valid, unexpected: true },
-        }), "teacher@example.com")).resolves.toBeNull();
+        }), "teacher@example.com", now)).resolves.toBeNull();
         await expect(lookupProvisionedTeacherLogin(clientWith({
             omr_lookup_provisioned_teacher_login_v1: [valid],
-        }), "teacher@example.com")).resolves.toBeNull();
+        }), "teacher@example.com", now)).resolves.toBeNull();
 
         const getter = Object.defineProperty({ ...valid }, "email", { enumerable: true, get: () => "attacker@example.com" });
-        await expect(lookupProvisionedTeacherLogin(clientWith({ omr_lookup_provisioned_teacher_login_v1: getter }), "x"))
+        await expect(lookupProvisionedTeacherLogin(clientWith({ omr_lookup_provisioned_teacher_login_v1: getter }), "x", now))
             .resolves.toBeNull();
         await expect(lookupProvisionedTeacherLogin(clientWith({
             omr_lookup_provisioned_teacher_login_v1: { ...valid, grantExpiresAt: "2026-08-01T00:00:00.000000Z" },

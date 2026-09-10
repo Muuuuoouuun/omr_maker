@@ -1,7 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPaymentProviderReadiness, getPaymentProviderRolloutReadiness, PAYMENT_PROVIDER_CONFIGS } from "./paymentProvider";
 
 describe("payment provider readiness", () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    it("uses the configured public mode and provider without an explicit environment", () => {
+        vi.stubEnv("NEXT_PUBLIC_PAYMENT_PROVIDER_MODE", "disabled");
+        vi.stubEnv("NEXT_PUBLIC_PAYMENT_PROVIDER", "naver");
+        vi.stubEnv("NEXT_PUBLIC_NAVER_PAY_CLIENT_ID", "naver-public");
+
+        expect(getPaymentProviderReadiness()).toMatchObject({
+            provider: { key: "naver" },
+            mode: "disabled",
+            canRecordLocalPlanChange: false,
+            canStartLiveCheckout: false,
+            publicKeyPresent: true,
+        });
+        expect(getPaymentProviderRolloutReadiness().find(row => row.active)).toMatchObject({
+            provider: { key: "naver" },
+            publicKeyPresent: true,
+        });
+    });
+
     it("defaults to Toss simulation without enabling live checkout", () => {
         expect(getPaymentProviderReadiness({})).toMatchObject({
             provider: { key: "toss", label: "토스페이먼츠", priority: 1 },

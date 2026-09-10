@@ -3,6 +3,9 @@ import { loadEnvConfig } from "@next/env";
 
 loadEnvConfig(process.cwd());
 
+// Exercise a non-default public setting in both SSR and the browser bundle.
+process.env.NEXT_PUBLIC_PAYMENT_PROVIDER_MODE = "disabled";
+
 const e2eTeacherSessionSecret = "omr-maker-e2e-teacher-session-secret-2026";
 process.env.TEACHER_SESSION_SECRET = e2eTeacherSessionSecret;
 const e2eExamInviteFixtures = JSON.stringify([{

@@ -8,6 +8,7 @@ import { studentAssignmentDraftStorageKey } from "../src/lib/studentAssignmentCl
 import { scopedExamDraftStorageKey } from "../src/app/create/createPageHelpers";
 import { stableWorkspaceHash } from "../src/lib/workspaceContext";
 import { mayRunMutatingE2E } from "./mutationSafety";
+import { createSignedStudentSessionCookie, STUDENT_SERVER_SESSION_COOKIE } from "../src/lib/studentServerSession";
 import type { Exam } from "../src/types/omr";
 
 const TEST_EXAM_ID = "e2e-korean-integrated-exam";
@@ -608,6 +609,44 @@ test.describe("Teacher and student full journey", () => {
         expect(storedCodes[TEST_STUDENT_ID]).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
     });
 
+    test("student logout removes the server cookie before clearing the browser identity", async ({ page, context, baseURL }) => {
+        await seedStudentRoster(page);
+        await page.goto("/?role=student");
+        await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
+        await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
+        await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await page.getByRole("dialog", { name: "시작 코드가 발급되었습니다" })
+            .getByRole("button", { name: "저장했어요, 계속" }).click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
+        await expect(page.getByRole("button", { name: "로그아웃", exact: true })).toBeVisible();
+
+        const cookie = createSignedStudentSessionCookie({
+            kind: "student",
+            accountId: `student_credential_${"a".repeat(32)}`,
+            studentId: TEST_STUDENT_ID,
+            organizationId: "default",
+            name: TEST_STUDENT_NAME,
+            identityType: "registered",
+            credentialGeneration: 1,
+        }, { STUDENT_SESSION_SECRET: "omr-maker-e2e-student-session-secret-2026" });
+        expect(cookie !== null).toBe(true);
+        await context.addCookies([{
+            name: STUDENT_SERVER_SESSION_COOKIE,
+            value: cookie!,
+            url: baseURL || "http://localhost:3003",
+            httpOnly: true,
+            sameSite: "Lax",
+        }]);
+
+        await page.getByRole("button", { name: "로그아웃", exact: true }).click();
+        await expect(page).toHaveURL(new URL("/", baseURL || "http://localhost:3003").href);
+        expect((await context.cookies()).filter(value => value.name === STUDENT_SERVER_SESSION_COOKIE).length).toBe(0);
+        expect(await page.evaluate(() => sessionStorage.getItem("omr_student_session"))).toBeNull();
+        await page.goto("/student/dashboard");
+        await expect(page.getByRole("heading", { name: "학생 로그인이 필요합니다" })).toBeVisible();
+    });
+
     test("requires lookup and start code before opening a same-name student account with history", async ({ page }) => {
         await seedSameNameRosterWithProtectedHistory(page);
         await page.goto("/?role=student");
@@ -738,7 +777,7 @@ test.describe("Teacher and student full journey", () => {
         await expectDurableConfirmedReceipt(page, remoteFixture.confirmedAttempt()!.id);
 
         await loginAsTeacher(page, "/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
         const dashboardActions = remoteFixture.activateTeacherDashboard();
         await expect(page.getByTestId("canonical-error-no-cache")).toBeVisible();
         remoteFixture.observedActionIds.clear();
@@ -772,7 +811,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByRole("heading", { name: new RegExp(`${TEST_STUDENT_NAME}.*성취도 추이`) })).toBeVisible({ timeout: 30_000 });
         const detailRow = page.getByRole("row").filter({ hasText: TEST_EXAM_TITLE });
         await expect(detailRow).toContainText("20 / 30");
-        await page.getByRole("button", { name: "시험 분석", exact: true }).click();
+        await page.getByRole("button", { name: "결과 분석", exact: true }).click();
         await expect(page.getByRole("combobox", { name: "시험", exact: true })).toHaveValue(TEST_EXAM_TITLE, { timeout: 30_000 });
         await expect(page.getByRole("region", { name: "시험 핵심 지표" })).toContainText("채점 응시", { timeout: 30_000 });
     });
@@ -1026,7 +1065,7 @@ test.describe("Teacher and student full journey", () => {
         await expectDurableConfirmedReceipt(page, remoteFixture.confirmedAttempt()!.id);
 
         await loginAsTeacher(page, "/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
         remoteFixture.activateTeacherDashboard();
         await expect(page.getByTestId("canonical-error-no-cache")).toBeVisible();
         await page.evaluate(() => {
@@ -1119,7 +1158,7 @@ test.describe("Teacher and student full journey", () => {
         });
         await expectDurableConfirmedReceipt(page, remoteFixture.confirmedAttempt()!.id);
         await loginAsTeacher(page, "/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
         // Compile the dashboard worker before resolving its exact action IDs.
         // The first identity-less render is intentionally discarded. The event
         // below exercises the canonical fixture after binding the exact teacher
@@ -1161,7 +1200,7 @@ test.describe("Teacher and student full journey", () => {
         expect(csvRows).toContainEqual(["시험별 통계"]);
         expect(csvRows).toContainEqual(["완료", TEST_EXAM_TITLE, formatKoreanDate(expectedExamDate), "1", "1", "100", "0", "N"]);
 
-        await page.getByRole("button", { name: "시험 분석", exact: true }).click();
+        await page.getByRole("button", { name: "결과 분석", exact: true }).click();
         await page.getByRole("tab", { name: "학생·반", exact: true }).click();
         for (const actionId of [dashboardActions.attempts, dashboardActions.analytics]) {
             await expect.poll(() => remoteFixture.observedActionIds.has(actionId), { timeout: 8_000 }).toBe(true);
@@ -1261,7 +1300,7 @@ test.describe("Teacher and student full journey", () => {
         await page.setViewportSize({ width: 820, height: 1180 });
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
         remoteFixture.activateTeacherDashboard();
         await expect(page.getByTestId("canonical-error-no-cache")).toBeVisible();
         await page.evaluate(() => {

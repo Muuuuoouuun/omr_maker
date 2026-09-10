@@ -441,6 +441,11 @@ describe("operator teacher provisioning CLI", () => {
 
     it("serializes two real competing operator processes without divergent credentials", async () => {
         const current = await fixture();
+        // Child processes use the real clock, unlike the in-process fixtures.
+        await writeFile(current.requestPath, `${JSON.stringify({
+            ...current.request,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        })}\n`, { mode: 0o600 });
         const script = join(process.cwd(), "scripts", "provision-initial-teacher.mjs");
         const env = { ...process.env };
         for (const name of [
