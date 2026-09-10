@@ -268,7 +268,12 @@ export default function MockupOverview({
                             <span className="mockup-legend is-bar"><i /> 응시 학생 수</span>
                         </span>
                     </div>
-                    <div ref={trendChartRef} className="mockup-chart comet-chart-light" aria-label="시험별 평균 점수와 응시 학생 수 복합 그래프">
+                    <div
+                        ref={trendChartRef}
+                        className="mockup-chart comet-chart-light"
+                        role="img"
+                        aria-label={`시험별 평균 점수와 응시 학생 수. ${model.rows.map(row => `${row.shortTitle} 평균 ${row.average.toFixed(1)}점, ${row.participants}명 응시`).join(". ")}`}
+                    >
                         <ResponsiveContainer
                             width="100%"
                             height="100%"
@@ -324,8 +329,8 @@ export default function MockupOverview({
                 <article className="mockup-panel mockup-exams-panel">
                     <div className="mockup-panel-heading">
                         <div>
-                            <h2>최근 시험</h2>
-                            <p>시험명을 선택하면 문항·반별 분석으로 이동합니다.</p>
+                            <h2>시험 운영 현황</h2>
+                            <p>참여율과 채점 상태를 확인하고 상세 분석으로 이동하세요.</p>
                         </div>
                     </div>
                     <div className="mockup-table-wrap">
@@ -353,7 +358,11 @@ export default function MockupOverview({
                             <p>전체 평균 <strong>{averageScore.toFixed(1)}점</strong></p>
                         </div>
                     </div>
-                    <div className="mockup-class-chart" aria-label="반별 평균 점수 막대 그래프">
+                    <div
+                        className="mockup-class-chart"
+                        role="img"
+                        aria-label={`반별 평균 점수. ${model.classRows.map(row => `${row.name} ${row.average.toFixed(1)}점`).join(". ")}`}
+                    >
                         <ResponsiveContainer
                             width="100%"
                             height="100%"

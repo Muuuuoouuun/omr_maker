@@ -1071,11 +1071,12 @@ export default function Home() {
                 overflow: "hidden",
               }}
             >
-              <div className="icon-wrap icon-wrap-secondary home-role-icon" style={{ marginBottom: "1.5rem" }}>
-                <GraduationCap size={48} strokeWidth={2} />
-              </div>
+              <span className="icon-wrap icon-wrap-secondary home-role-icon" style={{ marginBottom: "1.5rem" }}>
+                <GraduationCap size={48} strokeWidth={2} aria-hidden="true" />
+              </span>
 
-              <h2
+              <span
+                className="home-role-title"
                 style={{
                   fontSize: "1.5rem",
                   fontWeight: 800,
@@ -1085,10 +1086,11 @@ export default function Home() {
                 }}
               >
                 학생
-              </h2>
-              <p
+              </span>
+              <span
                 className="home-role-description"
                 style={{
+                  display: "block",
                   color: "var(--muted)",
                   fontSize: "0.95rem",
                   lineHeight: 1.65,
@@ -1096,9 +1098,9 @@ export default function Home() {
                 }}
               >
                 배정된 시험에 참여하고 결과를 확인하세요.
-              </p>
+              </span>
 
-              <div
+              <span
                 className="home-role-action"
                 style={{
                   display: "flex",
@@ -1112,7 +1114,7 @@ export default function Home() {
               >
                 시작하기
                 <ChevronRight aria-hidden="true" />
-              </div>
+              </span>
             </button>
 
             {/* Teacher */}
@@ -1133,11 +1135,12 @@ export default function Home() {
                 overflow: "hidden",
               }}
             >
-              <div className="icon-wrap icon-wrap-primary home-role-icon" style={{ marginBottom: "1.5rem" }}>
-                <FileBadge2 size={48} strokeWidth={2} />
-              </div>
+              <span className="icon-wrap icon-wrap-primary home-role-icon" style={{ marginBottom: "1.5rem" }}>
+                <FileBadge2 size={48} strokeWidth={2} aria-hidden="true" />
+              </span>
 
-              <h2
+              <span
+                className="home-role-title"
                 style={{
                   fontSize: "1.5rem",
                   fontWeight: 800,
@@ -1147,10 +1150,11 @@ export default function Home() {
                 }}
               >
                 교사
-              </h2>
-              <p
+              </span>
+              <span
                 className="home-role-description"
                 style={{
+                  display: "block",
                   color: "var(--muted)",
                   fontSize: "0.95rem",
                   lineHeight: 1.65,
@@ -1158,9 +1162,9 @@ export default function Home() {
                 }}
               >
                 시험을 출제하고 배포하며 학생 성취도를 분석하세요.
-              </p>
+              </span>
 
-              <div
+              <span
                 className="home-role-action"
                 style={{
                   display: "flex",
@@ -1174,7 +1178,7 @@ export default function Home() {
               >
                 대시보드
                 <ChevronRight aria-hidden="true" />
-              </div>
+              </span>
             </button>
           </div>
         )}

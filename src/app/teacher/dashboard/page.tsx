@@ -1252,6 +1252,20 @@ function TeacherDashboard() {
         && dataMode === "real"
         && isDashboardLoadDataEmpty(dashboardLoadState.data);
     const dashboardHasRenderableData = dashboardLoadState.state === "loaded_data" || isDashboardDegraded;
+    const dashboardHeading = {
+        overview: {
+            title: "대시보드",
+            subtitle: isMockupAccount ? "대시보드 요약" : "시험 현황과 학생 성취도를 한눈에 확인하세요.",
+        },
+        exam: {
+            title: "결과 분석",
+            subtitle: "시험별 점수, 참여율과 오답 유형을 확인하세요.",
+        },
+        student: {
+            title: "학생 성취도",
+            subtitle: "학생별 성장 흐름과 반복되는 약점을 확인하세요.",
+        },
+    }[activeTab];
 
     // Tab Navigation Component
     const renderTabs = () => isMockupAccount ? (
@@ -1394,10 +1408,10 @@ function TeacherDashboard() {
                 <div className="dashboard-welcome">
                     <div className="dashboard-title-block mobile-section-stack" style={{ minWidth: 0 }}>
                         <h1 className="dashboard-title" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--foreground)' }}>
-                            대시보드
+                            {dashboardHeading.title}
                         </h1>
                         <p className="text-muted" style={{ fontSize: '1.1rem' }}>
-                            시험 현황과 학생 성취도를 한눈에 확인하세요.
+                            {dashboardHeading.subtitle}
                         </p>
                     </div>
                     <div className="dashboard-welcome-actions">

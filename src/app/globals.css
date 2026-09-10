@@ -11275,7 +11275,8 @@ body:has(.create-workspace.is-resizing) {
   background: color-mix(in srgb, var(--primary) 7%, rgba(255, 255, 255, 0.76));
 }
 
-.home-page[data-home-role="none"] .home-role-card h2 {
+.home-page[data-home-role="none"] .home-role-title {
+  display: block;
   margin-bottom: 0.6rem !important;
   font-size: 2rem !important;
   letter-spacing: -0.025em !important;
@@ -11333,6 +11334,8 @@ body:has(.create-workspace.is-resizing) {
   display: flex;
   flex-direction: column;
   padding: 2.25rem 1.25rem 1.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-right: 1px solid var(--border);
   background: var(--surface);
   z-index: 55;
@@ -11528,18 +11531,26 @@ body:has(.create-workspace.is-resizing) {
 
 .mockup-metric-grid {
   gap: 1.25rem;
+  overflow: visible;
+  border: 0;
+  background: transparent;
 }
 
 .mockup-metric,
 .mockup-panel {
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-color: color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 1.25rem;
   box-shadow: 0 10px 28px rgba(47, 56, 88, 0.075);
 }
 
+.mockup-metric + .mockup-metric {
+  border-left: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+}
+
 .mockup-metric,
 .mockup-metric-action {
-  min-height: 11rem;
+  min-height: 12.25rem;
 }
 
 .mockup-metric-action {
@@ -11734,6 +11745,14 @@ body:has(.create-workspace.is-resizing) {
 }
 
 @media (min-width: 1121px) {
+  .mockup-dashboard-main .dashboard-title-block p {
+    margin-top: 1.1rem;
+  }
+
+  .mockup-dashboard-main .dashboard-welcome-actions {
+    margin-top: 4.25rem;
+  }
+
   .teacher-dashboard-shell > .dashboard-workspace > .teacher-header {
     display: none;
   }
@@ -11839,7 +11858,7 @@ body:has(.create-workspace.is-resizing) {
     height: 1.5rem;
   }
 
-  .home-page[data-home-role="none"] .home-role-card h2 {
+  .home-page[data-home-role="none"] .home-role-title {
     margin-bottom: 0.25rem !important;
     font-size: 1.15rem !important;
   }
@@ -11892,6 +11911,9 @@ body:has(.create-workspace.is-resizing) {
 
   .mockup-metric-action {
     padding: 0.85rem;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 0.55rem;
   }
 
   .mockup-metric-label {
