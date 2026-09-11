@@ -153,7 +153,7 @@ begin
                'omr_student_credential_batch_receipts',
                'omr_kakao_candidate_reviews',
                'omr_kakao_dispatch_logs',
-               'omr_kakao_reminder_legacy_quarantine'
+               'omr_kakao_reminder_legacy_quarantine', 'omr_remediation_cases'
            )
            and (
                not has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -272,6 +272,9 @@ begin
                '%s(%s)', routine.proname,
                pg_catalog.oidvectortypes(routine.proargtypes)
            ) not in (
+               'omr_remediation_allowed_v1(text, text, text, text, boolean)',
+               'omr_remediation_progress_v1(text)',
+               'omr_remediation_case_view_v1(omr_remediation_cases, text, text)',
                'omr_save_exam_plan_unlocked_v1(jsonb, jsonb)',
                'omr_save_roster_plan_unlocked_v1(text, jsonb, jsonb, jsonb, jsonb)',
                'omr_save_roster_unlocked_v1(text, jsonb, jsonb, jsonb, jsonb)',

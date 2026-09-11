@@ -673,7 +673,8 @@ begin
         ('omr_teacher_notification_states'), ('omr_operational_job_status'),
         ('omr_pilot_plan_grants'), ('omr_student_credential_epochs'),
         ('omr_student_credential_batch_receipts'),
-        ('omr_kakao_reminder_legacy_quarantine')
+        ('omr_kakao_reminder_legacy_quarantine'),
+        ('omr_remediation_cases')
     ), actual(table_name, row_security, force_row_security) as (
         select relation.relname::text, relation.relrowsecurity, relation.relforcerowsecurity
           from pg_catalog.pg_class relation
@@ -696,6 +697,8 @@ begin
              where role_row.rolname = 'service_role' and role_row.rolbypassrls
         )
         and pg_catalog.has_schema_privilege('service_role', 'public', 'USAGE')
+        and pg_catalog.has_table_privilege('service_role', 'public.omr_remediation_cases', 'SELECT')
+        and not pg_catalog.has_table_privilege('service_role', 'public.omr_remediation_cases', 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
         and not exists (
             select 1
               from pg_catalog.pg_class relation
@@ -713,7 +716,7 @@ begin
                    'omr_remote_assets', 'omr_remote_asset_upload_intents',
                    'omr_remote_asset_cleanup_queue', 'omr_plan_usage',
                    'omr_plan_usage_reservations', 'omr_kakao_candidate_reviews',
-                   'omr_kakao_dispatch_logs', 'omr_kakao_reminder_legacy_quarantine'
+                   'omr_kakao_dispatch_logs', 'omr_kakao_reminder_legacy_quarantine', 'omr_remediation_cases'
                )
                and (
                    not pg_catalog.has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -3340,5 +3343,18 @@ begin
         execute pg_catalog.format('grant execute on function public.%s to service_role',signature);
     end loop;
 end $$;
+
+-- Remediation records and helpers stay server-only, including after rollback.
+alter table public.omr_remediation_cases enable row level security;
+alter table public.omr_remediation_cases force row level security;
+revoke all on table public.omr_remediation_cases from public,anon,authenticated,service_role;
+grant select on table public.omr_remediation_cases to service_role;
+revoke all on function public.omr_remediation_allowed_v1(text,text,text,text,boolean) from public,anon,authenticated,service_role;
+revoke all on function public.omr_remediation_progress_v1(text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_remediation_case_view_v1(public.omr_remediation_cases,text,text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_manage_remediation_v1(text,text,bigint,text,text,jsonb) from public,anon,authenticated;
+revoke all on function public.omr_student_remediation_v1(text,text) from public,anon,authenticated;
+grant execute on function public.omr_manage_remediation_v1(text,text,bigint,text,text,jsonb) to service_role;
+grant execute on function public.omr_student_remediation_v1(text,text) to service_role;
 
 commit;

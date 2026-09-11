@@ -444,6 +444,7 @@ async function runSqlMatrix(
         variables: ["canonical_evidence_contention_verified=1"],
     });
     psqlFile("supabase/kakao-reminder-entitlement-assertions.sql");
+    psqlFile("supabase/remediation-assertions.sql");
     psqlFile("supabase/kakao-reminder-entitlement-concurrency-lock.sql");
     psqlFile("supabase/individual-student-assignments-assertions.sql");
     psqlFile("supabase/teacher-force-finish-compact-assertions.sql");
@@ -459,6 +460,7 @@ async function runSqlMatrix(
         "set omr.rollback_confirm = 'restore-browser-access'",
     ]);
     psqlFile("supabase/live-test-rollback-assertions.sql");
+    psqlFile("supabase/remediation-assertions.sql");
     releaseProofReports.push(releaseProofReport(psqlFile("supabase/initial-operations-release-proof-assertions.sql", [], {
         capture: true,
         variables: ["release_proof_phase=rollback_asserted"],
@@ -472,6 +474,7 @@ async function runSqlMatrix(
         variables: ["release_proof_phase=reapplied"],
     })));
     psqlFile("supabase/live-test-assertions.sql");
+    psqlFile("supabase/remediation-assertions.sql");
     psqlFile("supabase/roster-snapshot-cas-assertions.sql");
     psqlFile("supabase/teacher-notification-summary-assertions.sql");
     psqlFile("supabase/teacher-notification-state-assertions.sql");

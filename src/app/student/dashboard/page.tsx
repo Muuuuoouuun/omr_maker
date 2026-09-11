@@ -787,6 +787,7 @@ export default function StudentDashboard() {
                     </p>
                 </div>
 
+                {user?.identityType === "registered" && <Link href="/student/remediation" className="btn btn-secondary" style={{ marginBottom: "1rem" }}>선생님이 배정한 오답 보강 →</Link>}
                 {/* Dashboard Grid */}
                 <div className={`bento-grid student-dashboard-grid student-dashboard-task-flow${stats.completedCount === 0 ? " is-zero-completions" : ""}`}>
                     {/* Todo List (Main Focus) */}

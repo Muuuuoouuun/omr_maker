@@ -271,6 +271,9 @@ export default function TeacherHeader({
                                             <Activity size={17} aria-hidden="true" /> 실시간 모니터링
                                         </Link>
                                     )}
+                                    <Link href="/teacher/remediation" role="menuitem" onClick={() => closeAccountMenu()} style={menuLinkStyle}>
+                                        <Activity size={17} aria-hidden="true" /> 오답 보강 관리
+                                    </Link>
                                     <Link href="/teacher/settings" role="menuitem" onClick={() => closeAccountMenu()} style={menuLinkStyle}>
                                         <Settings size={17} aria-hidden="true" /> 설정
                                     </Link>

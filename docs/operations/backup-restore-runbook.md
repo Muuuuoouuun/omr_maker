@@ -1,6 +1,6 @@
 # DB·Private Storage 백업/복원 훈련 Runbook
 
-이 절차는 운영 백업을 별도 Supabase staging 프로젝트에 복원한 뒤 DB canonical 43개 테이블의 정확한 행 수와 모든 private Storage object 본문의 크기·SHA-256을 비교합니다. canonical manifest는 `schema.sql baseline + sorted migrations = final schema` 규칙으로 계산합니다. 프로덕션 프로젝트로의 restore verify는 코드에서 거부됩니다.
+이 절차는 운영 백업을 별도 Supabase staging 프로젝트에 복원한 뒤 DB canonical 44개 테이블의 정확한 행 수와 모든 private Storage object 본문의 크기·SHA-256을 비교합니다. canonical manifest는 `schema.sql baseline + sorted migrations = final schema` 규칙으로 계산합니다. 프로덕션 프로젝트로의 restore verify는 코드에서 거부됩니다.
 
 ## 목표와 책임
 

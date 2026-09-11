@@ -127,6 +127,18 @@ grant all on all tables in schema public to service_role;
 grant all on all sequences in schema public to service_role;
 grant all on all functions in schema public to service_role;
 
+-- Remediation records and helpers stay server-only, including after rollback.
+alter table public.omr_remediation_cases force row level security;
+revoke all on table public.omr_remediation_cases from public,anon,authenticated,service_role;
+grant select on table public.omr_remediation_cases to service_role;
+revoke all on function public.omr_remediation_allowed_v1(text,text,text,text,boolean) from public,anon,authenticated,service_role;
+revoke all on function public.omr_remediation_progress_v1(text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_remediation_case_view_v1(public.omr_remediation_cases,text,text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_manage_remediation_v1(text,text,bigint,text,text,jsonb) from public,anon,authenticated;
+revoke all on function public.omr_student_remediation_v1(text,text) from public,anon,authenticated;
+grant execute on function public.omr_manage_remediation_v1(text,text,bigint,text,text,jsonb) to service_role;
+grant execute on function public.omr_student_remediation_v1(text,text) to service_role;
+
 -- CRITICAL: the blanket grants above are broader than the alpha baseline ever
 -- was. schema.sql and the migrations explicitly revoked a set of tables and
 -- SECURITY DEFINER RPCs from browser roles even while everything else was wide
