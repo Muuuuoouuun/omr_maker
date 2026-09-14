@@ -361,7 +361,7 @@ describe("production server-only database boundary", () => {
         expect(profile).toMatch(/grant all on all functions in schema public to service_role;/i);
 
         const discoveredTables = [...CANONICAL_TABLES];
-        expect(discoveredTables).toHaveLength(44);
+        expect(discoveredTables).toHaveLength(47);
         expect(discoveredTables).toEqual([...discoveredTables].sort());
         expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
         for (const table of CANONICAL_TABLES) {

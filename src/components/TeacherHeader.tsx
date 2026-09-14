@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Activity, ChevronDown, CreditCard, Gauge, Search, Settings, UserRound } from "lucide-react";
+import { Activity, Bell, ChevronDown, CreditCard, Gauge, Search, Settings, UserRound } from "lucide-react";
 import BrandLogo from "./BrandLogo";
 import ThemeToggle from "./ThemeToggle";
 import GlobalSearch from "./GlobalSearch";
@@ -273,6 +273,9 @@ export default function TeacherHeader({
                                     )}
                                     <Link href="/teacher/remediation" role="menuitem" onClick={() => closeAccountMenu()} style={menuLinkStyle}>
                                         <Activity size={17} aria-hidden="true" /> 오답 보강 관리
+                                    </Link>
+                                    <Link href="/teacher/reminders" role="menuitem" onClick={() => closeAccountMenu()} style={menuLinkStyle}>
+                                        <Bell size={17} aria-hidden="true" /> 학습 알림
                                     </Link>
                                     <Link href="/teacher/settings" role="menuitem" onClick={() => closeAccountMenu()} style={menuLinkStyle}>
                                         <Settings size={17} aria-hidden="true" /> 설정

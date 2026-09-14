@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
 import StatusPill from "@/components/dashboard/StatusPill";
 import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload, LogOut, Database, RefreshCw, AlertTriangle, CloudOff } from "lucide-react";
@@ -169,9 +170,9 @@ const NOTIFICATION_STATUS_ITEMS: readonly CapabilityStatusItem[] = [
     {
         key: "kakao-delivery",
         label: "카카오 실제 발송",
-        detail: "현재는 후보 검토와 대기 기록까지만 지원합니다. 카카오 메시지 provider가 연결되기 전에는 실제 메시지를 보내지 않습니다.",
+        detail: "학습 알림 화면에서 솔라피 연결 상태, 학생 연락처, 시험별 마감 알림을 관리합니다.",
         tone: "warning",
-        statusLabel: "연동 전",
+        statusLabel: "학습 알림에서 설정",
     },
     {
         key: "browser-push",
@@ -869,8 +870,9 @@ function NotificationsSection() {
         <Card title="알림 상태" desc={`${PRIMARY_NOTIFICATION_CHANNEL.label} 후보 계산과 실제 발송 연동 상태를 구분해 보여줍니다.`}>
             <CapabilityStatusList items={NOTIFICATION_STATUS_ITEMS} />
             <p style={{ marginTop: '1rem', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
-                이 화면은 현재 기능 상태를 안내합니다. 발송 provider가 연결되기 전에는 실제 전송 설정을 활성화할 수 없습니다.
+                마감 전·미제출 알림은 학습 알림 화면에서 관리합니다. 실제 전송은 서버의 솔라피 연결과 발송 모드 설정에 따릅니다.
             </p>
+            <Link href="/teacher/reminders" className="btn btn-primary">학습 알림 설정</Link>
         </Card>
     );
 }

@@ -1,19 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const controls = vi.hoisted(() => ({ sameOrigin: true, session: { memberRole: "teacher" } as { memberRole: string } | null,
-    student: { status: "active", identity: { organizationId: "signed-org", studentId: "signed-student", identityType: "registered" } }, rpc: vi.fn() }));
+    student: { status: "active", identity: { organizationId: "signed-org", studentId: "signed-student", identityType: "registered" } }, rpc: vi.fn(), retake: vi.fn() }));
 vi.mock("next/headers", () => ({ headers: async () => new Headers(), cookies: async () => ({ get: () => ({ value: "signed" }) }) }));
 vi.mock("@/lib/serverActionSecurity", () => ({ isSameOriginServerActionRequest: () => controls.sameOrigin }));
 vi.mock("@/lib/teacherServerSession", () => ({ resolveAuthorizedTeacherSessionCookie: async () => controls.session, TEACHER_SERVER_SESSION_COOKIE: "teacher" }));
 vi.mock("@/lib/studentServerSession", () => ({ resolveAuthorizedStudentSessionCookie: async () => controls.student, STUDENT_SERVER_SESSION_COOKIE: "student" }));
 vi.mock("@/lib/supabaseServerAdmin", () => ({ getSupabaseServerConfigFromEnv: () => ({ url: "https://example.test", serviceRoleKey: "test" }), createSupabaseAdminClient: () => ({ rpc: controls.rpc }) }));
 vi.mock("@/lib/workspaceContext", () => ({ workspaceContextFromTeacherSession: () => ({ organizationId: "signed-org", sessionAuthority: "account", accountId: "signed-account", accountSessionGeneration: 7, actorUserId: "signed-actor" }) }));
-import { loadStudentRemediation, manageRemediation } from "@/app/actions/remediation";
+vi.mock("@/lib/remediationRetake.server", () => ({ resolveRemediationRetakeWithGateway: controls.retake }));
+import { loadStudentRemediation, manageRemediation, resolveStudentRemediationRetake } from "@/app/actions/remediation";
 
 const assign = { op: "assign" as const, sourceAttemptIds: ["source"], dueAt: "2026-09-12T14:59:00.000Z" };
 describe("remediation server boundaries", () => {
     beforeEach(() => { controls.sameOrigin = true; controls.session = { memberRole: "teacher" }; controls.student.status = "active";
-        controls.student.identity.identityType = "registered"; controls.rpc.mockReset(); controls.rpc.mockResolvedValue({ data: { status: "saved" }, error: null }); });
+        controls.student.identity.identityType = "registered"; controls.rpc.mockReset(); controls.retake.mockReset(); controls.rpc.mockResolvedValue({ data: { status: "saved" }, error: null }); });
     it("denies stale sessions, viewers, assistant writes and foreign origins before RPC", async () => {
         for (const session of [null, { memberRole: "viewer" }, { memberRole: "assistant" }]) {
             controls.session = session; expect((await manageRemediation(assign)).status).toBe("error");
@@ -51,5 +52,24 @@ describe("remediation server boundaries", () => {
         controls.student.status = "active"; controls.student.identity.identityType = "guest";
         expect((await loadStudentRemediation()).status).toBe("error");
         expect(controls.rpc).not.toHaveBeenCalled();
+    });
+    it("validates the retake action input, origin, and live cookie before delegation", async () => {
+        for (const id of ["", " source ", "x".repeat(257), null]) {
+            expect((await resolveStudentRemediationRetake(id as string)).status).toBe("blocked");
+        }
+        controls.sameOrigin = false;
+        expect(await resolveStudentRemediationRetake("source")).toEqual({ status: "blocked", code: "unauthorized" });
+        controls.sameOrigin = true; controls.student.status = "unauthenticated";
+        expect(await resolveStudentRemediationRetake("source")).toEqual({ status: "blocked", code: "unauthorized" });
+        controls.student.status = "service_unavailable";
+        expect(await resolveStudentRemediationRetake("source")).toEqual({ status: "blocked", code: "service_unavailable" });
+        expect(controls.retake).not.toHaveBeenCalled();
+    });
+    it("delegates only the signed identity, returning no local-authority fallback", async () => {
+        controls.retake.mockResolvedValue({ status: "blocked", code: "changed" });
+        expect(await resolveStudentRemediationRetake("source")).toEqual({ status: "blocked", code: "changed" });
+        expect(controls.retake).toHaveBeenCalledWith(expect.anything(), controls.student.identity, "source");
+        controls.retake.mockRejectedValue(new Error("service-role-secret"));
+        expect(await resolveStudentRemediationRetake("source")).toEqual({ status: "blocked", code: "service_unavailable" });
     });
 });

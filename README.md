@@ -52,6 +52,15 @@ Production account, security, privacy, and usability rollout items are tracked i
 
 Current service direction and prioritization are tracked in `docs/service-direction.md`. The short version: stabilize PDF-region question metadata, tablet handwriting, 5-choice OMR solving, wrong-question/type analytics, and Kakao-first notification planning before advanced cropped question-image DB and payment integrations.
 
+## SOLAPI learning reminders
+
+Open `/teacher/reminders` (account menu → 학습 알림) to register student/guardian
+phone numbers, enable exam deadline reminders, preview recipients, and inspect
+dispatch records. The default is `OMR_REMINDER_MODE=dry_run`; no messages are sent.
+Apply `supabase/migrations/202609100001_solapi_reminders.sql` after the existing
+migrations. See [the setup guide](docs/solapi-reminders.md) for server credentials,
+Kakao templates, SMS fallback, scheduling, and activation.
+
 ## Verification
 
 ```bash

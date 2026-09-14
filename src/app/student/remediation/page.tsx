@@ -5,6 +5,7 @@ import Link from "next/link";
 import { loadStudentRemediation } from "@/app/actions/remediation";
 import { REMEDIATION_STATE_LABELS, type StudentRemediationCase } from "@/lib/remediation";
 import styles from "../../teacher/remediation/remediation.module.css";
+import RetakeEntry from "./RetakeEntry";
 
 export default function StudentRemediationPage() {
     const [cases, setCases] = useState<StudentRemediationCase[] | null>(null);
@@ -34,9 +35,11 @@ export default function StudentRemediationPage() {
         {cases && <div className={styles.grid}>{cases.map(item => <article className={styles.card} key={item.sourceAttemptId}>
             <span className={styles.badge} data-state={item.state}>{REMEDIATION_STATE_LABELS[item.state]}</span><h2>{item.examTitle}</h2>
             <p>수정한 오답 {item.correctedCount} / {item.targetCount}문항<br />기한 {new Date(item.dueAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</p>
+            {["assigned", "overdue", "recheck"].includes(item.state) && <RetakeEntry sourceAttemptId={item.sourceAttemptId} />}
             {item.state === "handoff" || item.state === "paused" ? <p>선생님에게 보강 진행 여부를 확인해주세요.</p>
-                : <Link className={styles.link} href={`/student/review/${encodeURIComponent(item.sourceAttemptId)}`}>{item.state === "confirmed" || item.state === "awaiting_review" ? "수정 결과 보기" : "오답 확인하고 다시 풀기"} →</Link>}
+                : <Link className={styles.link} href={`/student/review/${encodeURIComponent(item.sourceAttemptId)}`}>원시험 오답 복습 →</Link>}
+            {item.state === "awaiting_review" && <p>오답 수정이 끝났습니다. 선생님에게 풀이를 설명하고 확인을 받아주세요.</p>}
         </article>)}</div>}
-        <p>보강 목록은 최대 50건입니다. 다시 풀기가 열리지 않으면 선생님에게 시험 공개·배정 상태를 확인해주세요.</p>
+        <p>보강 목록은 최대 50건입니다. 다시 풀기는 선생님이 배정한 개별 재시험으로 연결됩니다. 보강 기한과 시험 응시 기간은 서로 다릅니다.</p>
     </main>;
 }

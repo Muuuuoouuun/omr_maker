@@ -56,8 +56,8 @@ describe("premium feature readiness", () => {
         });
         expect(buildBillingFeatureView(entitlement({ key: "reminders", label: "알림" }))).toMatchObject({
             status: "partial",
-            displayLabel: "카카오 발송 후보 · 큐",
-            displayDescription: expect.stringContaining("실제 카카오 메시지는 아직 발송하지 않습니다"),
+            displayLabel: "카카오 후보 · 학습 알림",
+            displayDescription: expect.stringContaining("실제 발송에는 서버 연결과 승인된 템플릿 설정이 필요합니다"),
         });
     });
 

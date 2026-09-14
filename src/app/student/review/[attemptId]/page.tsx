@@ -1510,10 +1510,33 @@ export default function ReviewPage() {
                         )}
 
                         {retakeRecovery && (
-                            <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '160ms' }}>
-                                <div className="student-review-section-title">
-                                    <TrendingUp size={16} />
-                                    <strong>재시험 회복</strong>
+                            <section
+                                className="bento-card student-review-side-card kpi-spring"
+                                style={{
+                                    animationDelay: '160ms',
+                                    ...(retakeRecovery.recoveredCount > 0 ? {
+                                        background: 'linear-gradient(135deg, rgba(34, 197, 94, 0.07) 0%, rgba(99, 102, 241, 0.05) 100%)',
+                                        borderColor: 'rgba(34, 197, 94, 0.35)',
+                                    } : {})
+                                }}
+                            >
+                                <div className="student-review-section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <TrendingUp size={16} color={retakeRecovery.recoveredCount > 0 ? 'var(--success)' : undefined} />
+                                        <strong>재시험 회복</strong>
+                                    </div>
+                                    {sourceScoreSummary && (scoreSummary.scorePercent ?? 0) > (sourceScoreSummary.scorePercent ?? 0) && (
+                                        <span style={{
+                                            fontSize: '0.76rem',
+                                            padding: '0.15rem 0.5rem',
+                                            borderRadius: '9999px',
+                                            background: 'var(--success-soft, rgba(34, 197, 94, 0.15))',
+                                            color: 'var(--success-text, #15803d)',
+                                            fontWeight: 700,
+                                        }}>
+                                            +{((scoreSummary.scorePercent ?? 0) - (sourceScoreSummary.scorePercent ?? 0))}%p 회복 성공! 🚀
+                                        </span>
+                                    )}
                                 </div>
                                 <p>
                                     {retakeRecovery.targetCount > 0

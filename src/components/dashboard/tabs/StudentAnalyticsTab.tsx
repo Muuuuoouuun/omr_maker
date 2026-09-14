@@ -1,14 +1,93 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import useCometReveal from "@/components/dashboard/useCometReveal";
 import StatusPill from "@/components/dashboard/StatusPill";
 import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-    ResponsiveContainer, Legend
+    ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
+    ResponsiveContainer, Legend, ReferenceLine
 } from 'recharts';
+
+interface StudentTrendTooltipProps {
+    active?: boolean;
+    payload?: Array<{
+        name?: string;
+        value?: number;
+        payload?: {
+            date: string;
+            examTitle: string;
+            studentScore: number;
+            avgScore: number;
+        };
+    }>;
+}
+
+function StudentTrendTooltip({ active, payload }: StudentTrendTooltipProps) {
+    if (!active || !payload || !payload.length) return null;
+    const data = payload[0]?.payload;
+    if (!data) return null;
+
+    const diff = data.studentScore - data.avgScore;
+    const isAbove = diff >= 0;
+
+    return (
+        <div style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: '10px',
+            padding: '0.75rem 0.9rem',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.12)',
+            minWidth: '190px',
+            fontSize: '0.85rem',
+            pointerEvents: 'none',
+        }}>
+            <div style={{ fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.15rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px' }}>
+                {data.examTitle}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginBottom: '0.55rem' }}>
+                {data.date}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--foreground)', fontWeight: 600 }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--primary)', flexShrink: 0 }} />
+                        내 점수
+                    </span>
+                    <strong style={{ color: 'var(--primary)', fontWeight: 800, fontSize: '0.95rem' }}>
+                        {data.studentScore}점
+                    </strong>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--muted)' }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--warning)', flexShrink: 0 }} />
+                        선택 범위 평균
+                    </span>
+                    <span style={{ color: 'var(--muted)', fontWeight: 700 }}>
+                        {data.avgScore}점
+                    </span>
+                </div>
+                <div style={{
+                    marginTop: '0.35rem',
+                    paddingTop: '0.35rem',
+                    borderTop: '1px dashed var(--border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '0.76rem',
+                }}>
+                    <span style={{ color: 'var(--muted)' }}>평균 대비</span>
+                    <span style={{
+                        fontWeight: 800,
+                        color: isAbove ? 'var(--success)' : 'var(--grade-red)',
+                    }}>
+                        {isAbove ? `+${diff}점 (상회)` : `${diff}점 (하회)`}
+                    </span>
+                </div>
+            </div>
+        </div>
+    );
+}
 import { Bell, Lock, MapPin, Target, TrendingUp } from "lucide-react";
 import { PremiumActionLink, PremiumFeatureCard } from "@/components/PremiumFeatureGate";
 import { formatKoreanDate } from "@/lib/pure";
@@ -316,13 +395,25 @@ export default function StudentAnalyticsTab({
             });
     }, [studentAttempts, excludedExamIds, attemptScoreById, averageScoreByExamId]);
 
-    // 시안 B — comet head leads the "내 점수" line draw (soft-light variant).
-    const trendChartRef = useRef<HTMLDivElement | null>(null);
-    useCometReveal(trendChartRef, {
-        color: "var(--primary)",
-        replayKey: trendData,
-        enabled: studentGrowthReportsEnabled && trendData.length > 1,
-    });
+    const studentTrendSummary = useMemo(() => {
+        if (!trendData || trendData.length === 0) return null;
+        const scores = trendData.map(d => d.studentScore);
+        const latest = trendData[trendData.length - 1];
+        const prev = trendData.length >= 2 ? trendData[trendData.length - 2] : null;
+        const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+        const max = Math.max(...scores);
+        const delta = prev ? latest.studentScore - prev.studentScore : null;
+        const avgDiff = latest.studentScore - latest.avgScore;
+
+        return {
+            latestScore: latest.studentScore,
+            averageScore: avg,
+            maxScore: max,
+            delta,
+            avgDiff,
+            examCount: trendData.length,
+        };
+    }, [trendData]);
 
     const detailedAnalysis = useMemo(() => {
         const getScoreRate = (candidate: Attempt) => (
@@ -577,7 +668,7 @@ export default function StudentAnalyticsTab({
                 />
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem', alignItems: 'start' }}>
                 {/* Left side: Chart */}
                 <div className="card chart-card-enter" style={{ ...CARD_SURFACE_STYLE, padding: '1.5rem', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                     <div style={{ marginBottom: '1.5rem' }}>
@@ -598,25 +689,137 @@ export default function StudentAnalyticsTab({
                         />
                     )}
 
-                    <div ref={trendChartRef} className="comet-chart-light" style={{ flex: 1, minHeight: studentGrowthReportsEnabled ? '350px' : 0, width: '100%', minWidth: 0, position: 'relative' }}>
+                    {studentGrowthReportsEnabled && studentTrendSummary && (
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(105px, 1fr))',
+                            gap: '0.65rem',
+                            marginBottom: '1rem',
+                            padding: '0.75rem 0.9rem',
+                            background: 'rgba(99, 102, 241, 0.04)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 'var(--radius-md)',
+                        }}>
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>최신 원시험</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem' }}>
+                                    <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--foreground)' }}>
+                                        {studentTrendSummary.latestScore}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
+                                    {studentTrendSummary.delta !== null && (
+                                        <span style={{
+                                            fontSize: '0.72rem',
+                                            fontWeight: 800,
+                                            color: studentTrendSummary.delta >= 0 ? 'var(--success)' : 'var(--grade-red)',
+                                        }}>
+                                            {studentTrendSummary.delta >= 0 ? `▲+${studentTrendSummary.delta}` : `▼${studentTrendSummary.delta}`}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>원시험 평균</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
+                                    <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--primary)' }}>
+                                        {studentTrendSummary.averageScore}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>최고 점수</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
+                                    <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--foreground)' }}>
+                                        {studentTrendSummary.maxScore}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>반 평균 대비</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
+                                    <span style={{
+                                        fontSize: '1.2rem',
+                                        fontWeight: 900,
+                                        color: studentTrendSummary.avgDiff >= 0 ? 'var(--success)' : 'var(--grade-red)',
+                                    }}>
+                                        {studentTrendSummary.avgDiff >= 0 ? `+${studentTrendSummary.avgDiff}` : studentTrendSummary.avgDiff}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="comet-chart-light" style={{ height: studentGrowthReportsEnabled ? '280px' : 0, width: '100%', minWidth: 0, position: 'relative' }}>
                         <div className="chart-texture is-light" aria-hidden="true" />
                         {studentGrowthReportsEnabled && trendData.length > 0 ? (
                             <ResponsiveContainer
                                 width="100%"
                                 height="100%"
                                 minWidth={0}
-                                minHeight={350}
-                                initialDimension={{ width: 760, height: 350 }}
+                                minHeight={280}
+                                initialDimension={{ width: 760, height: 280 }}
                             >
-                                <LineChart data={trendData} margin={{ top: 20, right: 30, left: 0, bottom: 20 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
-                                    <XAxis dataKey="examTitle" tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
-                                    <YAxis domain={[0, 100]} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-                                    <RechartsTooltip
-                                        contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', background: 'var(--background)' }}
-                                        labelStyle={{ fontWeight: 'bold', color: 'var(--text)', marginBottom: '8px' }}
+                                <ComposedChart
+                                    key={`${activeStudentKey}-${trendData.length}`}
+                                    data={trendData}
+                                    margin={{ top: 15, right: 25, left: -10, bottom: 15 }}
+                                >
+                                    <defs>
+                                        <linearGradient id="studentScoreGlow" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.22} />
+                                            <stop offset="95%" stopColor="var(--primary)" stopOpacity={0.0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" opacity={0.7} />
+                                    <XAxis
+                                        dataKey="examTitle"
+                                        tick={{ fill: 'var(--muted)', fontSize: 11, fontWeight: 600 }}
+                                        axisLine={{ stroke: 'var(--border)' }}
+                                        tickLine={false}
+                                        dy={8}
                                     />
-                                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                                    <YAxis
+                                        domain={[0, 100]}
+                                        ticks={[0, 25, 50, 75, 100]}
+                                        tick={{ fill: 'var(--muted)', fontSize: 11 }}
+                                        axisLine={false}
+                                        tickLine={false}
+                                        tickFormatter={(v) => `${v}점`}
+                                        dx={-4}
+                                    />
+                                    <ReferenceLine y={100} stroke="var(--border)" strokeDasharray="2 4" />
+                                    <RechartsTooltip
+                                        cursor={{ stroke: 'var(--primary)', strokeWidth: 1.5, strokeDasharray: '4 4', strokeOpacity: 0.4 }}
+                                        content={<StudentTrendTooltip />}
+                                        animationDuration={150}
+                                    />
+                                    <Legend
+                                        verticalAlign="bottom"
+                                        align="center"
+                                        wrapperStyle={{ paddingTop: '12px', fontSize: '0.8rem' }}
+                                        formatter={(value) => (
+                                            <span style={{ color: 'var(--foreground)', fontWeight: 600, marginRight: '8px' }}>
+                                                {value}
+                                            </span>
+                                        )}
+                                    />
+                                    <Area
+                                        type="monotone"
+                                        dataKey="studentScore"
+                                        stroke="none"
+                                        fill="url(#studentScoreGlow)"
+                                        isAnimationActive={true}
+                                        animationDuration={850}
+                                        animationEasing="ease-out"
+                                        legendType="none"
+                                        tooltipType="none"
+                                    />
                                     <Line
                                         name="내 점수"
                                         type="monotone"
@@ -624,9 +827,11 @@ export default function StudentAnalyticsTab({
                                         className="comet-target"
                                         stroke="var(--primary)"
                                         strokeWidth={3}
-                                        dot={{ r: 5, strokeWidth: 2, fill: 'var(--background)' }}
-                                        activeDot={{ r: 7 }}
-                                        isAnimationActive={false}
+                                        dot={{ r: 4.5, strokeWidth: 2, fill: 'var(--background)' }}
+                                        activeDot={{ r: 6.5, strokeWidth: 2, stroke: 'var(--primary)', fill: 'var(--background)' }}
+                                        isAnimationActive={true}
+                                        animationDuration={850}
+                                        animationEasing="ease-out"
                                     />
                                     <Line
                                         name="선택 범위 평균"
@@ -635,12 +840,14 @@ export default function StudentAnalyticsTab({
                                         stroke="var(--warning)"
                                         strokeWidth={2}
                                         strokeDasharray="5 5"
-                                        dot={{ r: 4, strokeWidth: 0, fill: 'var(--muted)' }}
-                                        animationBegin={1200}
-                                        animationDuration={900}
+                                        dot={{ r: 3.5, strokeWidth: 0, fill: 'var(--muted)' }}
+                                        activeDot={{ r: 5.5, strokeWidth: 0, fill: 'var(--warning)' }}
+                                        isAnimationActive={true}
+                                        animationBegin={200}
+                                        animationDuration={850}
                                         animationEasing="ease-out"
                                     />
-                                </LineChart>
+                                </ComposedChart>
                             </ResponsiveContainer>
                         ) : studentGrowthReportsEnabled ? (
                             <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>

@@ -2128,7 +2128,8 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("NOTIFICATION_STATUS_ITEMS");
         expect(settingsPage).toContain("앱 내 카카오 발송 후보");
         expect(settingsPage).toContain("카카오 실제 발송");
-        expect(settingsPage).toContain("실제 전송 설정을 활성화할 수 없습니다");
+        expect(settingsPage).toContain('href="/teacher/reminders"');
+        expect(settingsPage).toContain("서버의 솔라피 연결과 발송 모드 설정에 따릅니다");
         expect(settingsPage).not.toContain('<Toggle checked={value.email}');
         expect(settingsPage).not.toContain('<Toggle checked={value.push}');
         expect(overviewTab).toContain("카카오 알림 연동 전");

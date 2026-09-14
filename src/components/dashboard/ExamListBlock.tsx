@@ -142,7 +142,7 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
             <div
               style={{
                 textAlign: "center",
-                padding: "3.5rem 2rem",
+                padding: "2.5rem 1.5rem",
                 color: "var(--muted)",
                 background: "var(--background)",
                 borderRadius: "var(--radius-lg)",
@@ -150,13 +150,69 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
-                gap: "0.75rem",
+                gap: "1rem",
               }}
             >
-              <FileIcon />
-              <span style={{ fontSize: "0.9rem", fontWeight: 500 }}>
-                아직 출제한 시험이 없습니다
-              </span>
+              <div style={{
+                width: 48,
+                height: 48,
+                borderRadius: "50%",
+                background: "rgba(99, 102, 241, 0.08)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "var(--primary)",
+              }}>
+                <FileIcon />
+              </div>
+              <div>
+                <div style={{ fontSize: "1rem", fontWeight: 700, color: "var(--foreground)", marginBottom: "0.25rem" }}>
+                  아직 출제한 시험이 없습니다
+                </div>
+                <p style={{ fontSize: "0.82rem", color: "var(--muted)", margin: 0, wordBreak: "keep-all" }}>
+                  PDF 시험지를 업로드하고 3분 만에 첫 OMR 시험을 배포해보세요.
+                </p>
+              </div>
+
+              {/* 3-step quick onboarding */}
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+                gap: "0.5rem",
+                width: "100%",
+                maxWidth: 480,
+                marginTop: "0.25rem",
+              }}>
+                <div style={{ padding: "0.6rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", textAlign: "left" }}>
+                  <div style={{ fontSize: "0.72rem", color: "var(--primary)", fontWeight: 800 }}>STEP 1</div>
+                  <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--foreground)", marginTop: "0.15rem" }}>PDF 시험지 등록</div>
+                </div>
+                <div style={{ padding: "0.6rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", textAlign: "left" }}>
+                  <div style={{ fontSize: "0.72rem", color: "var(--primary)", fontWeight: 800 }}>STEP 2</div>
+                  <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--foreground)", marginTop: "0.15rem" }}>정답표 자동 인식</div>
+                </div>
+                <div style={{ padding: "0.6rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", textAlign: "left" }}>
+                  <div style={{ fontSize: "0.72rem", color: "var(--primary)", fontWeight: 800 }}>STEP 3</div>
+                  <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--foreground)", marginTop: "0.15rem" }}>링크/QR 배포</div>
+                </div>
+              </div>
+
+              <Link
+                href="/create"
+                className="btn btn-primary"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  fontSize: "0.85rem",
+                  fontWeight: 700,
+                  padding: "0.6rem 1.25rem",
+                  borderRadius: "var(--radius-full)",
+                  marginTop: "0.25rem",
+                }}
+              >
+                <PlusIcon /> 첫 시험 출제하기
+              </Link>
             </div>
           ) : (
             exams.slice(0, 8).map((exam, idx) => (

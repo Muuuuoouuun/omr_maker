@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useId, useRef } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
-import { Lock, Plus, UserPlus } from 'lucide-react';
+import { Check, Copy, Lock, Plus, Radio, Share2, Sparkles, UserPlus } from 'lucide-react';
 import type { Exam } from '@/types/omr';
 import { formatRegionScopedLabel } from '@/lib/dashboardSelection';
 import type { ExamValidationSummary } from '@/lib/examValidation';
@@ -747,6 +747,30 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             await navigator.clipboard.writeText(visibleShareUrl);
             if (!operationIsCurrent(operation)) return;
             setCopyStatus("복사됨");
+            toast.success("링크 복사 완료", "학생용 응시 링크가 클립보드에 복사되었습니다.");
+            copyResetTimerRef.current = window.setTimeout(() => {
+                copyResetTimerRef.current = undefined;
+                setCopyStatus("");
+            }, 1600);
+        } catch {
+            if (operationIsCurrent(operation)) setCopyStatus("복사 실패");
+        }
+    };
+
+    const copyGuideMessage = async () => {
+        if (!visibleShareUrl) return;
+        const operation = beginIdentityOperation();
+        if (!operation) return;
+        if (copyResetTimerRef.current !== undefined) {
+            window.clearTimeout(copyResetTimerRef.current);
+            copyResetTimerRef.current = undefined;
+        }
+        try {
+            const message = `[OMR 시험 응시 안내]\n선생님이 배포한 시험에 접속하여 응시해주세요.\n👉 응시 링크: ${visibleShareUrl}`;
+            await navigator.clipboard.writeText(message);
+            if (!operationIsCurrent(operation)) return;
+            setCopyStatus("안내 문구 복사됨");
+            toast.success("복사 완료", "학생에게 전달할 응시 안내 문구가 복사되었습니다.");
             copyResetTimerRef.current = window.setTimeout(() => {
                 copyResetTimerRef.current = undefined;
                 setCopyStatus("");
@@ -1489,19 +1513,68 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                         </>
                     ) : (
                         <div style={{ textAlign: 'center' }}>
+                            {/* Celebration Header */}
+                            <div style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.45rem',
+                                padding: '0.4rem 0.9rem',
+                                borderRadius: 'var(--radius-full)',
+                                background: 'rgba(16, 185, 129, 0.1)',
+                                border: '1px solid rgba(16, 185, 129, 0.25)',
+                                color: 'var(--success)',
+                                fontSize: '0.82rem',
+                                fontWeight: 800,
+                                marginBottom: '0.75rem',
+                            }}>
+                                <Sparkles size={14} /> 시험 배포 준비 완료!
+                            </div>
+                            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--foreground)', marginBottom: '0.35rem' }}>
+                                학생 응시 링크가 발급되었습니다
+                            </h3>
+                            <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.25rem', wordBreak: 'keep-all' }}>
+                                QR 코드를 화면에 띄우거나, 링크 또는 안내 문구를 복사하여 학생들에게 전달하세요.
+                            </p>
+
                             {!isShareUrlReachableByStudents(visibleShareUrl) && (
                                 <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5, marginBottom: '1.25rem', textAlign: 'left' }}>
                                     ⚠️ 이 링크는 이 컴퓨터에서만 열립니다. 학생들이 다른 기기에서 접속하려면 공개 주소(NEXT_PUBLIC_SHARE_BASE_URL)를 설정해야 합니다.
                                 </div>
                             )}
-                            <div style={{ marginBottom: '1.5rem' }}>
+
+                            {/* QR Frame */}
+                            <div style={{
+                                display: 'inline-block',
+                                padding: '1rem',
+                                background: 'white',
+                                borderRadius: '16px',
+                                border: '1px solid var(--border)',
+                                boxShadow: '0 8px 24px rgba(0,0,0,0.06)',
+                                marginBottom: '1.25rem',
+                            }}>
                                 <QRCodeCanvas id="qr-code-canvas" value={visibleShareUrl} size={200} level={"H"} includeMargin={true} />
                             </div>
 
-                            <div className="distribute-share-actions">
-                                <button type="button" onClick={downloadQR} className="btn btn-secondary">QR 저장</button>
-                                <button type="button" onClick={copyShareLink} className="btn btn-primary">
-                                    {copyStatus || "링크 복사"}
+                            <div className="distribute-share-actions" style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                <button
+                                    type="button"
+                                    onClick={copyShareLink}
+                                    className="btn btn-primary"
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                                >
+                                    {copyStatus === "복사됨" ? <Check size={15} /> : <Copy size={15} />}
+                                    {copyStatus === "복사됨" ? "복사 완료!" : "링크 복사"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={copyGuideMessage}
+                                    className="btn btn-secondary"
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                                >
+                                    <Share2 size={15} /> 안내 문구 복사
+                                </button>
+                                <button type="button" onClick={downloadQR} className="btn btn-secondary">
+                                    QR 저장
                                 </button>
                                 {accessType === "group" && examId && (
                                     <button
@@ -1517,7 +1590,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
 
                             <div
                                 data-testid="distribution-share-url"
-                                style={{ background: 'var(--background)', border: '1px solid var(--border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.8rem', wordBreak: 'break-all', color: 'var(--muted)', marginBottom: '1.25rem' }}
+                                style={{ background: 'var(--background)', border: '1px solid var(--border)', padding: '0.6rem 0.75rem', borderRadius: '8px', fontSize: '0.8rem', wordBreak: 'break-all', color: 'var(--muted)', marginBottom: '1.25rem' }}
                             >
                                 {visibleShareUrl}
                             </div>
@@ -1528,30 +1601,47 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                 </div>
                             )}
 
-                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, marginBottom: '1rem', wordBreak: 'keep-all' }}>
+                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, marginBottom: '1.25rem', wordBreak: 'keep-all' }}>
                                 설치 앱 또는 웹 브라우저에서 열리는 응시 링크입니다. 학생 앱 로그인이 있으면 학생으로, 없으면 확인 화면에서 게스트로 입장합니다.
                             </p>
 
                             {examId && (
-                                <a
-                                    href={`/teacher/dashboard?tab=exam&examId=${examId}`}
-                                    style={{
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '0.4rem',
-                                        fontSize: '0.85rem',
-                                        fontWeight: 700,
-                                        color: 'var(--primary)',
-                                        textDecoration: 'none',
-                                        padding: '0.6rem 1rem',
-                                        borderRadius: 'var(--radius-full)',
-                                        border: '1px solid rgba(99,102,241,0.28)',
-                                        background: 'rgba(99,102,241,0.07)',
-                                        transition: 'border-color 0.15s, background-color 0.15s, color 0.15s, transform 0.15s',
-                                    }}
-                                >
-                                    결과 분석 보러 가기 →
-                                </a>
+                                <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'center', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                                    <a
+                                        href={`/teacher/live?examId=${examId}`}
+                                        className="btn btn-secondary"
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.4rem',
+                                            fontSize: '0.85rem',
+                                            padding: '0.6rem 1.1rem',
+                                            borderRadius: 'var(--radius-full)',
+                                        }}
+                                    >
+                                        <Radio size={14} color="var(--error)" />
+                                        실시간 응시 모니터링
+                                    </a>
+                                    <a
+                                        href={`/teacher/dashboard?tab=exam&examId=${examId}`}
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.4rem',
+                                            fontSize: '0.85rem',
+                                            fontWeight: 700,
+                                            color: 'var(--primary)',
+                                            textDecoration: 'none',
+                                            padding: '0.6rem 1.1rem',
+                                            borderRadius: 'var(--radius-full)',
+                                            border: '1px solid rgba(99,102,241,0.28)',
+                                            background: 'rgba(99,102,241,0.07)',
+                                            transition: 'all 0.15s',
+                                        }}
+                                    >
+                                        결과 분석 보러 가기 →
+                                    </a>
+                                </div>
                             )}
                         </div>
                     )}

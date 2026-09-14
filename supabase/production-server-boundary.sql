@@ -549,6 +549,12 @@ alter table if exists public.omr_kakao_dispatch_logs enable row level security;
 alter table if exists public.omr_kakao_dispatch_logs force row level security;
 alter table if exists public.omr_kakao_reminder_legacy_quarantine enable row level security;
 alter table if exists public.omr_kakao_reminder_legacy_quarantine force row level security;
+alter table if exists public.omr_reminder_settings enable row level security;
+alter table if exists public.omr_reminder_settings force row level security;
+alter table if exists public.omr_reminder_contacts enable row level security;
+alter table if exists public.omr_reminder_contacts force row level security;
+alter table if exists public.omr_reminder_deliveries enable row level security;
+alter table if exists public.omr_reminder_deliveries force row level security;
 alter table if exists public.omr_comments enable row level security;
 alter table if exists public.omr_comments force row level security;
 alter table if exists public.omr_audit_logs enable row level security;
@@ -674,7 +680,7 @@ begin
         ('omr_pilot_plan_grants'), ('omr_student_credential_epochs'),
         ('omr_student_credential_batch_receipts'),
         ('omr_kakao_reminder_legacy_quarantine'),
-        ('omr_remediation_cases')
+        ('omr_reminder_settings'), ('omr_reminder_contacts'), ('omr_reminder_deliveries'), ('omr_remediation_cases')
     ), actual(table_name, row_security, force_row_security) as (
         select relation.relname::text, relation.relrowsecurity, relation.relforcerowsecurity
           from pg_catalog.pg_class relation

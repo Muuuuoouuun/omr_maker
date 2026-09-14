@@ -116,6 +116,9 @@ describe("production boundary rollback contract", () => {
             "omr_kakao_candidate_reviews",
             "omr_kakao_dispatch_logs",
             "omr_kakao_reminder_legacy_quarantine",
+            "omr_reminder_settings",
+            "omr_reminder_contacts",
+            "omr_reminder_deliveries",
             "omr_remediation_cases",
         ]);
         const forcedByBoundary = new Set(

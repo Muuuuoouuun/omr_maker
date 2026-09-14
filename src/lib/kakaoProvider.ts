@@ -76,7 +76,7 @@ export function getKakaoProviderReadiness(env: Env = process.env): KakaoProvider
         mode,
         status: "ready",
         label: "카카오 Live 준비",
-        detail: "공개 채널 식별자는 확인되었습니다. 실제 provider 호출은 서버 어댑터 연결 후 활성화합니다.",
+        detail: "이 화면은 후보 검토와 시뮬레이션 기록을 관리합니다. 솔라피 실제 발송은 학습 알림 화면에서 설정합니다.",
         channelId,
         canQueueDispatch: true,
         canMarkOutcomes: true,

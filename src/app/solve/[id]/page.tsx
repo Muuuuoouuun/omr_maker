@@ -8,7 +8,7 @@ import OMRCardView from "@/components/OMRCardView";
 import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
 import { toast } from "@/components/Toast";
-import { AlertTriangle, Clock, LoaderCircle, PanelRightClose, PanelRightOpen, PenLine, Save } from "lucide-react";
+import { AlertTriangle, Clock, LoaderCircle, PanelRightClose, PanelRightOpen, PenLine, RotateCcw, Save } from "lucide-react";
 import { deleteStoredData, storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
 import { resolveDraftDrawings } from "@/lib/draftRecovery";
 import { verifyTeacherPassword } from "@/app/actions/auth";
@@ -782,8 +782,8 @@ function SolveLoadErrorCard({ error }: { error: SolveLoadError }) {
         }}>
             <div className="bento-card" role="alert" style={{
                 width: '100%',
-                maxWidth: 440,
-                padding: '2rem',
+                maxWidth: 460,
+                padding: '2.2rem 2rem',
                 textAlign: 'center',
                 border: '1px solid var(--border)',
                 boxShadow: '0 18px 48px rgba(15,23,42,0.12)',
@@ -797,19 +797,46 @@ function SolveLoadErrorCard({ error }: { error: SolveLoadError }) {
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    marginBottom: '1rem',
+                    marginBottom: '1.1rem',
                 }}>
                     <AlertTriangle size={30} />
                 </div>
                 <h2 style={{ fontSize: '1.25rem', fontWeight: 850, marginBottom: '0.55rem', lineHeight: 1.35 }}>
                     {error.title}
                 </h2>
-                <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.7, marginBottom: '1.35rem', wordBreak: 'keep-all' }}>
+                <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.7, marginBottom: '1.25rem', wordBreak: 'keep-all' }}>
                     {error.body}
                 </p>
-                <Link href="/?role=student" className="btn btn-primary" style={{ justifyContent: 'center' }}>
-                    학생 홈으로
-                </Link>
+                <div style={{
+                    background: 'var(--surface-sunken, rgba(0,0,0,0.02))',
+                    borderRadius: 'var(--radius-md, 8px)',
+                    padding: '0.75rem 1rem',
+                    marginBottom: '1.5rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.6rem',
+                    fontSize: '0.84rem',
+                    color: 'var(--muted)',
+                    border: '1px solid var(--border)',
+                    textAlign: 'left',
+                }}>
+                    <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>🔒</span>
+                    <span>작성 중이던 임시 답안은 기기에 안전하게 보존되어 있으니 안심하세요.</span>
+                </div>
+                <div style={{ display: 'flex', gap: '0.65rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <button
+                        type="button"
+                        onClick={() => window.location.reload()}
+                        className="btn btn-secondary"
+                        style={{ flex: 1, minWidth: '130px', justifyContent: 'center', gap: '0.4rem' }}
+                    >
+                        <RotateCcw size={15} />
+                        다시 시도
+                    </button>
+                    <Link href="/?role=student" className="btn btn-primary" style={{ flex: 1, minWidth: '130px', justifyContent: 'center' }}>
+                        학생 홈으로
+                    </Link>
+                </div>
             </div>
         </div>
     );
@@ -1156,6 +1183,14 @@ export default function SolvePage() {
     // Timer + autosave State
     const [startedAt, setStartedAt] = useState(() => new Date().toISOString());
     const [timeRemaining, setTimeRemaining] = useState<number | null>(null); // seconds
+    const [initialTimeLimitSec, setInitialTimeLimitSec] = useState<number | null>(null);
+    const [timeMilestoneAlert, setTimeMilestoneAlert] = useState<{
+        type: "5min" | "1min";
+        title: string;
+        message: string;
+    } | null>(null);
+    const notified5MinRef = useRef(false);
+    const notified1MinRef = useRef(false);
     const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
     const [legacyDraftRecoveryExport, setLegacyDraftRecoveryExport] = useState<{
         fileName: string;
@@ -3332,6 +3367,76 @@ export default function SolvePage() {
         return () => clearTimeout(timerId);
     }, [timeRemaining, solveAllowed]);
 
+    // Track initial total duration to compute progress percentage smoothly.
+    useEffect(() => {
+        if (timeRemaining !== null && initialTimeLimitSec === null && timeRemaining > 0) {
+            const totalSec = examData?.durationMin && examData.durationMin > 0
+                ? examData.durationMin * 60
+                : timeRemaining;
+            setInitialTimeLimitSec(totalSec);
+        }
+    }, [timeRemaining, initialTimeLimitSec, examData?.durationMin]);
+
+    // Low-time milestone notifications (5m, 1m warnings)
+    useEffect(() => {
+        if (timeRemaining === null || submittedRef.current) return;
+        if (timeRemaining <= 300 && timeRemaining > 270 && !notified5MinRef.current) {
+            notified5MinRef.current = true;
+            setTimeMilestoneAlert({
+                type: "5min",
+                title: "시험 종료 5분 전입니다",
+                message: "남은 시간을 확인하고 답안 마킹을 전체적으로 점검해 주세요.",
+            });
+            try {
+                navigator.vibrate?.([80, 40, 80]);
+            } catch {}
+        } else if (timeRemaining <= 60 && timeRemaining > 30 && !notified1MinRef.current) {
+            notified1MinRef.current = true;
+            setTimeMilestoneAlert({
+                type: "1min",
+                title: "시험 종료 1분 전입니다!",
+                message: "곧 시험이 종료되며 작성된 답안이 자동으로 제출됩니다.",
+            });
+            try {
+                navigator.vibrate?.([150, 80, 150]);
+            } catch {}
+        }
+    }, [timeRemaining]);
+
+    // Auto dismiss milestone alert after 7 seconds
+    useEffect(() => {
+        if (!timeMilestoneAlert) return;
+        const alertDismissTimer = setTimeout(() => {
+            setTimeMilestoneAlert(null);
+        }, 7000);
+        return () => clearTimeout(alertDismissTimer);
+    }, [timeMilestoneAlert]);
+
+    // Close focus warning modal on Enter or Escape
+    useEffect(() => {
+        if (!showFocusWarning) return;
+        const handleFocusWarningKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape" || e.key === "Enter") {
+                e.preventDefault();
+                setShowFocusWarning(false);
+            }
+        };
+        window.addEventListener("keydown", handleFocusWarningKeyDown);
+        return () => window.removeEventListener("keydown", handleFocusWarningKeyDown);
+    }, [showFocusWarning]);
+
+    const totalExamDurationSec = (examData?.durationMin && examData.durationMin > 0)
+        ? examData.durationMin * 60
+        : (initialTimeLimitSec || timeRemaining);
+
+    const timeRemainingRatio = (totalExamDurationSec && totalExamDurationSec > 0 && timeRemaining !== null)
+        ? Math.max(0, Math.min(1, timeRemaining / totalExamDurationSec))
+        : null;
+
+    const timeRemainingPercent = timeRemainingRatio !== null
+        ? Math.max(0, Math.min(100, Math.round(timeRemainingRatio * 100)))
+        : null;
+
     const handleSubmit = () => {
         if (!examData) return;
         const activeExamQuestions = getActiveExamQuestions();
@@ -3734,8 +3839,28 @@ export default function SolvePage() {
             <header className="header solve-header" style={{
                 flexShrink: 0,
                 height: 'auto',
-                padding: '0.75rem 1.5rem'
+                padding: '0.75rem 1.5rem',
+                position: 'relative'
             }}>
+                {/* Time Progress Gauge Bar */}
+                {timeRemaining !== null && (
+                    <div
+                        className="solve-time-gauge-track"
+                        role="progressbar"
+                        aria-label="시험 남은 시간 비율"
+                        aria-valuenow={timeRemainingPercent ?? 0}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                    >
+                        <div
+                            className="solve-time-gauge-fill"
+                            data-urgency={timeRemaining <= 60 ? "critical" : timeRemaining <= 300 ? "warning" : "normal"}
+                            style={{
+                                width: `${timeRemainingPercent ?? 0}%`,
+                            }}
+                        />
+                    </div>
+                )}
                 <div className="container header-content solve-header-content" style={{ gap: '1rem' }}>
                     <div className="solve-title-group" style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
                         <BrandLogo compact markOnly priorityLabel="OMR Maker" className="solve-brand" style={{ fontSize: '1rem' }} />
@@ -3764,22 +3889,69 @@ export default function SolvePage() {
                         (() => {
                             const mm = Math.floor(Math.max(0, timeRemaining) / 60).toString().padStart(2, "0");
                             const ss = (Math.max(0, timeRemaining) % 60).toString().padStart(2, "0");
-                            const isCritical = timeRemaining <= 300; // last 5 min
+                            const isCritical1Min = timeRemaining <= 60;
+                            const isCritical5Min = timeRemaining <= 300;
                             return (
                                 <div className="solve-timer" style={{
                                     display: 'flex', alignItems: 'center', gap: '0.4rem',
                                     padding: '0.35rem 0.75rem',
-                                    background: isCritical ? 'rgba(239,68,68,0.1)' : 'var(--background)',
-                                    border: `1px solid ${isCritical ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`,
+                                    background: isCritical1Min
+                                        ? 'rgba(239, 68, 68, 0.14)'
+                                        : isCritical5Min
+                                        ? 'rgba(245, 158, 11, 0.12)'
+                                        : 'var(--background)',
+                                    border: `1px solid ${
+                                        isCritical1Min
+                                            ? 'rgba(239, 68, 68, 0.6)'
+                                            : isCritical5Min
+                                            ? 'rgba(245, 158, 11, 0.5)'
+                                            : 'var(--border)'
+                                    }`,
                                     borderRadius: 'var(--radius-full)',
-                                    color: isCritical ? '#ef4444' : 'var(--foreground)',
+                                    color: isCritical1Min
+                                        ? '#ef4444'
+                                        : isCritical5Min
+                                        ? 'var(--warning, #d97706)'
+                                        : 'var(--foreground)',
                                     flexShrink: 0,
-                                    animation: isCritical ? 'pulse 1.5s ease-in-out infinite' : undefined
+                                    boxShadow: isCritical1Min
+                                        ? '0 0 12px rgba(239, 68, 68, 0.35)'
+                                        : isCritical5Min
+                                        ? '0 0 8px rgba(245, 158, 11, 0.2)'
+                                        : undefined,
+                                    animation: isCritical1Min
+                                        ? 'urgentBorderPulse 1.2s ease-in-out infinite'
+                                        : isCritical5Min
+                                        ? 'warningBorderPulse 2s ease-in-out infinite'
+                                        : undefined,
+                                    transition: 'all 0.3s ease'
                                 }}>
-                                    <Clock size={13} />
+                                    {isCritical1Min ? (
+                                        <AlertTriangle size={13} style={{ animation: 'pulse 1s infinite' }} />
+                                    ) : (
+                                        <Clock size={13} />
+                                    )}
                                     <span style={{ fontSize: '0.82rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
                                         {mm}:{ss}
                                     </span>
+                                    {timeRemainingPercent !== null && (
+                                        <span style={{
+                                            fontSize: '0.7rem',
+                                            opacity: 0.8,
+                                            fontWeight: 600,
+                                            marginLeft: '0.1rem',
+                                            paddingLeft: '0.35rem',
+                                            borderLeft: `1px solid ${
+                                                isCritical1Min
+                                                    ? 'rgba(239,68,68,0.35)'
+                                                    : isCritical5Min
+                                                    ? 'rgba(245,158,11,0.35)'
+                                                    : 'var(--border)'
+                                            }`
+                                        }}>
+                                            {timeRemainingPercent}%
+                                        </span>
+                                    )}
                                 </div>
                             );
                         })()
@@ -3922,6 +4094,71 @@ export default function SolvePage() {
                     </div>
                 </div>
             </header>
+
+            {/* Time Milestone Alert (5m / 1m warning) */}
+            {timeMilestoneAlert && (
+                <aside
+                    className="solve-time-alert-banner"
+                    role="alert"
+                    aria-live="assertive"
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem',
+                        padding: '0.85rem 1.15rem',
+                        borderRadius: 'var(--radius-lg, 12px)',
+                        background: timeMilestoneAlert.type === '1min'
+                            ? 'color-mix(in srgb, var(--grade-red, #ef4444) 14%, var(--surface, #ffffff))'
+                            : 'color-mix(in srgb, var(--warning, #f59e0b) 14%, var(--surface, #ffffff))',
+                        border: `1.5px solid ${
+                            timeMilestoneAlert.type === '1min'
+                                ? 'rgba(239, 68, 68, 0.65)'
+                                : 'rgba(245, 158, 11, 0.55)'
+                        }`,
+                        color: timeMilestoneAlert.type === '1min'
+                            ? 'var(--grade-red, #dc2626)'
+                            : 'var(--warning, #d97706)',
+                        boxShadow: timeMilestoneAlert.type === '1min'
+                            ? '0 14px 34px -4px rgba(239, 68, 68, 0.35), 0 4px 12px rgba(0,0,0,0.1)'
+                            : '0 14px 34px -4px rgba(245, 158, 11, 0.25), 0 4px 12px rgba(0,0,0,0.06)',
+                        backdropFilter: 'blur(12px)',
+                    }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        <span style={{ fontSize: '1.35rem', flexShrink: 0 }}>
+                            {timeMilestoneAlert.type === '1min' ? '🚨' : '⏰'}
+                        </span>
+                        <div>
+                            <strong style={{ display: 'block', fontSize: '0.92rem', lineHeight: 1.3, color: 'var(--foreground)' }}>
+                                {timeMilestoneAlert.title}
+                            </strong>
+                            <span style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.4, marginTop: '0.15rem', display: 'block' }}>
+                                {timeMilestoneAlert.message}
+                            </span>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setTimeMilestoneAlert(null)}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--foreground)',
+                            padding: '0.35rem 0.6rem',
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            fontWeight: 700,
+                            fontSize: '0.8rem',
+                            flexShrink: 0,
+                            opacity: 0.8,
+                        }}
+                        aria-label="알림 닫기"
+                    >
+                        확인
+                    </button>
+                </aside>
+            )}
 
             {/* Body */}
             <div className="solve-body" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -4219,82 +4456,132 @@ export default function SolvePage() {
                 <div style={{
                     position: 'fixed',
                     inset: 0,
-                    backgroundColor: 'rgba(15, 23, 42, 0.85)',
-                    backdropFilter: 'blur(8px)',
+                    backgroundColor: 'rgba(15, 23, 42, 0.82)',
+                    backdropFilter: 'blur(12px)',
                     zIndex: 9999,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    padding: '1.5rem'
+                    padding: '1.5rem',
+                    animation: 'fadeIn 0.2s ease-out',
                 }}>
                     <div
                         role="dialog"
                         aria-modal="true"
                         aria-labelledby="solve-focus-warning-title"
                         style={{
-                        background: 'var(--background, white)',
-                        border: '2px solid #ef4444',
-                        borderRadius: '16px',
-                        padding: '2.5rem 2rem',
-                        maxWidth: '480px',
-                        width: '100%',
-                        textAlign: 'center',
-                        boxShadow: '0 25px 50px -12px rgba(239, 68, 68, 0.25)'
-                    }}>
+                            background: 'var(--background, white)',
+                            border: '1.5px solid rgba(239, 68, 68, 0.45)',
+                            borderRadius: '20px',
+                            padding: '2.5rem 2rem',
+                            maxWidth: '480px',
+                            width: '100%',
+                            textAlign: 'center',
+                            boxShadow: '0 25px 60px -15px rgba(239, 68, 68, 0.28), 0 0 0 1px rgba(239, 68, 68, 0.12)',
+                            animation: 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                        }}
+                    >
+                        {/* Pulse Ring Caution Badge */}
                         <div style={{
-                            fontSize: '3.5rem',
-                            marginBottom: '1rem',
-                            animation: 'pulse 2s infinite'
+                            width: 76,
+                            height: 76,
+                            borderRadius: '50%',
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.25)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            margin: '0 auto 1.25rem',
+                            animation: 'cautionPulseRing 2s infinite ease-out',
                         }}>
-                            ⚠️
+                            <AlertTriangle size={38} color="#ef4444" />
                         </div>
                         <h2 id="solve-focus-warning-title" style={{
-                            fontSize: '1.4rem',
-                            fontWeight: 800,
+                            fontSize: '1.35rem',
+                            fontWeight: 850,
                             color: '#ef4444',
-                            marginBottom: '0.75rem'
+                            marginBottom: '0.65rem',
+                            letterSpacing: '-0.02em',
                         }}>
                             시험 화면 이탈 안내
                         </h2>
                         <p style={{
                             fontSize: '0.95rem',
                             color: 'var(--foreground)',
-                            lineHeight: 1.6,
-                            marginBottom: '1.5rem'
+                            lineHeight: 1.65,
+                            marginBottom: '1.25rem',
+                            wordBreak: 'keep-all',
                         }}>
                             {focusWarningMessage}
                         </p>
                         <div style={{
-                            background: 'rgba(239, 68, 68, 0.1)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            background: 'rgba(239, 68, 68, 0.08)',
                             border: '1px solid rgba(239, 68, 68, 0.2)',
-                            borderRadius: '8px',
-                            padding: '0.75rem',
-                            marginBottom: '2rem',
+                            borderRadius: '10px',
+                            padding: '0.75rem 1rem',
+                            marginBottom: '1rem',
                             fontSize: '0.9rem',
-                            fontWeight: 700,
-                            color: '#ef4444'
+                            color: '#ef4444',
                         }}>
-                            현재 이탈 횟수: <span style={{ fontSize: '1.1rem' }}>{tabFociLostCount}</span>회
+                            <span style={{ fontWeight: 600 }}>화면 이탈 기록</span>
+                            <span style={{ fontWeight: 800, fontSize: '1.05rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span style={{
+                                    display: 'inline-block',
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: '50%',
+                                    background: '#ef4444',
+                                    animation: 'pulse 1s infinite',
+                                }} />
+                                현재 {tabFociLostCount}회 기록됨
+                            </span>
+                        </div>
+                        <div style={{
+                            background: 'var(--surface-sunken, rgba(0,0,0,0.02))',
+                            borderRadius: '8px',
+                            padding: '0.6rem 0.85rem',
+                            marginBottom: '1.75rem',
+                            fontSize: '0.82rem',
+                            color: 'var(--muted)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.45rem',
+                            border: '1px solid var(--border)',
+                        }}>
+                            <span>🔒</span>
+                            <span>작성 중이던 모든 답안은 안전하게 보존되어 있습니다.</span>
                         </div>
                         <button
+                            autoFocus
                             onClick={() => setShowFocusWarning(false)}
                             style={{
                                 background: '#ef4444',
                                 color: 'white',
                                 border: 'none',
-                                borderRadius: '8px',
-                                padding: '0.75rem 2rem',
+                                borderRadius: '10px',
+                                padding: '0.85rem 2rem',
                                 fontWeight: 700,
                                 fontSize: '0.95rem',
                                 cursor: 'pointer',
-                                transition: 'background 0.2s',
+                                transition: 'all 0.2s ease',
                                 minHeight: '44px',
-                                width: '100%'
+                                width: '100%',
+                                boxShadow: '0 4px 14px rgba(239, 68, 68, 0.35)',
                             }}
-                            onMouseOver={(e) => e.currentTarget.style.background = '#dc2626'}
-                            onMouseOut={(e) => e.currentTarget.style.background = '#ef4444'}
+                            onMouseOver={(e) => {
+                                e.currentTarget.style.background = '#dc2626';
+                                e.currentTarget.style.transform = 'translateY(-1px)';
+                            }}
+                            onMouseOut={(e) => {
+                                e.currentTarget.style.background = '#ef4444';
+                                e.currentTarget.style.transform = 'translateY(0)';
+                            }}
                         >
-                            시험으로 돌아가기
+                            확인하고 시험으로 돌아가기
                         </button>
                     </div>
                 </div>

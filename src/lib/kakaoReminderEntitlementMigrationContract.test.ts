@@ -27,7 +27,7 @@ describe("Kakao reminder entitlement migration contract", () => {
         expect(migration).toContain("public.omr_kakao_reminder_legacy_quarantine");
         expect(migration).toContain("forensic evidence is retained until explicit operator deletion");
         expect(migration).not.toContain("public.kakao_reminder_legacy_quarantine");
-        expect(manifest).toContain("EXPECTED_CANONICAL_TABLE_COUNT = 44");
+        expect(manifest).toContain("EXPECTED_CANONICAL_TABLE_COUNT = 47");
     });
 
     it("never uses an unconditional quarantine read policy and attests each profile exactly", () => {

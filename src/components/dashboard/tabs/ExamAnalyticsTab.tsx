@@ -4,7 +4,7 @@ import { useMemo, useState, useEffect, useRef, type CSSProperties } from "react"
 import { DEFAULT_CHOICE_COUNT, Exam, Attempt, type PlanKey } from "@/types/omr";
 import type { QuestionResult } from "@/types/omr";
 import {
-    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
+    BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
     Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts';
 import type { ValueType } from "recharts/types/component/DefaultTooltipContent";
@@ -3075,10 +3075,26 @@ export default function ExamAnalyticsTab({
 
                     {/* Detailed Question correct rate bar chart */}
                     <div className="card chart-card-enter" style={{ ...CARD_SURFACE_STYLE, padding: '1.5rem' }}>
-                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <CheckCircle size={18} color="var(--success)" />
-                            문항별 상세 정답률
-                        </h3>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <CheckCircle size={18} color="var(--success)" />
+                                문항별 상세 정답률
+                            </h3>
+                            <div style={{ display: 'flex', gap: '0.85rem', flexWrap: 'wrap', alignItems: 'center', fontSize: '0.82rem' }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--grade-red)', fontWeight: 600 }}>
+                                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--grade-red)' }} />
+                                    킬러(&lt;40%): {questionCorrectRateChartData.filter(q => q.correctRate !== null && q.correctRate < 40).length}문항
+                                </span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--warning)', fontWeight: 600 }}>
+                                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--warning)' }} />
+                                    보통(40~69%): {questionCorrectRateChartData.filter(q => q.correctRate !== null && q.correctRate >= 40 && q.correctRate < 70).length}문항
+                                </span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--primary)', fontWeight: 600 }}>
+                                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--primary)' }} />
+                                    수월(≥70%): {questionCorrectRateChartData.filter(q => q.correctRate !== null && q.correctRate >= 70).length}문항
+                                </span>
+                            </div>
+                        </div>
                         <div
                             role="img"
                             aria-label="문항별 상세 정답률"
@@ -3101,7 +3117,19 @@ export default function ExamAnalyticsTab({
                                         cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }}
                                         content={<QuestionCorrectRateTooltip />}
                                     />
-                                    <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} shape={<WaveBar />} />
+                                    <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} shape={<WaveBar />}>
+                                        {questionCorrectRateChartData.map((entry, idx) => {
+                                            const rate = entry.correctRate;
+                                            const cellColor = rate === null
+                                                ? "var(--muted)"
+                                                : rate < 40
+                                                ? "var(--grade-red)"
+                                                : rate < 70
+                                                ? "var(--warning)"
+                                                : "var(--primary)";
+                                            return <Cell key={`rate-cell-${entry.index}-${idx}`} fill={cellColor} />;
+                                        })}
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>

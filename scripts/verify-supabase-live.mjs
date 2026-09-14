@@ -444,6 +444,7 @@ async function runSqlMatrix(
         variables: ["canonical_evidence_contention_verified=1"],
     });
     psqlFile("supabase/kakao-reminder-entitlement-assertions.sql");
+    psqlFile("supabase/solapi-reminder-assertions.sql");
     psqlFile("supabase/remediation-assertions.sql");
     psqlFile("supabase/kakao-reminder-entitlement-concurrency-lock.sql");
     psqlFile("supabase/individual-student-assignments-assertions.sql");

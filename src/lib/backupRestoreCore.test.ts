@@ -50,13 +50,13 @@ function manifestFixture() {
 }
 
 describe("backup and restore manifest core", () => {
-    it("keeps the exact sorted 44-table backup allowlist aligned with baseline plus migrations", () => {
+    it("keeps the exact sorted 47-table backup allowlist aligned with baseline plus migrations", () => {
         const discoveredTables = loadRepositoryCanonicalTables({ rootDir: process.cwd() });
 
-        expect(discoveredTables).toHaveLength(44);
+        expect(discoveredTables).toHaveLength(47);
         expect(discoveredTables).toEqual([...discoveredTables].sort());
         expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
-        expect(CANONICAL_BACKUP_TABLES).toHaveLength(44);
+        expect(CANONICAL_BACKUP_TABLES).toHaveLength(47);
         expect(CANONICAL_BACKUP_TABLES).toContain("omr_remediation_cases");
         expect(CANONICAL_BACKUP_TABLES).toEqual(discoveredTables);
         expect(CANONICAL_BACKUP_TABLES).toContain("omr_operational_job_status");
@@ -396,7 +396,7 @@ describe("backup and restore manifest core", () => {
             createdAt: manifest.createdAt,
             gitCommit: manifest.gitCommit,
             sourceProjectRefHash: SHA_A,
-            databaseTableCount: 44,
+            databaseTableCount: 47,
             databaseRowCount: 0,
             storageBucket: REMOTE_ASSET_BUCKET,
             storageObjectCount: 1,

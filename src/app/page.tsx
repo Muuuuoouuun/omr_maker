@@ -213,6 +213,7 @@ export default function Home() {
   const [teacherResetToken, setTeacherResetToken] = useState("");
   const [teacherLegacyLinkBlocked, setTeacherLegacyLinkBlocked] = useState(false);
   const [teacherLifecyclePending, setTeacherLifecyclePending] = useState(false);
+  const [teacherSignupSuccess, setTeacherSignupSuccess] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
   const [mockupLoginPending, setMockupLoginPending] = useState(false);
   const [error, setError] = useState("");
@@ -496,13 +497,18 @@ export default function Home() {
     if (teacherLifecyclePending) return;
     setTeacherLifecyclePending(true);
     setError("");
+    setTeacherSignupSuccess(false);
     try {
       const result = await requestTeacherSignup({
         email: teacherIdentifier,
         displayName: teacherDisplayName,
         password,
       });
-      setError(teacherLifecycleMessage(result.status));
+      if (result.status === "accepted") {
+        setTeacherSignupSuccess(true);
+      } else {
+        setError(teacherLifecycleMessage(result.status));
+      }
     } catch {
       setError("계정 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
     } finally {
@@ -1402,6 +1408,53 @@ export default function Home() {
                     </p>
                   )}
 
+                  {teacherSignupSuccess && (
+                    <div
+                      style={{
+                        padding: "1rem 1.15rem",
+                        background: "var(--accent-subtle, rgba(34, 197, 94, 0.08))",
+                        border: "1px solid rgba(34, 197, 94, 0.3)",
+                        borderRadius: "0.75rem",
+                        display: "grid",
+                        gap: "0.55rem",
+                        marginBottom: "1rem",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <span style={{ fontSize: "1.25rem" }} role="img" aria-label="축하">🎉</span>
+                        <strong style={{ fontSize: "var(--type-ui)", color: "var(--foreground)" }}>
+                          가입 요청을 접수했습니다!
+                        </strong>
+                      </div>
+                      <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", lineHeight: 1.55 }}>
+                        확인 이메일을 발송했습니다. 메일함의 인증 링크를 클릭하여 계정 설정을 완료해 주세요.
+                      </p>
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.25rem" }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          style={{ fontSize: "0.85rem", padding: "0.4rem 0.8rem" }}
+                          onClick={() => {
+                            setTeacherAccountMode("login");
+                            setTeacherSignupSuccess(false);
+                          }}
+                        >
+                          로그인 화면으로 이동
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ fontSize: "0.85rem", padding: "0.4rem 0.8rem" }}
+                          onClick={handleMockupLogin}
+                          disabled={mockupLoginPending}
+                        >
+                          <Sparkles size={14} style={{ marginRight: "0.3rem" }} />
+                          데모로 둘러보기
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div
                     id="teacher-login-feedback"
                     aria-live="polite"
@@ -1441,6 +1494,7 @@ export default function Home() {
                             onClick={() => {
                               setTeacherAccountMode(mode => mode === "signup" ? "login" : "signup");
                               setError("");
+                              setTeacherSignupSuccess(false);
                             }}
                           >
                             {visibleTeacherAccountMode === "signup" ? "로그인으로 돌아가기" : "교사 계정 만들기"}
@@ -1451,6 +1505,7 @@ export default function Home() {
                             onClick={() => {
                               setTeacherAccountMode(mode => mode === "reset" ? "login" : "reset");
                               setError("");
+                              setTeacherSignupSuccess(false);
                             }}
                           >
                             {visibleTeacherAccountMode === "reset" ? "로그인으로 돌아가기" : "비밀번호 재설정"}

@@ -8,6 +8,9 @@ import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import { parseRemediationDashboard, validRemediationCommand, type RemediationCommand, type RemediationDashboard } from "@/lib/remediation";
 import { parseStudentRemediation, type StudentRemediationCase } from "@/lib/remediation";
 import { resolveAuthorizedStudentSessionCookie, STUDENT_SERVER_SESSION_COOKIE, type StudentSessionValidationClient } from "@/lib/studentServerSession";
+import type { RemediationRetakeResult } from "@/lib/remediationRetake";
+import { resolveRemediationRetakeWithGateway } from "@/lib/remediationRetake.server";
+import type { StudentExamGatewayClient } from "@/lib/studentExamServerGateway";
 
 type Failure = { status: "error"; error: string; code: string };
 const messages: Record<string, string> = {
@@ -55,4 +58,18 @@ export async function loadStudentRemediation(): Promise<{ status: "loaded"; case
         const cases = result.error ? null : parseStudentRemediation(result.data);
         return cases ? { status: "loaded", cases } : fail();
     } catch { return fail(); }
+}
+
+export async function resolveStudentRemediationRetake(sourceAttemptId: string): Promise<RemediationRetakeResult> {
+    if (typeof sourceAttemptId !== "string" || !sourceAttemptId || sourceAttemptId.length > 256
+        || sourceAttemptId.trim() !== sourceAttemptId) return { status: "blocked", code: "unavailable" };
+    try {
+        if (!isSameOriginServerActionRequest(await headers())) return { status: "blocked", code: "unauthorized" };
+        const config = getSupabaseServerConfigFromEnv();
+        if (!config) return { status: "blocked", code: "service_unavailable" };
+        const admin = createSupabaseAdminClient(config) as unknown as StudentSessionValidationClient & StudentExamGatewayClient;
+        const validation = await resolveAuthorizedStudentSessionCookie((await cookies()).get(STUDENT_SERVER_SESSION_COOKIE)?.value, admin);
+        if (validation.status !== "active") return { status: "blocked", code: validation.status === "service_unavailable" ? "service_unavailable" : "unauthorized" };
+        return await resolveRemediationRetakeWithGateway(admin, validation.identity, sourceAttemptId);
+    } catch { return { status: "blocked", code: "service_unavailable" }; }
 }

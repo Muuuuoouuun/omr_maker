@@ -91,8 +91,8 @@ export const PREMIUM_FEATURE_READINESS: Record<PlanEntitlementKey, PremiumFeatur
     },
     reminders: {
         status: "partial",
-        label: "카카오 발송 후보 · 큐",
-        description: "미응시·재시험 발송 후보를 검토하고 대기 기록을 관리합니다. 실제 카카오 메시지는 아직 발송하지 않습니다.",
+        label: "카카오 후보 · 학습 알림",
+        description: "미응시·재시험 후보 검토와 솔라피 마감 알림을 지원합니다. 실제 발송에는 서버 연결과 승인된 템플릿 설정이 필요합니다.",
     },
     retakeAssignments: { status: "available" },
     multiTeacher: {
