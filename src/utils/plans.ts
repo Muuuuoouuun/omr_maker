@@ -163,7 +163,7 @@ export const PLAN_ENTITLEMENT_COPY: Record<PlanEntitlementKey, PlanEntitlementCo
     },
     advancedAnalytics: {
         label: "고급 오답 분석",
-        description: "학생별, 반별, 시험별 약점 유형을 비교합니다.",
+        description: "시험지의 개념·함정 포인트를 분석하고 학생별, 반별, 시험별 강점과 약점 유형을 비교합니다. 시험지 AI 분석은 Pro 이상에서 제공합니다.",
     },
     advancedQuestionDesign: {
         label: "고급 문항 구성",
@@ -171,7 +171,7 @@ export const PLAN_ENTITLEMENT_COPY: Record<PlanEntitlementKey, PlanEntitlementCo
     },
     studentGrowthReports: {
         label: "학생 성장 리포트",
-        description: "학생별 누적 성취와 반복 약점을 리포트로 정리합니다.",
+        description: "학생별 성적 추이와 개념별 강점·약점, 판단에 사용한 문항 근거를 정리합니다.",
     },
     csvExport: {
         label: "CSV 내보내기",

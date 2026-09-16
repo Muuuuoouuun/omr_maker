@@ -184,6 +184,7 @@ export const BILLING_PLAN_FEATURES: Record<PlanKey, readonly BillingPlanFeature[
         { label: "비공개 서버 필기 원본 보관", status: "available" },
         { label: "필기 마크업 · 주석 파일", status: "available" },
         { label: "고급 오답·성장 분석", status: "available" },
+        { label: "시험지 개념·함정 포인트 분석", status: "available", detail: "AI 초안을 교사가 검토 · 공용 키는 AI 인식 한도 공유" },
         { label: "인쇄 · PDF 저장", status: "partial", detail: "브라우저 인쇄 방식" },
         { label: "카카오 발송 후보 · 큐", status: "partial", detail: "실제 발송 미연동" },
         { label: "우선 지원", status: "planned" },

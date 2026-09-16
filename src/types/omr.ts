@@ -59,6 +59,13 @@ export interface MissingRequiredSubQuestion {
     subQuestionId: string;
 }
 
+export interface QuestionContentAnalysis {
+    concepts: string[];
+    trapPoints: string[];
+    summary: string;
+    status: 'draft' | 'reviewed';
+}
+
 export interface Question {
     id: number;
     number: number;
@@ -69,6 +76,8 @@ export interface Question {
     choices?: 4 | 5;
     /** Optional teacher-authored explanation shown in review. */
     explanation?: string;
+    /** Teacher-only AI content analysis; drafts require teacher review. */
+    contentAnalysis?: QuestionContentAnalysis;
     /** Optional advanced design metadata for teacher diagnostics. */
     tags?: {
         subject?: string;

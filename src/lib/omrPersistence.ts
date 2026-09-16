@@ -8,6 +8,7 @@ import {
 } from "@/lib/workspaceContext";
 import { questionChoiceCount, type Attempt, type Exam, type QuestionResult, type QuestionResultStatus, type StoredDataRef } from "@/types/omr";
 import { MAX_SUB_QUESTION_LENGTH, normalizeQuestionSubQuestions } from "@/lib/subQuestions";
+import { normalizeQuestionContentAnalysis } from "@/lib/examContentAnalysis";
 import {
     SUPABASE_ATTEMPT_LIST_READ_COLUMNS,
     SUPABASE_ATTEMPT_READ_COLUMNS,
@@ -987,14 +988,18 @@ function sanitizeQuestions(value: unknown): Exam["questions"] {
             if (id === undefined) return null;
             const number = numberValue(question.number) || index + 1;
             const subQuestions = normalizeQuestionSubQuestions(question.subQuestions, id);
+            const contentAnalysis = normalizeQuestionContentAnalysis(question.contentAnalysis);
+            const safeQuestion = { ...question };
+            delete safeQuestion.contentAnalysis;
             return {
-                ...question,
+                ...safeQuestion,
                 id,
                 number,
                 answer: numberValue(question.answer),
                 choices: question.choices === 4 || question.choices === 5 ? question.choices : undefined,
                 score: numberValue(question.score),
                 ...(subQuestions.length > 0 ? { subQuestions } : {}),
+                ...(contentAnalysis ? { contentAnalysis } : {}),
             } as Exam["questions"][number];
         })
         .filter((question): question is Exam["questions"][number] => !!question);

@@ -52,6 +52,7 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), {
     ssr: false,
     loading: PdfViewerLoading,
 });
+const ExamContentAnalysisPanel = dynamic(() => import("@/components/ExamContentAnalysisPanel"), { ssr: false });
 const AnswerImportModal = dynamic(() => import("@/components/AnswerImportModal"), { ssr: false });
 const DistributeModal = dynamic(() => import("@/components/DistributeModal"), { ssr: false });
 import { Suspense, useState, useEffect, useLayoutEffect, useId, useRef, useCallback, useMemo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
@@ -3545,6 +3546,20 @@ function CreateOMRPageInner() {
                             </button>
                         </div>
                     </div>
+
+                    <ExamContentAnalysisPanel
+                        file={pdfFile}
+                        questions={questions}
+                        enabled={hasPlanEntitlement(currentPlan, 'advancedAnalytics')}
+                        onApply={rows => {
+                            const byId = new Map(rows.map(row => [row.questionId, row]));
+                            setQuestions(current => current.map(question => {
+                                const row = byId.get(question.id);
+                                if (!row || row.questionNumber !== question.number) return question;
+                                return { ...question, tags: { ...question.tags, ...row.tags }, contentAnalysis: row.contentAnalysis };
+                            }));
+                        }}
+                    />
 
                     <div style={{ marginBottom: '1.2rem' }}>
                         <div className="create-action-row">

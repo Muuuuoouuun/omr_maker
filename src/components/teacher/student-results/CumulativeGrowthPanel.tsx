@@ -1,6 +1,7 @@
 "use client";
 
 import type { StudentProfileInsight } from "@/lib/studentProfileAnalytics";
+import StudentConceptMasteryPanel from "./StudentConceptMasteryPanel";
 import LockedFeaturePanel from "./LockedFeaturePanel";
 import styles from "./StudentResultHub.module.css";
 
@@ -79,6 +80,8 @@ export default function CumulativeGrowthPanel({
                                 <Stat label="원시험" value={`${insight.baseAttemptCount}회`} />
                                 <Stat label="재시험" value={`${insight.retakeAttemptCount}회`} />
                             </div>
+                            <p className={styles.emptyText}>점수 변화는 원시험 기준이며 시험별 난이도·문항 구성 차이는 보정하지 않습니다.</p>
+                            {insight.conceptMastery ? <StudentConceptMasteryPanel summary={insight.conceptMastery} /> : null}
                             <div className={styles.reportGrowthDetails}>
                                 <div><strong>반복 약점</strong><p>{insight.weaknessGroups.slice(0, 3).map(group => group.title).join(", ") || "뚜렷한 반복 약점 없음"}</p></div>
                                 <div><strong>최근 원시험</strong><p>{insight.attempts.filter(item => !item.isRetake).slice(0, 4).map(item => `${item.examTitle} ${item.scorePercent === null ? "미채점" : `${item.scorePercent}%`}`).join(" · ") || "기록 없음"}</p></div>

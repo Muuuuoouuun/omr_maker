@@ -408,5 +408,9 @@ describe("student profile analytics", () => {
         ]);
         expect(insight.wrongQuestionCount).toBe(1);
         expect(insight.unansweredQuestionCount).toBe(1);
+        expect(insight.conceptMastery?.groups.find(group => group.concept === "시제")).toMatchObject({
+            correctCount: 0, totalCount: 2, attemptCount: 1, assessment: "insufficient",
+        });
+        expect(insight.conceptMastery?.groups.flatMap(group => group.evidence).every(item => item.attemptId === "base")).toBe(true);
     });
 });

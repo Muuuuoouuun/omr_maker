@@ -21,6 +21,8 @@ import {
 } from "@/lib/premiumAnalytics";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
 
+import { buildStudentConceptMastery, type StudentConceptMasterySummary } from "@/lib/studentConceptMastery";
+
 const DEFAULT_WEAKNESS_KINDS: QuestionResultGroupKind[] = ["concept", "mistakeType", "unit"];
 
 export interface StudentProfileAttemptInsight {
@@ -113,6 +115,7 @@ export interface StudentProfileInsight {
     headlineWeaknessGroups: StudentProfileHeadlineWeaknessEvidence[];
     mostMissedQuestions: StudentProfileMissedQuestionInsight[];
     tagStats: StudentProfileTagInsight[];
+    conceptMastery?: StudentConceptMasterySummary;
 }
 
 export interface StudentProfileInsightOptions {
@@ -428,5 +431,6 @@ export function buildStudentProfileInsight(
         headlineWeaknessGroups,
         mostMissedQuestions: sortedMostMissedQuestions,
         tagStats,
+        conceptMastery: buildStudentConceptMastery(baseQuestionResults, examById, new Map(baseMatchedAttempts.map(attempt => [attempt.id, attempt.finishedAt]))),
     };
 }
