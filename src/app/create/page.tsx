@@ -58,6 +58,7 @@ const DistributeModal = dynamic(() => import("@/components/DistributeModal"), { 
 import { Suspense, useState, useEffect, useLayoutEffect, useId, useRef, useCallback, useMemo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question, type QuestionSubQuestion, type QuestionSubQuestionTemplateId } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
+import { applyReviewedExamContentAnalysis } from "@/lib/examContentAnalysis";
 import { deleteStoredData, saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
 import { isPdfFileByMagic, uploadTeacherPdfDirect } from "@/lib/directTeacherAssetUpload.client";
@@ -3552,12 +3553,7 @@ function CreateOMRPageInner() {
                         questions={questions}
                         enabled={hasPlanEntitlement(currentPlan, 'advancedAnalytics')}
                         onApply={rows => {
-                            const byId = new Map(rows.map(row => [row.questionId, row]));
-                            setQuestions(current => current.map(question => {
-                                const row = byId.get(question.id);
-                                if (!row || row.questionNumber !== question.number) return question;
-                                return { ...question, tags: { ...question.tags, ...row.tags }, contentAnalysis: row.contentAnalysis };
-                            }));
+                            setQuestions(current => applyReviewedExamContentAnalysis(current, rows));
                         }}
                     />
 

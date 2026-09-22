@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import React from 'react';
+import React, { useState } from 'react';
+import type { Question } from '@/types/omr';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ExamContentAnalysisPanel from './ExamContentAnalysisPanel';
 import type { ExamContentAnalysisRow } from '@/lib/examContentAnalysis';
+import { applyReviewedExamContentAnalysis } from '@/lib/examContentAnalysis';
 
 const mocks = vi.hoisted(() => ({ analyze: vi.fn(), render: vi.fn() }));
 vi.mock('@/app/actions/analyzeExam', () => ({ analyzeExamImages: mocks.analyze }));
@@ -11,8 +13,8 @@ vi.mock('@/services/examAnalysisPdf.client', () => ({ renderExamAnalysisPages: m
 const questions = [{ id: 1, number: 1 }];
 const file = new File(['pdf'], 'exam.pdf', { type: 'application/pdf' });
 const result: ExamContentAnalysisRow[] = [{ questionId: 1, questionNumber: 1, tags: { unit: '대수', concept: '방정식' }, contentAnalysis: { concepts: ['방정식'], trapPoints: ['부호'], summary: '방정식의 해를 구한다.', status: 'draft' } }];
-afterEach(cleanup);
-beforeEach(() => { vi.clearAllMocks(); mocks.render.mockResolvedValue(['data:image/jpeg;base64,x']); mocks.analyze.mockResolvedValue(result); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); mocks.render.mockResolvedValue(['data:image/jpeg;base64,x']); mocks.analyze.mockResolvedValue(result); });
 
 describe('exam content review', () => {
     it('locks analysis for free plans', () => {
@@ -42,4 +44,42 @@ describe('exam content review', () => {
         expect(screen.queryByLabelText('1번 개념')).toBeNull();
         expect(onApply).not.toHaveBeenCalled();
     });
+    it('reads the current personal key on every analysis request', async () => {
+        localStorage.setItem('omr_settings', JSON.stringify({ api: { geminiKey: 'personal-one' } }));
+        render(<ExamContentAnalysisPanel file={file} questions={questions} enabled onApply={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: '선택한 페이지 분석' }));
+        await screen.findByLabelText('1번 개념');
+        expect(mocks.analyze).toHaveBeenLastCalledWith(expect.any(Array), questions, 'personal-one');
+        localStorage.setItem('omr_settings', JSON.stringify({ api: { geminiKey: 'personal-two' } }));
+        fireEvent.click(screen.getByRole('button', { name: '선택한 페이지 분석' }));
+        await waitFor(() => expect(mocks.analyze).toHaveBeenLastCalledWith(expect.any(Array), questions, 'personal-two'));
+    });
+    it('does not silently consume shared quota when settings storage is unavailable', async () => {
+        vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError'); });
+        render(<ExamContentAnalysisPanel file={file} questions={questions} enabled onApply={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: '선택한 페이지 분석' }));
+        expect((await screen.findByRole('alert')).textContent).toContain('저장된 개인 API 키 설정을 읽을 수 없습니다');
+        expect(mocks.analyze).not.toHaveBeenCalled();
+        expect(mocks.render).not.toHaveBeenCalled();
+    });
+    it('retains apply feedback across the parent update, then clears it on unrelated edits', async () => {
+        function Parent() {
+            const [current, setCurrent] = useState<Question[]>(questions);
+            return <>
+                <button onClick={() => setCurrent(items => items.map(item => ({ ...item, answer: 2 })))}>다른 문항 편집</button>
+                <ExamContentAnalysisPanel file={file} questions={current} enabled onApply={rows => {
+                    setCurrent(items => applyReviewedExamContentAnalysis(items, rows));
+                }} />
+            </>;
+        }
+        render(<Parent />);
+        fireEvent.click(screen.getByRole('button', { name: '선택한 페이지 분석' }));
+        await screen.findByLabelText('1번 개념');
+        fireEvent.click(screen.getByRole('button', { name: '선택한 문항 검토 완료·적용' }));
+        expect(screen.getByRole('status').textContent).toContain('1문항의 검토한 분석을 적용했습니다');
+        expect(screen.queryByLabelText('1번 개념')).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: '다른 문항 편집' }));
+        expect(screen.queryByRole('status')).toBeNull();
+    });
+
 });

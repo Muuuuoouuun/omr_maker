@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { applyExamContentAnalysis, normalizeQuestionContentAnalysis, validateExamAnalysisQuestions, validateExamContentAnalysis } from './examContentAnalysis';
+import type { Question } from '@/types/omr';
+import { applyExamContentAnalysis, applyReviewedExamContentAnalysis, normalizeQuestionContentAnalysis, validateExamAnalysisQuestions, validateExamContentAnalysis } from './examContentAnalysis';
 
 const questions = [{ id: 42, number: 3 }, { id: 5, number: 8 }];
 const row = { questionId: 42, questionNumber: 3, tags: { unit: '함수', skill: '그래프 해석' }, contentAnalysis: { concepts: ['일차함수'], trapPoints: ['축의 단위'], summary: '기울기 해석', status: 'reviewed' as const } };
@@ -31,5 +32,15 @@ describe('exam content analysis trust boundaries', () => {
     it('normalizes bounded reviewed metadata but rejects arbitrary status', () => {
         expect(normalizeQuestionContentAnalysis(row.contentAnalysis)).toEqual(row.contentAnalysis);
         expect(normalizeQuestionContentAnalysis({ ...row.contentAnalysis, status: 'published' })).toBeUndefined();
+    });
+    it('clears reviewed fields without leaving stale classifications or altering grading', () => {
+        const original: Question[] = [{ ...questions[0], answer: 4, score: 5, tags: { unit: '옛 단원', skill: '옛 역량', concept: '옛 개념', subject: '수학', difficulty: 'hard' } }, questions[1]];
+        const updated = applyReviewedExamContentAnalysis(original, [{ ...row, tags: {} }]);
+        expect(updated[0]).toMatchObject({ answer: 4, score: 5, tags: { subject: '수학', difficulty: 'hard', concept: '일차함수' }, contentAnalysis: { status: 'reviewed' } });
+        expect(updated[0].tags).not.toHaveProperty('unit');
+        expect(updated[0].tags).not.toHaveProperty('skill');
+        expect(updated[1]).toBe(original[1]);
+        expect(original[0].tags?.unit).toBe('옛 단원');
+        expect(() => applyReviewedExamContentAnalysis(original, [{ ...row, contentAnalysis: { ...row.contentAnalysis, status: 'draft' } }])).toThrow();
     });
 });

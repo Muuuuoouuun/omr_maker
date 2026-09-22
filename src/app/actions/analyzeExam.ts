@@ -82,6 +82,14 @@ Match the printed question number to its exact questionId. Do not renumber, inve
 Analyze only visible readable questions. Omit uncertain or missing questions. If none readable return [].
 Do not infer concepts from an answer key alone. Do not claim any student made a mistake.
 Identify concepts, unit, question type and potential trap points from the actual problem.
+The FIRST item in concepts is the representative concept used to aggregate this student's results across DIFFERENT exams.
+Use a concise, reusable curriculum concept or assessed reading skill for this first item, not a passage-specific topic, person, quotation, or case label.
+For Korean reading comprehension, choose the assessed skill, e.g. "내용 일치 판단", "관점 비판", "사례 적용", "추론", "글의 구조 파악".
+For math/science/grammar, choose the actual curriculum concept, e.g. "조건부 확률", "일차함수의 기울기", "음운 변동". Do not replace these with generic labels like "문제 해결".
+Keep the same label for the same assessed concept across questions. Additional concepts may describe passage-specific knowledge.
+Example: a reading question about a particular theory's limitations should start with "관점 비판", followed by that theory if useful.
+Trap points must be grounded in visible conditions/options. A general warning such as "실수 주의" is not evidence.
+Respect negative stems such as "적절하지 않은" and "일치하지 않는": a false statement may be the requested correct choice, so do not call it a distractor merely because it is false. Describe the reasoning pitfall without asserting an answer number.
 Concepts: 1-8 short labels, each <=200 characters; traps: 0-8 items <=200 characters each.
 Summary <=1000 characters; unit and skill <=120 characters. No answer key extraction.
 These are provisional teacher-review drafts, not definitive assessments.`;

@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { BrainCircuit, Loader2 } from 'lucide-react';
 import { analyzeExamImages } from '@/app/actions/analyzeExam';
 import { PremiumFeatureCard } from '@/components/PremiumFeatureGate';
-import { validateExamContentAnalysis, type ExamContentAnalysisRow } from '@/lib/examContentAnalysis';
+import { applyReviewedExamContentAnalysis, validateExamContentAnalysis, type ExamContentAnalysisRow } from '@/lib/examContentAnalysis';
+import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 import type { Question } from '@/types/omr';
 
 interface Props {
@@ -37,14 +38,18 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
     const [error, setError] = useState('');
     const generation = useRef(0);
     const acceptedContext = useRef<{ file: File | null; questions: Question[] } | null>(null);
+    const pendingApply = useRef<{ file: File | null; questions: string } | null>(null);
     useEffect(() => {
+        const isOwnAppliedUpdate = enabled && pendingApply.current?.file === file
+            && pendingApply.current.questions === JSON.stringify(questions);
+        pendingApply.current = null;
         generation.current++;
         acceptedContext.current = null;
         // A PDF replacement or question edit invalidates pending AI work and its review.
         setRows([]);
         setBusy(false);
         setError('');
-        setMessage('');
+        if (!isOwnAppliedUpdate) setMessage('');
         const cancelGeneration = () => { generation.current++; };
         return cancelGeneration;
     }, [file, questions, enabled]);
@@ -58,11 +63,15 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
         setBusy(true); setError(''); setMessage('선택한 PDF 페이지를 준비하고 있습니다.'); setRows([]);
         acceptedContext.current = null;
         try {
+            let personalApiKey: string;
+            try { personalApiKey = readStoredGeminiApiKey(); } catch {
+                throw new Error('저장된 개인 API 키 설정을 읽을 수 없습니다. 브라우저 저장소 설정을 확인한 뒤 다시 시도해 주세요.');
+            }
             const { renderExamAnalysisPages } = await import('@/services/examAnalysisPdf.client');
             const images = await renderExamAnalysisPages(file, start, end, isCurrent);
             if (!isCurrent()) return;
             setMessage('문항별 개념과 함정 포인트를 분석하고 있습니다.');
-            const result = await analyzeExamImages(images, questions.map(({ id, number }) => ({ id, number })));
+            const result = await analyzeExamImages(images, questions.map(({ id, number }) => ({ id, number })), personalApiKey);
             if (!isCurrent()) return;
             acceptedContext.current = { file, questions };
             setRows(result.map(editRow));
@@ -77,9 +86,11 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
             const selected = rows.filter(row => row.selected);
             if (!selected.length) throw new Error('적용할 문항을 선택해 주세요.');
             const validated = validateExamContentAnalysis(selected.map(row => ({ questionId: row.questionId, questionNumber: row.questionNumber, tags: { ...(row.unit.trim() ? { unit: row.unit.trim() } : {}), ...(row.skill.trim() ? { skill: row.skill.trim() } : {}) }, contentAnalysis: { concepts: list(row.concepts), trapPoints: list(row.trapPoints), summary: row.summary.trim(), status: 'draft' } })), questions);
-            onApply(validated.map(row => ({ ...row, contentAnalysis: { ...row.contentAnalysis, status: 'reviewed' } })));
+            const reviewed = validated.map(row => ({ ...row, contentAnalysis: { ...row.contentAnalysis, status: 'reviewed' as const } }));
+            pendingApply.current = { file, questions: JSON.stringify(applyReviewedExamContentAnalysis(questions, reviewed)) };
+            onApply(reviewed);
             setRows([]); setError(''); setMessage(`${validated.length}문항의 검토한 분석을 적용했습니다. 시험을 저장하면 함께 보관됩니다.`);
-        } catch { setError('선택한 문항의 개념과 요약을 입력해 주세요. 개념·함정은 각각 최대 8개(각 200자), 요약은 1,000자까지 가능합니다.'); }
+        } catch { pendingApply.current = null; setError('선택한 문항의 개념과 요약을 입력해 주세요. 개념·함정은 각각 최대 8개(각 200자), 요약은 1,000자까지 가능합니다.'); }
     }
     function patch(id: number, update: Partial<EditableRow>) { setRows(current => current.map(row => row.questionId === id ? { ...row, ...update } : row)); }
     const saved = questions.filter(question => question.contentAnalysis);
@@ -90,7 +101,7 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
             <label style={{ flex: 1 }}>시작 쪽<input aria-label="분석 시작 쪽" className="input-field" type="number" min={1} value={start} disabled={busy} onChange={event => setStart(Number(event.target.value))} /></label>
             <label style={{ flex: 1 }}>끝 쪽<input aria-label="분석 끝 쪽" className="input-field" type="number" min={start} max={start + 3} value={end} disabled={busy} onChange={event => setEnd(Number(event.target.value))} /></label>
         </div>
-        <p className="hint" style={{ margin: '0.4rem 0' }}>한 번에 최대 4쪽 · 선택한 페이지만 AI 분석 서비스로 전송되며 공용 AI 이용량을 사용합니다.</p>
+        <p className="hint" style={{ margin: '0.4rem 0' }}>한 번에 최대 4쪽 · 선택한 페이지만 AI 분석 서비스로 전송됩니다. 설정에 저장된 개인 API 키가 있으면 해당 키를 사용하며, 없으면 공용 AI 이용량을 사용합니다.</p>
         <button type="button" className="btn btn-secondary" onClick={analyze} disabled={!file || busy}>{busy ? <Loader2 size={16} className="animate-spin" /> : <BrainCircuit size={16} />}{busy ? '분석 중' : '선택한 페이지 분석'}</button>
         {busy ? <button type="button" className="btn btn-secondary" onClick={() => { generation.current++; setBusy(false); setMessage('분석 결과 수신을 취소했습니다.'); }}>취소</button> : null}
         {!file ? <p className="hint">먼저 문제지 PDF를 업로드해 주세요.</p> : null}

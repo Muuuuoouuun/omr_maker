@@ -40,6 +40,27 @@ describe("student concept mastery", () => {
         expect(summary.groups.find(group => group.concept === "어휘")).toMatchObject({ correctRate: 50, assessment: "developing" });
     });
 
+    it.each([undefined, "", "invalid", "2026", "2026-02-30", "2026-09-02"])("withholds trends for missing, invalid, partial, or tied dates: %s", oldDate => {
+        const attemptDates = new Map([["new", "2026-09-02"]]);
+        if (oldDate !== undefined) attemptDates.set("old", oldDate);
+        const summary = buildStudentConceptMastery([
+            result(1, "new", "correct"), result(2, "new", "correct"),
+            result(3, "old", "wrong"), result(4, "old", "wrong"),
+        ], new Map(), attemptDates);
+        expect(summary.groups[0]).toMatchObject({ totalCount: 4, correctRate: 50, trendDelta: null });
+    });
+
+    it.each(["새 개념", "시제"])("never attaches current reviewed traps to historic grading even if the concept is %s", concept => {
+        const exam: Exam = { id: "exam", title: "시험", createdAt: "2026-09-01", questions: [{
+            id: 1, number: 1,
+            contentAnalysis: { status: "reviewed", concepts: [concept], trapPoints: ["나중에 추가한 함정"], summary: "수정된 분석" },
+        }] };
+        const canonical = [result(1, "old", "wrong")];
+        const withCurrentExam = buildStudentConceptMastery(canonical, new Map([[exam.id, exam]]), dates);
+        expect(withCurrentExam).toEqual(buildStudentConceptMastery(canonical, new Map(), dates));
+        expect(withCurrentExam.groups[0].evidence[0].trapPoints).toEqual([]);
+    });
+
     it("does not backdate edited concepts or expose draft trap annotations", () => {
         const exam: Exam = { id: "exam", title: "시험", createdAt: "2026-09-01", questions: [{
             id: 1, number: 1, tags: { concept: "현재 수정된 개념" },

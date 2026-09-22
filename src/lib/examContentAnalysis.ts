@@ -74,6 +74,26 @@ export function applyExamContentAnalysis(questions: Question[], rows: ExamConten
     });
 }
 
+/** Apply an explicit teacher review, including removal of cleared unit/skill fields. */
+export function applyReviewedExamContentAnalysis(questions: Question[], rows: ExamContentAnalysisRow[]): Question[] {
+    if (rows.some(row => row.contentAnalysis.status !== 'reviewed')) return invalid();
+    const validated = validateExamContentAnalysis(rows, questions);
+    const byId = new Map(validated.map(row => [row.questionId, row]));
+    return questions.map(question => {
+        const row = byId.get(question.id);
+        if (!row) return question;
+        const tags = { ...question.tags };
+        delete tags.unit;
+        delete tags.concept;
+        delete tags.skill;
+        return {
+            ...question,
+            tags: { ...tags, ...row.tags },
+            contentAnalysis: { ...row.contentAnalysis, status: 'reviewed' },
+        };
+    });
+}
+
 /** Persistence boundary: discard malformed metadata rather than trusting stored AI output. */
 export function normalizeQuestionContentAnalysis(value: unknown): QuestionContentAnalysis | undefined {
     try {

@@ -7,6 +7,7 @@ export interface StudentConceptEvidence {
     attemptId: string;
     status: QuestionResult["status"];
     finishedAt: string;
+    /** Reserved for a future submission-time snapshot; current exam annotations are never historical evidence. */
     trapPoints: string[];
 }
 
@@ -28,15 +29,23 @@ export interface StudentConceptMasterySummary {
     unmappedQuestionCount: number;
 }
 
-/** Uses canonical grading only. Reviewed content annotations describe questions, never a student's actual mistake. */
+function activityTimestamp(value: string): number | null {
+    if (!/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value)) return null;
+    const datePart = value.slice(0, 10);
+    const calendarDate = Date.parse(`${datePart}T00:00:00Z`);
+    if (!Number.isFinite(calendarDate) || new Date(calendarDate).toISOString().slice(0, 10) !== datePart) return null;
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+/** Uses canonical grading and concept snapshots only, never mutable exam annotations. */
 export function buildStudentConceptMastery(
     results: readonly QuestionResult[],
     examById: ReadonlyMap<string, Exam>,
     finishedAtByAttempt: ReadonlyMap<string, string>,
 ): StudentConceptMasterySummary {
-    const questionByKey = new Map([...examById.values()].flatMap(exam => exam.questions.map(question => [
-        JSON.stringify([exam.id, question.id]), question,
-    ] as const)));
+    // Retain the argument for callers, but never join mutable exam annotations into historical evidence.
+    void examById;
     const grouped = new Map<string, StudentConceptEvidence[]>();
     const distinctQuestions = new Map<string, Set<string>>();
     const seenResults = new Set<string>();
@@ -47,9 +56,6 @@ export function buildStudentConceptMastery(
         if (seenResults.has(resultKey)) continue;
         seenResults.add(resultKey);
         const questionKey = JSON.stringify([result.examId, result.questionId]);
-        const question = questionByKey.get(questionKey);
-        const analysis = question?.contentAnalysis;
-        const reviewed = analysis?.status === "reviewed";
         // Keep the submitted concept snapshot: later edits must not relabel historical work.
         const concepts = result.concept?.trim() ? [result.concept.trim()] : [];
         if (!concepts.length) unmappedQuestionCount += 1;
@@ -62,7 +68,7 @@ export function buildStudentConceptMastery(
                 attemptId: result.attemptId,
                 status: result.status,
                 finishedAt: finishedAtByAttempt.get(result.attemptId) || "",
-                trapPoints: reviewed ? analysis.trapPoints : [],
+                trapPoints: [],
             });
             grouped.set(concept, evidence);
             const questions = distinctQuestions.get(concept) || new Set<string>();
@@ -71,7 +77,7 @@ export function buildStudentConceptMastery(
         }
     }
     const groups = [...grouped].map(([concept, evidence]): StudentConceptMastery => {
-        evidence.sort((a, b) => (Date.parse(b.finishedAt) || 0) - (Date.parse(a.finishedAt) || 0)
+        evidence.sort((a, b) => (activityTimestamp(b.finishedAt) ?? -Infinity) - (activityTimestamp(a.finishedAt) ?? -Infinity)
             || a.attemptId.localeCompare(b.attemptId) || a.questionNumber - b.questionNumber);
         const attempts = [...new Set(evidence.map(item => item.attemptId))];
         const correctCount = evidence.filter(item => item.status === "correct").length;
@@ -84,7 +90,12 @@ export function buildStudentConceptMastery(
         const previousIds = new Set(attempts.slice(windowSize, windowSize * 2));
         const recent = evidence.filter(item => recentIds.has(item.attemptId));
         const previous = evidence.filter(item => previousIds.has(item.attemptId));
-        const trendDelta = windowSize >= 1 && recent.length >= 2 && previous.length >= 2
+        const allDatesKnown = evidence.every(item => activityTimestamp(item.finishedAt) !== null);
+        // Equal timestamps across the split cannot establish a previous/recent ordering.
+        const orderedWindows = recent.length > 0 && previous.length > 0
+            && Math.min(...recent.map(item => activityTimestamp(item.finishedAt) ?? -Infinity))
+                > Math.max(...previous.map(item => activityTimestamp(item.finishedAt) ?? Infinity));
+        const trendDelta = allDatesKnown && orderedWindows && windowSize >= 1 && recent.length >= 2 && previous.length >= 2
             ? Math.round(recent.filter(item => item.status === "correct").length / recent.length * 100)
                 - Math.round(previous.filter(item => item.status === "correct").length / previous.length * 100)
             : null;
