@@ -51,6 +51,7 @@ import {
     matchRosterStudentForAttempt,
     mergeSelectedAttemptIntoPeers,
     parseStudentResultView,
+    parseStudentResultQuestionNumber,
     resolveStudentResultComparisonScore,
 } from "@/lib/studentResultHub";
 import StudentResultHeader from "@/components/teacher/student-results/StudentResultHeader";
@@ -140,6 +141,7 @@ export default function TeacherAttemptPage() {
     const searchParams = useSearchParams();
     const id = params?.attemptId as string;
     const activeView = parseStudentResultView(searchParams.get("view"));
+    const requestedQuestionNumber = parseStudentResultQuestionNumber(searchParams.get("question"));
     const activeAttemptIdRef = useRef(id);
     const handwritingLoadingAttemptRef = useRef<string | null>(null);
     const handwritingReadyAttemptIdRef = useRef<string | null>(null);
@@ -956,6 +958,8 @@ export default function TeacherAttemptPage() {
                                 exam={exam ?? undefined}
                                 gradingSource={answerGradingSource}
                                 questionResults={answerQuestionResults}
+                                requestedQuestionNumber={requestedQuestionNumber}
+                                questionResultsLoading={!!exam && !analyticsBuilders}
                                 counts={answerCounts}
                                 score={analytics?.score}
                                 subQuestionFilter={subQuestionFilter}

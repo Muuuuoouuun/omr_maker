@@ -94,6 +94,19 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
     }
     function patch(id: number, update: Partial<EditableRow>) { setRows(current => current.map(row => row.questionId === id ? { ...row, ...update } : row)); }
     const saved = questions.filter(question => question.contentAnalysis);
+    const reusableConcepts = [...new Set(questions.flatMap(question => [
+        question.tags?.concept?.trim() || '',
+        question.contentAnalysis?.status === 'reviewed' ? question.contentAnalysis.concepts[0]?.trim() || '' : '',
+    ]).filter(Boolean))];
+    function chooseRepresentative(row: EditableRow, concept: string) {
+        const next = [concept, ...list(row.concepts).filter(value => value !== concept)];
+        if (next.length > 8) {
+            setError(`${row.questionNumber}번 개념은 최대 8개입니다. 기존 개념을 줄인 뒤 대표 개념을 추가해 주세요.`);
+            return;
+        }
+        patch(row.questionId, { concepts: next.join('\n') });
+        setError('');
+    }
     return <details className="card" aria-label="시험지 개념·함정 분석" style={{ padding: '1rem', marginBottom: '1rem' }}>
         <summary style={{ cursor: 'pointer', fontWeight: 700 }}>시험지 개념·함정 분석 <span className="hint">Pro · {saved.length ? `${saved.length}문항 저장됨` : '펼치기'}</span></summary>
         <p className="hint" style={{ margin: '0.6rem 0', lineHeight: 1.6 }}>업로드한 문제지에서 개념과 함정 포인트를 AI 초안으로 만듭니다. 검토한 분석의 첫 번째 개념을 대표 개념으로 사용해 학생별 누적 강점·약점을 비교합니다.</p>
@@ -114,6 +127,13 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
             {rows.map(row => <details key={row.questionId} open style={{ borderTop: '1px solid var(--border)', padding: '0.75rem 0' }}>
                 <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{row.questionNumber}번 · 검토 대기</summary>
                 <label style={{ display: 'block', margin: '0.5rem 0' }}><input type="checkbox" checked={row.selected} onChange={event => patch(row.questionId, { selected: event.target.checked })} /> 이 문항 적용</label>
+                <label>대표 개념
+                    <select className="input-field" aria-label={`${row.questionNumber}번 대표 개념`} value={list(row.concepts)[0] || ''} onChange={event => chooseRepresentative(row, event.target.value)}>
+                        {!list(row.concepts).length ? <option value="" disabled>개념을 입력하거나 기존 개념을 선택하세요</option> : null}
+                        {[...new Set([...list(row.concepts), ...reusableConcepts])].map(concept => <option key={concept} value={concept}>{concept}{reusableConcepts.includes(concept) ? ' · 등록된 개념' : ''}</option>)}
+                    </select>
+                </label>
+                <p className="hint">학생별 강점·약점을 묶는 기준입니다. 같은 개념은 같은 이름으로 맞추세요. 이 시험에 등록된 개념도 선택할 수 있습니다. 선택한 개념이 아래 첫 줄에 반영됩니다.</p>
                 <label>개념 (한 줄에 하나)<textarea className="input-field" aria-label={`${row.questionNumber}번 개념`} rows={2} value={row.concepts} onChange={event => patch(row.questionId, { concepts: event.target.value })} /></label>
                 <label>단원<input className="input-field" aria-label={`${row.questionNumber}번 단원`} maxLength={120} value={row.unit} onChange={event => patch(row.questionId, { unit: event.target.value })} /></label>
                 <label>평가 역량<input className="input-field" aria-label={`${row.questionNumber}번 평가 역량`} maxLength={120} value={row.skill} onChange={event => patch(row.questionId, { skill: event.target.value })} /></label>

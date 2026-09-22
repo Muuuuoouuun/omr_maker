@@ -11,6 +11,7 @@ import {
     markUnresolvedGrowthAttempt,
     mergeSelectedAttemptIntoPeers,
     parseStudentResultView,
+    parseStudentResultQuestionNumber,
     sameStudentAttempt,
 } from "./studentResultHub";
 import { buildStudentProfileInsight } from "./studentProfileAnalytics";
@@ -386,6 +387,17 @@ describe("student result hub", () => {
 
     it("builds canonical result links with encoded attempt ids", () => {
         expect(buildStudentResultHref("attempt/a", "analytics")).toBe("/teacher/attempt/attempt%2Fa?view=analytics");
+    });
+
+    it("builds and safely parses question-level result links", () => {
+        expect(buildStudentResultHref("attempt/a", "answers", 12)).toBe("/teacher/attempt/attempt%2Fa?view=answers&question=12");
+        expect(parseStudentResultQuestionNumber("12")).toBe(12);
+        for (const value of [null, "", "0", "-1", "1.5", "1e2", "02", " 2", "2x", "9007199254740992"]) {
+            expect(parseStudentResultQuestionNumber(value)).toBeNull();
+        }
+        for (const value of [0, -1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+            expect(buildStudentResultHref("attempt", "answers", value)).toBe("/teacher/attempt/attempt?view=answers");
+        }
     });
 
     it("matches stable student identifiers across profile and legacy id fields", () => {

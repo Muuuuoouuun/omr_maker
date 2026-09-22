@@ -184,8 +184,16 @@ export function parseStudentResultView(value?: string | null): StudentResultView
     return STUDENT_RESULT_VIEWS.includes(value as StudentResultView) ? value as StudentResultView : "answers";
 }
 
-export function buildStudentResultHref(attemptId: string, view: StudentResultView): string {
-    return `/teacher/attempt/${encodeURIComponent(attemptId)}?view=${view}`;
+export function parseStudentResultQuestionNumber(value?: string | null): number | null {
+    if (!value || !/^[1-9]\d*$/.test(value)) return null;
+    const number = Number(value);
+    return Number.isSafeInteger(number) ? number : null;
+}
+
+export function buildStudentResultHref(attemptId: string, view: StudentResultView, questionNumber?: number): string {
+    const question = Number.isSafeInteger(questionNumber) && (questionNumber ?? 0) > 0
+        ? `&question=${questionNumber}` : "";
+    return `/teacher/attempt/${encodeURIComponent(attemptId)}?view=${view}${question}`;
 }
 
 export function matchRosterStudentForAttempt(

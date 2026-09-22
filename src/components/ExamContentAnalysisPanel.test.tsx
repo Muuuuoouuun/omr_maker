@@ -82,4 +82,28 @@ describe('exam content review', () => {
         expect(screen.queryByRole('status')).toBeNull();
     });
 
+    it('reuses an existing concept as representative without dropping draft concepts', async () => {
+        const onApply = vi.fn();
+        render(<ExamContentAnalysisPanel file={file} questions={[{ id: 1, number: 1, tags: { concept: '일차방정식' } }]} enabled onApply={onApply} />);
+        fireEvent.click(screen.getByRole('button', { name: '선택한 페이지 분석' }));
+        const representative = await screen.findByLabelText('1번 대표 개념');
+        fireEvent.change(representative, { target: { value: '일차방정식' } });
+        expect((screen.getByLabelText('1번 개념') as HTMLTextAreaElement).value).toBe('일차방정식\n방정식');
+        fireEvent.click(screen.getByRole('button', { name: '선택한 문항 검토 완료·적용' }));
+        expect(onApply).toHaveBeenCalledWith([expect.objectContaining({ tags: expect.objectContaining({ concept: '일차방정식' }), contentAnalysis: expect.objectContaining({ concepts: ['일차방정식', '방정식'] }) })]);
+    });
+    it('keeps representative selection synchronized with edited concepts and prevents silent truncation', async () => {
+        render(<ExamContentAnalysisPanel file={file} questions={[{ id: 1, number: 1, tags: { concept: '등록 개념' } }]} enabled onApply={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: '선택한 페이지 분석' }));
+        const field = await screen.findByLabelText('1번 개념');
+        fireEvent.change(field, { target: { value: 'A\nB\nC\nD\nE\nF\nG\nH' } });
+        const representative = screen.getByLabelText('1번 대표 개념') as HTMLSelectElement;
+        expect(representative.value).toBe('A');
+        fireEvent.change(representative, { target: { value: '등록 개념' } });
+        expect(screen.getByRole('alert').textContent).toContain('최대 8개');
+        expect((field as HTMLTextAreaElement).value.split('\n')).toHaveLength(8);
+        fireEvent.change(representative, { target: { value: 'H' } });
+        expect((field as HTMLTextAreaElement).value).toBe('H\nA\nB\nC\nD\nE\nF\nG');
+    });
+
 });

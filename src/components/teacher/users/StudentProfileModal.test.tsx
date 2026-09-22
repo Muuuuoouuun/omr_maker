@@ -28,9 +28,9 @@ describe("StudentProfileModal concept analytics", () => {
         render(<StudentProfileModal student={student} profile={profile} onClose={() => {}} retakeAssignmentsEnabled={false} />);
         const dialog = screen.getByRole("dialog", { name: "김학생 학생 성장 리포트" });
         expect(within(dialog).getByRole("heading", { name: "개념별 강점과 보완점" })).toBeInTheDocument();
-        expect(within(dialog).getByRole("heading", { name: "문맥 추론", exact: true })).toBeInTheDocument();
+        expect(within(dialog).getByRole("heading", { name: "문맥 추론" })).toBeInTheDocument();
         fireEvent.click(within(dialog).getByRole("button", { name: /문맥 추론 문항 근거 보기/ }));
-        expect(within(dialog).getByRole("link", { name: /진단 시험/ })).toHaveAttribute("href", "/teacher/attempt/attempt-1?view=answers");
+        expect(within(dialog).getByRole("link", { name: "진단 시험 · 2번 · 오답" })).toHaveAttribute("href", "/teacher/attempt/attempt-1?view=answers&question=2");
     });
 
     it("keeps legacy profiles without concept analytics usable", () => {

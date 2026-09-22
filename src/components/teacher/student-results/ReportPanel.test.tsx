@@ -188,9 +188,9 @@ describe("ReportPanel", () => {
     it("shows cumulative concept strengths and weaknesses in the live report", () => {
         renderReport({ insight: conceptInsight() });
         const section = screen.getByRole("region", { name: "누적 개념 분석" });
-        expect(within(section).getByRole("heading", { name: "문맥 추론", exact: true })).toBeInTheDocument();
+        expect(within(section).getByRole("heading", { name: "문맥 추론" })).toBeInTheDocument();
         fireEvent.click(within(section).getByRole("button", { name: /문맥 추론 문항 근거 보기/ }));
-        expect(within(section).getByRole("link", { name: /개념 근거 시험/ })).toHaveAttribute("href", "/teacher/attempt/attempt-1?view=answers");
+        expect(within(section).getByRole("link", { name: "개념 근거 시험 · 2번 · 오답" })).toHaveAttribute("href", "/teacher/attempt/attempt-1?view=answers&question=2");
     });
 
     it.each(["idle", "loading", "error", "empty"] as const)("withholds concept detail when growth state is %s", status => {
