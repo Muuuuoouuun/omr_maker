@@ -1,0 +1,46 @@
+.panel { margin-bottom: 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); min-width: 0; }
+.header { display: flex; align-items: flex-start; gap: .5rem; padding: 1rem; cursor: pointer; font-weight: 750; line-height: 1.6; word-break: keep-all; overflow-wrap: anywhere; list-style: none; }
+.header::-webkit-details-marker { display: none; }
+.headerText { flex: 1; min-width: 0; }
+.header > svg { flex-shrink: 0; margin-top: .3rem; }
+.header[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.pro { display: inline-block; margin-left: .5rem; padding: .05rem .4rem; border: 1px solid var(--border); border-radius: 5px; font-size: .75rem; color: var(--text-primary); vertical-align: middle; }
+.saved { display: block; margin-top: .2rem; font-size: .75rem; font-weight: 500; color: var(--muted); }
+.body { padding: 0 1rem 1rem; min-width: 0; }
+.steps { list-style: none; display: flex; flex-wrap: wrap; gap: .75rem 1rem; padding: .9rem 0; margin: .5rem 0 1rem; border-block: 1px solid var(--border); }
+.steps li { display: flex; gap: .4rem; align-items: flex-start; flex: 1 1 75px; }
+.steps li > span { font-size: .8rem; font-weight: 750; color: var(--muted); }
+.steps strong, .steps small { display: block; }
+.steps strong { font-size: .8rem; }
+.steps small { margin-top: .15rem; font-size: .75rem; color: var(--muted); line-height: 1.5; }
+.steps li[data-active="true"] > span, .steps li[data-active="true"] strong { color: var(--primary); }
+.sectionHeading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .3rem .75rem; margin-bottom: .65rem; }
+.sectionHeading strong { font-size: .9rem; }
+.sectionHeading > span { color: var(--muted); font-size: .75rem; }
+.range, .metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+.body label { display: block; min-width: 0; font-size: .8rem; font-weight: 650; line-height: 1.5; }
+.body input:not([type="checkbox"]), .body select, .body textarea { display: block; margin-top: .35rem; min-height: 44px; width: 100%; min-width: 0; font-weight: 450; }
+.body textarea { resize: vertical; line-height: 1.65; }
+.helper, .applyArea > p { font-size: .75rem; line-height: 1.65; color: var(--muted); margin: .6rem 0; }
+.actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.actions button { min-height: 44px; white-space: normal; max-width: 100%; }
+.status { border-left: 3px solid var(--primary); padding: .65rem .75rem; font-size: .8rem; line-height: 1.6; margin: .75rem 0; }
+.error { border-left: 3px solid var(--error); padding: .65rem .75rem; color: var(--text-error); font-size: .8125rem; line-height: 1.6; }
+.review { margin-top: 1.25rem; }
+.question { border-top: 1px solid var(--border); margin-top: .75rem; }
+.questionHeading { padding: .85rem 0; cursor: pointer; line-height: 1.65; overflow-wrap: anywhere; }
+.questionHeading strong { margin-right: .5rem; }
+.questionHeading > span { font-size: .9rem; font-weight: 650; }
+.questionHeading small { color: var(--muted); margin-left: .5rem; font-size: .75rem; }
+.questionBody { display: grid; gap: .8rem; padding-bottom: .75rem; }
+.questionBody > p { margin: -.4rem 0 0; line-height: 1.65; }
+.body .include { display: flex; align-items: center; gap: .5rem; min-height: 44px; font-weight: 450; }
+.include input { width: 18px; height: 18px; accent-color: var(--primary); }
+.body .representative { font-size: .9rem; font-weight: 750; }
+.representative select { border-color: var(--primary); }
+.metadata { padding: .75rem 0; border-block: 1px solid var(--border); }
+.interpretation { display: grid; gap: .8rem; }
+.applyArea { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--border); }
+.header:focus-visible, .questionHeading:focus-visible, .body button:focus-visible, .body input:focus-visible, .body select:focus-visible, .body textarea:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+@media (max-width: 480px) { .body { padding-inline: .75rem; } .header { padding-inline: .75rem; } .metadata { grid-template-columns: 1fr; } .applyArea .actions button { flex: 1 1 100%; } }
+@media (forced-colors: active) { .representative select, .pro, .status, .error { border-color: CanvasText; } }

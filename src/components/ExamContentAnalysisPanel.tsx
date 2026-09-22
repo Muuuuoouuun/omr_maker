@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
-import { BrainCircuit, Loader2 } from 'lucide-react';
+import { BrainCircuit, ChevronDown, Loader2 } from 'lucide-react';
 import { analyzeExamImages } from '@/app/actions/analyzeExam';
 import { PremiumFeatureCard } from '@/components/PremiumFeatureGate';
 import { applyReviewedExamContentAnalysis, validateExamContentAnalysis, type ExamContentAnalysisRow } from '@/lib/examContentAnalysis';
 import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
+import styles from './ExamContentAnalysisPanel.module.css';
 import type { Question } from '@/types/omr';
 
 interface Props {
@@ -36,6 +37,7 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
+    const [isOpen, setIsOpen] = useState(false);
     const generation = useRef(0);
     const acceptedContext = useRef<{ file: File | null; questions: Question[] } | null>(null);
     const pendingApply = useRef<{ file: File | null; questions: string } | null>(null);
@@ -107,27 +109,39 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
         patch(row.questionId, { concepts: next.join('\n') });
         setError('');
     }
-    return <details className="card" aria-label="시험지 개념·함정 분석" style={{ padding: '1rem', marginBottom: '1rem' }}>
-        <summary style={{ cursor: 'pointer', fontWeight: 700 }}>시험지 개념·함정 분석 <span className="hint">Pro · {saved.length ? `${saved.length}문항 저장됨` : '펼치기'}</span></summary>
+    return <details className={styles.panel} open={isOpen} aria-label="시험지 개념·함정 분석">
+        <summary className={styles.header} aria-expanded={isOpen} onClick={event => { event.preventDefault(); setIsOpen(current => !current); }}><span className={styles.headerText}><span>시험지 개념·함정 분석</span><span className={styles.pro}>Pro</span><span className={styles.saved}>{saved.length ? `${saved.length}문항 반영됨 · ` : ''}{isOpen ? '분석 설정 접기' : '분석 설정 펼치기'}</span></span><ChevronDown size={17} aria-hidden="true" /></summary>
+        <div className={styles.body}>
         <p className="hint" style={{ margin: '0.6rem 0', lineHeight: 1.6 }}>업로드한 문제지에서 개념과 함정 포인트를 AI 초안으로 만듭니다. 검토한 분석의 첫 번째 개념을 대표 개념으로 사용해 학생별 누적 강점·약점을 비교합니다.</p>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap' }}>
-            <label style={{ flex: 1 }}>시작 쪽<input aria-label="분석 시작 쪽" className="input-field" type="number" min={1} value={start} disabled={busy} onChange={event => setStart(Number(event.target.value))} /></label>
-            <label style={{ flex: 1 }}>끝 쪽<input aria-label="분석 끝 쪽" className="input-field" type="number" min={start} max={start + 3} value={end} disabled={busy} onChange={event => setEnd(Number(event.target.value))} /></label>
+        <ol className={styles.steps} aria-label="시험지 분석 진행 순서">
+            <li><span>1</span><div><strong>분석</strong><small>PDF 범위 선택</small></div></li>
+            <li data-active={rows.length > 0}><span>2</span><div><strong>검토</strong><small>개념 확인·반영</small></div></li>
+            <li><span>3</span><div><strong>저장</strong><small>시험 저장으로 보관</small></div></li>
+        </ol>
+        <div className={styles.preparation}>
+        <div className={styles.sectionHeading}><strong>분석할 페이지</strong><span>한 번에 최대 4쪽</span></div>
+        <div className={styles.range}>
+            <label>시작 쪽<input aria-label="분석 시작 쪽" className="input-field" type="number" min={1} value={start} disabled={busy} onChange={event => setStart(Number(event.target.value))} /></label>
+            <label>끝 쪽<input aria-label="분석 끝 쪽" className="input-field" type="number" min={start} max={start + 3} value={end} disabled={busy} onChange={event => setEnd(Number(event.target.value))} /></label>
         </div>
-        <p className="hint" style={{ margin: '0.4rem 0' }}>한 번에 최대 4쪽 · 선택한 페이지만 AI 분석 서비스로 전송됩니다. 설정에 저장된 개인 API 키가 있으면 해당 키를 사용하며, 없으면 공용 AI 이용량을 사용합니다.</p>
+        <p className={styles.helper}> 선택한 페이지만 AI 분석 서비스로 전송됩니다. 설정에 저장된 개인 API 키가 있으면 해당 키를 사용하며, 없으면 공용 AI 이용량을 사용합니다.</p>
+        <div className={styles.actions}>
         <button type="button" className="btn btn-secondary" onClick={analyze} disabled={!file || busy}>{busy ? <Loader2 size={16} className="animate-spin" /> : <BrainCircuit size={16} />}{busy ? '분석 중' : '선택한 페이지 분석'}</button>
         {busy ? <button type="button" className="btn btn-secondary" onClick={() => { generation.current++; setBusy(false); setMessage('분석 결과 수신을 취소했습니다.'); }}>취소</button> : null}
+        </div></div>
         {!file ? <p className="hint">먼저 문제지 PDF를 업로드해 주세요.</p> : null}
         {saved.length ? <p className="hint">PDF를 교체해도 저장된 분석은 자동 갱신되지 않습니다. 새 문제지와 일치하는지 검토하거나 다시 분석해 주세요.</p> : null}
         {saved.length && !busy ? <button type="button" className="btn btn-secondary" style={{ marginTop: 8 }} onClick={() => { acceptedContext.current = { file, questions }; setRows(saved.map(question => editRow({ questionId: question.id, questionNumber: question.number, tags: question.tags || {}, contentAnalysis: question.contentAnalysis! }))); setError(''); setMessage('저장된 분석을 검토하고 수정할 수 있습니다.'); }}>저장된 분석 검토 ({saved.length}문항)</button> : null}
-        {message ? <p role="status" className="hint" style={{ marginTop: 8 }}>{message}</p> : null}
-        {error ? <p role="alert" style={{ color: 'var(--danger)', marginTop: 8 }}>{error}</p> : null}
-        {rows.length ? <div style={{ marginTop: 12 }}>
+        {message ? <p role="status" className={styles.status}>{message}</p> : null}
+        {error ? <p role="alert" className={styles.error}>{error}</p> : null}
+        {rows.length ? <div className={styles.review}>
+            <div className={styles.sectionHeading}><strong>문항별 검토</strong><span>{rows.filter(row => row.selected).length}/{rows.length}문항 적용 예정</span></div>
             <p className="hint">AI 결과는 틀릴 수 있습니다. 아래 함정은 문제의 잠재적 함정이며 학생이 실제로 범한 실수로 단정하지 않습니다.</p>
-            {rows.map(row => <details key={row.questionId} open style={{ borderTop: '1px solid var(--border)', padding: '0.75rem 0' }}>
-                <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{row.questionNumber}번 · 검토 대기</summary>
-                <label style={{ display: 'block', margin: '0.5rem 0' }}><input type="checkbox" checked={row.selected} onChange={event => patch(row.questionId, { selected: event.target.checked })} /> 이 문항 적용</label>
-                <label>대표 개념
+            {rows.map(row => <details key={row.questionId} open className={styles.question}>
+                <summary className={styles.questionHeading}><strong>{row.questionNumber}번</strong><span>{list(row.concepts)[0] || '대표 개념 입력 필요'}</span><small>검토 대기</small></summary>
+                <div className={styles.questionBody}>
+                <label className={styles.include}><input type="checkbox" checked={row.selected} onChange={event => patch(row.questionId, { selected: event.target.checked })} /> 이 문항 적용</label>
+                <label className={styles.representative}>대표 개념
                     <select className="input-field" aria-label={`${row.questionNumber}번 대표 개념`} value={list(row.concepts)[0] || ''} onChange={event => chooseRepresentative(row, event.target.value)}>
                         {!list(row.concepts).length ? <option value="" disabled>개념을 입력하거나 기존 개념을 선택하세요</option> : null}
                         {[...new Set([...list(row.concepts), ...reusableConcepts])].map(concept => <option key={concept} value={concept}>{concept}{reusableConcepts.includes(concept) ? ' · 등록된 개념' : ''}</option>)}
@@ -135,13 +149,22 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
                 </label>
                 <p className="hint">학생별 강점·약점을 묶는 기준입니다. 같은 개념은 같은 이름으로 맞추세요. 이 시험에 등록된 개념도 선택할 수 있습니다. 선택한 개념이 아래 첫 줄에 반영됩니다.</p>
                 <label>개념 (한 줄에 하나)<textarea className="input-field" aria-label={`${row.questionNumber}번 개념`} rows={2} value={row.concepts} onChange={event => patch(row.questionId, { concepts: event.target.value })} /></label>
+                <div className={styles.metadata}>
                 <label>단원<input className="input-field" aria-label={`${row.questionNumber}번 단원`} maxLength={120} value={row.unit} onChange={event => patch(row.questionId, { unit: event.target.value })} /></label>
                 <label>평가 역량<input className="input-field" aria-label={`${row.questionNumber}번 평가 역량`} maxLength={120} value={row.skill} onChange={event => patch(row.questionId, { skill: event.target.value })} /></label>
+                </div>
+                <div className={styles.interpretation}>
                 <label>함정 포인트 (한 줄에 하나)<textarea className="input-field" aria-label={`${row.questionNumber}번 함정 포인트`} rows={2} value={row.trapPoints} onChange={event => patch(row.questionId, { trapPoints: event.target.value })} /></label>
                 <label>출제 의도·요약<textarea className="input-field" aria-label={`${row.questionNumber}번 출제 의도`} rows={3} maxLength={1000} value={row.summary} onChange={event => patch(row.questionId, { summary: event.target.value })} /></label>
+                </div></div>
             </details>)}
+            <div className={styles.applyArea}>
+            <p>검토한 내용을 시험에 반영합니다. 보관하려면 화면 상단에서 시험을 저장하세요.</p>
+            <div className={styles.actions}>
             <button type="button" className="btn btn-primary" onClick={apply} disabled={!rows.some(row => row.selected)}>선택한 문항 검토 완료·적용</button>
             <button type="button" className="btn btn-secondary" onClick={() => { setRows([]); setMessage('초안을 닫았습니다.'); }}>초안 닫기</button>
+            </div></div>
         </div> : null}
+        </div>
     </details>;
 }

@@ -57,7 +57,7 @@ describe('student concept filters', () => {
         expect(review.queryByText('자료 부족')).toBeNull();
         expect(review.queryByText('학습 중 개념')).toBeNull();
         expect(review.getByText('누적 오답 0건 · 미응답 3건')).toBeTruthy();
-        expect(review.getByRole('link', { name: '시험 A · 7번 미응답 확인 →' }).getAttribute('href')).toBe('/teacher/attempt/attempt%2Fid?view=answers&question=7');
+        expect(review.getByRole('link', { name: '시험 A · 7번 미응답 확인' }).getAttribute('href')).toBe('/teacher/attempt/attempt%2Fid?view=answers&question=7');
     });
     it('does not confuse the latest evidence with cumulative errors', () => {
         const olderWeakness = { ...group('이전 오답 개념', 'weakness', 30), correctCount: 6, totalCount: 20, unansweredCount: 0, evidence: Array.from({ length: 6 }, (_, index) => ({ ...group('', 'weakness', 0).evidence[0], questionNumber: index + 1, status: 'correct' as const })) };

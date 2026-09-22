@@ -17,6 +17,19 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); mocks.render.mockResolvedValue(['data:image/jpeg;base64,x']); mocks.analyze.mockResolvedValue(result); });
 
 describe('exam content review', () => {
+    it('opens and closes analysis settings with a matching accessible state', () => {
+        render(<ExamContentAnalysisPanel file={file} questions={questions} enabled onApply={vi.fn()} />);
+        const header = screen.getByText('시험지 개념·함정 분석').closest('summary')!;
+        const panel = header.parentElement!;
+        expect(header.getAttribute('aria-expanded')).toBe('false');
+        fireEvent.click(header);
+        expect(header.getAttribute('aria-expanded')).toBe('true');
+        expect(panel.hasAttribute('open')).toBe(true);
+        expect(screen.getByText('분석 설정 접기')).toBeTruthy();
+        fireEvent.click(header);
+        expect(panel.hasAttribute('open')).toBe(false);
+        expect(screen.getByText('분석 설정 펼치기')).toBeTruthy();
+    });
     it('locks analysis for free plans', () => {
         render(<ExamContentAnalysisPanel file={file} questions={questions} enabled={false} onApply={vi.fn()} />);
         expect(screen.getByRole('link', { name: '플랜 보기' }).getAttribute('href')).toBe('/teacher/billing');
