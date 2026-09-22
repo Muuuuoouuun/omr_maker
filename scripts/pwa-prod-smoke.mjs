@@ -7,8 +7,12 @@ const port = Number(process.env.PWA_SMOKE_PORT || 3004);
 const externalBaseUrl = process.env.PWA_SMOKE_BASE_URL?.replace(/\/$/, "");
 const baseUrl = externalBaseUrl || `http://localhost:${port}`;
 const ownsServer = !externalBaseUrl;
-const expectedCachePrefix = "omr-maker-v15";
-const mobileSolveDraftKey = "omr_draft_mobile-pwa-smoke-exam_mobile-pwa-smoke-student_base";
+const expectedCachePrefix = "omr-maker-v16";
+// Mirrors studentAssignmentDraftStorageKey's immutable v2 tuple. Legacy
+// underscore-delimited keys are migration inputs, not current draft writes.
+const mobileSolveDraftKey = `omr_draft:v2:${encodeURIComponent(JSON.stringify([
+    "student-assignment-draft", 2, "mobile-pwa-smoke-exam", "mobile-pwa-smoke-student", null, null, "base",
+]))}`;
 const mobileSolvePanelKey = "omr_solve_panel_mobile-pwa-smoke-exam_mobile-pwa-smoke-student_base";
 const simulatedActionOutageKey = "omr_pwa_smoke_simulate_action_outage";
 const optimizedImagePath = "/_next/image?url=%2Flogo.png&w=96&q=75";
@@ -136,7 +140,7 @@ async function collectResourceState() {
 
 function startNextServer() {
     const nextCliPath = path.join(process.cwd(), "node_modules", "next", "dist", "bin", "next");
-    const child = spawn(process.execPath, [nextCliPath, "start", "-p", String(port)], {
+    const child = spawn(process.execPath, [nextCliPath, "start", "-H", "127.0.0.1", "-p", String(port)], {
         env: { ...process.env, PORT: String(port) },
         stdio: ["ignore", "pipe", "pipe"],
     });
@@ -462,6 +466,7 @@ async function runSmoke() {
 
         await page.goto("/pwa-check", { waitUntil: "networkidle" });
         await page.getByRole("heading", { name: "PWA 디바이스 체크" }).waitFor({ state: "visible", timeout: 10_000 });
+        await page.getByTestId("pwa-advanced-diagnostics-summary").click();
         await page.getByTestId("pwa-device-handoff-qr").waitFor({ state: "visible", timeout: 10_000 });
         await page.waitForFunction(() => (
             document.querySelector('[data-testid="pwa-device-report"]')?.textContent?.includes("OMR Maker PWA device check")
@@ -640,6 +645,11 @@ async function runSmoke() {
             offlineFallbackState,
         );
 
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10_000 }),
+            page.getByRole("button", { name: "다시 연결 시도", exact: true }).click(),
+        ]);
+        await page.getByRole("heading", { name: "오프라인 상태입니다" }).waitFor({ state: "visible", timeout: 10_000 });
         const unexpectedOfflineConsoleProblems = offlineConsoleProblems.filter(problem => !isExpectedOfflineBrowserProblem(problem));
         assert(onlineConsoleProblems.length === 0, "Online console warnings/errors were emitted during PWA smoke", onlineConsoleProblems);
         assert(

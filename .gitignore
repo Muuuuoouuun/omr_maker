@@ -25,6 +25,7 @@
 
 # next.js
 /.next/
+/.next-e2e/
 /out/
 
 # production
@@ -63,7 +64,7 @@ next-env.d.ts
 .superpowers/
 .worktrees/
 
-# Android platform dropped — this app ships iOS(Capacitor)/web/desktop only.
+# Android native platform is optional and not shipped by this checkout.
 # The android/ tree also sat half-evicted in iCloud Drive and hung every
 # git operation that tried to read it.
 /android/

@@ -26,6 +26,10 @@ async function clearStorage(page: Page) {
 function collectConsoleProblems(page: Page): string[] {
     const problems: string[] = [];
     page.on("console", message => {
+        // WebKit can warn about Next's unused development HMR preload after
+        // navigation. Keep every application warning/error in the assertion.
+        if (message.type() === "warning" && /\[turbopack\]|%5Bturbopack%5D/i.test(message.text())
+            && message.text().includes("hmr-client") && message.text().includes("was preloaded")) return;
         if (message.type() === "error" || message.type() === "warning") {
             problems.push(`${message.type()}: ${message.text()}`);
         }
@@ -242,7 +246,7 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
         `- launch-proof=pass:확인됨 (${displayEvidence})`,
         "- service-worker=pass:제어 중 (script=https://omr-maker-eight.vercel.app/sw.js · controller=yes · active=activated · waiting=none · installing=none)",
-        "- offline-cache=pass:준비 (caches=omr-maker-v15-shell, omr-maker-v15-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v15-shell · missingCaches=none · missing=none)",
+        "- offline-cache=pass:준비 (caches=omr-maker-v16-shell, omr-maker-v16-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v16-shell · missingCaches=none · missing=none)",
         "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
         "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
         "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
@@ -371,7 +375,8 @@ test.describe("Mobile PWA entry", () => {
         });
         expect(manifestState.shortcutUrls).toEqual(expect.arrayContaining(["/create", "/teacher/dashboard", "/?role=student", "/pwa-check"]));
         expect(manifestState.launchHandler).toEqual(expect.arrayContaining(["navigate-existing", "auto"]));
-        await expectTouchTarget(page.locator('button[aria-label$="모드로 전환"]'));
+        // Role selection deliberately has only its two primary entry choices.
+        await expect(page.locator('button[aria-label$="모드로 전환"]')).toBeHidden();
         await expectTouchTarget(page.getByRole("button", { name: /학생.*시작하기/ }));
         await expectTouchTarget(page.getByRole("button", { name: /교사.*대시보드/ }));
         const centeredBrand = await page.locator(".home-logo").evaluate(element => {
@@ -396,12 +401,15 @@ test.describe("Mobile PWA entry", () => {
 
         await page.getByRole("button", { name: /학생.*시작하기/ }).click();
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
-        await page.getByPlaceholder("이름을 입력하세요").fill("모바일학생");
-        await expect(page.getByPlaceholder("이름을 입력하세요")).toHaveValue("모바일학생");
-        const studentLookupInput = page.getByLabel("학생번호 또는 이메일");
-        await expect(studentLookupInput).toHaveAttribute("placeholder", "선생님이 알려준 학생번호 또는 이메일");
-        await expect(studentLookupInput).toHaveAttribute("inputmode", "email");
-        await expect(studentLookupInput).toHaveAttribute("autocomplete", "email");
+        await expectTouchTarget(page.locator('button[aria-label$="모드로 전환"]'));
+        // The development-only local entry form differs from the provisioned
+        // production flow, which is checked by teacher-provisioned-links.
+        await page.getByPlaceholder("이름을 입력하세요").fill("모바일 게스트");
+        await page.getByText("다른 방법으로 참여", { exact: true }).click();
+        const guestEntry = page.getByRole("button", { name: "코드 없이 게스트로 계속하기" });
+        await expectTouchTarget(guestEntry);
+        await guestEntry.click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
         await expectNoHorizontalOverflow(page);
         expect(consoleProblems).toEqual([]);
     });
@@ -658,8 +666,8 @@ test.describe("Mobile PWA entry", () => {
         await page.evaluate(() => window.dispatchEvent(new Event("focus")));
         const focusWarning = page.getByRole("dialog", { name: "시험 화면 이탈 안내" });
         await expect(focusWarning).toBeVisible();
-        await expect(focusWarning).toContainText(/현재 이탈 횟수:\s*\d+회/);
-        const returnToExamButton = focusWarning.getByRole("button", { name: "시험으로 돌아가기" });
+        await expect(focusWarning).toContainText(/현재\s*\d+회 기록됨/);
+        const returnToExamButton = focusWarning.getByRole("button", { name: "확인하고 시험으로 돌아가기" });
         await expectTouchTarget(returnToExamButton);
         await returnToExamButton.click();
         await expect(focusWarning).toBeHidden();
@@ -961,7 +969,9 @@ test.describe("Mobile PWA entry", () => {
         await page.getByRole("button", { name: /학생.*시작하기/ }).click();
 
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
-        await expect(page.getByPlaceholder("이름을 입력하세요")).toHaveCSS("font-size", "16px");
+        const nameInput = page.getByPlaceholder("이름을 입력하세요");
+        await expect(nameInput).toBeVisible();
+        expect(await nameInput.evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
         await expectNoHorizontalOverflow(page);
 
         const standaloneState = await page.evaluate(() => {

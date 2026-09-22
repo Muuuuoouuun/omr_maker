@@ -5,7 +5,7 @@ import { DEFAULT_CHOICE_COUNT, Exam, Attempt, type PlanKey } from "@/types/omr";
 import type { QuestionResult } from "@/types/omr";
 import {
     BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
-    Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
+    Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ReferenceLine
 } from 'recharts';
 import type { ValueType } from "recharts/types/component/DefaultTooltipContent";
 import {
@@ -765,6 +765,29 @@ export default function ExamAnalyticsTab({
     const questionCorrectRateChartSummary = `문항별 상세 정답률 데이터: ${questionCorrectRateChartData
         .map(question => `${question.index}번${question.cohortLabel ? ` (${question.cohortLabel})` : ""} ${question.correctRateLabel}`)
         .join(", ")}.`;
+
+    const avgQuestionCorrectRate = useMemo(() => {
+        const valid = questionCorrectRateChartData.filter(q => q.correctRate !== null);
+        if (valid.length === 0) return null;
+        const sum = valid.reduce((acc, q) => acc + (q.correctRate || 0), 0);
+        return Math.round(sum / valid.length);
+    }, [questionCorrectRateChartData]);
+
+    const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState<"all" | "killer" | "medium" | "easy">("all");
+
+    const filteredQuestionAnalytics = useMemo(() => {
+        const list = [...questionAnalytics].sort((a, b) => a.index - b.index);
+        if (questionDifficultyFilter === "killer") {
+            return list.filter(q => q.correctRate !== null && q.correctRate < 40);
+        }
+        if (questionDifficultyFilter === "medium") {
+            return list.filter(q => q.correctRate !== null && q.correctRate >= 40 && q.correctRate < 70);
+        }
+        if (questionDifficultyFilter === "easy") {
+            return list.filter(q => q.correctRate !== null && q.correctRate >= 70);
+        }
+        return list;
+    }, [questionAnalytics, questionDifficultyFilter]);
 
     const examLabels = useMemo(() => {
         return Array.from(new Set(questionAnalytics.map(q => q.label || '일반')));
@@ -3037,15 +3060,26 @@ export default function ExamAnalyticsTab({
                                     // Point-biserial r, same index as the 문항별 상세 table ("-" below n ≥ 5).
                                     const discriminationText = q.pointBiserial !== null ? q.pointBiserial.toFixed(2) : '-';
                                     return (
-                                    <div key={q.cohortKey} style={{
-                                        padding: '1rem',
-                                        borderRadius: 'var(--radius-md)',
-                                        background: 'var(--grade-red-soft)',
-                                        borderLeft: '4px solid var(--grade-red)',
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                        alignItems: 'center'
-                                    }}>
+                                    <div
+                                        key={q.cohortKey}
+                                        onClick={() => {
+                                            const el = document.getElementById(`question-row-${q.index}`);
+                                            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                        }}
+                                        className="card-hover"
+                                        style={{
+                                            padding: '1rem',
+                                            borderRadius: 'var(--radius-md)',
+                                            background: 'var(--grade-red-soft)',
+                                            borderLeft: '4px solid var(--grade-red)',
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.16s ease',
+                                        }}
+                                        title={`${q.index}번 문항 상세 분석으로 이동`}
+                                    >
                                         <div>
                                             <div style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--error)', marginBottom: '0.2rem' }}>
                                                 {q.index}번 문항 ({q.label}){q.cohortLabel ? ` · ${q.cohortLabel}` : ""}
@@ -3117,6 +3151,21 @@ export default function ExamAnalyticsTab({
                                         cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }}
                                         content={<QuestionCorrectRateTooltip />}
                                     />
+                                    {avgQuestionCorrectRate !== null && (
+                                        <ReferenceLine
+                                            y={avgQuestionCorrectRate}
+                                            stroke="var(--primary)"
+                                            strokeDasharray="4 4"
+                                            strokeOpacity={0.7}
+                                            label={{
+                                                value: `전체 평균 ${avgQuestionCorrectRate}%`,
+                                                position: 'insideTopRight',
+                                                fill: 'var(--primary)',
+                                                fontSize: 11,
+                                                fontWeight: 600
+                                            }}
+                                        />
+                                    )}
                                     <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} shape={<WaveBar />}>
                                         {questionCorrectRateChartData.map((entry, idx) => {
                                             const rate = entry.correctRate;
@@ -3138,10 +3187,82 @@ export default function ExamAnalyticsTab({
                         </p>
 
                         {/* Option Selection Rates Table */}
-                        <h4 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 700, marginTop: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <List size={16} color="var(--primary)" />
-                            세부사항: 문항별 선택률
-                        </h4>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.25rem', marginBottom: '0.75rem' }}>
+                            <h4 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <List size={16} color="var(--primary)" />
+                                세부사항: 문항별 선택률
+                            </h4>
+                            <div role="group" aria-label="문항 난이도 필터" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', background: 'var(--surface)', padding: '0.2rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setQuestionDifficultyFilter("all")}
+                                    style={{
+                                        border: 'none',
+                                        background: questionDifficultyFilter === 'all' ? 'var(--primary)' : 'transparent',
+                                        color: questionDifficultyFilter === 'all' ? '#fff' : 'var(--muted)',
+                                        fontWeight: questionDifficultyFilter === 'all' ? 700 : 500,
+                                        fontSize: '0.78rem',
+                                        padding: '0.25rem 0.6rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                >
+                                    전체 ({questionAnalytics.length})
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setQuestionDifficultyFilter("killer")}
+                                    style={{
+                                        border: 'none',
+                                        background: questionDifficultyFilter === 'killer' ? 'var(--grade-red)' : 'transparent',
+                                        color: questionDifficultyFilter === 'killer' ? '#fff' : 'var(--grade-red)',
+                                        fontWeight: questionDifficultyFilter === 'killer' ? 700 : 500,
+                                        fontSize: '0.78rem',
+                                        padding: '0.25rem 0.6rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                >
+                                    킬러 &lt;40%
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setQuestionDifficultyFilter("medium")}
+                                    style={{
+                                        border: 'none',
+                                        background: questionDifficultyFilter === 'medium' ? 'var(--warning)' : 'transparent',
+                                        color: questionDifficultyFilter === 'medium' ? '#fff' : 'var(--warning)',
+                                        fontWeight: questionDifficultyFilter === 'medium' ? 700 : 500,
+                                        fontSize: '0.78rem',
+                                        padding: '0.25rem 0.6rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                >
+                                    보통 40~69%
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setQuestionDifficultyFilter("easy")}
+                                    style={{
+                                        border: 'none',
+                                        background: questionDifficultyFilter === 'easy' ? 'var(--success)' : 'transparent',
+                                        color: questionDifficultyFilter === 'easy' ? '#fff' : 'var(--success)',
+                                        fontWeight: questionDifficultyFilter === 'easy' ? 700 : 500,
+                                        fontSize: '0.78rem',
+                                        padding: '0.25rem 0.6rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                >
+                                    수월 ≥70%
+                                </button>
+                            </div>
+                        </div>
                         <p id="exam-question-detail-scroll-hint" className={styles.scrollHint}>
                             표가 화면보다 넓으면 좌우로 스크롤해 확인하세요.
                         </p>
@@ -3177,7 +3298,14 @@ export default function ExamAnalyticsTab({
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {[...questionAnalytics].sort((a: { index: number }, b: { index: number }) => a.index - b.index).map((q) => {
+                                    {filteredQuestionAnalytics.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={7 + maxChoiceCount} style={{ textAlign: 'center', padding: '2.5rem 1rem', color: 'var(--muted)', fontSize: '0.9rem' }}>
+                                                선택한 난이도 조건에 해당하는 문항이 없습니다.
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredQuestionAnalytics.map((q) => {
                                         const hasQuestionEvidence = q.totalCount > 0;
                                         const optMap = q.optionRates.reduce((acc: Record<number, number>, curr: { option: number; rate: number }) => { acc[curr.option] = curr.rate; return acc; }, {});
                                         const weakPointBiserial = q.pointBiserial !== null && q.pointBiserial < WEAK_POINT_BISERIAL_THRESHOLD;
@@ -3200,6 +3328,7 @@ export default function ExamAnalyticsTab({
                                         return (
                                             <tr
                                                 key={q.cohortKey}
+                                                id={`question-row-${q.index}`}
                                                 style={{ borderBottom: '1px solid var(--border)' }}
                                                 onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.06)'; }}
                                                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
@@ -3268,7 +3397,8 @@ export default function ExamAnalyticsTab({
                                                 })}
                                             </tr>
                                         );
-                                    })}
+                                    })
+                                    )}
                                 </tbody>
                             </table>
                         </div>

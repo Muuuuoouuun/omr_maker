@@ -7,6 +7,13 @@ const rootDir = process.cwd();
 const portModulePath = path.join(rootDir, "electron", "desktop-port.mjs");
 const logModulePath = path.join(rootDir, "scripts", "desktop-smoke-log.mjs");
 
+it("requires signed Windows distribution and includes the runtime CSP configuration", () => {
+  const config = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+  expect(config.scripts["desktop:dist:win"]).toContain("-c.forceCodeSigning=true");
+  expect(config.build.files).toContain("src/lib/contentSecurityPolicy.ts");
+  expect(config.build.files).not.toContain(".env.local");
+});
+
 type PortModule = {
   selectDesktopServerPort(options: {
     getBoundPort: () => number | null;

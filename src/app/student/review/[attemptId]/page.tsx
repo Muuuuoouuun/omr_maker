@@ -1119,6 +1119,39 @@ export default function ReviewPage() {
                                 <strong><CountUp value={scoreSummary.scorePercent} delayMs={200} /><span>%</span></strong>
                                 <div>{scoreSummary.earnedScore} / {scoreSummary.totalScore}점</div>
                             </div>
+                            <div
+                                className="student-review-score-bar-track"
+                                role="progressbar"
+                                aria-label="점수 성취율"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={scoreSummary.scorePercent}
+                                style={{
+                                    height: '6px',
+                                    width: '100%',
+                                    background: 'var(--border)',
+                                    borderRadius: 'var(--radius-full)',
+                                    overflow: 'hidden',
+                                    margin: '0.2rem 0 0.4rem',
+                                }}
+                            >
+                                <div
+                                    className="student-review-score-bar-fill"
+                                    style={{
+                                        height: '100%',
+                                        width: `${Math.min(100, Math.max(0, scoreSummary.scorePercent))}%`,
+                                        background: scoreSummary.scorePercent >= 80
+                                            ? 'linear-gradient(90deg, #10b981, #059669)'
+                                            : scoreSummary.scorePercent >= 60
+                                            ? 'linear-gradient(90deg, #6366f1, #4f46e5)'
+                                            : scoreSummary.scorePercent >= 40
+                                            ? 'linear-gradient(90deg, #f59e0b, #d97706)'
+                                            : 'linear-gradient(90deg, #f43f5e, #e11d48)',
+                                        borderRadius: 'var(--radius-full)',
+                                        transition: 'width 0.9s cubic-bezier(0.16, 1, 0.3, 1)',
+                                    }}
+                                />
+                            </div>
                             <GradingEvidenceNote source={gradingResolution.source} />
                             <div className="student-review-pill-row">
                                 {attempt.handwritingArchived && (

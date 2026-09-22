@@ -16,6 +16,8 @@ export default function TeacherLogoutButton({ size = "normal", role }: TeacherLo
     const handleLogout = () => {
         clearTeacherSession();
         void clearTeacherAuthSession().finally(() => {
+            // Drop the entire authenticated client/router state on logout.
+            // eslint-disable-next-line @next/next/no-location-assign-relative-destination
             window.location.href = "/?role=teacher";
         });
     };

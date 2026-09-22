@@ -11,6 +11,8 @@ import {
     SHARED_CLASS_ID,
     SHARED_ORGANIZATION_ID,
     vercelReadableEnvArgs,
+    assertQaDatabaseIsolation,
+    deploymentCredentials,
 } from "./deployment-test-accounts-core.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,7 +23,8 @@ const mode = process.argv.includes("--apply")
         : process.argv.includes("--dry-run")
             ? "dry-run"
             : null;
-const targets = ["production", "preview"];
+const targets = ["preview"];
+const readTargets = ["production", "preview"];
 
 function parseEnvFile(path) {
     const env = {};
@@ -40,7 +43,7 @@ function parseEnvFile(path) {
 }
 
 function runVercel(args, options = {}) {
-    const result = spawnSync("npx", ["--yes", "vercel@latest", ...args], {
+    const result = spawnSync("npx", ["--yes", "vercel@58.9.0", ...args], {
         cwd: root,
         encoding: "utf8",
         input: options.input,
@@ -48,8 +51,7 @@ function runVercel(args, options = {}) {
         env: { ...process.env, NO_COLOR: "1" },
     });
     if (result.status !== 0) {
-        const detail = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-        throw new Error(`Vercel command failed: vercel ${args.join(" ")}${detail ? `\n${detail}` : ""}`);
+        throw new Error(`Vercel ${args[0]} failed; check CLI authentication and project access`);
     }
     return result.stdout.trim();
 }
@@ -94,11 +96,6 @@ function chooseStudentSecrets(environments) {
         target,
         configuredStrongSecret(environments[target], "STUDENT_SESSION_SECRET", "OMR_STUDENT_SESSION_SECRET") || secureSecret(),
     ]));
-    const productionConfig = serverConfig(environments.production, "production");
-    const previewConfig = serverConfig(environments.preview, "preview");
-    if (productionConfig.url === previewConfig.url && secrets.production !== secrets.preview) {
-        secrets.preview = secrets.production;
-    }
     return secrets;
 }
 
@@ -176,28 +173,15 @@ function verifyTeacherAccounts(env, target) {
 }
 
 async function apply(environments) {
-    const inheritedPreviewKeys = [
-        "SUPABASE_URL",
-        "SUPABASE_SERVICE_ROLE_KEY",
-        "NEXT_PUBLIC_SUPABASE_URL",
-        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-        "STUDENT_ATTEMPT_SECRET",
-        "OMR_STUDENT_ATTEMPT_SECRET",
-    ];
-    for (const key of inheritedPreviewKeys) {
-        if (!environments.preview[key] && environments.production[key]) {
-            addEnvironmentValue(key, "preview", environments.production[key]);
-            environments.preview[key] = environments.production[key];
-        }
-    }
+    assertQaDatabaseIsolation(environments);
+    const credentials = deploymentCredentials(process.env);
     const studentSecrets = chooseStudentSecrets(environments);
     const appliedDatabases = new Set();
     for (const target of targets) {
         const teacherSessionSecret = configuredStrongSecret(environments[target], "TEACHER_SESSION_SECRET", "OMR_TEACHER_SESSION_SECRET") || secureSecret();
         const studentAttemptSecret = configuredStrongSecret(environments[target], "STUDENT_ATTEMPT_SECRET", "OMR_STUDENT_ATTEMPT_SECRET") || secureSecret();
         const rateLimitHashSecret = configuredStrongSecret(environments[target], "OMR_RATE_LIMIT_HASH_SECRET") || secureSecret();
-        const fixture = buildDeploymentFixture({ studentSessionSecret: studentSecrets[target] });
+        const fixture = buildDeploymentFixture({ studentSessionSecret: studentSecrets[target], ...credentials });
         addEnvironmentValue("TEACHER_ACCOUNTS", target, JSON.stringify(fixture.teacherAccounts));
         addEnvironmentValue("TEACHER_SESSION_SECRET", target, teacherSessionSecret);
         addEnvironmentValue("STUDENT_SESSION_SECRET", target, studentSecrets[target]);
@@ -247,9 +231,11 @@ async function main() {
         return;
     }
 
+    if (mode === "apply") deploymentCredentials(process.env);
     const temporaryDirectory = mkdtempSync(resolve(tmpdir(), "omr-deployment-accounts-"));
     try {
-        const environments = Object.fromEntries(targets.map(target => [target, pullEnvironment(target, temporaryDirectory)]));
+        const environments = Object.fromEntries(readTargets.map(target => [target, pullEnvironment(target, temporaryDirectory)]));
+        assertQaDatabaseIsolation(environments);
         if (mode === "apply") {
             await apply(environments);
             const refreshed = Object.fromEntries(targets.map(target => [target, pullEnvironment(target, temporaryDirectory)]));

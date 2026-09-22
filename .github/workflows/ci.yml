@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, "premier0.1"]
+    branches: ["**"]
   pull_request:
-    branches: [main, "premier0.1"]
+    branches: ["**"]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -153,8 +154,10 @@ jobs:
       - name: Install
         run: npm ci
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
       - name: Build
         run: npm run build
       - name: PWA smoke
         run: npm run pwa:smoke
+      - name: Production security E2E
+        run: npx playwright test --config=playwright.production.config.ts

@@ -72,10 +72,10 @@ describe("CI quality gates", () => {
         const permissions = extractBlock("permissions", 0);
 
         expect(push.split("\n").map((line) => line.trim())).toContain(
-            'branches: [main, "premier0.1"]',
+            'branches: ["**"]',
         );
         expect(pullRequest.split("\n").map((line) => line.trim())).toContain(
-            'branches: [main, "premier0.1"]',
+            'branches: ["**"]',
         );
         expect(concurrency.split("\n").map((line) => line.trim())).toEqual(
             expect.arrayContaining([

@@ -1,39 +1,23 @@
-# 배포 테스트 계정
+# 격리된 Preview QA 계정
 
-Vercel Preview와 Production에서 하나의 Supabase 테스트 워크스페이스를 공유하는 계정입니다. 간단한 비밀번호는 요청에 따른 QA 전용 값이므로 실제 사용자 계정이나 민감한 학생 데이터에 사용하지 않습니다.
+이전 환경변수 기반 계정과 샘플 시험을 검증하는 개발용 절차입니다. 현재 운영 교사 로그인은 DB에 발급된 계정을 사용하는 `provisioned_only`이므로, 이 fixture가 운영 로그인 준비를 대신하지 않습니다. 실제 운영 계정은 `npm run ops:teacher:provision`과 [운영 준비 게이트](production-readiness.md)를 사용합니다.
 
-## 교사 계정
+## 안전 경계
 
-| ID | 비밀번호 | 역할 | 유효 요금제 |
-|---|---|---|---|
-| `admin` | `admin1234` | 관리자 | Academy |
-| `teacher1` | `teacher1234` | 강사 | Free |
-| `teacher2` | `teacher1234` | 강사 | Pro |
-| `teacher3` | `teacher1234` | 강사 | Academy |
+- 쓰기 대상은 Vercel **Preview만**입니다. Production 환경은 DB 분리 확인 목적으로만 읽습니다.
+- Production과 Preview 모두 유효한 Supabase 프로젝트 URL이 필요하며 같은 프로젝트이면 적용·검증·삭제를 거부합니다.
+- 운영 키·계정을 Preview로 복사하지 않습니다. 별도의 QA DB와 service-role 키를 먼저 설정해야 합니다.
+- `teacher_sharedqa` 조직에는 합성 테스트 데이터만 넣습니다. 실명·연락처·실제 학생 응시 기록을 넣지 않습니다.
+- 과거 문서에 공개했던 비밀번호와 시작 코드는 더 이상 배포할 수 없습니다. 이미 사용했다면 해당 계정의 비밀번호·코드를 폐기/재발급하고 필요한 경우 세션을 회수해야 합니다. 이 로컬 변경만으로 원격 계정이 회수되지는 않습니다.
 
-네 계정은 모두 `teacher_sharedqa` 조직의 `테스트반`과 학생 3명을 함께 봅니다. 조직의 서버 권위 요금제는 Academy이고, 서명된 계정 요금제는 권한 상한으로 작동합니다. 따라서 `teacher1`은 Free, `teacher2`는 Pro까지만 사용할 수 있으며 계정 상한으로 조직 권한을 높일 수 없습니다.
+## 계정 정보 주입
 
-교사 비밀번호는 Vercel의 `TEACHER_ACCOUNTS`에 원문이 아닌 PBKDF2-SHA256 해시로 저장합니다. 서버는 120,000~1,000,000회 반복, 16~64바이트 salt, 32바이트 hash만 허용하며, 프로비저닝 스크립트는 120,000회와 16바이트 무작위 salt를 사용합니다.
+안전한 로컬 환경 또는 비밀 관리 도구에서 다음 JSON 환경변수를 설정합니다. 값은 저장소·명령행 인수·로그·채팅에 남기지 않습니다.
 
-## 학생 계정
+- `OMR_QA_TEACHER_PASSWORDS`: `admin`, `teacher1`, `teacher2`, `teacher3` 각각 서로 다른 16~128자 무작위 비밀번호
+- `OMR_QA_STUDENT_START_CODES`: `student1`, `student2`, `student3` 각각 서로 다른 6자리 코드(대문자 A~Z 중 I/O 제외, 숫자 2~9)
 
-학생 로그인 URL:
-
-```text
-/?role=student&workspace=teacher_sharedqa
-```
-
-| 학생번호 | 이름 | 반 | 지역 | 시작 코드 |
-|---|---|---|---|---|
-| `student1` | 학생 1 | 테스트반 | 서울 | `ABC234` |
-| `student2` | 학생 2 | 테스트반 | 서울 | `BCD345` |
-| `student3` | 학생 3 | 테스트반 | 서울 | `CDE456` |
-
-학생은 URL에서 `테스트반`을 선택하고 이름, 학생번호, 시작 코드를 입력합니다. Supabase에는 학생 시작 코드 원문을 저장하지 않고, 서버 로그인용 PBKDF2 해시와 기존 워크스페이스 로그인용 HMAC 메타데이터만 저장합니다.
-
-## 프로비저닝
-
-연결된 Vercel 프로젝트와 Supabase 프로젝트에 계정을 등록합니다.
+교사 역할/계정 요금제는 `admin` 관리자/Academy, `teacher1` 강사/Free, `teacher2` 강사/Pro, `teacher3` 강사/Academy입니다. 조직은 Academy이며 각 계정 요금제는 권한 상한일 뿐 조직 권한을 높이지 않습니다. 교사 비밀번호와 학생 시작 코드는 PBKDF2-SHA256 해시로만 저장합니다.
 
 ```bash
 npm run accounts:deploy:dry-run
@@ -41,26 +25,13 @@ npm run accounts:deploy:apply
 npm run accounts:deploy:verify
 ```
 
-`accounts:deploy:apply`는 다음 작업을 멱등적으로 수행합니다.
+dry-run은 외부 연결 없이 비식별 구조만 출력합니다. apply는 비공개 계정 정보와 DB 분리를 먼저 확인한 다음 Preview의 계정·세션 secret·속도 제한 secret과 테스트 조직/반/학생을 설정합니다. 적용 후 구성을 재검증합니다. Preview의 `TEACHER_ACCOUNTS`를 교체하므로 기존 QA 계정 변경을 의도할 때만 실행합니다.
 
-- Preview와 Production의 `TEACHER_ACCOUNTS`를 해시된 네 계정으로 설정
-- 누락되었거나 짧은 `OMR_RATE_LIMIT_HASH_SECRET`을 포함해 `TEACHER_SESSION_SECRET`, `STUDENT_SESSION_SECRET`, `STUDENT_ATTEMPT_SECRET`을 각각 32바이트 이상의 임의값으로 생성
-- Academy 테스트 조직과 교사 회원 4명 생성
-- 테스트반, 학생 3명, 반 등록 관계, 학생 시작 코드 해시 생성
-- 적용 직후 Vercel 구성과 Supabase 행 개수 재검증
+Vercel은 인증된 `env pull` 검증을 위해 해당 Preview 환경변수를 읽기 가능한 암호화 값으로 보관합니다. 접근 가능한 운영자를 최소화하고, 임시 환경 파일은 전용 디렉터리에 두었다가 종료 시 제거합니다. 값과 해시는 정상 로그에 출력하지 않습니다.
 
-기존 Supabase URL·공개 키·서비스 역할 키는 변경하지 않습니다. 스크립트의 dry-run과 정상 완료 로그에는 세션 secret, 서비스 역할 키, 비밀번호 해시를 출력하지 않습니다.
+## 샘플 시험
 
-## 샘플 데이터 경계
-
-`teacher_sharedqa` 조직에는 국어 QA 시나리오를 위해 실제 Supabase 행과 비공개 Storage 파일로 구성한 샘플 시험 3개가 등록되어 있습니다. 이 데이터는 `admin`과 `teacher1`~`teacher3` 계정에서 공통으로 보입니다.
-
-- 학생 1: 2025학년도 수능 원시험 76점, 교사 피드백·필기 보관, 오답 재시험 75%
-- 학생 2: 같은 원시험 94점, 오답 3문항, 재시험 미응시
-- 학생 3: 배포된 시험 3개 모두 미응시
-- 나머지 2개 시험: 세 학생 모두 미응시
-
-샘플 시험은 다음 명령으로 멱등 적용·검증·삭제할 수 있습니다.
+아래 명령도 분리된 Preview DB에만 접근합니다. 각 fixture의 소유권을 확인하며 Production을 수정하지 않습니다. 서버 전용 경계에서 차단되는 직접 쓰기를 허용하려고 운영 RLS를 완화해서는 안 됩니다.
 
 ```bash
 npm run exams:korean:dry-run
@@ -69,4 +40,4 @@ npm run exams:korean:verify
 npm run exams:korean:remove
 ```
 
-합성 분석 데이터인 공개 `omr-showcase` 목업과 달리, 이 국어 QA 시나리오는 교사 제작·배포·학생 응시·리뷰·재시험의 서버 경계를 검증하기 위한 실제 공유 워크스페이스 데이터입니다. 자세한 검증 결과와 알려진 보완점은 [국어 샘플 시험 적용 평가](./korean-exam-fixture-evaluation.md)를 참고합니다.
+이 명령의 존재는 실제 원격 샘플 데이터가 현재 등록되어 있음을 뜻하지 않습니다. 공개 `omr-showcase`는 별도의 읽기 전용 합성 목업입니다.

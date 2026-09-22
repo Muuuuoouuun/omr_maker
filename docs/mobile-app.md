@@ -5,7 +5,9 @@ OMR Maker의 모바일 실행 경로는 PWA와 Capacitor Android 개발 셸로 �
 | 방식 | 목적 | 서버 | 현재 상태 |
 |---|---|---|---|
 | PWA | 실제 사용자 설치·배포 | HTTPS 서버(오프라인 앱 셸 지원) | 구성 완료 |
-| Capacitor Android | Windows에서 WebView·키보드·안전영역 실기기 검증 | Windows 개발 서버 | 개발 셸 구성 완료 |
+| Capacitor Android | Windows에서 WebView·키보드·안전영역 실기기 검증 | Windows 개발 서버 | 설정·스크립트만 있음; 네이티브 프로젝트 생성과 SDK 설치 필요 |
+
+현재 체크아웃에는 `android/`, `ios/` 네이티브 프로젝트가 없습니다. 아래 네이티브 절차는 선택적인 개발 준비이며, APK/IPA가 배포됐다는 의미가 아닙니다. 실제 모바일 이용 경로는 PWA입니다.
 
 ## 1. PWA — 현재 운영 배포 경로
 
@@ -39,6 +41,10 @@ Android Studio의 SDK Manager에서 Android SDK Platform과 Android SDK Platform
 $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 $env:Path += ";$env:ANDROID_HOME\platform-tools"
 ```
+
+### 네이티브 프로젝트 준비
+
+Android 개발이 필요한 경우 SDK 설치 후 `npx cap add android`로 로컬 프로젝트를 생성하고 `npm run android:doctor`를 다시 실행합니다. `android/`는 생성 산출물로 Git에서 제외됩니다. 생성되지 않은 상태에서는 sync/open/dev 명령을 실행할 수 없습니다.
 
 ### USB 실기기 실행
 
@@ -94,7 +100,7 @@ npm run mobile:apk
 
 ## 5. iOS
 
-Windows에서는 iOS 네이티브 빌드를 만들 수 없습니다. macOS와 Xcode가 준비되기 전까지 iOS는 PWA 홈 화면 설치 경로를 사용합니다.
+현재 저장소에는 iOS 네이티브 프로젝트와 App Store 배포 설정이 없습니다. iOS 사용자는 PWA 홈 화면 설치 경로를 사용합니다. 별도 네이티브 배포에는 macOS·Xcode, 플랫폼 생성, 인증서와 배포 정책 검증이 필요합니다.
 
 ## 문제 해결
 

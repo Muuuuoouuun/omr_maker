@@ -1,8 +1,9 @@
-const CACHE_VERSION = "omr-maker-v15";
+const CACHE_VERSION = "omr-maker-v16";
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const CACHE_FIRST_PATHS = new Set([
   "/offline.html",
+  "/offline.js",
   "/manifest.webmanifest",
   "/favicon.ico",
   "/icon.png",
@@ -19,6 +20,7 @@ const APP_SHELL = [
   "/",
   "/pwa-check",
   "/offline.html",
+  "/offline.js",
   "/manifest.webmanifest",
   "/favicon.ico",
   "/icon.png",

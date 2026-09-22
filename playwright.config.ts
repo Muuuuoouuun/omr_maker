@@ -21,7 +21,10 @@ const e2eExamInviteFixtures = JSON.stringify([{
 }]);
 
 const externalBaseURL = process.env.PLAYWRIGHT_BASE_URL;
-const baseURL = externalBaseURL || "http://localhost:3003";
+if (!externalBaseURL) process.env.OMR_ISOLATED_E2E = "1";
+const localPort = Number(process.env.PLAYWRIGHT_PORT || 3105);
+if (!Number.isSafeInteger(localPort) || localPort < 1024 || localPort > 65535) throw new Error("Invalid local E2E port");
+const baseURL = externalBaseURL || `http://localhost:${localPort}`;
 const enableWebKitPwa = process.env.PLAYWRIGHT_ENABLE_WEBKIT === "1";
 const conditionalWebKitProjects = enableWebKitPwa ? [
     {
@@ -179,7 +182,7 @@ export default defineConfig({
         },
     ],
     webServer: externalBaseURL ? undefined : {
-        command: "npm run dev",
+        command: `npx next dev -H 127.0.0.1 -p ${localPort}`,
         url: baseURL,
         reuseExistingServer: process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "1",
         timeout: 60_000,
@@ -206,6 +209,7 @@ export default defineConfig({
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
             NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
             TEACHER_PLAN: "",
+            OMR_ISOLATED_E2E: "1",
             SUPABASE_URL: "",
             SUPABASE_SERVICE_ROLE_KEY: "",
             OMR_SUPABASE_SERVICE_ROLE_KEY: "",

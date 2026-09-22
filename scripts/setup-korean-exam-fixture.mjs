@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createClient } from "@supabase/supabase-js";
+import { assertQaDatabaseIsolation } from "./deployment-test-accounts-core.mjs";
 import {
     buildKoreanExamFixture,
     KOREAN_EXAM_FIXTURE_OWNER,
@@ -16,7 +17,7 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REMOTE_BUCKET = "omr-private-assets";
-const DEPLOYMENT_TARGETS = ["production", "preview"];
+const DEPLOYMENT_TARGETS = ["preview"];
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export function parseFixtureMode(args) {
@@ -89,15 +90,14 @@ function parseEnvFile(path) {
 }
 
 function runVercel(args) {
-    const result = spawnSync("npx", ["--yes", "vercel@latest", ...args], {
+    const result = spawnSync("npx", ["--yes", "vercel@58.9.0", ...args], {
         cwd: root,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, NO_COLOR: "1" },
     });
     if (result.status !== 0) {
-        const detail = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-        throw new Error(`Vercel command failed${detail ? `: ${detail}` : ""}`);
+        throw new Error("Vercel command failed; check CLI authentication and project access");
     }
 }
 
@@ -378,7 +378,9 @@ async function removeFixture(client, fixture) {
 async function loadConfigs() {
     const temporaryDirectory = mkdtempSync(resolve(tmpdir(), "omr-korean-exam-fixture-"));
     try {
-        return DEPLOYMENT_TARGETS.map(target => serverConfig(pullEnvironment(target, temporaryDirectory), target));
+        const environments = Object.fromEntries(["production", "preview"].map(target => [target, pullEnvironment(target, temporaryDirectory)]));
+        assertQaDatabaseIsolation(environments);
+        return DEPLOYMENT_TARGETS.map(target => serverConfig(environments[target], target));
     } finally {
         rmSync(temporaryDirectory, { recursive: true, force: true });
     }

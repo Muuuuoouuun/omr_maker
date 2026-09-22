@@ -157,18 +157,25 @@ export default function ExamAnalyticsReportOverview({
                         )}
                     >
                         <ol className={styles.distributionBars} aria-hidden="true">
-                            {distribution.map(bucket => (
-                                <li key={`${bucket.min}-${bucket.max}`}>
-                                    <span className={styles.distributionCount}>{bucket.count}</span>
-                                    <span
-                                        className={styles.distributionBar}
-                                        style={{
-                                            "--distribution-share": `${(bucket.count / maxDistributionCount) * 100}%`,
-                                        } as DistributionBarStyle}
-                                    />
-                                    <span className={styles.distributionLabel}>{bucket.label}</span>
-                                </li>
-                            ))}
+                            {distribution.map(bucket => {
+                                const isPeak = bucket.count === maxDistributionCount && bucket.count > 0;
+                                return (
+                                    <li key={`${bucket.min}-${bucket.max}`} className={isPeak ? styles.distributionItemPeak : undefined}>
+                                        <span className={`${styles.distributionCount} ${isPeak ? styles.distributionCountPeak : ""}`}>
+                                            {bucket.count}
+                                        </span>
+                                        <span
+                                            className={`${styles.distributionBar} ${isPeak ? styles.distributionBarPeak : ""}`}
+                                            style={{
+                                                "--distribution-share": `${(bucket.count / maxDistributionCount) * 100}%`,
+                                            } as DistributionBarStyle}
+                                        />
+                                        <span className={`${styles.distributionLabel} ${isPeak ? styles.distributionLabelPeak : ""}`}>
+                                            {bucket.label}
+                                        </span>
+                                    </li>
+                                );
+                            })}
                         </ol>
                     </AnalyticsChartFrame>
                 </AnalyticsReportSection>

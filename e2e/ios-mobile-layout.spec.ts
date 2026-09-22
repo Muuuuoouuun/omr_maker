@@ -194,7 +194,7 @@ async function readCountdownSeconds(locator: Locator) {
 async function seedStudentTaskFlow(page: Page) {
     await page.addInitScript(({ attemptId, completedTitle, pendingTitle, studentName }) => {
         const session = {
-            createdAt: "2026-08-05T00:00:00.000Z",
+            createdAt: new Date().toISOString(),
             groupId: "iphone-mobile-class",
             groupName: "아이폰 모바일 학습반",
             identityType: "temporary",
@@ -710,7 +710,7 @@ test.describe("iPhone WebKit mobile layout", () => {
     test("authenticated teacher header keeps primary actions visible and moves live monitoring into the account menu", async ({ page }) => {
         await loginAsTeacher(page);
 
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
         const actions = page.locator(".teacher-header-actions");
         await expect(actions).toBeVisible();
         const interactiveActions = actions.locator(":scope > button:visible, :scope > a:visible, :scope > div > button:visible");
@@ -734,13 +734,13 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expectNoDocumentHorizontalOverflow(page);
     });
 
-    test("teacher dashboard leads from context and demo state into KPIs and one primary analysis action", async ({ page }) => {
+    test("teacher dashboard orders context, demo state, KPIs, recent exams, and its primary analysis action", async ({ page }) => {
         await loginAsShowcaseTeacher(page);
 
-        const title = page.getByRole("heading", { name: /김하늘 선생님/ });
+        const title = page.getByRole("heading", { name: "대시보드", exact: true });
         const state = page.getByRole("status", { name: "데모 데이터 안내" });
         const firstKpi = page.getByRole("button", { name: /진행 중 시험.*진행 시험 분석/ });
-        const primaryAction = page.getByRole("button", { name: /함수의 극한 정답률 58%/ });
+        const primaryAction = page.getByRole("button", { name: "시험별 분석 보기", exact: true });
         const secondarySection = page.getByRole("heading", { name: "최근 시험" });
 
         for (const element of [title, state, firstKpi, primaryAction]) {
@@ -748,11 +748,13 @@ test.describe("iPhone WebKit mobile layout", () => {
         }
         await expectPrecedesInDom(title, state);
         await expectPrecedesInDom(state, firstKpi);
-        await expectPrecedesInDom(firstKpi, primaryAction);
-        await expectPrecedesInDom(primaryAction, secondarySection);
+        await expectPrecedesInDom(firstKpi, secondarySection);
+        await expectPrecedesInDom(secondarySection, primaryAction);
         await expectMinimumTouchTarget(firstKpi);
         await expectMinimumTouchTarget(primaryAction);
         await expectNoDocumentHorizontalOverflow(page);
+        await primaryAction.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: `/tmp/omr-mobile-dashboard-${test.info().project.name}.png` });
     });
 
     test("teacher users puts roster state and KPI cards before mobile actions and student cards", async ({ page }) => {

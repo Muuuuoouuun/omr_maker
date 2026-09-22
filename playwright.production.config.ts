@@ -1,16 +1,22 @@
 import { defineConfig, devices } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+
+const port = Number(process.env.PLAYWRIGHT_PRODUCTION_PORT || 3103);
+if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid local production test port");
+const baseURL = `http://localhost:${port}`;
+const build = process.env.OMR_PRODUCTION_EXPECTED_BUILD || execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+process.env.OMR_PRODUCTION_EXPECTED_BUILD = build;
 
 export default defineConfig({
     testDir: "./e2e",
-    testMatch: /production-security\.spec\.ts/,
-    grep: /production health exposes the exact immutable build without cache|production static assets use immutable same-origin delivery|production root boot scrubs legacy student start codes without reading or displaying them/,
+    testMatch: /(?:production-security|teacher-provisioned-links)\.spec\.ts/,
     fullyParallel: false,
     forbidOnly: !!process.env.CI,
     retries: 0,
     workers: 1,
     reporter: [["list"]],
     use: {
-        baseURL: "http://localhost:3003",
+        baseURL,
         trace: "on-first-retry",
     },
     projects: [
@@ -24,12 +30,14 @@ export default defineConfig({
         },
     ],
     webServer: {
-        command: "npm run start -- -p 3003",
-        url: "http://localhost:3003",
+        command: `npm run start -- -H 127.0.0.1 -p ${port}`,
+        url: baseURL,
         reuseExistingServer: false,
         timeout: 60_000,
         env: {
             ...process.env,
+            VERCEL_GIT_COMMIT_SHA: build,
+            GIT_SHA: build,
             // Neutralize developer-local account JSON — TEACHER_ACCOUNTS takes
             // precedence over TEACHER_LOGIN_ID/TEACHER_PASSWORD when present.
             TEACHER_ACCOUNTS: "",
@@ -41,6 +49,10 @@ export default defineConfig({
             NEXT_PUBLIC_SUPABASE_URL: "",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
             NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
+            SUPABASE_URL: "",
+            SUPABASE_SERVICE_ROLE_KEY: "",
+            OMR_SUPABASE_SERVICE_ROLE_KEY: "",
+            GEMINI_API_KEY: "",
         },
     },
 });

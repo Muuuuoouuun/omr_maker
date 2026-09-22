@@ -32,6 +32,8 @@ describe("canonical load-state surfaces", () => {
         expect(teacherDashboard).toContain('data-testid="canonical-dashboard-retry"');
         expect(teacherDashboard).toMatch(/dashboardHasRenderableData\s*&&\s*!isMockupAccount[\s\S]*dashboard-analysis-actions/);
         expect(teacherDashboard).toContain("dashboardAllowsMutations");
+        expect(teacherDashboard).toContain("(isMockupAccount || dashboardAllowsMutations) && <Link");
+        expect(teacherDashboard).toContain("(isMockupAccount || dashboardAllowsAnalysis) && <>");
         expect(teacherDashboard).toMatch(/dashboardAllowsAnalysis[\s\S]*analyticsDataHealth\.kind/);
         expect(teacherDashboard).toMatch(/dashboardAllowsAnalysis[\s\S]*dashboard-analysis-actions/);
         expect(teacherDashboard).toContain("readTeacherDashboardDegradedCache");

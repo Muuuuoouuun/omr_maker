@@ -16,7 +16,7 @@ const TARGETS: AuditTarget[] = [
     { name: "teacher-login-desktop", path: "/?role=teacher", expectedText: "교사 포털", viewport: { width: 1440, height: 900 } },
     { name: "student-login-mobile", path: "/?role=student", expectedText: "학습 시작", viewport: { width: 390, height: 844 } },
     { name: "admin-route-mobile", path: "/admin", expectedText: "관리자 기능은 교사 포털에서 관리합니다", viewport: { width: 390, height: 844 } },
-    { name: "teacher-dashboard-desktop", path: "/teacher/dashboard", expectedText: "분석 센터", viewport: { width: 1440, height: 900 }, teacher: true },
+    { name: "teacher-dashboard-desktop", path: "/teacher/dashboard", expectedText: "대시보드", viewport: { width: 1440, height: 900 }, teacher: true },
     { name: "teacher-showcase-mobile-dark-preference", path: "/teacher/dashboard?showcase=1&tab=exam", expectedText: "시험별 통계", viewport: { width: 390, height: 844 }, teacher: true, initialTheme: "dark" },
     { name: "teacher-users-groups-mobile", path: "/teacher/users?tab=groups", expectedText: "사용자 관리", viewport: { width: 390, height: 844 }, teacher: true },
     { name: "teacher-settings-mobile", path: "/teacher/settings", expectedText: "설정", viewport: { width: 390, height: 844 }, teacher: true },
@@ -312,12 +312,16 @@ test.describe("UI-UX PROMAX layout audit", () => {
             })
         );
 
+        // The redesigned wide desktop uses a sidebar. Test the visible tab
+        // indicator at the tablet breakpoint, where this control is offered.
+        await page.setViewportSize({ width: 1024, height: 768 });
         await loginAsShowcaseTeacher(page);
         await expect(page.locator(".mockup-dashboard-tabs")).toBeVisible();
         const actionMotion = await readMotion(".mockup-primary-action");
         const cardMotion = await readMotion(".mockup-panel");
         const tabMotion = await readMotion('.mockup-dashboard-tabs button[aria-pressed="true"]', "::after");
 
+        await page.setViewportSize({ width: 1440, height: 900 });
         await openTeacherPage(page, "/create");
         await page.getByRole("button", { name: "정답 인식 마법사 열기" }).click();
         await expect(page.getByRole("dialog", { name: "정답 PDF 불러오기" })).toBeVisible();

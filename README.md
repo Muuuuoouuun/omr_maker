@@ -13,11 +13,11 @@ The dev server runs on [http://localhost:3003](http://localhost:3003).
 
 ## Authentication setup
 
-Teacher accounts are server configuration, not source-controlled signup records. Configure development accounts in `.env.local` with `TEACHER_ACCOUNTS`; do not publish shared test credentials in documentation or commit environment files.
+Production uses operator-provisioned, database-backed teacher accounts (`provisioned_only`). Issue them with `npm run ops:teacher:provision` under the [Go-Live Gate](docs/production-readiness.md). Development/legacy QA accounts may use `.env.local` `TEACHER_ACCOUNTS`; do not publish credentials or commit environment files.
 
-With no `TEACHER_ACCOUNTS`/`TEACHER_PASSWORD` configured, the app falls back to `admin` / `admin123`. The `admin` account is bound to the Academy plan and can use every feature without quota limits.
+Only local development falls back to `admin` / `admin123` when no teacher credentials are configured. Development fixtures do not prove production login, billing, or external integration readiness.
 
-In production, there is no default account. Set one of these on the server before deploying:
+There is no default production account. These legacy account settings do not replace production operator provisioning:
 
 - Single teacher: `TEACHER_LOGIN_ID`, optional `TEACHER_EMAIL`/`TEACHER_NAME`/`TEACHER_PLAN`, and a supported PBKDF2 value in `TEACHER_PASSWORD_HASH`.
 - Multiple teachers: `TEACHER_ACCOUNTS` as a JSON array whose entries use `passwordHash` rather than `password`. Production rejects plaintext `TEACHER_PASSWORD` and `TEACHER_ACCOUNTS[].password`; plaintext remains available only for local development fixtures.
@@ -26,9 +26,9 @@ In production, there is no default account. Set one of these on the server befor
 - Academy is a catalog tier, not a promise that every listed organization feature is implemented. Billing readiness labels are the source of truth for unavailable/partial features.
 - Required production signing secrets: `TEACHER_SESSION_SECRET`, `STUDENT_SESSION_SECRET`, and `STUDENT_ATTEMPT_SECRET`, each containing at least 32 UTF-8 bytes of random secret material. Short values fail closed and cannot mint or verify sessions or attempt tickets.
 
-Teacher login is currently backed by server environment variables, not Supabase Auth. If a deployed build only says the credentials are invalid, check the deployment provider's environment variables and redeploy before checking Supabase.
+Production login requires the provisioned account, active membership/profile, current grant, service-role RPCs, and signing/rate-limiter secrets. A rendered login screen alone does not prove these are ready; verify the protected `/api/readyz` endpoint.
 
-The shared deployment QA workspace uses four teacher logins against the same Supabase organization (`teacher_sharedqa`): `admin` (Academy), `teacher1` (Free), `teacher2` (Pro), and `teacher3` (Academy). The organization itself is Academy; each signed account plan is a ceiling that can reduce, but never elevate, server authorization. Provision and verify the fixture with `npm run accounts:deploy:apply` and `npm run accounts:deploy:verify`. See `docs/deployment-test-accounts.md` for the test-only credentials and student entry URL.
+The legacy QA workspace (`teacher_sharedqa`) is restricted to a Preview Supabase project separate from Production. Its provisioning scripts reject shared or unresolved database targets and require private credentials. They never modify Production and do not qualify the current production teacher-login flow. See [the QA setup](docs/deployment-test-accounts.md).
 
 Synthetic dashboard, roster, and live-monitoring examples are restricted to the public `omr-showcase` mockup account. Normal admin and teacher accounts display their real workspace, including an empty state when no data exists.
 
@@ -95,11 +95,11 @@ The app is a web app with PWA support:
 
 Users can open it in a browser or install it to a phone/tablet home screen from a supported browser.
 
-Windows-to-Android device development is also available through the Capacitor test shell. Run `npm run android:doctor`, then connect an emulator or USB-debugging device and use `npm run android:dev`. See [docs/mobile-app.md](docs/mobile-app.md) for the PWA/Android deployment boundary and setup steps.
+PWA is the current Android/iOS delivery path. This checkout has Capacitor development configuration but no generated Android or iOS native project. Native device testing requires platform generation and SDK setup; see [docs/mobile-app.md](docs/mobile-app.md).
 
 ## Supabase Sync
 
-Without Supabase env vars, data is saved locally in the browser. With Supabase configured, exams and attempts sync across web/PWA installs.
+Local development can save data in the browser. Production canonical data, authentication, and submissions require a verified Supabase server boundary; local storage is not a substitute for an unavailable production backend.
 
 Setup:
 
@@ -120,7 +120,7 @@ OMR_RATE_LIMIT_HASH_SECRET=replace_with_at_least_32_random_bytes
 See `supabase/README.md` for details, the current RLS warning, and the production RLS handoff.
 Before going live with real student data, work through the consolidated [Go-Live Gate](docs/production-readiness.md).
 
-The alpha schema includes organization, member, class, exam, attempt, plan-usage, and audit-log tables. Current saves use an interim teacher-scoped `teacher_<hash>` organization id when a teacher session is active. `SUPABASE_SERVICE_ROLE_KEY` is required for authoritative plan lookup and atomic quota reservation; when set, teacher login also bootstraps the matching workspace/member/profile rows from the server. Current `schema.sql` business-data RLS policies are open only for alpha/local testing (plan-usage tables remain server-only); configure Supabase Auth, fill real `organization_id`/membership rows, and apply `supabase/production-rls.sql` before storing real student data.
+The alpha `schema.sql` alone is not safe for real student data. Apply sorted migrations, pass organization preflight, and apply `supabase/production-server-boundary.sql` with the migration owner before receiving live traffic. The historical `production-rls.sql` browser-access profile is not the current production handoff. Local PostgreSQL tests validate the repository SQL, while hosted readiness must separately prove the actual deployment.
 
 ## Answer-Key Recognition
 

@@ -479,7 +479,8 @@ test("connects the editorial exam overview to a dense personal growth report", a
         "다음 행동",
     ]);
 
-    await page.getByRole("button", { name: "학생별 분석" }).click();
+    await page.getByRole("complementary", { name: "교사 대시보드 내비게이션" })
+        .getByRole("button", { name: "학생 성취도", exact: true }).click();
     await page.getByRole("link", { name: /결과 분석 열기/ }).first().click();
     await expect(page).toHaveURL(/\/teacher\/attempt\/.*\?view=analytics/);
     await page.getByRole("tab", { name: "리포트", exact: true }).click();
@@ -521,16 +522,17 @@ test.describe("Teacher dashboard", () => {
         await expect.poll(() => [...remoteFixture.rewrittenActionIds].sort()).toEqual(
             Object.values(actionIds).sort(),
         );
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
         const onboarding = page.getByRole("region", { name: "첫 시험부터 시작해보세요" });
         await expect(onboarding).toBeVisible();
         await expect(onboarding.getByRole("link", { name: "첫 시험 만들기" })).toBeVisible();
         await expect(page.getByText("빠른 작업", { exact: false })).toHaveCount(0);
     });
 
-    test("header live shortcut navigates to /teacher/live", async ({ page }) => {
+    test("dashboard live shortcut navigates to /teacher/live", async ({ page }) => {
         await page.goto("/teacher/dashboard");
-        await page.getByRole("link", { name: "실시간 모니터링" }).click();
+        await page.getByRole("complementary", { name: "교사 대시보드 내비게이션" })
+            .getByRole("link", { name: "실시간 현황" }).click();
         await expect(page).toHaveURL(/\/teacher\/live$/);
         await expect(page.getByRole("heading", { name: "응시 결과 확인" })).toBeVisible();
     });

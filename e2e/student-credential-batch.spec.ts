@@ -5,6 +5,7 @@ import { mintTeacherToken } from "../src/lib/teacherAuth";
 import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
 import { createTeacherSession, LEGACY_TEACHER_TOKEN_KEY, TEACHER_SESSION_KEY } from "../src/lib/teacherSession";
 import { STUDENT_SERVER_SESSION_COOKIE } from "../src/lib/studentServerSession";
+import { registerCanonicalRemoteFixture } from "./fixtures/canonical-remote-fixture";
 
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 
@@ -18,6 +19,8 @@ async function authenticateLocalTeacher(page: Page, baseURL: string | undefined)
     const identity = {
         teacherId: "admin", email: "admin@example.com", displayName: "E2E Admin",
         organizationId: "default", organizationName: "E2E Workspace", memberRole: "admin" as const,
+        sessionAuthority: "bootstrap" as const,
+        accountSessionGeneration: 1,
     };
     const token = mintTeacherToken();
     const session = createTeacherSession(token, Date.now(), identity);
@@ -245,6 +248,19 @@ if (!hostedMode) {
             return Array.isArray(rows) ? rows.length : -1;
         });
         expect(storedStudentCount).toBe(2);
+        // Unverified local rows must not become an authoritative roster. Seed
+        // only the read response to exercise the still-real issuance failure.
+        await expect(page.getByTestId("canonical-error-no-cache")).toBeVisible();
+        await expect(page.getByText("로컬 학생 1", { exact: true })).toHaveCount(0);
+        const fixture = await registerCanonicalRemoteFixture(page);
+        const roster = await page.evaluate(() => ({
+            students: JSON.parse(localStorage.getItem("omr_students") || "[]"),
+            groups: JSON.parse(localStorage.getItem("omr_groups") || "[]"),
+            invites: [],
+        }));
+        const { loadRoster } = fixture.activateRoster(roster);
+        await page.reload();
+        await expect.poll(() => fixture.rewrittenActionIds.has(loadRoster)).toBe(true);
         await expect(page.getByText("로컬 학생 1", { exact: true }).first()).toBeVisible({ timeout: 15_000 });
         const boxes = page.locator('tbody input[type="checkbox"]');
         await expect(boxes).toHaveCount(2);

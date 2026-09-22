@@ -1313,6 +1313,8 @@ function SecuritySection({
         clearTeacherSession();
         toast.success("세션 종료됨", "교사 세션을 종료했습니다. 다시 로그인해주세요.");
         void clearTeacherAuthSession().finally(() => {
+            // Drop the entire authenticated client/router state on logout.
+            // eslint-disable-next-line @next/next/no-location-assign-relative-destination
             window.location.href = "/?role=teacher";
         });
     };

@@ -1356,10 +1356,11 @@ function TeacherDashboard() {
                         <LayoutDashboard size={20} aria-hidden="true" />
                         <span>대시보드</span>
                     </button>
-                    <Link href="/create">
+                    {(isMockupAccount || dashboardAllowsMutations) && <Link href="/create">
                         <FilePlus2 size={20} aria-hidden="true" />
                         <span>시험 만들기</span>
-                    </Link>
+                    </Link>}
+                    {(isMockupAccount || dashboardAllowsAnalysis) && <>
                     <button type="button" aria-current={activeTab === "exam" ? "page" : undefined} onClick={() => applyTab("exam", selectedExamIdForAnalytics)}>
                         <BarChart2 size={20} aria-hidden="true" />
                         <span>결과 분석</span>
@@ -1368,6 +1369,7 @@ function TeacherDashboard() {
                         <GraduationCap size={20} aria-hidden="true" />
                         <span>학생 성취도</span>
                     </button>
+                    </>}
                     <Link href="/teacher/users">
                         <Users size={20} aria-hidden="true" />
                         <span>학생 관리</span>

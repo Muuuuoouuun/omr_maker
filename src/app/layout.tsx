@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 // Pretendard's dynamic subset: 92 @font-face rules that split the Korean glyph
 // set by unicode-range, so the browser fetches only the ranges a page actually
 // renders. See the --font-pretendard note in globals.css for why this is not
@@ -140,19 +141,20 @@ const teacherLegacyLinkCanonicalizationScript = `
 })();
 `;
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   const teacherIdentityMode = resolveTeacherIdentityMode();
+  const nonce = (await headers()).get("x-nonce") || undefined;
 
   return (
     <html lang="ko" data-theme="light" data-scroll-behavior="smooth" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {teacherIdentityMode === "provisioned_only" ? (
-          <script dangerouslySetInnerHTML={{ __html: teacherLegacyLinkCanonicalizationScript }} />
+          <script nonce={nonce} dangerouslySetInnerHTML={{ __html: teacherLegacyLinkCanonicalizationScript }} />
         ) : null}
       </head>
       <body>

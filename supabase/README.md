@@ -4,7 +4,7 @@
 2. Create `.env.local` in the project root:
 
 ```bash
-NEXT_PUBLIC_SUPABASE_URL=https://wqhiajvisirxdjivhmlt.supabase.co
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_full_key_here
 SUPABASE_SERVICE_ROLE_KEY=server_only_service_role_key_for_workspace_bootstrap
 OMR_RATE_LIMIT_HASH_SECRET=replace_with_at_least_32_random_bytes
@@ -14,7 +14,7 @@ OMR_RATE_LIMIT_HASH_SECRET=replace_with_at_least_32_random_bytes
 
 3. Apply the sorted migrations and `production-server-boundary.sql`, set the server environment values, and only then promote/restart the matching Next.js build.
 
-The app keeps localStorage as a fallback. When Supabase is configured, exams, attempts, and the teacher roster are synced to:
+Local development may use localStorage. Production requires the verified server boundary and cannot use a local-only fallback as evidence of readiness. The data model includes:
 
 - `public.omr_organizations`
 - `public.omr_user_profiles`
@@ -87,7 +87,7 @@ Phase C vNext mutation catalog/body digest and `effectiveWorkspacePlanEnforcemen
 denies retired/private mutation paths and direct service-role mutation of plan/asset
 state, and keeps the initial-operations load gate on its seeded exact identity and
 v2 student-session/teacher-asset paths. It also validates the exact
-42-table allowlist plus every table's ENABLE + FORCE RLS state, reruns the
+canonical-table allowlist derived from schema plus sorted migrations, every table's ENABLE + FORCE RLS state, reruns the
 four-count organization preflight, checks the exact purpose-scoped teacher RPC
 signatures, requires the exact 17 server-gateway signatures with no extra
 overload, forbids every legacy broad-RPC overload, and verifies the hosted
@@ -127,9 +127,10 @@ signed-actor-primary request limit whose expired entries are pruned and whose
 in-memory store has a fixed cap. This process-local limiter is defense in depth;
 multi-instance deployments must also enforce a shared upstream rate limit.
 
-Run `npm run test:supabase:live` locally when Docker is available. A machine
-without Docker cannot replace this required CI gate with source-string
-assertions.
+Run `npm run test:supabase:live` with Docker or a local PostgreSQL 17 toolchain.
+The script creates and removes its own disposable database. Source-string
+assertions alone cannot replace this required live SQL gate, and local success
+does not attest the hosted production database.
 
 ## Data Model
 

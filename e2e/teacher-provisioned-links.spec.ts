@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 test.describe.configure({ retries: 0 });
+// Development journeys intentionally use self_service bootstrap fixtures.
+// Exercise the provisioned-only boundary against the actual production build.
+test.beforeEach(async ({ browserName }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("prod-"), `Run ${browserName} provisioned-only checks with the production configuration`);
+});
 
 test.describe("provisioned-only legacy teacher links", () => {
     for (const tokenParameter of ["teacherResetToken", "teacherVerifyToken"] as const) {

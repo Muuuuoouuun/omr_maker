@@ -60,9 +60,9 @@ test("dashboard data failure is not presented as an empty successful dashboard a
     await expect(errorStatus).toHaveAttribute("role", "status");
     await expect(errorStatus).toHaveAttribute("aria-live", "polite");
     await expect(errorStatus.getByRole("heading", { name: "학습 현황을 불러오지 못했습니다" })).toBeVisible();
-    // This branch fails before a local snapshot can be read or its stale marker
-    // can be evaluated, so it must report the storage/read failure honestly.
-    await expect(errorStatus).toContainText("저장공간");
+    // The server failure has no verified cache timestamp; it must not claim
+    // that an empty dashboard is a successful load or imply trusted local data.
+    await expect(errorStatus).toContainText("검증된 저장 시각이 없습니다");
     await expect(page.locator(".student-dashboard-user")).toContainText("Guest Student");
 
     await expect(page.getByText("나의 원시험 평균", { exact: true })).toHaveCount(0);

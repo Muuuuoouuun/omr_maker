@@ -11,7 +11,7 @@ import { TrendChartSkeleton } from "@/components/dashboard/DashboardLoadingSkele
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
 import { toast } from "@/components/Toast";
-import { Users, BarChart3, PlusCircle, Activity, Bell, Download, MessageSquare, ArrowRight, CheckCircle2, CircleAlert } from "lucide-react";
+import { Users, BarChart3, PlusCircle, Activity, Bell, Download, MessageSquare, ArrowRight, CheckCircle2, CircleAlert, Copy, Check } from "lucide-react";
 import {
     deleteTeacherExamMutation,
     setTeacherExamArchivedFromSummary,
@@ -188,6 +188,31 @@ function FreshOverviewTab({ capability, exams: examsProp, attempts, stats, trend
     // disabled/label state so a large workspace doesn't look unresponsive on click.
     const [isExportingStats, setIsExportingStats] = useState(false);
     const [exportStatsError, setExportStatsError] = useState<string | null>(null);
+    const [copiedExamId, setCopiedExamId] = useState<string | null>(null);
+
+    const handleCopyExamLink = async (examId: string, examTitle: string) => {
+        try {
+            const origin = typeof window !== "undefined" ? window.location.origin : "";
+            const shareUrl = `${origin}/solve/${examId}`;
+            if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(shareUrl);
+            }
+            setCopiedExamId(examId);
+            toast.success("응시 링크 복사됨", `'${examTitle}' 학생 접속 링크를 복사했습니다.`);
+            window.setTimeout(() => {
+                if (isMountedRef.current) {
+                    setCopiedExamId(prev => (prev === examId ? null : prev));
+                }
+            }, 2000);
+        } catch {
+            toast.error("복사 실패", "클립보드 권한을 확인해주세요.");
+        }
+    };
+
+    const trendDelta = useMemo(() => {
+        if (!trendData || trendData.length < 2) return null;
+        return Math.round((trendData[trendData.length - 1] - trendData[0]) * 10) / 10;
+    }, [trendData]);
 
     // Sync when parent reloads data (initial mount / navigation).
     useEffect(() => {
@@ -668,9 +693,30 @@ function FreshOverviewTab({ capability, exams: examsProp, attempts, stats, trend
 
             {/* 2. Score Trend — 시안 B dark-glass surface (dot-grid + glow) */}
             {trendData.length > 0 && <div className="bento-card col-span-2 overview-trend-card" style={{ position: 'relative', overflow: 'hidden' }}>
-                <div style={{ marginBottom: '1.5rem', position: 'relative', zIndex: 1 }}>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>평균 점수 추이</h3>
-                    <p style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>최근 7개 시험 · 상세 분석 전 빠른 흐름 확인</p>
+                <div style={{ marginBottom: '1.5rem', position: 'relative', zIndex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <div>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>평균 점수 추이</h3>
+                        <p style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>최근 {trendData.length}개 시험 · 상세 분석 전 빠른 흐름 확인</p>
+                    </div>
+                    {trendDelta !== null && (
+                        <span
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.3rem 0.65rem',
+                                borderRadius: 'var(--radius-full)',
+                                background: trendDelta >= 0 ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                                color: trendDelta >= 0 ? 'var(--success)' : 'var(--grade-red)',
+                                fontSize: '0.8rem',
+                                fontWeight: 800,
+                            }}
+                            title={`첫 시험 대비 ${trendDelta >= 0 ? "+" : ""}${trendDelta}점 변동`}
+                        >
+                            {trendDelta >= 0 ? `▲ +${trendDelta}점` : `▼ ${trendDelta}점`}
+                            <small style={{ color: 'var(--muted)', fontSize: '0.7rem', fontWeight: 700 }}>추이</small>
+                        </span>
+                    )}
                 </div>
 
                 <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%', position: 'relative', zIndex: 1 }}>
@@ -771,12 +817,12 @@ function FreshOverviewTab({ capability, exams: examsProp, attempts, stats, trend
                         <colgroup>
                             <col style={{ width: '220px' }} />
                             <col style={{ width: '115px' }} />
-                            <col style={{ width: '190px' }} />
-                            <col style={{ width: '135px' }} />
+                            <col style={{ width: '175px' }} />
+                            <col style={{ width: '130px' }} />
                             <col style={{ width: '85px' }} />
-                            <col style={{ width: '120px' }} />
+                            <col style={{ width: '130px' }} />
                             {activeTab === 'ongoing' && <col style={{ width: '130px' }} />}
-                            <col style={{ width: '60px' }} />
+                            <col style={{ width: '85px' }} />
                         </colgroup>
                         <thead>
                             <tr style={{ color: 'var(--muted)', fontSize: '0.85rem', borderBottom: '1px solid var(--border)' }}>
@@ -857,14 +903,19 @@ function FreshOverviewTab({ capability, exams: examsProp, attempts, stats, trend
                                             />
                                         </td>
                                         <td>
-                                            <StatusPill
-                                                tone={isArchived || !targetCountVerified ? "muted" : participationRate === 100 ? "success" : "primary"}
-                                                size="sm"
-                                                label={statusText}
-                                                style={!isArchived && participationRate !== 100
-                                                    ? { textTransform: 'uppercase', background: 'rgba(139, 92, 246, 0.1)', color: 'var(--accent)' }
-                                                    : { textTransform: 'uppercase' }}
-                                            />
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+                                                {!isArchived && targetCountVerified && participationRate !== 100 && (
+                                                    <span className="live-pulse-dot" aria-hidden="true" title="응시 진행 중" />
+                                                )}
+                                                <StatusPill
+                                                    tone={isArchived || !targetCountVerified ? "muted" : participationRate === 100 ? "success" : "primary"}
+                                                    size="sm"
+                                                    label={statusText}
+                                                    style={!isArchived && participationRate !== 100
+                                                        ? { textTransform: 'uppercase', background: 'rgba(139, 92, 246, 0.1)', color: 'var(--accent)' }
+                                                        : { textTransform: 'uppercase' }}
+                                                />
+                                            </div>
                                         </td>
                                         {activeTab === 'ongoing' && (
                                             <td style={{ textAlign: 'right' }}>
@@ -891,11 +942,34 @@ function FreshOverviewTab({ capability, exams: examsProp, attempts, stats, trend
                                             </td>
                                         )}
                                         <td style={{ textAlign: 'right' }}>
-                                            <ExamActionsMenu
-                                                exam={{ id: exam.id, title: exam.title, archived: isArchived }}
-                                                onAction={handleExamAction}
-                                                disabled={mutationExamIds.has(exam.id)}
-                                            />
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem' }}>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleCopyExamLink(exam.id, exam.title)}
+                                                    aria-label={`${exam.title} 링크 복사`}
+                                                    title="학생 응시 링크 복사"
+                                                    className="card-hover"
+                                                    style={{
+                                                        width: '32px',
+                                                        height: '32px',
+                                                        display: 'inline-grid',
+                                                        placeItems: 'center',
+                                                        border: '1px solid var(--border)',
+                                                        borderRadius: 'var(--radius-md)',
+                                                        background: copiedExamId === exam.id ? 'rgba(34, 197, 94, 0.12)' : 'var(--surface)',
+                                                        color: copiedExamId === exam.id ? 'var(--success)' : 'var(--muted)',
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.16s ease',
+                                                    }}
+                                                >
+                                                    {copiedExamId === exam.id ? <Check size={14} /> : <Copy size={14} />}
+                                                </button>
+                                                <ExamActionsMenu
+                                                    exam={{ id: exam.id, title: exam.title, archived: isArchived }}
+                                                    onAction={handleExamAction}
+                                                    disabled={mutationExamIds.has(exam.id)}
+                                                />
+                                            </div>
                                         </td>
                                     </tr>
                                 );

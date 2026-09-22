@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export function exactNextActionId(filename: string, exportedName: string, worker: string): string {
-    const manifestPath = join(process.cwd(), ".next/dev/server/server-reference-manifest.json");
+    const buildDirectory = process.env.OMR_ISOLATED_E2E === "1" ? ".next-e2e" : ".next";
+    const manifestPath = join(process.cwd(), buildDirectory, "dev/server/server-reference-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
         node?: Record<string, { filename?: string; exportedName?: string; workers?: Record<string, unknown> }>;
     };

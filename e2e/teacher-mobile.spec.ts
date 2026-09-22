@@ -91,10 +91,10 @@ async function loginWithCanonicalDashboard(page: Page, baseURL: string | undefin
     const remoteFixture = await registerCanonicalRemoteFixture(page);
     const actionIds = remoteFixture.activateEmptyTeacherDashboard(roster);
     await page.goto("/teacher/dashboard");
-    for (const actionId of Object.values(actionIds)) {
+    for (const [actionName, actionId] of Object.entries(actionIds)) {
         await expect.poll(
             () => remoteFixture.rewrittenActionIds.has(actionId),
-            { timeout: 15_000 },
+            { timeout: 15_000, message: `Expected intercepted ${actionName}` },
         ).toBe(true);
     }
 }
@@ -337,7 +337,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_teacher_mobile" });
         await loginAsTeacher(page, "/teacher/dashboard");
 
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
         await expectTeacherHeaderTouchFriendly(page, { hasDashboardShortcut: false });
 
         await page.locator(".teacher-header").getByRole("button", { name: /알림/ }).click();
@@ -381,7 +381,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         test.setTimeout(60_000);
         await loginAsShowcaseTeacher(page);
 
-        await expect(page.getByRole("heading", { name: /김하늘 선생님/ })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "대시보드", exact: true })).toBeVisible();
         const scoreMetric = page.getByRole("button", { name: /전체 평균 점수.*점수 원인 보기/ });
         await expectTouchTarget(scoreMetric);
         await expect(scoreMetric).toContainText(/직전 시험보다 .*점 (상승|하락)/);

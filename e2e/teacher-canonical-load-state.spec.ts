@@ -34,7 +34,7 @@ test("teacher dashboard keeps a scoped degraded snapshot strictly read only", as
 
     await resetBrowserState(page, context);
     await loginAsTeacher(page, "/teacher/dashboard");
-    await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+    await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
     failCanonicalActions = true;
 
     await page.evaluate(() => {
@@ -130,6 +130,8 @@ test("teacher dashboard keeps a scoped degraded snapshot strictly read only", as
     await expect(page.getByRole("link", { name: "시험 출제하기" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "시험 분석" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "학생 성취도" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "결과 분석", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "시험 만들기", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /분석 보기/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /통계 CSV|CSV 다시 시도/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /시험 작업 메뉴/ })).toHaveCount(0);
@@ -139,6 +141,7 @@ test("teacher dashboard keeps a scoped degraded snapshot strictly read only", as
     observeMutationOrDetailActionRequests = false;
     expect(mutationOrDetailActionRequestCount).toBe(0);
     expect(injectedFailureCount).toBeGreaterThan(0);
+    await page.screenshot({ path: `/tmp/omr-degraded-dashboard-${test.info().project.name}.png` });
 });
 
 test("teacher roster and distribution preserve failure, recovery, and degraded capabilities", async ({ page, context }) => {

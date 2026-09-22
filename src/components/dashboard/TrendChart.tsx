@@ -18,13 +18,23 @@ function LastPointFlag(props: { x?: number; y?: number; value?: number; index?: 
     if (index !== lastIndex || x === undefined || y === undefined) return null;
     return (
         <g className="comet-flag" pointerEvents="none">
-            <rect x={x - 62} y={y - 12} width={50} height={23} rx={7} fill="#ffffff" />
+            <rect
+                x={x - 64}
+                y={y - 13}
+                width={54}
+                height={25}
+                rx={8}
+                fill="#ffffff"
+                style={{
+                    filter: "drop-shadow(0 3px 6px rgba(0, 0, 0, 0.16))",
+                }}
+            />
             <text
                 x={x - 37}
                 y={y + 4}
                 textAnchor="middle"
                 fontSize={12}
-                fontWeight={800}
+                fontWeight={850}
                 fill="var(--primary-dark)"
             >
                 {value}점
@@ -117,11 +127,12 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
                 minHeight={height}
                 initialDimension={{ width: 640, height }}
             >
-                <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                <AreaChart data={chartData} margin={{ top: 12, right: 12, left: 12, bottom: 0 }}>
                     <defs>
                         <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor={color} stopOpacity={0.4} />
-                            <stop offset="95%" stopColor={color} stopOpacity={0} />
+                            <stop offset="0%" stopColor={color} stopOpacity={0.48} />
+                            <stop offset="45%" stopColor={color} stopOpacity={0.16} />
+                            <stop offset="100%" stopColor={color} stopOpacity={0} />
                         </linearGradient>
                     </defs>
                     <Tooltip
@@ -150,11 +161,12 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
                         className="comet-target"
                         stroke={color}
                         fill={`url(#${gradientId})`}
-                        strokeWidth={3}
+                        strokeWidth={3.5}
                         isAnimationActive={false}
-                        activeDot={{ r: 7, strokeWidth: 0, fill: color }}
-                        dot={{ r: 5, strokeWidth: 2, fill: 'var(--primary-dark)', stroke: color }}
+                        activeDot={{ r: 7, strokeWidth: 2.5, stroke: '#ffffff', fill: color }}
+                        dot={{ r: 4.5, strokeWidth: 2, fill: 'var(--surface)', stroke: color }}
                         label={<LastPointFlag lastIndex={chartData.length - 1} />}
+                        style={{ filter: 'drop-shadow(0 4px 10px rgba(99, 102, 241, 0.28))' }}
                     />
                 </AreaChart>
             </ResponsiveContainer>
