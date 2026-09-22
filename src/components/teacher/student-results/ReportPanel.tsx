@@ -9,6 +9,7 @@ import { buildStudentReportHeadline } from "@/lib/studentReportHeadline";
 import type { StudentRetakeScoreDelta } from "@/lib/studentResultHub";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
+import StudentConceptMasteryPanel from "./StudentConceptMasteryPanel";
 import StudentGrowthReport, { type StudentGrowthReportState } from "./StudentGrowthReport";
 import styles from "./StudentResultHub.module.css";
 
@@ -205,6 +206,13 @@ export default function ReportPanel({
                     lockedDescription="시험별 성장 추이와 반 평균 격차, 등수 변화는 Pro 이상에서 확인할 수 있습니다."
                     onRetry={onRetryCumulative}
                 />
+
+                {reportCumulativeInsight?.conceptMastery ? (
+                    <section className="bento-card" style={{ padding: "1rem" }} aria-label="누적 개념 분석">
+                        {dataQualifier ? <p className={styles.cumulativeWarning}>{dataQualifier}</p> : null}
+                        <StudentConceptMasteryPanel summary={reportCumulativeInsight.conceptMastery} />
+                    </section>
+                ) : null}
 
                 <section className="bento-card" style={{ padding: "1rem" }} aria-labelledby="report-weakness-title">
                     <h2 id="report-weakness-title" className={styles.reportSectionTitle}>주요 오답과 약점</h2>

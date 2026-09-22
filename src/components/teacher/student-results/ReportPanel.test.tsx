@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import type {
@@ -177,6 +177,37 @@ function renderReport({
 afterEach(cleanup);
 
 describe("ReportPanel", () => {
+    const conceptInsight = () => cumulativeInsight({ conceptMastery: {
+        unmappedQuestionCount: 0,
+        groups: [{ concept: "문맥 추론", correctCount: 1, totalCount: 4, unansweredCount: 0,
+            distinctQuestionCount: 4, attemptCount: 2, correctRate: 25, assessment: "weakness", trendDelta: null,
+            evidence: [{ examId: "exam-1", examTitle: "개념 근거 시험", questionNumber: 2, attemptId: "attempt-1", status: "wrong", finishedAt: "2026-09-01", trapPoints: [] }],
+        }],
+    } });
+
+    it("shows cumulative concept strengths and weaknesses in the live report", () => {
+        renderReport({ insight: conceptInsight() });
+        const section = screen.getByRole("region", { name: "누적 개념 분석" });
+        expect(within(section).getByRole("heading", { name: "문맥 추론", exact: true })).toBeInTheDocument();
+        fireEvent.click(within(section).getByRole("button", { name: /문맥 추론 문항 근거 보기/ }));
+        expect(within(section).getByRole("link", { name: /개념 근거 시험/ })).toHaveAttribute("href", "/teacher/attempt/attempt-1?view=answers");
+    });
+
+    it.each(["idle", "loading", "error", "empty"] as const)("withholds concept detail when growth state is %s", status => {
+        renderReport({ insight: conceptInsight(), status });
+        expect(screen.queryByRole("region", { name: "누적 개념 분석" })).not.toBeInTheDocument();
+    });
+
+    it("withholds concept detail when the premium entitlement is disabled", () => {
+        renderReport({ insight: conceptInsight(), enabled: false });
+        expect(screen.queryByText(/문맥 추론/)).not.toBeInTheDocument();
+    });
+
+    it.each([["partial", "일부 제출 기준"], ["stale", "저장된 데이터 기준"]] as const)("qualifies %s concept evidence", (status, label) => {
+        renderReport({ insight: conceptInsight(), status });
+        expect(within(screen.getByRole("region", { name: "누적 개념 분석" })).getByText(label)).toBeInTheDocument();
+    });
+
     it("labels a completely ungraded attempt without publishing a false zero-percent headline", () => {
         const ungradedAttempt = { ...attempt, score: 0, totalScore: 0 };
         render(

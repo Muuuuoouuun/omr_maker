@@ -6,6 +6,7 @@
 
 import { useState } from "react";
 import NextLink from "next/link";
+import StudentConceptMasteryPanel from "@/components/teacher/student-results/StudentConceptMasteryPanel";
 import StatusPill from "@/components/dashboard/StatusPill";
 import {
     Users,
@@ -569,6 +570,8 @@ export function StudentProfileModal({
                     <ProfileMetric label="평균 시험시간" value={formatDuration(profile.averageElapsedTimeSec)} color="#0ea5e9" icon={<Clock size={15} />} />
                     <ProfileMetric label="문항 평균시간" value={formatDuration(profile.averageQuestionTimeSec)} color="#f59e0b" icon={<Clock size={15} />} />
                 </div>
+
+                {profile.conceptMastery ? <StudentConceptMasteryPanel summary={profile.conceptMastery} /> : null}
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
                     <section style={{ minWidth: 0 }}>

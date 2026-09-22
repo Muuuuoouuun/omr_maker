@@ -319,6 +319,43 @@ describe("canonical collection server action contract", () => {
         });
     });
 
+    it("accepts the real student builder including populated concept mastery and rejects unsafe mastery payloads", async () => {
+        const { buildStudentProfileInsight } = await vi.importActual<typeof import("@/lib/studentProfileAnalytics")>("@/lib/studentProfileAnalytics");
+        const { buildQuestionResults } = await import("@/lib/premiumAnalytics");
+        const { buildCanonicalQuestionResultEvidence } = await import("@/lib/canonicalQuestionResultManifest");
+        const student = { id: "student-1", name: "학생", email: "", group: "A반", avatar: "", avgScore: 0, examsTaken: 0, lastActive: "", trend: "flat" as const, status: "idle" as const };
+        const exam = { id: "exam-1", title: "개념 시험", organizationId: "org-1", createdAt: "2026-09-01T00:00:00Z", questions: [{ id: 1, number: 1, answer: 2, score: 10, tags: { concept: "일차함수" } }] };
+        const candidate = { id: "attempt-1", examId: exam.id, examTitle: exam.title, organizationId: "org-1", studentId: student.id, studentName: student.name, startedAt: "2026-09-01T00:00:00Z", finishedAt: "2026-09-01T00:10:00Z", status: "completed" as const, answers: { 1: 2 }, score: 10, totalScore: 10 };
+        const questionResults = buildQuestionResults(exam, candidate);
+        const canonical = { ...candidate, questionResults };
+        const attempt = { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
+        const meta = { organizationId: "org-1", loadedAt: "2026-09-01T00:10:00Z", rawCount: 1, parsedCount: 1 };
+        gatewayMocks.attemptSummaryList.mockResolvedValue({ status: "loaded", attempts: [attempt], page: { partial: false, hasMore: false, itemCount: 1 }, meta });
+        gatewayMocks.attemptLoad.mockResolvedValue({ status: "loaded", attempt });
+        gatewayMocks.examList.mockResolvedValue({ status: "loaded", exams: [exam], meta });
+        gatewayMocks.rosterLoad.mockResolvedValue({ status: "loaded", snapshot: { students: [student], groups: [], invites: [] }, meta });
+        profileMocks.student.mockImplementation(buildStudentProfileInsight);
+        const result = await loadTeacherCanonicalRosterProfile({ kind: "student", id: student.id });
+        expect(result).toMatchObject({ status: "loaded", kind: "student", profile: { conceptMastery: { unmappedQuestionCount: 0, groups: [{ concept: "일차함수", correctCount: 1, assessment: "insufficient", evidence: [{ attemptId: attempt.id, status: "correct", trapPoints: [] }] }] } } });
+        const profile = buildStudentProfileInsight(student, [attempt], new Map([[exam.id, exam]]));
+        const group = profile.conceptMastery!.groups[0];
+        for (const conceptMastery of [
+            { ...profile.conceptMastery, groups: [{ ...group, evidence: [{ ...group.evidence[0], secret: PROVIDER_SENTINEL }] }] },
+            { ...profile.conceptMastery, groups: [{ ...group, evidence: Array(7).fill(group.evidence[0]) }] },
+            { ...profile.conceptMastery, groups: [{ ...group, assessment: "guaranteed" }] },
+            { ...profile.conceptMastery, groups: [{ ...group, correctRate: 101 }] },
+            { ...profile.conceptMastery, unmappedQuestionCount: -1 },
+        ]) {
+            profileMocks.student.mockReturnValue({ ...profile, conceptMastery });
+            const rejected = await loadTeacherCanonicalRosterProfile({ kind: "student", id: student.id });
+            expect(rejected).toMatchObject({ status: "service_unavailable" });
+            expect(JSON.stringify(rejected)).not.toContain(PROVIDER_SENTINEL);
+        }
+        gatewayMocks.attemptSummaryList.mockResolvedValue({ status: "loaded", attempts: [], page: { partial: false, hasMore: false, itemCount: 0 }, meta });
+        profileMocks.student.mockImplementation(buildStudentProfileInsight);
+        await expect(loadTeacherCanonicalRosterProfile({ kind: "student", id: student.id })).resolves.toMatchObject({ status: "loaded", profile: { conceptMastery: { groups: [], unmappedQuestionCount: 0 } } });
+    });
+
     it("passes exact successful collection metadata through unchanged", async () => {
         const meta = {
             organizationId: "org-1",

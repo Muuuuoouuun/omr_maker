@@ -142,7 +142,7 @@ const STUDENT_PROFILE_KEYS = [
     "averageElapsedTimeSec", "averageQuestionTimeSec", "totalTrackedTimeSec",
     "focusLossCount", "wrongQuestionCount", "unansweredQuestionCount",
     "handwritingArchiveCount", "baseAttemptCount", "retakeAttemptCount",
-    "weaknessGroups", "headlineWeaknessGroups", "mostMissedQuestions", "tagStats",
+    "weaknessGroups", "headlineWeaknessGroups", "mostMissedQuestions", "tagStats", "conceptMastery",
 ] as const;
 const GROUP_PROFILE_KEYS = [
     "groupId", "groupName", "rosterStudentCount", "attemptCount", "retakeAttemptCount",
@@ -164,6 +164,8 @@ const PROFILE_NESTED_KEYS = new Set([
     "examIds", "maxWrongRate", "questionId", "questionNumber", "label", "concept",
     "averageTimeSec", "correctCount", "correctRate", "studentCount", "attemptCount",
     "topWeakness", "name", "latestScore", "trendDelta",
+    "groups", "unmappedQuestionCount", "distinctQuestionCount", "assessment", "evidence",
+    "attemptId", "status", "trapPoints",
 ]);
 
 function hasExactRootKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
@@ -198,13 +200,51 @@ function stableProfileData(value: unknown, seen: WeakSet<object>, state: { nodes
     return true;
 }
 
+/** Validate the new optional DTO independently so its keys cannot hide arbitrary nested payloads. */
+function validConceptMastery(value: unknown): boolean {
+    if (value === undefined) return true; // Older profile producers omit this optional field.
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const summary = value as Record<string, unknown>;
+    const count = (value: unknown, max = PROFILE_RICH_QUESTION_RESULT_LIMIT): value is number =>
+        Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= max;
+    const label = (value: unknown, max: number): value is string => typeof value === "string" && value.length <= max;
+    if (!hasExactRootKeys(summary, ["groups", "unmappedQuestionCount"])
+        || !count(summary.unmappedQuestionCount) || !Array.isArray(summary.groups)
+        || summary.groups.length > 2_000) return false;
+    return summary.groups.every((group: Record<string, unknown>) => {
+        if (!group || typeof group !== "object" || Array.isArray(group)
+            || !hasExactRootKeys(group, ["concept", "correctCount", "totalCount", "unansweredCount", "distinctQuestionCount", "attemptCount", "correctRate", "assessment", "trendDelta", "evidence"])
+            || !label(group.concept, 10_000) || !group.concept.trim()
+            || !count(group.totalCount) || !count(group.correctCount, group.totalCount)
+            || !count(group.unansweredCount, group.totalCount)
+            || !count(group.distinctQuestionCount, group.totalCount)
+            || !count(group.attemptCount, PROFILE_RICH_ATTEMPT_LIMIT)
+            || !count(group.correctRate, 100)
+            || !["strength", "weakness", "developing", "insufficient"].includes(String(group.assessment))
+            || !(group.trendDelta === null || (typeof group.trendDelta === "number" && Number.isInteger(group.trendDelta) && Math.abs(group.trendDelta) <= 100))
+            || !Array.isArray(group.evidence) || group.evidence.length > 6) return false;
+        return group.evidence.every((item: Record<string, unknown>) => item && typeof item === "object" && !Array.isArray(item)
+            && hasExactRootKeys(item, ["examId", "examTitle", "questionNumber", "attemptId", "status", "finishedAt", "trapPoints"])
+            && label(item.examId, 200) && label(item.examTitle, 10_000) && label(item.attemptId, 200)
+            && Number.isSafeInteger(item.questionNumber) && Number(item.questionNumber) > 0
+            && ["correct", "wrong", "unanswered"].includes(String(item.status))
+            && label(item.finishedAt, 100) && Array.isArray(item.trapPoints) && item.trapPoints.length <= 8
+            && item.trapPoints.every(trap => label(trap, 200)));
+    });
+}
+
 function boundedProfileSnapshot<T extends StudentProfileInsight | GroupProfileInsight>(
     profile: T,
     kind: "student" | "group",
 ): T | null {
     try {
         if (!stableProfileData(profile, new WeakSet(), { nodes: 0 })) return null;
-        if (!hasExactRootKeys(profile as unknown as Record<string, unknown>, kind === "student" ? STUDENT_PROFILE_KEYS : GROUP_PROFILE_KEYS)) return null;
+        const record = profile as unknown as Record<string, unknown>;
+        const expected = kind === "student"
+            ? (Object.prototype.hasOwnProperty.call(record, "conceptMastery") ? STUDENT_PROFILE_KEYS : STUDENT_PROFILE_KEYS.filter(key => key !== "conceptMastery"))
+            : GROUP_PROFILE_KEYS;
+        if (!hasExactRootKeys(record, expected)) return null;
+        if (kind === "student" && !validConceptMastery(record.conceptMastery)) return null;
         const serialized = JSON.stringify(profile);
         if (new TextEncoder().encode(serialized).byteLength > 512 * 1024) return null;
         const parsed = JSON.parse(serialized) as T;
