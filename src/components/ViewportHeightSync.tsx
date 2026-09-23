@@ -59,12 +59,16 @@ function readViewportMetrics() {
 export default function ViewportHeightSync() {
   useEffect(() => {
     let frame: number | null = null;
+    let focusFrame: number | null = null;
     let settleTimer: number | null = null;
+    let previousHeight: number | null = null;
 
     const applyMetrics = () => {
       frame = null;
       const metrics = readViewportMetrics();
       const root = document.documentElement;
+      const viewportShrank = previousHeight !== null && metrics.height < previousHeight - 1;
+      previousHeight = metrics.height;
 
       root.style.setProperty(VIEWPORT_HEIGHT_VAR, `${metrics.height}px`);
       root.style.setProperty(VIEWPORT_WIDTH_VAR, `${metrics.width}px`);
@@ -73,6 +77,24 @@ export default function ViewportHeightSync() {
       root.style.setProperty(VIEWPORT_SCALE_VAR, String(metrics.scale));
       root.style.setProperty(KEYBOARD_INSET_BOTTOM_VAR, `${metrics.keyboardInsetBottom}px`);
       root.setAttribute(KEYBOARD_STATE_ATTRIBUTE, metrics.keyboardOpen ? "open" : "closed");
+
+      // A tablet keyboard can shrink the visible area while an editor input
+      // remains focused. Keep that field in the settings pane's scroll area.
+      if (viewportShrank) {
+        if (focusFrame !== null) window.cancelAnimationFrame(focusFrame);
+        focusFrame = window.requestAnimationFrame(() => {
+          focusFrame = null;
+          const active = document.activeElement;
+          if (!(active instanceof HTMLElement)
+            || !active.matches("input, textarea, select, [contenteditable='true']")
+            || !active.closest(".create-settings-sidebar")) return;
+          const rect = active.getBoundingClientRect();
+          const current = readViewportMetrics();
+          if (rect.top < current.offsetTop || rect.bottom > current.offsetTop + current.height) {
+            active.scrollIntoView({ block: "center", inline: "nearest" });
+          }
+        });
+      }
     };
 
     const scheduleApplyMetrics = () => {
@@ -100,6 +122,7 @@ export default function ViewportHeightSync() {
 
     return () => {
       if (frame !== null) window.cancelAnimationFrame(frame);
+      if (focusFrame !== null) window.cancelAnimationFrame(focusFrame);
       if (settleTimer !== null) window.clearTimeout(settleTimer);
       window.removeEventListener("resize", scheduleApplyMetrics);
       window.removeEventListener("orientationchange", scheduleSettledApplyMetrics);

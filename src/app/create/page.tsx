@@ -2991,7 +2991,7 @@ function CreateOMRPageInner() {
     };
 
     return (
-        <div className="layout-main create-editor-page" style={{ background: 'var(--background)', height: 'var(--app-viewport-height, 100dvh)', overflow: 'hidden' }}>
+        <div className="layout-main create-editor-page" style={{ background: 'var(--background)', height: 'min(var(--app-viewport-height, 100dvh), 100dvh)', overflow: 'hidden' }}>
             <header className="header create-editor-shell-header" style={{ flexShrink: 0 }}>
                 <div className="container header-content create-editor-header" style={{ maxWidth: '100%', padding: '0 2rem' }}>
                     <div className="create-editor-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>

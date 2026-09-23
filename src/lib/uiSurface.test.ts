@@ -837,7 +837,7 @@ describe("service UI surface", () => {
         expect(css).toContain("min-height: calc(4.5rem + var(--app-safe-area-top))");
         expect(css).toContain("padding-top: var(--app-safe-area-top)");
         expect(css).toContain("height: var(--app-viewport-height, 100dvh) !important");
-        expect(createPage).toContain("height: 'var(--app-viewport-height, 100dvh)'");
+        expect(createPage).toContain("height: 'min(var(--app-viewport-height, 100dvh), 100dvh)'");
         expect(createPage).toContain("calc(var(--app-viewport-height, 100dvh) - 4rem)");
         expect(solvePage).toContain("height: 'var(--app-viewport-height, 100dvh)'");
         expect(solvePage).toContain("minHeight: 'var(--app-viewport-height, 100dvh)'");

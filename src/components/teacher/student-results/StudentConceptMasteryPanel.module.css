@@ -86,6 +86,29 @@
 .method h4 { margin: 0; font-size: .75rem; font-weight: 700; color: var(--muted); }
 .method .note { font-size: .75rem; margin: .35rem 0; }
 .filtered, .collapsed { display: none; }
+/* Use available panel width: tablet sidebars and profile dialogs can be much
+   narrower than the viewport. Keep each two-column card at least ~370px wide. */
+@container (max-width: 760px) {
+    .groups { grid-template-columns: minmax(0, 1fr); }
+    .browseHeader { align-items: stretch; flex-direction: column; gap: .75rem; }
+    .search { width: 100%; }
+}
+@container (min-width: 620px) and (max-width: 1000px) {
+    .groups { gap: 1rem; }
+    .card { padding: 1.25rem 1.25rem 0; }
+    .heading h4 { font-size: 1.0625rem; }
+    .sample, .trend, .errorCounts dt, .rate > span { font-size: .8125rem; }
+    .filters { gap: .625rem; }
+    .filters button { min-height: 80px; }
+    .filters button span { font-size: .8125rem; }
+    .evidenceToggle, .evidence a { min-height: 52px; font-size: .875rem; }
+}
+@media screen and (pointer: coarse) {
+    .search input { min-height: 48px; font-size: 1rem; }
+    .reviewSummary a { min-height: 48px; }
+    .evidenceToggle, .evidence a { min-height: 52px; }
+    .showMore, .reset { min-height: 48px; }
+}
 @container (max-width: 620px) {
     .groups { grid-template-columns: minmax(0, 1fr); }
     .panelHeader { align-items: flex-start; }

@@ -646,6 +646,26 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await tabs.getByRole("tab", { name: "설정", exact: true }).click();
         await expect(page.locator("#create-pdf-panel")).toBeHidden();
         await expect(page.locator("#create-settings-panel")).toBeVisible();
+        const title = page.getByLabel("시험 제목");
+        await title.fill("태블릿 회전 중인 시험");
+        await page.setViewportSize({ width: 820, height: 1180 });
+        await expect(tabs.getByRole("tab", { name: "설정", exact: true })).toHaveAttribute("aria-selected", "true");
+        await expect(title).toHaveValue("태블릿 회전 중인 시험");
+        await expect(page.locator("#create-settings-panel")).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+        // A keyboard can animate the visible area smaller in several steps.
+        for (const height of [1120, 1060, 1000, 940, 880, 820, 760, 700, 640, 600]) {
+            await page.setViewportSize({ width: 820, height });
+            // Native keyboards emit a viewport resize; Playwright's emulation does not.
+            await page.evaluate(() => window.dispatchEvent(new Event("resize")));
+            await expect.poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue("--app-viewport-height"))).toBe(`${height}px`);
+        }
+        await expect(title).toBeInViewport();
+        await expect(page.locator(".create-primary-actions:visible").getByRole("button", { name: "초안 저장" })).toBeInViewport();
+        await expectNoHorizontalOverflow(page);
+        await page.setViewportSize({ width: 1180, height: 820 });
+        await expect(title).toHaveValue("태블릿 회전 중인 시험");
+        await expect(page.locator("#create-settings-panel")).toBeVisible();
         await expectNoHorizontalOverflow(page);
     });
 
@@ -740,6 +760,27 @@ test.describe("Teacher phone and tablet app surfaces", () => {
             expect(viewerBox!.x).toBeGreaterThanOrEqual(sidebarBox!.x + sidebarBox!.width);
             expect(Math.abs(viewerBox!.y - sidebarBox!.y)).toBeLessThanOrEqual(2);
         }
+    });
+
+    test("keeps the student result tab open through tablet rotation", async ({ page }) => {
+        await page.setViewportSize({ width: 820, height: 1180 });
+        await seedTeacherAttemptReview(page);
+        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
+
+        await expect(page.getByRole("heading", { name: "모바일 학생" })).toBeVisible();
+        const handwritingTab = page.getByRole("tab", { name: "필기" });
+        await handwritingTab.click();
+        await expect(handwritingTab).toHaveAttribute("aria-selected", "true");
+        await expect(page.getByRole("heading", { name: "학생 풀이 필기" })).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+
+        await page.setViewportSize({ width: 1180, height: 820 });
+        await expect(handwritingTab).toHaveAttribute("aria-selected", "true");
+        await expect(page.getByRole("heading", { name: "학생 풀이 필기" })).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+        await page.setViewportSize({ width: 820, height: 1180 });
+        await expect(handwritingTab).toHaveAttribute("aria-selected", "true");
+        await expectNoHorizontalOverflow(page);
     });
 
     test("lays out the mobile student result tabs as touch-friendly rows", async ({ page }) => {
