@@ -467,6 +467,9 @@ test("connects the editorial exam overview to a dense personal growth report", a
     await loginAsShowcaseTeacher(page);
     await page.goto("/teacher/dashboard?showcase=1&tab=exam");
 
+    // The analytics tab is a lazy chunk; a cold CI build may still be loading
+    // after navigation completes. Wait for that surface before inspecting it.
+    await expect(page.getByRole("tabpanel", { name: "시험 통계 요약" })).toBeVisible({ timeout: 30_000 });
     const overviewHeadings = page.locator('[role="tabpanel"][aria-label="시험 통계 요약"] > * h2');
     await expect(page.getByRole("region", { name: "시험 핵심 지표" })).toBeVisible();
     await expect(page.getByRole("table", { name: "취약 문항 근거" })).toBeVisible();
@@ -545,8 +548,12 @@ test.describe("Create page label memory", () => {
 
     const revealAnswerImportTrigger = async (page: Page) => {
         const trigger = page.getByRole("button", { name: "정답 인식 마법사 열기" });
+        const settingsTab = page.getByRole("tab", { name: /^설정/ });
+        // Do not mistake an editor that is still mounting for a collapsed
+        // mobile settings pane (desktop has no settings tab to click).
+        await expect(trigger.or(settingsTab).filter({ visible: true }).first()).toBeVisible();
         if (!await trigger.isVisible()) {
-            await page.getByRole("tab", { name: /^설정/ }).click();
+            await settingsTab.click();
         }
         await expect(trigger).toBeVisible();
         return trigger;
@@ -578,7 +585,8 @@ test.describe("Create page label memory", () => {
         await problemUpload.press("Enter");
         await expect(problemInput).toHaveAttribute("data-keyboard-activations", "1");
         await problemInput.setInputFiles(fixturePath);
-        await expect(page.getByText("문제지 PDF 파일 수신됨", { exact: true })).toBeVisible();
+        const selectedPdfName = page.locator("#create-pdf-panel").getByText("sample-problem.pdf", { exact: true });
+        await expect(selectedPdfName).toBeVisible();
 
         await pdfMenuTrigger.focus();
         await pdfMenuTrigger.press("Space");
@@ -589,7 +597,10 @@ test.describe("Create page label memory", () => {
         await answerUpload.press("Space");
         await expect(answerInput).toHaveAttribute("data-keyboard-activations", "1");
         await answerInput.setInputFiles(fixturePath);
-        await expect(page.getByText("답지 PDF 파일 수신됨", { exact: true })).toBeVisible();
+        // Fast PDF parsing replaces the receipt toast with the ready toast.
+        // The answer switch and filename persist and prove the upload succeeded.
+        await expect(page.getByRole("button", { name: "참고용 답지", exact: true })).toBeVisible();
+        await expect(selectedPdfName).toBeVisible();
     });
 
     test("keyboard upload in the answer import modal opens a file chooser and shows the selected PDF", async ({ page }) => {

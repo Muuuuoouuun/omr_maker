@@ -109,9 +109,13 @@ jobs:
           retention-days: 7
 
   ios-webkit-pwa:
-    name: iOS WebKit PWA tests
+    name: iOS WebKit PWA tests (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     needs: lint-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,14 +129,14 @@ jobs:
       - name: Install Playwright WebKit
         run: npx playwright install --with-deps webkit
       - name: Run iOS WebKit PWA E2E
-        run: npm run test:e2e:ios-webkit
+        run: npm run test:e2e:ios-webkit -- --shard=${{ matrix.shard }}/3
         env:
           CI: "true"
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-ios-webkit
+          name: playwright-report-ios-webkit-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/
@@ -161,3 +165,12 @@ jobs:
         run: npm run pwa:smoke
       - name: Production security E2E
         run: npx playwright test --config=playwright.production.config.ts
+      - name: Upload production Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-production
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

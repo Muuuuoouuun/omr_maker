@@ -48,16 +48,18 @@ insert into public.omr_exams (
      '{"id":"kakao-race-exam-b"}'::jsonb, 'teacher_8888888888888888',
      pg_catalog.clock_timestamp(), pg_catalog.clock_timestamp(), false);
 
+-- Docker invokes psql through a Unix socket, where inet_server_port() is
+-- NULL. Use the cluster's TCP port for these independent worker connections.
 select extensions.dblink_connect(
     'kakao_race_a',
-    'host=127.0.0.1 port=' || pg_catalog.inet_server_port()
+    'host=127.0.0.1 port=' || pg_catalog.current_setting('port')
         || ' dbname=' || pg_catalog.current_database()
         || ' user=' || current_user
         || ' password=' || :'kakao_dblink_password'
 );
 select extensions.dblink_connect(
     'kakao_race_b',
-    'host=127.0.0.1 port=' || pg_catalog.inet_server_port()
+    'host=127.0.0.1 port=' || pg_catalog.current_setting('port')
         || ' dbname=' || pg_catalog.current_database()
         || ' user=' || current_user
         || ' password=' || :'kakao_dblink_password'
@@ -169,7 +171,7 @@ $seed_race_b_review$;
 
 select extensions.dblink_connect(
     'kakao_dispatch_a',
-    'host=127.0.0.1 port=' || pg_catalog.inet_server_port()
+    'host=127.0.0.1 port=' || pg_catalog.current_setting('port')
         || ' dbname=' || pg_catalog.current_database()
         || ' user=' || current_user
         || ' password=' || :'kakao_dblink_password'

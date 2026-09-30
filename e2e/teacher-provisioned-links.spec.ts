@@ -105,6 +105,9 @@ test.describe("provisioned-only legacy teacher links", () => {
 
         await page.goto(`/?teacherVerifyToken=${legacyToken}&next=%2Fteacher%2Fsettings`);
         await expect(page.getByRole("form", { name: "교사 로그인" })).toBeVisible();
+        // The canonical recovery URL can render before React owns the inputs.
+        // Wait before filling so hydration cannot discard the credentials.
+        await expect(page.getByRole("button", { name: "대시보드 입장" })).toBeEnabled();
         await page.getByLabel("아이디 또는 이메일").fill("operator-issued-id");
         await page.getByLabel("비밀번호").fill("not-a-real-password");
         await page.getByRole("button", { name: "대시보드 입장" }).click();
@@ -155,6 +158,7 @@ test.describe("provisioned-only legacy teacher links", () => {
                     && current.search === "?role=teacher&teacherRecovery=legacy_link"
                     && current.hash === "";
             });
+            await expect(page.getByRole("button", { name: "대시보드 입장" })).toBeEnabled();
             await page.getByLabel("아이디 또는 이메일").fill("operator-issued-id");
             await page.getByLabel("비밀번호").fill("not-a-real-password");
             await page.getByRole("button", { name: "대시보드 입장" }).click();

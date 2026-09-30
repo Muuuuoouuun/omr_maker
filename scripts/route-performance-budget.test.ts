@@ -57,6 +57,41 @@ describe("route performance budget", () => {
         expect(missingChunk.failures).toContain("missing_chunk:/");
     });
 
+    it("reads Windows build diagnostics with the same normalized chunk paths", () => {
+        const reads: string[] = [];
+        const result = evaluateRoutePerformanceBudgets([{
+            route: "/",
+            firstLoadUncompressedJsBytes: 10,
+            firstLoadChunkPaths: [".next\\static\\chunks\\home.js"],
+        }], (path: string) => {
+            reads.push(path);
+            return Buffer.from("ok");
+        }, { "/": homeBudget });
+
+        expect(result.passed).toBe(true);
+        expect(reads).toEqual([".next/static/chunks/home.js"]);
+    });
+
+    it.each([
+        [".next/static/chunks/home.js", ".next\\static\\chunks\\home.js"],
+        [".next\\static\\chunks\\..\\secret.js"],
+        [".next/static/chunks/..\\secret.js"],
+        ["C:\\outside\\home.js"],
+    ])("rejects unsafe or duplicate normalized paths: %j", (...paths) => {
+        let reads = 0;
+        const result = evaluateRoutePerformanceBudgets([{
+            route: "/",
+            firstLoadUncompressedJsBytes: 10,
+            firstLoadChunkPaths: paths,
+        }], () => {
+            reads += 1;
+            return Buffer.from("ok");
+        }, { "/": homeBudget });
+
+        expect(result.failures).toEqual(["invalid_chunks:/"]);
+        expect(reads).toBe(0);
+    });
+
     it("rejects duplicate or traversal-like build chunk paths before reading them", () => {
         const stats = [{
             route: "/",

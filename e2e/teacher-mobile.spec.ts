@@ -72,7 +72,10 @@ async function authenticateCanonicalTeacher(page: Page, baseURL?: string) {
         window.sessionStorage.setItem(sessionKey, JSON.stringify(storedSession));
         window.sessionStorage.setItem(legacyTokenKey, storedSession.token);
     };
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.goto("/?role=teacher", { waitUntil: "domcontentloaded" });
+    // Finish the initial hydration before leaving the seed document. Cold
+    // WebKit can otherwise abort its chunks and reload / over the next route.
+    await expect(page.getByRole("button", { name: "대시보드 입장" })).toBeEnabled({ timeout: 30_000 });
     await page.evaluate(seedSession, {
         storedSession: session,
         sessionKey: TEACHER_SESSION_KEY,
@@ -333,15 +336,24 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("keeps the dashboard header touch friendly", async ({ page }) => {
+    test("keeps dashboard navigation touch friendly", async ({ page }) => {
         test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_teacher_mobile" });
         await loginAsTeacher(page, "/teacher/dashboard");
 
         await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
-        await expectTeacherHeaderTouchFriendly(page, { hasDashboardShortcut: false });
-
-        await page.locator(".teacher-header").getByRole("button", { name: /알림/ }).click();
-        await expect(page.getByRole("dialog", { name: "알림 목록" })).toBeVisible();
+        if (await page.evaluate(() => window.matchMedia("(min-width: 1121px)").matches)) {
+            const sidebar = page.getByRole("complementary", { name: "교사 대시보드 내비게이션" });
+            await expect(sidebar).toBeVisible();
+            await expect(sidebar.getByRole("button", { name: "대시보드", exact: true })).toHaveAttribute("aria-current", "page");
+            for (const name of ["학생 관리", "실시간 현황", "설정"]) {
+                await expectTouchTarget(sidebar.getByRole("link", { name, exact: true }));
+            }
+            await expectTouchTarget(sidebar.getByRole("button", { name: "교사 로그아웃" }));
+        } else {
+            await expectTeacherHeaderTouchFriendly(page, { hasDashboardShortcut: false });
+            await page.locator(".teacher-header").getByRole("button", { name: /알림/ }).click();
+            await expect(page.getByRole("dialog", { name: "알림 목록" })).toBeVisible();
+        }
         await expectNoHorizontalOverflow(page);
     });
 
@@ -372,7 +384,13 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         });
 
         const main = page.getByRole("main");
-        await expect(main.getByRole("group", { name: "대시보드 보기" })).toBeVisible();
+        if (await page.evaluate(() => window.matchMedia("(min-width: 1121px)").matches)) {
+            const sidebar = page.getByRole("complementary", { name: "교사 대시보드 내비게이션" });
+            await expectTouchTarget(sidebar.getByRole("button", { name: "결과 분석" }));
+            await expectTouchTarget(sidebar.getByRole("button", { name: "학생 성취도" }));
+        } else {
+            await expect(main.getByRole("group", { name: "대시보드 보기" })).toBeVisible();
+        }
         await expect(main.locator(".dashboard-empty-onboarding")).toHaveCount(0);
         await expectNoHorizontalOverflow(page);
     });
@@ -387,14 +405,24 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expect(scoreMetric).toContainText(/직전 시험보다 .*점 (상승|하락)/);
         await scoreMetric.click();
         await expect(page).toHaveURL(/tab=exam/, { timeout: 25_000 });
-        await expect(page.getByRole("button", { name: "시험별 분석" })).toHaveAttribute("aria-pressed", "true");
-
-        await page.getByRole("button", { name: "개요", exact: true }).click();
+        const usesSidebar = await page.evaluate(() => window.matchMedia("(min-width: 1121px)").matches);
+        const sidebar = page.getByRole("complementary", { name: "교사 대시보드 내비게이션" });
+        if (usesSidebar) {
+            await expect(sidebar.getByRole("button", { name: "결과 분석" })).toHaveAttribute("aria-current", "page");
+            await sidebar.getByRole("button", { name: "대시보드", exact: true }).click();
+        } else {
+            await expect(page.getByRole("button", { name: "시험별 분석" })).toHaveAttribute("aria-pressed", "true");
+            await page.getByRole("button", { name: "개요", exact: true }).click();
+        }
         const studentMetric = page.getByRole("button", { name: /명단 학생.*학생별 성취 보기/ });
         await expectTouchTarget(studentMetric);
         await studentMetric.click();
         await expect(page).toHaveURL(/tab=student/, { timeout: 25_000 });
-        await expect(page.getByRole("button", { name: "학생별 분석" })).toHaveAttribute("aria-pressed", "true");
+        if (usesSidebar) {
+            await expect(sidebar.getByRole("button", { name: "학생 성취도" })).toHaveAttribute("aria-current", "page");
+        } else {
+            await expect(page.getByRole("button", { name: "학생별 분석" })).toHaveAttribute("aria-pressed", "true");
+        }
         await expectNoHorizontalOverflow(page);
     });
 
@@ -404,7 +432,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await loginAsShowcaseTeacher(page);
         await page.goto("/teacher/exam/mock-final-comprehensive");
 
-        await expect(page.getByRole("heading", { name: "[예시] 기말고사 대비 종합평가" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "[예시] 기말고사 대비 종합평가" })).toBeVisible({ timeout: 30_000 });
         await expect(page.locator(".teacher-exam-results-table")).toBeHidden();
 
         const cards = page.getByTestId("teacher-exam-mobile-result-card");

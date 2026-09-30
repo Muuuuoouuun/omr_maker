@@ -93,7 +93,10 @@ test("production showcase button preserves exact read-only mockup authority", as
     expect(session).not.toHaveProperty("organizationId");
     expect(session).not.toHaveProperty("memberRole");
     expect(session).not.toHaveProperty("accountSessionGeneration");
-    await page.goto("/create");
+    // Let the dynamically loaded dashboard settle before replacing its
+    // navigation. WebKit can otherwise abort the overview chunk mid-load.
+    await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible();
+    await page.goto("/create", { waitUntil: "domcontentloaded" });
     await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1$/, { timeout: 15_000 });
 });
 

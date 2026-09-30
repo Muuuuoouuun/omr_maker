@@ -709,7 +709,9 @@ async function runLocalVerification() {
 
         function psqlFile(path, commands = [], options = {}) {
             return run(postgresBinary(postgresBin, "psql"), [
-                "-h", "127.0.0.1",
+                // Match Docker's socket-based psql entry point. The dblink
+                // workers still use TCP, so both transports are exercised.
+                "-h", socketDirectory,
                 "-p", String(port),
                 "-U", migrationOwner,
                 "-d", localDatabase,

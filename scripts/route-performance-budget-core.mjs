@@ -25,13 +25,16 @@ function validBudget(value) {
         && value.maximumCompressedBytes > 0;
 }
 
-function validChunkPaths(paths) {
-    if (!Array.isArray(paths) || paths.length === 0 || new Set(paths).size !== paths.length) return false;
-    return paths.every(path => (
-        typeof path === "string"
-        && /^\.next\/static\/chunks\/[a-zA-Z0-9_./-]+\.js$/.test(path)
+function normalizeChunkPaths(paths) {
+    if (!Array.isArray(paths) || paths.length === 0 || paths.some(path => typeof path !== "string")) return null;
+    // Next writes project-relative paths with the host OS separator. Validate
+    // after normalization so mixed separators cannot bypass traversal/dedup checks.
+    const normalized = paths.map(path => path.replaceAll("\\", "/"));
+    if (new Set(normalized).size !== normalized.length) return null;
+    return normalized.every(path => (
+        /^\.next\/static\/chunks\/[a-zA-Z0-9_./-]+\.js$/.test(path)
         && !path.split("/").includes("..")
-    ));
+    )) ? normalized : null;
 }
 
 /**
@@ -63,14 +66,15 @@ export function evaluateRoutePerformanceBudgets(
             failures.push(`missing_route:${route}`);
             continue;
         }
-        if (!validChunkPaths(stat.firstLoadChunkPaths)) {
+        const chunkPaths = normalizeChunkPaths(stat.firstLoadChunkPaths);
+        if (!chunkPaths) {
             failures.push(`invalid_chunks:${route}`);
             continue;
         }
 
         let compressedBytes = 0;
         let missingChunk = false;
-        for (const chunkPath of stat.firstLoadChunkPaths) {
+        for (const chunkPath of chunkPaths) {
             const bytes = readChunk(chunkPath);
             if (!Buffer.isBuffer(bytes)) {
                 missingChunk = true;
@@ -94,7 +98,7 @@ export function evaluateRoutePerformanceBudgets(
             route,
             uncompressedBytes,
             compressedBytes: missingChunk ? null : compressedBytes,
-            chunkCount: stat.firstLoadChunkPaths.length,
+            chunkCount: chunkPaths.length,
             budget,
         });
     }
