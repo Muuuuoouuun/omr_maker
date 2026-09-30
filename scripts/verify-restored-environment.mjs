@@ -1310,6 +1310,8 @@ export async function runRestoredEnvironmentVerification(config, dependencies = 
     if (existsSync(config.outputPath) || existsSync(completeMarkerPath) || existsSync(fencedMarkerPath)) {
         throw new Error("Restore verification output already exists");
     }
+    readRestoreApplyMarker({ ...config, outputDir: dirname(config.outputPath) });
+    assertSecureOutputParent(config.outputParentIdentity);
     let incompleteMarkerFd;
     let outputCreated = false;
     let outputHandle;
@@ -1318,10 +1320,9 @@ export async function runRestoredEnvironmentVerification(config, dependencies = 
         // Pin the original inode until publication or rollback finishes. Without
         // an open descriptor Linux can reuse its number after unlink/recreate,
         // making a same-content replacement indistinguishable from the original.
-        incompleteMarkerFd = openSync(incompleteMarkerPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        incompleteMarkerFd = openSync(incompleteMarkerPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
         const incompleteMarkerIdentity = fstatSync(incompleteMarkerFd);
         assertRestoreApplyMarkerBindingAtPath(incompleteMarkerPath, incompleteMarkerIdentity, config);
-        readRestoreApplyMarker({ ...config, outputDir: dirname(config.outputPath) });
         assertSecureOutputParent(config.outputParentIdentity);
         const collectTableCounts = dependencies.collectTableCounts ?? collectTableCountsWithPsql;
         const collectStorageObjects = dependencies.collectStorageObjects ?? collectStorageObjectsWithBodies;

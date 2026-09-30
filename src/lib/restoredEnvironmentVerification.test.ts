@@ -893,6 +893,27 @@ describe("restored staging environment verification", () => {
         })).rejects.toThrow(/RTO/i);
     });
 
+    it("does not recreate a missing apply marker before verification starts", async () => {
+        const { backupDir } = backupFixture();
+        const outputDir = mkdtempSync(join(tmpdir(), "omr-restore-missing-marker-"));
+        const output = join(outputDir, "evidence.json");
+        const config = resolveConfig({
+            argv: argv(backupDir, output),
+            env: env(),
+            cwd: process.cwd(),
+            now: new Date("2026-08-07T00:40:00.000Z"),
+        });
+        const markerPath = join(outputDir, ".INCOMPLETE");
+        rmSync(markerPath);
+
+        await expect(runRestoredEnvironmentVerification(config, {
+            now: () => new Date("2026-08-07T00:40:00.000Z"),
+        })).rejects.toThrow(/marker/i);
+        expect(existsSync(markerPath)).toBe(false);
+        expect(existsSync(join(outputDir, ".RESTORE_COMPLETE"))).toBe(false);
+        expect(existsSync(output)).toBe(false);
+    });
+
     it("rejects replacement of the exact apply marker after the final smoke and RTO gates", async () => {
         const { backupDir, manifest } = backupFixture();
         const outputDir = mkdtempSync(join(tmpdir(), "omr-restore-marker-race-"));
