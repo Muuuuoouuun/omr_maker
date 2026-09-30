@@ -72,7 +72,9 @@ export async function loginAsShowcaseTeacher(page: Page) {
     // The URL changes before the showcase dashboard's dynamic overview chunk
     // has finished rendering. Replacing that navigation immediately can abort
     // the chunk request in WebKit and surface a false application runtime error.
-    await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible({ timeout: 30_000 });
+    // CI traces show Linux WebKit needing over 30s for this dev-mode chunk.
+    const overviewTimeout = page.context().browser()?.browserType().name() === "webkit" ? 45_000 : 30_000;
+    await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible({ timeout: overviewTimeout });
     await page.waitForLoadState("networkidle");
 }
 

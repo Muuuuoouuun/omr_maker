@@ -76,6 +76,7 @@ test("production static assets use immutable same-origin delivery", async ({ req
 });
 
 test("production showcase button preserves exact read-only mockup authority", async ({ page }, testInfo) => {
+    test.setTimeout(60_000);
     test.skip(!testInfo.project.name.startsWith("prod-"), "Production-build security contract.");
     await page.goto("/?role=teacher");
     await page.getByRole("button", { name: "데모 계정으로 둘러보기" }).click();
@@ -95,7 +96,7 @@ test("production showcase button preserves exact read-only mockup authority", as
     expect(session).not.toHaveProperty("accountSessionGeneration");
     // Let the dynamically loaded dashboard settle before replacing its
     // navigation. WebKit can otherwise abort the overview chunk mid-load.
-    await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible({ timeout: 30_000 });
     await page.goto("/create", { waitUntil: "domcontentloaded" });
     await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1$/, { timeout: 15_000 });
 });

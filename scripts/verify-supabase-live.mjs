@@ -653,7 +653,9 @@ delete from public.omr_kakao_reminder_legacy_quarantine
 
         let ready = false;
         for (let attempt = 0; attempt < 60; attempt += 1) {
-            const probe = run("docker", ["exec", container, "pg_isready", "-U", migrationOwner], {
+            // The image starts a socket-only temporary server during initdb,
+            // then stops it. TCP readiness identifies the final server instead.
+            const probe = run("docker", ["exec", container, "pg_isready", "-h", "127.0.0.1", "-U", migrationOwner], {
                 capture: true,
                 allowFailure: true,
             });

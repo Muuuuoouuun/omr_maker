@@ -456,6 +456,11 @@ test.describe("iPhone WebKit mobile layout", () => {
         const body = dialog.locator(".distribute-dialog-body");
         await expect(dialog).toBeVisible();
         await expect(close).toBeFocused();
+        // Visibility/focus precede the end of the entrance translation. Measure
+        // the settled panel so the animation cannot look like safe-area overflow.
+        await dialog.evaluate(async element => {
+            await Promise.all(element.getAnimations().map(animation => animation.finished));
+        });
         const metrics = await dialog.evaluate(element => {
             const box = element.getBoundingClientRect();
             const bodyElement = element.querySelector<HTMLElement>(".distribute-dialog-body");
@@ -785,7 +790,7 @@ test.describe("iPhone WebKit mobile layout", () => {
     });
 
     test("teacher live keeps factual status and KPI results before its stacked control group", async ({ page }) => {
-        test.setTimeout(60_000);
+        test.setTimeout(Math.max(test.info().timeout, 60_000));
         await loginAsShowcaseTeacher(page);
         await page.goto("/teacher/live");
 

@@ -396,7 +396,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
     });
 
     test("connects dashboard metrics to the next analysis action", async ({ page }) => {
-        test.setTimeout(60_000);
+        test.setTimeout(Math.max(test.info().timeout, 60_000));
         await loginAsShowcaseTeacher(page);
 
         await expect(page.getByRole("heading", { name: "대시보드", exact: true })).toBeVisible();
@@ -427,7 +427,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
     });
 
     test("progressively reveals showcase exam results on a 390px phone", async ({ page }) => {
-        test.setTimeout(60_000);
+        test.setTimeout(Math.max(test.info().timeout, 60_000));
         await page.setViewportSize({ width: 390, height: 844 });
         await loginAsShowcaseTeacher(page);
         await page.goto("/teacher/exam/mock-final-comprehensive");
@@ -491,7 +491,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
     });
 
     test("keeps mobile roster search and detail actions clear of data-source toasts", async ({ page }) => {
-        test.setTimeout(45_000);
+        test.setTimeout(Math.max(test.info().timeout, 45_000));
         await page.setViewportSize({ width: 390, height: 844 });
         await loginAsShowcaseTeacher(page);
         await page.goto("/teacher/users");
@@ -845,7 +845,7 @@ test.describe("Teacher desktop Chromium result tab accessibility", () => {
     });
 
     test("moves focus across result tabs before keyboard activation", async ({ page }) => {
-        test.setTimeout(60_000);
+        test.setTimeout(Math.max(test.info().timeout, 60_000));
         await seedTeacherAttemptReview(page);
         await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
 

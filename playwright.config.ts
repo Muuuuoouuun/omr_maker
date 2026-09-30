@@ -26,9 +26,13 @@ const localPort = Number(process.env.PLAYWRIGHT_PORT || 3105);
 if (!Number.isSafeInteger(localPort) || localPort < 1024 || localPort > 65535) throw new Error("Invalid local E2E port");
 const baseURL = externalBaseURL || `http://localhost:${localPort}`;
 const enableWebKitPwa = process.env.PLAYWRIGHT_ENABLE_WEBKIT === "1";
+// Linux WebKit can spend 40s entering the cold teacher dashboard, then 15s
+// loading the next route. Budget both navigations and the interaction checks;
+// this is an E2E execution limit, not the production performance budget.
 const conditionalWebKitProjects = enableWebKitPwa ? [
     {
         name: "ios-se-webkit",
+        timeout: 90_000,
         testMatch: /ios-mobile-layout\.spec\.ts/,
         use: {
             ...devices["iPhone 13"],
@@ -38,6 +42,7 @@ const conditionalWebKitProjects = enableWebKitPwa ? [
     },
     {
         name: "ios-standard-webkit",
+        timeout: 90_000,
         testMatch: /ios-mobile-layout\.spec\.ts/,
         use: {
             ...devices["iPhone 13"],
@@ -52,6 +57,7 @@ const conditionalWebKitProjects = enableWebKitPwa ? [
     },
     {
         name: "ios-max-webkit",
+        timeout: 90_000,
         testMatch: /ios-mobile-layout\.spec\.ts/,
         use: {
             ...devices["iPhone 13"],
@@ -76,16 +82,19 @@ const conditionalWebKitProjects = enableWebKitPwa ? [
     },
     {
         name: "mobile-ios-webkit-teacher",
+        timeout: 90_000,
         testMatch: /teacher-mobile\.spec\.ts/,
         use: { ...devices["iPhone 13"], browserName: "webkit" as const },
     },
     {
         name: "tablet-ios-webkit-teacher",
+        timeout: 90_000,
         testMatch: /teacher-mobile\.spec\.ts/,
         use: { ...devices["iPad Pro 11"], browserName: "webkit" as const },
     },
     {
         name: "tablet-ios-webkit-landscape-teacher",
+        timeout: 90_000,
         testMatch: /teacher-mobile\.spec\.ts/,
         use: { ...devices["iPad Pro 11 landscape"], browserName: "webkit" as const },
     },
