@@ -269,7 +269,6 @@ export default function Home() {
   };
 
   useEffect(() => {
-    setIsHydrated(true);
     let cancelled = false;
     let localGroups: RosterGroup[] = [];
     try {
@@ -303,6 +302,9 @@ export default function Home() {
       redirectToCanonicalTeacherRecovery();
       return () => { cancelled = true; };
     }
+    // A legacy recovery link replaces this document. Keep its controls inert
+    // until the canonical destination has mounted, so entered state is not lost.
+    setIsHydrated(true);
     if (teacherOperatorRecovery) {
       // A provisioned-only legacy link has already been canonicalized. Keep
       // operator recovery dominant over every student or exam handoff.

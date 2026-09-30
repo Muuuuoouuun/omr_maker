@@ -110,7 +110,9 @@ jobs:
 
   ios-webkit-pwa:
     name: iOS WebKit PWA tests (${{ matrix.shard }}/3)
-    runs-on: ubuntu-latest
+    # Native WebKit is closest to Safari; Linux WPE repeatedly stalls during
+    # dev-mode dashboard rendering despite fast successful chunk responses.
+    runs-on: macos-15
     needs: lint-and-test
     strategy:
       fail-fast: false

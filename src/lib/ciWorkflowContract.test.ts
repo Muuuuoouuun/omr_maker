@@ -66,6 +66,7 @@ function extractCheckoutSteps(source = workflow): string[] {
 describe("CI quality gates", () => {
     it("runs every WebKit shard independently and retains separate failure evidence", () => {
         const job = extractBlock("ios-webkit-pwa", 2);
+        expect(job).toContain("runs-on: macos-15");
         expect(job).toContain("fail-fast: false");
         expect(job).toContain("shard: [1, 2, 3]");
         expect(job).toContain("npm run test:e2e:ios-webkit -- --shard=${{ matrix.shard }}/3");
