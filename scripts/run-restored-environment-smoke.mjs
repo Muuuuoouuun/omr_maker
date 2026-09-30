@@ -157,13 +157,22 @@ function defaultExecRunner(runner, operation, payload, runnerEnv) {
     try {
         captureDir = mkdtempSync(join(tmpdir(), "omr-restore-smoke-operation-"));
         chmodSync(captureDir, 0o700);
-        const capturedPath = join(captureDir, "runner.mjs");
+        const capturedPath = join(captureDir, "runner.cjs");
         writeFileSync(capturedPath, runner.bytes, { mode: 0o700, flag: "wx" });
         fd = openSync(capturedPath, constants.O_RDONLY | constants.O_NOFOLLOW);
         unlinkSync(capturedPath);
         rmSync(captureDir, { recursive: true, force: true });
         captureDir = undefined;
-        const stdout = execFileSync(process.execPath, ["/dev/fd/3", `--operation=${operation}`], {
+        // Read the inherited descriptor directly: on Linux Node resolves a
+        // /dev/fd entry point to its already-unlinked pathname before loading it.
+        // Keep stdin for the payload and CommonJS semantics for the runner.
+        const stdout = execFileSync(process.execPath, [
+            "--input-type=commonjs",
+            "--eval",
+            'require("node:vm").runInThisContext(require("node:fs").readFileSync(3, "utf8"), { filename: "restore-smoke-runner.cjs" });',
+            "restore-smoke-runner.cjs",
+            `--operation=${operation}`,
+        ], {
             encoding: "utf8",
             input: `${JSON.stringify(payload)}\n`,
             env: runnerEnv,
