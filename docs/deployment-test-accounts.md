@@ -10,14 +10,24 @@
 - `teacher_sharedqa` 조직에는 합성 테스트 데이터만 넣습니다. 실명·연락처·실제 학생 응시 기록을 넣지 않습니다.
 - 과거 문서에 공개했던 비밀번호와 시작 코드는 더 이상 배포할 수 없습니다. 이미 사용했다면 해당 계정의 비밀번호·코드를 폐기/재발급하고 필요한 경우 세션을 회수해야 합니다. 이 로컬 변경만으로 원격 계정이 회수되지는 않습니다.
 
+## 환경별 데모 계정 (학생1 · 교사1 · 원장1)
+
+| 환경 | 학생1 | 교사1 | 원장1 |
+|---|---|---|---|
+| 로컬 개발 (`NODE_ENV≠production`, 교사 계정 환경변수 없음) | `NEXT_PUBLIC_OMR_SEED_TEST_ACCOUNTS=1`일 때 `student1` / 시작 코드 `ABC234` | `teacher1` / `teacher123` | `owner1` / `owner123` |
+| Preview QA (아래 절차) | `student1` / `OMR_QA_STUDENT_START_CODES` 값 | `teacher1` / `OMR_QA_TEACHER_PASSWORDS` 값 | `owner1` / `OMR_QA_TEACHER_PASSWORDS` 값 |
+| Production | 원장이 명단 화면에서 학생을 등록하고 시작 코드를 발급 | 지원 안 함: `provisioned_only` 로그인은 `owner` 계정만 허용 | `npm run ops:teacher:provision`으로 발급 ([운영자 발급 절차](operator-teacher-provisioning.md)) |
+
+로컬 `owner1`과 `teacher1`은 같은 `teacher_localdemo` 작업공간을 공유하며 production 빌드에서는 반환되지 않습니다. 로그인 없이 둘러보는 공개 데모는 읽기 전용 `omr-showcase` 목업입니다.
+
 ## 계정 정보 주입
 
 안전한 로컬 환경 또는 비밀 관리 도구에서 다음 JSON 환경변수를 설정합니다. 값은 저장소·명령행 인수·로그·채팅에 남기지 않습니다.
 
-- `OMR_QA_TEACHER_PASSWORDS`: `admin`, `teacher1`, `teacher2`, `teacher3` 각각 서로 다른 16~128자 무작위 비밀번호
+- `OMR_QA_TEACHER_PASSWORDS`: `admin`, `owner1`, `teacher1`, `teacher2`, `teacher3` 각각 서로 다른 16~128자 무작위 비밀번호
 - `OMR_QA_STUDENT_START_CODES`: `student1`, `student2`, `student3` 각각 서로 다른 6자리 코드(대문자 A~Z 중 I/O 제외, 숫자 2~9)
 
-교사 역할/계정 요금제는 `admin` 관리자/Academy, `teacher1` 강사/Free, `teacher2` 강사/Pro, `teacher3` 강사/Academy입니다. 조직은 Academy이며 각 계정 요금제는 권한 상한일 뿐 조직 권한을 높이지 않습니다. 교사 비밀번호와 학생 시작 코드는 PBKDF2-SHA256 해시로만 저장합니다.
+교사 역할/계정 요금제는 `admin` 관리자/Academy, `owner1` 원장(owner)/Academy, `teacher1` 강사/Free, `teacher2` 강사/Pro, `teacher3` 강사/Academy입니다. 조직은 Academy이며 각 계정 요금제는 권한 상한일 뿐 조직 권한을 높이지 않습니다. 교사 비밀번호와 학생 시작 코드는 PBKDF2-SHA256 해시로만 저장합니다.
 
 ```bash
 npm run accounts:deploy:dry-run

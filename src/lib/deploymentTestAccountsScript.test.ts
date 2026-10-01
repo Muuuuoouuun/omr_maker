@@ -16,7 +16,7 @@ describe("deployment test account fixture", () => {
         expect(() => deploymentCredentials({})).toThrow(/required/);
         expect(() => deploymentCredentials({ OMR_QA_TEACHER_PASSWORDS: "{" })).toThrow(/JSON/);
         const env = {
-            OMR_QA_TEACHER_PASSWORDS: JSON.stringify({ admin: "private-test-admin-123", teacher1: "private-test-teacher1", teacher2: "private-test-teacher2", teacher3: "private-test-teacher3" }),
+            OMR_QA_TEACHER_PASSWORDS: JSON.stringify({ admin: "private-test-admin-123", owner1: "private-test-owner1-1", teacher1: "private-test-teacher1", teacher2: "private-test-teacher2", teacher3: "private-test-teacher3" }),
             OMR_QA_STUDENT_START_CODES: JSON.stringify({ student1: "XYZ234", student2: "XYZ345", student3: "XYZ456" }),
         };
         const credentials = deploymentCredentials(env);
@@ -25,6 +25,10 @@ describe("deployment test account fixture", () => {
         expect(verifyTeacherPasswordHash("private-test-admin-123", fixture.teacherAccounts[0].passwordHash)).toBe(true);
         expect(verifyStudentStartCodeHash("XYZ234", fixture.studentCredentials[0].start_code_hash)).toBe(true);
         expect(() => deploymentCredentials({ ...env, OMR_QA_STUDENT_START_CODES: JSON.stringify({ student1: "ABC234", student2: "XYZ345", student3: "XYZ456" }) })).toThrow(/private/);
+        const withoutOwner = JSON.parse(env.OMR_QA_TEACHER_PASSWORDS);
+        delete withoutOwner.owner1;
+        expect(() => deploymentCredentials({ ...env, OMR_QA_TEACHER_PASSWORDS: JSON.stringify(withoutOwner) })).toThrow(/16–128/);
+        expect(() => deploymentCredentials({ ...env, OMR_QA_TEACHER_PASSWORDS: JSON.stringify({ ...withoutOwner, owner1: "private-test-admin-123" }) })).toThrow(/unique/);
     });
 
     it("both provisioning commands only target isolated preview data", () => {
@@ -93,10 +97,12 @@ describe("deployment test account fixture", () => {
         });
 
         expect(fixture.organization.id).toBe("teacher_sharedqa");
-        expect(fixture.teacherAccounts.map(account => account.plan)).toEqual(["academy", "free", "pro", "academy"]);
-        expect(fixture.teacherAccounts.map(account => account.memberRole)).toEqual(["admin", "teacher", "teacher", "teacher"]);
+        expect(fixture.teacherAccounts.map(account => account.plan)).toEqual(["academy", "academy", "free", "pro", "academy"]);
+        expect(fixture.teacherAccounts.map(account => account.memberRole)).toEqual(["admin", "owner", "teacher", "teacher", "teacher"]);
+        expect(fixture.members.find(member => member.email === "owner1@omr.test")?.role).toBe("owner");
         expect(JSON.stringify(fixture.teacherAccounts)).not.toContain("admin1234");
         expect(JSON.stringify(fixture.teacherAccounts)).not.toContain("teacher1234");
+        expect(JSON.stringify(fixture.teacherAccounts)).not.toContain("owner1234");
         expect(verifyTeacherPasswordHash("admin1234", fixture.teacherAccounts[0].passwordHash)).toBe(true);
         expect(fixture.students).toHaveLength(3);
         expect(fixture.enrollments).toHaveLength(3);

@@ -302,6 +302,14 @@ export function resolveTeacherPassword(env: TeacherAuthEnv = process.env): strin
     return env.NODE_ENV === "production" ? null : "admin123";
 }
 
+const LOCAL_DEMO_ORGANIZATION = { organizationId: "teacher_localdemo", organizationName: "OMR Maker 로컬 데모" } as const;
+
+/** Dev-only 원장/교사 pair sharing one workspace; never returned in production. */
+const LOCAL_DEMO_ROLE_ACCOUNTS: TeacherCredential[] = [
+    { id: "owner1", email: "owner1@example.com", name: "원장 1", password: "owner123", plan: "academy", memberRole: "owner", ...LOCAL_DEMO_ORGANIZATION },
+    { id: "teacher1", email: "teacher1@example.com", name: "교사 1", password: "teacher123", plan: "academy", memberRole: "teacher", ...LOCAL_DEMO_ORGANIZATION },
+];
+
 export function resolveTeacherCredentials(env: TeacherAuthEnv = process.env): TeacherCredential[] {
     const configuredAccounts = [
         ...parseTeacherAccounts(env.TEACHER_ACCOUNTS),
@@ -334,8 +342,9 @@ export function resolveTeacherCredentials(env: TeacherAuthEnv = process.env): Te
         password: "admin123",
         plan: "academy",
         memberRole: "admin",
-    }];
+    }, ...LOCAL_DEMO_ROLE_ACCOUNTS];
 }
+
 
 export function inspectTeacherAuthConfig(env: TeacherAuthEnv = process.env): TeacherAuthConfigReadiness {
     const credentials = resolveTeacherCredentials(env);

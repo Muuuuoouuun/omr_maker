@@ -33,7 +33,30 @@ describe("teacher auth", () => {
             password: "admin123",
             plan: "academy",
             memberRole: "admin",
+        }, {
+            id: "owner1",
+            email: "owner1@example.com",
+            name: "원장 1",
+            password: "owner123",
+            plan: "academy",
+            memberRole: "owner",
+            organizationId: "teacher_localdemo",
+            organizationName: "OMR Maker 로컬 데모",
+        }, {
+            id: "teacher1",
+            email: "teacher1@example.com",
+            name: "교사 1",
+            password: "teacher123",
+            plan: "academy",
+            memberRole: "teacher",
+            organizationId: "teacher_localdemo",
+            organizationName: "OMR Maker 로컬 데모",
         }]);
+        expect(verifyTeacherLogin("owner1", "owner123", { NODE_ENV: "development" }).teacher).toMatchObject({
+            memberRole: "owner",
+            organizationId: "teacher_localdemo",
+        });
+        expect(verifyTeacherLogin("teacher1", "teacher123", { NODE_ENV: "production" })).toEqual({ success: false });
         expect(resolveTeacherCredentials({ NODE_ENV: "production" })).toEqual([]);
     });
 

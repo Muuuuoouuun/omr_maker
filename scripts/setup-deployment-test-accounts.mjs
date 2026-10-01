@@ -140,7 +140,7 @@ async function verifySupabase(config) {
     ]);
     const checks = {
         organization: organizations.length === 1 && organizations[0].plan === "academy",
-        members: members.length === 4,
+        members: members.length === 5,
         class: classes.length === 1 && classes[0].name === "테스트반",
         students: students.length === 3,
         enrollments: enrollments.length === 3 && enrollments.every(row => row.enrollment_status === "active"),
@@ -156,6 +156,7 @@ function verifyTeacherAccounts(env, target) {
     try { accounts = JSON.parse(env.TEACHER_ACCOUNTS || "[]"); } catch { accounts = []; }
     const expected = [
         ["admin", "academy", "admin"],
+        ["owner1", "academy", "owner"],
         ["teacher1", "free", "teacher"],
         ["teacher2", "pro", "teacher"],
         ["teacher3", "academy", "teacher"],

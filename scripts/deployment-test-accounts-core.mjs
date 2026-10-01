@@ -5,6 +5,7 @@ export const SHARED_ORGANIZATION_NAME = "OMR Maker 테스트";
 export const SHARED_CLASS_ID = "teacher_sharedqa_test_class";
 export const TEACHER_LOGIN_PASSWORDS = Object.freeze({
     admin: "admin1234",
+    owner1: "owner1234",
     teacher1: "teacher1234",
     teacher2: "teacher1234",
     teacher3: "teacher1234",
@@ -36,8 +37,8 @@ export function deploymentCredentials(env) {
             throw new Error("Every QA student requires a private six-character start code");
         }
     }
-    if (new Set(Object.keys(TEACHER_LOGIN_PASSWORDS).map(id => teacherPasswords[id])).size !== 4
-        || new Set(Object.keys(STUDENT_START_CODES).map(id => studentStartCodes[id])).size !== 3) {
+    if (new Set(Object.keys(TEACHER_LOGIN_PASSWORDS).map(id => teacherPasswords[id])).size !== Object.keys(TEACHER_LOGIN_PASSWORDS).length
+        || new Set(Object.keys(STUDENT_START_CODES).map(id => studentStartCodes[id])).size !== Object.keys(STUDENT_START_CODES).length) {
         throw new Error("QA credentials must be unique per account");
     }
     return { teacherPasswords, studentStartCodes };
@@ -130,6 +131,7 @@ export function buildDeploymentFixture({ studentSessionSecret, now = new Date().
     }
     const teachers = [
         { id: "admin", name: "관리자", email: "admin@omr.test", memberRole: "admin", plan: "academy" },
+        { id: "owner1", name: "원장 1", email: "owner1@omr.test", memberRole: "owner", plan: "academy" },
         { id: "teacher1", name: "강사 1", email: "teacher1@omr.test", memberRole: "teacher", plan: "free" },
         { id: "teacher2", name: "강사 2", email: "teacher2@omr.test", memberRole: "teacher", plan: "pro" },
         { id: "teacher3", name: "강사 3", email: "teacher3@omr.test", memberRole: "teacher", plan: "academy" },
