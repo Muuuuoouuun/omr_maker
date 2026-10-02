@@ -392,7 +392,7 @@ test.describe("student UI simplification regressions", () => {
         const gradingNote = page.getByRole("note", { name: "채점 근거 안내" });
         const questionTabs = page.getByRole("tablist", { name: "문항 바로가기" }).getByRole("tab");
         const allFilter = page.getByRole("button", { name: "전체 2" });
-        const wrongFilter = page.getByRole("button", { name: "오답 1" });
+        const wrongFilter = page.getByRole("button", { name: "오답·미응답 1" });
 
         await expect(gradingNote).toContainText("과거 기록 · 현재 시험지 기준 참고 채점");
         await expect(gradingNote).toContainText("문항별 제출 채점 결과가 저장되기 전 기록으로, 현재 시험지에서 산출한 참고값입니다.");

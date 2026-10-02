@@ -211,12 +211,12 @@
 **깨지는 테스트:** `assignmentLifecycleSurface.test.ts:100-110`, `uiSurface.test.ts:1877`, `e2e/student-assignment-lifecycle.spec.ts:122-150`, `e2e/ios-mobile-layout.spec.ts:913,916`, `e2e/pwa-mobile.spec.ts:438`, `e2e/student-dashboard-load-state.spec.ts`, `e2e/korean-exam-fixture.spec.ts:65`
 
 ### B5. 제출 확인·복습·재시험 결과 (S~M)
-- [ ] 제출 확인창에 빈 문항 번호를 보여줍니다: "3, 7, 12번 문항이 비어 있어요." 8개를 넘으면 "외 N문항"으로 줄입니다. 보조 버튼은 "빈 문항으로 이동"입니다.
-- [ ] 복습 화면:
+- [x] 제출 확인창에 빈 문항 번호를 보여줍니다: "3, 7, 12번 문항이 비어 있어요." 8개를 넘으면 "외 N문항"으로 줄입니다. 보조 버튼은 "빈 문항으로 이동"입니다.
+- [x] 복습 화면:
   - 첫 오답이나 미응답을 기본으로 선택합니다.
   - 탭 이름을 "오답·미응답 n"으로 바꿉니다. 요약 숫자와 맞추기 위해서입니다.
   - 만점이면 "다음 오답 →"을 숨기고 "모두 맞혔어요"를 보여줍니다.
-- [ ] 재시험 결과에서 "회복 성공! 🚀"를 없애고 "다시 맞힘" 계열 표현으로 바꿉니다. 근거는 `docs/remediation-management.md`의 "정답 수정은 독립적인 유형 숙달의 증거로 간주하지 않는다"입니다.
+- [x] 재시험 결과에서 "회복 성공! 🚀"를 없애고 "다시 맞힘" 계열 표현으로 바꿉니다. 근거는 `docs/remediation-management.md`의 "정답 수정은 독립적인 유형 숙달의 증거로 간주하지 않는다"입니다.
   - 안내 문구: "같은 문제를 해설을 본 뒤 다시 맞힌 결과예요. 실력이 늘었는지는 비슷한 유형의 새 문제로 확인해보세요."
 
 **깨지는 테스트:** `e2e/ios-mobile-layout.spec.ts:961,982-986`, `e2e/student-simplification.spec.ts:320`

@@ -200,6 +200,18 @@ type RetakeConfig = Omit<RetakeMetadata, "createdAt">;
 interface SubmitConfirmState {
     unanswered: number;
     total: number;
+    /** Question numbers (display order) that are still blank. */
+    unansweredNumbers: number[];
+    /** Question id of the first blank, used by "빈 문항으로 이동". */
+    firstUnansweredQuestionId: number | null;
+}
+
+const SUBMIT_CONFIRM_LISTED_BLANKS = 8;
+
+function formatUnansweredQuestionList(numbers: readonly number[]): string {
+    const listed = numbers.slice(0, SUBMIT_CONFIRM_LISTED_BLANKS).join(", ");
+    const rest = numbers.length - SUBMIT_CONFIRM_LISTED_BLANKS;
+    return rest > 0 ? `${listed}번 외 ${rest}문항` : `${listed}번 문항`;
 }
 
 interface ExamGuestEntryGroup {
@@ -853,22 +865,31 @@ function SubmitConfirmDialog({
     state,
     onClose,
     onConfirm,
+    onGoToFirstBlank,
 }: {
     state: SubmitConfirmState;
     onClose: () => void;
     onConfirm: () => void;
+    onGoToFirstBlank: () => void;
 }) {
     const hasUnanswered = state.unanswered > 0;
+    const canJumpToBlank = hasUnanswered && state.firstUnansweredQuestionId !== null;
     return (
         <SolveDialogShell title="답안 제출" onClose={onClose}>
             <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.7, marginBottom: '1.25rem', wordBreak: 'keep-all' }}>
                 {hasUnanswered
-                    ? `전체 ${state.total}문항 중 ${state.unanswered}문항이 아직 비어 있습니다. 그대로 제출할까요?`
+                    ? (state.unansweredNumbers.length > 0
+                        ? `${formatUnansweredQuestionList(state.unansweredNumbers)}이 비어 있어요. 그대로 제출할까요?`
+                        : `전체 ${state.total}문항 중 ${state.unanswered}문항이 아직 비어 있어요. 그대로 제출할까요?`)
                     : `전체 ${state.total}문항 답안을 모두 선택했습니다. 제출하면 복습 화면으로 이동합니다.`}
             </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                <button type="button" onClick={onClose} style={{ ...dialogButtonBase, background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)' }}>
-                    계속 풀기
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button
+                    type="button"
+                    onClick={canJumpToBlank ? onGoToFirstBlank : onClose}
+                    style={{ ...dialogButtonBase, background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)' }}
+                >
+                    {canJumpToBlank ? "빈 문항으로 이동" : "계속 풀기"}
                 </button>
                 <button type="button" onClick={onConfirm} style={{ ...dialogButtonBase, background: 'var(--primary)', color: 'white' }}>
                     제출하기
@@ -3522,12 +3543,33 @@ export default function SolvePage() {
             return;
         }
         const totalQ = activeExamQuestions.length;
-        const answeredCount = activeExamQuestions.filter(q => {
+        const blankQuestions = activeExamQuestions.filter(q => {
             const answer = studentAnswers[q.id];
-            return answer !== undefined && answer !== null && answer !== 0;
-        }).length;
-        const unanswered = totalQ - answeredCount;
-        setSubmitConfirm({ unanswered, total: totalQ });
+            return answer === undefined || answer === null || answer === 0;
+        });
+        setSubmitConfirm({
+            unanswered: blankQuestions.length,
+            total: totalQ,
+            unansweredNumbers: blankQuestions.map(q => q.number),
+            firstUnansweredQuestionId: blankQuestions[0]?.id ?? null,
+        });
+    };
+
+    const goToFirstUnansweredQuestion = () => {
+        const firstBlankId = submitConfirm?.firstUnansweredQuestionId ?? null;
+        setSubmitConfirm(null);
+        if (firstBlankId === null) return;
+        beginQuestionVisit(firstBlankId);
+        setIsOMRCollapsed(false);
+        // Wait for the dialog to unmount and the sheet to expand before moving
+        // focus onto the blank question's number button.
+        window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+                document
+                    .querySelector<HTMLElement>('.q-card-select-button[aria-current="true"]')
+                    ?.focus({ preventScroll: true });
+            });
+        });
     };
 
     const confirmSubmit = () => {
@@ -4521,6 +4563,7 @@ export default function SolvePage() {
                         });
                     }}
                     onConfirm={confirmSubmit}
+                    onGoToFirstBlank={goToFirstUnansweredQuestion}
                 />
             )}
 

@@ -1158,6 +1158,8 @@
 .tone-success { color: #15803d; background: #dcfce7; border-color: #bbf7d0; }
 .tone-error   { color: #dc2626; background: #fef2f2; border-color: #fecaca; }
 .tone-text-teal { color: #0f766e; }
+/* Retake-only chip — token-driven, so the dark theme needs no override. */
+.tone-retake  { color: var(--retake); background: var(--retake-soft); border-color: var(--retake-line); }
 
 .away-severity-badge {
   display: inline-flex;

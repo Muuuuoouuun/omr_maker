@@ -214,6 +214,8 @@ async function seedStudentTaskFlow(page: Page) {
                 { id: 2, number: 2, answer: 3, choices: 4, score: 50, label: "문법" },
             ],
         };
+        // Q2 is the wrong answer, and the review opens on the first wrong
+        // question — so the long label lives on Q2 to stay in the first view.
         const completedExam = {
             id: "iphone-completed-exam",
             title: completedTitle,
@@ -227,8 +229,8 @@ async function seedStudentTaskFlow(page: Page) {
                     answer: 2,
                     choices: 4,
                     score: 50,
-                    label: "내용 이해와 중심 생각 찾기",
-                    explanation: "문단마다 반복되는 핵심 표현을 연결하면 글쓴이의 중심 생각을 자연스럽게 찾을 수 있습니다.",
+                    label: "근거 추론",
+                    explanation: "선택지의 표현과 본문의 근거 문장을 차례로 비교해 가장 직접적으로 뒷받침되는 답을 고릅니다.",
                 },
                 {
                     id: 12,
@@ -236,8 +238,8 @@ async function seedStudentTaskFlow(page: Page) {
                     answer: 4,
                     choices: 4,
                     score: 50,
-                    label: "근거 추론",
-                    explanation: "선택지의 표현과 본문의 근거 문장을 차례로 비교해 가장 직접적으로 뒷받침되는 답을 고릅니다.",
+                    label: "내용 이해와 중심 생각 찾기",
+                    explanation: "문단마다 반복되는 핵심 표현을 연결하면 글쓴이의 중심 생각을 자연스럽게 찾을 수 있습니다.",
                 },
             ],
         };
@@ -993,7 +995,7 @@ test.describe("iPhone WebKit mobile layout", () => {
         const gradingNote = page.getByRole("note", { name: "채점 근거 안내" });
         const questionTabs = page.getByRole("tablist", { name: "문항 바로가기" }).getByRole("tab");
         const allFilter = page.getByRole("button", { name: "전체 2" });
-        const wrongFilter = page.getByRole("button", { name: "오답 1" });
+        const wrongFilter = page.getByRole("button", { name: "오답·미응답 1" });
 
         for (const element of [title, status, primaryAction, longQuestionCopy]) {
             await expectWithinViewport(element, page);
@@ -1017,7 +1019,8 @@ test.describe("iPhone WebKit mobile layout", () => {
         }))).toBe(true);
         await expect(questionTabs.nth(0)).toHaveAccessibleName("문항 1 정답");
         await expect(questionTabs.nth(1)).toHaveAccessibleName("문항 2 오답");
-        await expect(questionTabs.nth(0)).toHaveAttribute("aria-selected", "true");
+        // The review lands on the first wrong/unanswered question.
+        await expect(questionTabs.nth(1)).toHaveAttribute("aria-selected", "true");
         await questionTabs.nth(0).focus();
         await questionTabs.nth(0).press("ArrowRight");
         await expect(questionTabs.nth(1)).toBeFocused();
