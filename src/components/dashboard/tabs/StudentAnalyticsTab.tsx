@@ -1,37 +1,117 @@
 "use client";
 
-import { useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import useCometReveal from "@/components/dashboard/useCometReveal";
 import StatusPill from "@/components/dashboard/StatusPill";
 import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-    ResponsiveContainer, Legend
+    ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
+    ResponsiveContainer, Legend, ReferenceLine
 } from 'recharts';
+
+interface StudentTrendTooltipProps {
+    active?: boolean;
+    payload?: Array<{
+        name?: string;
+        value?: number;
+        payload?: {
+            date: string;
+            examTitle: string;
+            studentScore: number;
+            avgScore: number;
+        };
+    }>;
+}
+
+function StudentTrendTooltip({ active, payload }: StudentTrendTooltipProps) {
+    if (!active || !payload || !payload.length) return null;
+    const data = payload[0]?.payload;
+    if (!data) return null;
+
+    const diff = data.studentScore - data.avgScore;
+    const isAbove = diff >= 0;
+
+    return (
+        <div style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: '10px',
+            padding: '0.75rem 0.9rem',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.12)',
+            minWidth: '190px',
+            fontSize: '0.85rem',
+            pointerEvents: 'none',
+        }}>
+            <div style={{ fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.15rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px' }}>
+                {data.examTitle}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginBottom: '0.55rem' }}>
+                {data.date}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--foreground)', fontWeight: 600 }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--primary)', flexShrink: 0 }} />
+                        내 점수
+                    </span>
+                    <strong style={{ color: 'var(--primary)', fontWeight: 800, fontSize: '0.95rem' }}>
+                        {data.studentScore}점
+                    </strong>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--muted)' }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--warning)', flexShrink: 0 }} />
+                        선택 범위 평균
+                    </span>
+                    <span style={{ color: 'var(--muted)', fontWeight: 700 }}>
+                        {data.avgScore}점
+                    </span>
+                </div>
+                <div style={{
+                    marginTop: '0.35rem',
+                    paddingTop: '0.35rem',
+                    borderTop: '1px dashed var(--border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '0.76rem',
+                }}>
+                    <span style={{ color: 'var(--muted)' }}>평균 대비</span>
+                    <span style={{
+                        fontWeight: 800,
+                        color: isAbove ? 'var(--success)' : 'var(--grade-red)',
+                    }}>
+                        {isAbove ? `+${diff}점 (상회)` : `${diff}점 (하회)`}
+                    </span>
+                </div>
+            </div>
+        </div>
+    );
+}
 import { Bell, Lock, MapPin, Target, TrendingUp } from "lucide-react";
 import { PremiumActionLink, PremiumFeatureCard } from "@/components/PremiumFeatureGate";
 import { formatKoreanDate } from "@/lib/pure";
-import {
-    buildLearningRecommendations,
-    buildRetakeQuestionIds,
-    getAttemptQuestionResults,
-    studentScopeKeyForAttempt,
-    summarizeAttemptBehavior,
-} from "@/lib/premiumAnalytics";
-import { baseAttemptsOnly, buildAttemptScoreLookup, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { computeRankPercentile } from "@/lib/scoreDistribution";
 import {
-    buildRegionalLearningScopes,
-    filterAttemptsByRegion,
-    regionNameForAttempt,
-    type RegionalLearningScope,
-} from "@/lib/regionalAnalytics";
+    buildStudentAnalyticsRegionalScopes,
+    filterStudentAnalyticsAttemptsByRegion,
+    studentAnalyticsRegionName,
+    studentAnalyticsStudentKey,
+    type StudentAnalyticsRegionalScope,
+} from "@/lib/studentAnalyticsScopeProjection";
+import { safeScorePercent } from "@/lib/scoreUtils";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { resolveScopedSelection } from "@/lib/dashboardSelection";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
+import {
+    currentTeacherCanonicalAnalyticsSnapshot,
+    exactTeacherCanonicalWrongRetakeCohorts,
+    type TeacherCanonicalAnalyticsSnapshot,
+    type TeacherCanonicalAnalyticsSnapshotMap,
+    type TeacherCanonicalStudentAnalyticsRow,
+} from "@/lib/teacherCanonicalAnalyticsSnapshotContract";
 
 interface StudentAnalyticsTabProps {
     exams: Exam[];
@@ -39,9 +119,21 @@ interface StudentAnalyticsTabProps {
     rosterStudents?: RosterStudent[];
     rosterGroups?: RosterGroup[];
     currentPlan?: PlanKey;
+    canonicalAnalyticsSnapshots?: TeacherCanonicalAnalyticsSnapshotMap;
 }
 
 const ALL_REGION_KEY = "__all_regions__";
+const EMPTY_BEHAVIOR = {
+    elapsedTimeSec: 0,
+    totalTrackedTimeSec: 0,
+    averageTimeSec: 0,
+    slowQuestionNumbers: [],
+    rushedQuestionNumbers: [],
+    revisitedQuestionNumbers: [],
+    answerChangedQuestionNumbers: [],
+    focusLossCount: 0,
+    focusLossQuestionNumbers: [],
+};
 
 // Shared card surface so student-analytics sections match the exam tab's coherent
 // grammar (rounded, subtly elevated, consistently bordered). The `.card` class has no
@@ -53,8 +145,21 @@ const CARD_SURFACE_STYLE: CSSProperties = {
     boxShadow: 'var(--shadow-md)',
 };
 
-function regionalScopeLabel(scope: RegionalLearningScope | undefined): string {
+type StudentAnalyticsLocalRuntime = typeof import("@/lib/studentAnalyticsLocalRuntime");
+
+function regionalScopeLabel(scope: StudentAnalyticsRegionalScope | undefined): string {
     return scope?.regionName || "전체 지역";
+}
+
+function storedAttemptScore(attempt: Attempt) {
+    return {
+        earnedScore: attempt.score,
+        totalScore: attempt.totalScore,
+        scorePercent: safeScorePercent(attempt.score, attempt.totalScore),
+        source: "storedScore" as const,
+        gradedQuestionCount: 0,
+        ungradedQuestionCount: 0,
+    };
 }
 
 function formatSeconds(totalSec: number): string {
@@ -75,16 +180,27 @@ export default function StudentAnalyticsTab({
     rosterStudents = [],
     rosterGroups = [],
     currentPlan = "free",
+    canonicalAnalyticsSnapshots,
 }: StudentAnalyticsTabProps) {
+    const requiresCanonicalSnapshot = canonicalAnalyticsSnapshots !== undefined;
+    const [localRuntime, setLocalRuntime] = useState<StudentAnalyticsLocalRuntime | null>(null);
+    useEffect(() => {
+        if (requiresCanonicalSnapshot) return;
+        let current = true;
+        void import("@/lib/studentAnalyticsLocalRuntime").then(runtime => {
+            if (current) setLocalRuntime(runtime);
+        });
+        return () => { current = false; };
+    }, [requiresCanonicalSnapshot]);
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
+    const analyticsAttempts = useMemo(() => attempts.filter(attempt => attempt.status === "completed"), [attempts]);
     const regionScopeOptions = useMemo(() => (
-        buildRegionalLearningScopes({
+        buildStudentAnalyticsRegionalScopes({
             students: rosterStudents,
             groups: rosterGroups,
-            attempts,
-            exams,
+            attempts: analyticsAttempts,
         }).filter(scope => scope.attemptCount > 0)
-    ), [attempts, exams, rosterGroups, rosterStudents]);
+    ), [analyticsAttempts, rosterGroups, rosterStudents]);
     const activeRegionKey = selectedRegionKey === ALL_REGION_KEY || regionScopeOptions.some(scope => scope.regionKey === selectedRegionKey)
         ? selectedRegionKey
         : ALL_REGION_KEY;
@@ -92,11 +208,11 @@ export default function StudentAnalyticsTab({
     const activeRegionLabel = activeRegionKey === ALL_REGION_KEY ? "전체 지역" : regionalScopeLabel(activeRegionScope);
     const scopedAttempts = useMemo(() => (
         activeRegionKey === ALL_REGION_KEY
-            ? attempts
-            : filterAttemptsByRegion(attempts, activeRegionKey, rosterStudents, rosterGroups)
-    ), [activeRegionKey, attempts, rosterGroups, rosterStudents]);
-    const baseScopedAttempts = useMemo(() => baseAttemptsOnly(scopedAttempts), [scopedAttempts]);
-    const retakeScopedAttempts = useMemo(() => retakeAttemptsOnly(scopedAttempts), [scopedAttempts]);
+            ? analyticsAttempts
+            : filterStudentAnalyticsAttemptsByRegion(analyticsAttempts, activeRegionKey, rosterStudents, rosterGroups)
+    ), [activeRegionKey, analyticsAttempts, rosterGroups, rosterStudents]);
+    const baseScopedAttempts = useMemo(() => scopedAttempts.filter(attempt => !attempt.retake), [scopedAttempts]);
+    const retakeScopedAttempts = useMemo(() => scopedAttempts.filter(attempt => !!attempt.retake), [scopedAttempts]);
 
     const students = useMemo(() => {
         const studentMap = new Map<string, {
@@ -111,9 +227,9 @@ export default function StudentAnalyticsTab({
             latestFinishedAt: string;
         }>();
         scopedAttempts.forEach(a => {
-            const key = studentScopeKeyForAttempt(a);
+            const key = studentAnalyticsStudentKey(a);
             const current = studentMap.get(key);
-            const regionName = regionNameForAttempt(a, rosterStudents, rosterGroups);
+            const regionName = studentAnalyticsRegionName(a, rosterStudents, rosterGroups);
             const isLatest = !current || new Date(a.finishedAt).getTime() > new Date(current.latestFinishedAt).getTime();
             const nextName = isLatest ? a.studentName : current?.name || a.studentName;
             const nextGroupName = isLatest ? a.groupName : current?.groupName;
@@ -176,11 +292,11 @@ export default function StudentAnalyticsTab({
     const studentAttempts = useMemo(() => {
         if (!activeStudentKey) return [];
         return scopedAttempts
-            .filter(a => studentScopeKeyForAttempt(a) === activeStudentKey)
+            .filter(a => studentAnalyticsStudentKey(a) === activeStudentKey)
             .sort((a, b) => new Date(a.finishedAt).getTime() - new Date(b.finishedAt).getTime());
     }, [activeStudentKey, scopedAttempts]);
-    const studentBaseAttempts = useMemo(() => baseAttemptsOnly(studentAttempts), [studentAttempts]);
-    const studentRetakeAttempts = useMemo(() => retakeAttemptsOnly(studentAttempts), [studentAttempts]);
+    const studentBaseAttempts = useMemo(() => studentAttempts.filter(attempt => !attempt.retake), [studentAttempts]);
+    const studentRetakeAttempts = useMemo(() => studentAttempts.filter(attempt => !!attempt.retake), [studentAttempts]);
 
     const unattemptedExams = useMemo(() => {
         const attemptedExamIds = new Set(studentBaseAttempts.map(attempt => attempt.examId));
@@ -188,10 +304,51 @@ export default function StudentAnalyticsTab({
     }, [exams, studentBaseAttempts]);
 
     const examsById = useMemo(() => new Map(exams.map(exam => [exam.id, exam])), [exams]);
+    const canonicalSnapshotsByExamId = useMemo(() => {
+        const snapshots = new Map<string, TeacherCanonicalAnalyticsSnapshot>();
+        if (!canonicalAnalyticsSnapshots) return snapshots;
+        for (const exam of exams) {
+            const examAttempts = analyticsAttempts.filter(attempt => attempt.examId === exam.id);
+            const snapshot = currentTeacherCanonicalAnalyticsSnapshot(canonicalAnalyticsSnapshots[exam.id], exam.id, examAttempts);
+            if (snapshot?.status === "ready") snapshots.set(exam.id, snapshot);
+        }
+        return snapshots;
+    }, [analyticsAttempts, canonicalAnalyticsSnapshots, exams]);
+    const canonicalStudentRowsByAttemptId = useMemo(() => {
+        const rows = new Map<string, TeacherCanonicalStudentAnalyticsRow>();
+        if (!canonicalAnalyticsSnapshots) return rows;
+        for (const exam of exams) {
+            const examAttempts = analyticsAttempts.filter(attempt => attempt.examId === exam.id);
+            const snapshot = currentTeacherCanonicalAnalyticsSnapshot(
+                canonicalAnalyticsSnapshots[exam.id],
+                exam.id,
+                examAttempts,
+            );
+            if (snapshot?.status !== "ready" || !snapshot.studentAggregatesComplete) continue;
+            for (const row of snapshot.studentRows) rows.set(row.attemptId, row);
+        }
+        return rows;
+    }, [analyticsAttempts, canonicalAnalyticsSnapshots, exams]);
 
     const attemptScoreById = useMemo(() => {
-        return buildAttemptScoreLookup(scopedAttempts, examsById);
-    }, [scopedAttempts, examsById]);
+        if (requiresCanonicalSnapshot) {
+            return new Map(scopedAttempts.map(attempt => {
+                const canonicalRow = canonicalStudentRowsByAttemptId.get(attempt.id);
+                return [attempt.id, canonicalRow
+                    ? {
+                        earnedScore: canonicalRow.totalScore,
+                        totalScore: attempt.totalScore,
+                        scorePercent: canonicalRow.scorePercentage,
+                        source: canonicalRow.gradingSource,
+                        gradedQuestionCount: 0,
+                        ungradedQuestionCount: 0,
+                    }
+                    : storedAttemptScore(attempt)];
+            }));
+        }
+        return localRuntime?.buildAttemptScoreLookup(scopedAttempts, examsById)
+            ?? new Map(scopedAttempts.map(attempt => [attempt.id, storedAttemptScore(attempt)]));
+    }, [canonicalStudentRowsByAttemptId, examsById, localRuntime, requiresCanonicalSnapshot, scopedAttempts]);
 
     const attemptsByExamId = useMemo(() => {
         const map = new Map<string, Attempt[]>();
@@ -224,10 +381,9 @@ export default function StudentAnalyticsTab({
             .filter(attempt => !attempt.retake)
             .filter(a => !excludedExamIds.has(a.examId))
             .map(attempt => {
-                const exam = examsById.get(attempt.examId);
                 const avgScore = averageScoreByExamId.get(attempt.examId) ?? 0;
                 const studentScore = attemptScoreById.get(attempt.id)?.scorePercent
-                    ?? resolveAttemptScore(attempt, exam).scorePercent;
+                    ?? storedAttemptScore(attempt).scorePercent;
 
                 return {
                     date: formatKoreanDate(attempt.finishedAt),
@@ -237,36 +393,65 @@ export default function StudentAnalyticsTab({
                     avgScore,
                 };
             });
-    }, [studentAttempts, excludedExamIds, examsById, attemptScoreById, averageScoreByExamId]);
+    }, [studentAttempts, excludedExamIds, attemptScoreById, averageScoreByExamId]);
 
-    // 시안 B — comet head leads the "내 점수" line draw (soft-light variant).
-    const trendChartRef = useRef<HTMLDivElement | null>(null);
-    useCometReveal(trendChartRef, {
-        color: "var(--primary)",
-        replayKey: trendData,
-        enabled: studentGrowthReportsEnabled && trendData.length > 1,
-    });
+    const studentTrendSummary = useMemo(() => {
+        if (!trendData || trendData.length === 0) return null;
+        const scores = trendData.map(d => d.studentScore);
+        const latest = trendData[trendData.length - 1];
+        const prev = trendData.length >= 2 ? trendData[trendData.length - 2] : null;
+        const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+        const max = Math.max(...scores);
+        const delta = prev ? latest.studentScore - prev.studentScore : null;
+        const avgDiff = latest.studentScore - latest.avgScore;
+
+        return {
+            latestScore: latest.studentScore,
+            averageScore: avg,
+            maxScore: max,
+            delta,
+            avgDiff,
+            examCount: trendData.length,
+        };
+    }, [trendData]);
 
     const detailedAnalysis = useMemo(() => {
         const getScoreRate = (candidate: Attempt) => (
             attemptScoreById.get(candidate.id)?.scorePercent
-            ?? resolveAttemptScore(candidate, examsById.get(candidate.examId)).scorePercent
+            ?? storedAttemptScore(candidate).scorePercent
         );
 
         return studentBaseAttempts.map(attempt => {
             const exam = examsById.get(attempt.examId);
+            const canonicalRow = requiresCanonicalSnapshot
+                ? canonicalStudentRowsByAttemptId.get(attempt.id)
+                : undefined;
             const examAttempts = [...(attemptsByExamId.get(attempt.examId) || [])]
                 .sort((a, b) => getScoreRate(b) - getScoreRate(a));
             const totalStudents = examAttempts.length;
-            const scoreSummary = attemptScoreById.get(attempt.id) ?? resolveAttemptScore(attempt, exam);
+            const gradingResolution = !requiresCanonicalSnapshot && exam && localRuntime
+                ? localRuntime.resolveAttemptGrading(exam, attempt)
+                : null;
+            const scoreSummary = canonicalRow
+                ? {
+                    earnedScore: canonicalRow.totalScore,
+                    totalScore: attempt.totalScore,
+                    scorePercent: canonicalRow.scorePercentage,
+                    source: canonicalRow.gradingSource,
+                }
+                : gradingResolution
+                ? { ...gradingResolution.scoreSummary, source: gradingResolution.source }
+                : storedAttemptScore(attempt);
             const studentScoreRate = scoreSummary.scorePercent;
             const rank = examAttempts.findIndex(a => getScoreRate(a) === studentScoreRate) + 1 || totalStudents;
 
             // Calculate strengths and weaknesses based on labels
             const labelStats: Record<string, { correct: number, total: number }> = {};
 
-            if (exam) {
-                getAttemptQuestionResults(exam, attempt).forEach(result => {
+            if (canonicalRow) {
+                Object.assign(labelStats, canonicalRow.labelOutcomes);
+            } else if (gradingResolution) {
+                gradingResolution.questionResults.forEach(result => {
                     if (result.status === "ungraded") return;
                     const label = result.label || '일반/종합';
                     if (!labelStats[label]) labelStats[label] = { correct: 0, total: 0 };
@@ -306,16 +491,23 @@ export default function StudentAnalyticsTab({
                 }
             }
 
-            const recommendations = exam
-                ? buildLearningRecommendations(exam, [attempt], {
+            const recommendations = !requiresCanonicalSnapshot && exam && localRuntime
+                ? localRuntime.buildLearningRecommendations(exam, [attempt], {
                     scope: "attempt",
                     attempt,
                     limit: 5,
                 })
                 : [];
-            const topWeakness = recommendations[0];
-            const retakeIds = exam ? buildRetakeQuestionIds(exam, attempt) : [];
-            const behavior = summarizeAttemptBehavior(attempt);
+            const topWeakness = canonicalRow?.topWeakness || recommendations[0];
+            const retakeIds = canonicalRow?.retakeQuestionIds
+                || (!requiresCanonicalSnapshot && exam && localRuntime ? localRuntime.buildRetakeQuestionIds(exam, attempt) : []);
+            const behavior = canonicalRow?.behavior
+                || (!requiresCanonicalSnapshot && localRuntime ? localRuntime.summarizeAttemptBehavior(attempt) : EMPTY_BEHAVIOR);
+            const officialSnapshot = canonicalSnapshotsByExamId.get(attempt.examId);
+            const localRequestedRetakeIds = topWeakness?.retakeQuestionIds.length ? topWeakness.retakeQuestionIds : retakeIds;
+            const officialCohortKeys = officialSnapshot
+                ? exactTeacherCanonicalWrongRetakeCohorts(officialSnapshot, attempt.id, retakeIds)
+                : null;
 
             return {
                 attemptId: attempt.id,
@@ -326,6 +518,7 @@ export default function StudentAnalyticsTab({
                 scoreRate: studentScoreRate,
                 rank,
                 totalStudents,
+                gradingSource: canonicalRow?.gradingSource || gradingResolution?.source || "stored_totals_only",
                 // null for solo submissions (totalStudents < 2) — "상위 100%" is meaningless
                 // (and reads as last place) when there's no one else to compare against.
                 percentile: computeRankPercentile(rank, totalStudents),
@@ -337,17 +530,38 @@ export default function StudentAnalyticsTab({
                 weakReason: topWeakness?.reason,
                 retakeIds,
                 retakeHref: exam && retakeIds.length > 0
-                    ? buildRetakeHref(attempt.examId, topWeakness?.sourceAttemptId || attempt.id, topWeakness?.retakeQuestionIds.length ? topWeakness.retakeQuestionIds : retakeIds, topWeakness?.retakeMode || "wrong", {
-                        labels: topWeakness?.retakeLabels || [],
-                        concepts: topWeakness?.retakeConcepts || [],
-                    })
+                    ? requiresCanonicalSnapshot
+                        ? officialCohortKeys
+                            ? buildRetakeHref(attempt.examId, attempt.id, retakeIds, "wrong", { cohortKeys: officialCohortKeys })
+                            : ""
+                        : buildRetakeHref(attempt.examId, topWeakness?.sourceAttemptId || attempt.id, localRequestedRetakeIds, topWeakness?.retakeMode || "wrong", {
+                            labels: topWeakness?.retakeLabels || [],
+                            concepts: topWeakness?.retakeConcepts || [],
+                        })
                     : "",
+                retakeDefinitionUnavailable: requiresCanonicalSnapshot && retakeIds.length > 0 && !officialCohortKeys,
                 behavior,
                 elapsedTimeSec: behavior.elapsedTimeSec,
                 date: formatKoreanDate(attempt.finishedAt)
             };
         }).reverse(); // Latest at the top
-    }, [studentBaseAttempts, attemptsByExamId, examsById, attemptScoreById]);
+    }, [
+        studentBaseAttempts,
+        attemptsByExamId,
+        examsById,
+        attemptScoreById,
+        canonicalStudentRowsByAttemptId,
+        canonicalSnapshotsByExamId,
+        localRuntime,
+        requiresCanonicalSnapshot,
+    ]);
+    const excludedGradingEvidence = useMemo(() => detailedAnalysis.reduce((summary, detail) => {
+        if (detail.gradingSource === "legacy_derived_current_exam") summary.legacy += 1;
+        if (detail.gradingSource === "stored_totals_only" || detail.gradingSource === "incomplete_or_invalid") {
+            summary.incomplete += 1;
+        }
+        return summary;
+    }, { legacy: 0, incomplete: 0 }), [detailedAnalysis]);
 
     const learningQueue = useMemo(() => {
         return detailedAnalysis
@@ -365,6 +579,23 @@ export default function StudentAnalyticsTab({
 
     return (
         <div className="fade-in-up" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            {(excludedGradingEvidence.legacy > 0 || excludedGradingEvidence.incomplete > 0) && (
+                <p
+                    role="status"
+                    style={{
+                        margin: 0,
+                        padding: '0.65rem 0.8rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid color-mix(in srgb, var(--warning) 45%, var(--border))',
+                        background: 'color-mix(in srgb, var(--warning) 10%, var(--surface))',
+                        color: 'var(--text-warning)',
+                        fontSize: '0.78rem',
+                        fontWeight: 800,
+                    }}
+                >
+                    과거 기록 기반 참고 분석 {excludedGradingEvidence.legacy}건과 근거 불완전 기록 {excludedGradingEvidence.incomplete}건은 공식 누적 문항·유형 집계에서 제외했습니다.
+                </p>
+            )}
             {/* Filter Section */}
             <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
                 {regionScopeOptions.length > 0 && (
@@ -437,7 +668,7 @@ export default function StudentAnalyticsTab({
                 />
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem', alignItems: 'start' }}>
                 {/* Left side: Chart */}
                 <div className="card chart-card-enter" style={{ ...CARD_SURFACE_STYLE, padding: '1.5rem', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                     <div style={{ marginBottom: '1.5rem' }}>
@@ -458,25 +689,137 @@ export default function StudentAnalyticsTab({
                         />
                     )}
 
-                    <div ref={trendChartRef} className="comet-chart-light" style={{ flex: 1, minHeight: studentGrowthReportsEnabled ? '350px' : 0, width: '100%', minWidth: 0, position: 'relative' }}>
+                    {studentGrowthReportsEnabled && studentTrendSummary && (
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(105px, 1fr))',
+                            gap: '0.65rem',
+                            marginBottom: '1rem',
+                            padding: '0.75rem 0.9rem',
+                            background: 'rgba(99, 102, 241, 0.04)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 'var(--radius-md)',
+                        }}>
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>최신 원시험</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem' }}>
+                                    <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--foreground)' }}>
+                                        {studentTrendSummary.latestScore}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
+                                    {studentTrendSummary.delta !== null && (
+                                        <span style={{
+                                            fontSize: '0.72rem',
+                                            fontWeight: 800,
+                                            color: studentTrendSummary.delta >= 0 ? 'var(--success)' : 'var(--grade-red)',
+                                        }}>
+                                            {studentTrendSummary.delta >= 0 ? `▲+${studentTrendSummary.delta}` : `▼${studentTrendSummary.delta}`}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>원시험 평균</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
+                                    <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--primary)' }}>
+                                        {studentTrendSummary.averageScore}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>최고 점수</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
+                                    <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--foreground)' }}>
+                                        {studentTrendSummary.maxScore}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>반 평균 대비</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
+                                    <span style={{
+                                        fontSize: '1.2rem',
+                                        fontWeight: 900,
+                                        color: studentTrendSummary.avgDiff >= 0 ? 'var(--success)' : 'var(--grade-red)',
+                                    }}>
+                                        {studentTrendSummary.avgDiff >= 0 ? `+${studentTrendSummary.avgDiff}` : studentTrendSummary.avgDiff}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="comet-chart-light" style={{ height: studentGrowthReportsEnabled ? '280px' : 0, width: '100%', minWidth: 0, position: 'relative' }}>
                         <div className="chart-texture is-light" aria-hidden="true" />
                         {studentGrowthReportsEnabled && trendData.length > 0 ? (
                             <ResponsiveContainer
                                 width="100%"
                                 height="100%"
                                 minWidth={0}
-                                minHeight={350}
-                                initialDimension={{ width: 760, height: 350 }}
+                                minHeight={280}
+                                initialDimension={{ width: 760, height: 280 }}
                             >
-                                <LineChart data={trendData} margin={{ top: 20, right: 30, left: 0, bottom: 20 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
-                                    <XAxis dataKey="examTitle" tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
-                                    <YAxis domain={[0, 100]} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-                                    <RechartsTooltip
-                                        contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', background: 'var(--background)' }}
-                                        labelStyle={{ fontWeight: 'bold', color: 'var(--text)', marginBottom: '8px' }}
+                                <ComposedChart
+                                    key={`${activeStudentKey}-${trendData.length}`}
+                                    data={trendData}
+                                    margin={{ top: 15, right: 25, left: -10, bottom: 15 }}
+                                >
+                                    <defs>
+                                        <linearGradient id="studentScoreGlow" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.22} />
+                                            <stop offset="95%" stopColor="var(--primary)" stopOpacity={0.0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" opacity={0.7} />
+                                    <XAxis
+                                        dataKey="examTitle"
+                                        tick={{ fill: 'var(--muted)', fontSize: 11, fontWeight: 600 }}
+                                        axisLine={{ stroke: 'var(--border)' }}
+                                        tickLine={false}
+                                        dy={8}
                                     />
-                                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                                    <YAxis
+                                        domain={[0, 100]}
+                                        ticks={[0, 25, 50, 75, 100]}
+                                        tick={{ fill: 'var(--muted)', fontSize: 11 }}
+                                        axisLine={false}
+                                        tickLine={false}
+                                        tickFormatter={(v) => `${v}점`}
+                                        dx={-4}
+                                    />
+                                    <ReferenceLine y={100} stroke="var(--border)" strokeDasharray="2 4" />
+                                    <RechartsTooltip
+                                        cursor={{ stroke: 'var(--primary)', strokeWidth: 1.5, strokeDasharray: '4 4', strokeOpacity: 0.4 }}
+                                        content={<StudentTrendTooltip />}
+                                        animationDuration={150}
+                                    />
+                                    <Legend
+                                        verticalAlign="bottom"
+                                        align="center"
+                                        wrapperStyle={{ paddingTop: '12px', fontSize: '0.8rem' }}
+                                        formatter={(value) => (
+                                            <span style={{ color: 'var(--foreground)', fontWeight: 600, marginRight: '8px' }}>
+                                                {value}
+                                            </span>
+                                        )}
+                                    />
+                                    <Area
+                                        type="monotone"
+                                        dataKey="studentScore"
+                                        stroke="none"
+                                        fill="url(#studentScoreGlow)"
+                                        isAnimationActive={true}
+                                        animationDuration={850}
+                                        animationEasing="ease-out"
+                                        legendType="none"
+                                        tooltipType="none"
+                                    />
                                     <Line
                                         name="내 점수"
                                         type="monotone"
@@ -484,9 +827,11 @@ export default function StudentAnalyticsTab({
                                         className="comet-target"
                                         stroke="var(--primary)"
                                         strokeWidth={3}
-                                        dot={{ r: 5, strokeWidth: 2, fill: 'var(--background)' }}
-                                        activeDot={{ r: 7 }}
-                                        isAnimationActive={false}
+                                        dot={{ r: 4.5, strokeWidth: 2, fill: 'var(--background)' }}
+                                        activeDot={{ r: 6.5, strokeWidth: 2, stroke: 'var(--primary)', fill: 'var(--background)' }}
+                                        isAnimationActive={true}
+                                        animationDuration={850}
+                                        animationEasing="ease-out"
                                     />
                                     <Line
                                         name="선택 범위 평균"
@@ -495,12 +840,14 @@ export default function StudentAnalyticsTab({
                                         stroke="var(--warning)"
                                         strokeWidth={2}
                                         strokeDasharray="5 5"
-                                        dot={{ r: 4, strokeWidth: 0, fill: 'var(--muted)' }}
-                                        animationBegin={1200}
-                                        animationDuration={900}
+                                        dot={{ r: 3.5, strokeWidth: 0, fill: 'var(--muted)' }}
+                                        activeDot={{ r: 5.5, strokeWidth: 0, fill: 'var(--warning)' }}
+                                        isAnimationActive={true}
+                                        animationBegin={200}
+                                        animationDuration={850}
                                         animationEasing="ease-out"
                                     />
-                                </LineChart>
+                                </ComposedChart>
                             </ResponsiveContainer>
                         ) : studentGrowthReportsEnabled ? (
                             <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
@@ -652,9 +999,8 @@ export default function StudentAnalyticsTab({
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', flex: 1 }}>
                             {studentBaseAttempts.map(attempt => {
                                 const isExcluded = excludedExamIds.has(attempt.examId);
-                                const exam = examsById.get(attempt.examId);
                                 const scoreRate = attemptScoreById.get(attempt.id)?.scorePercent
-                                    ?? resolveAttemptScore(attempt, exam).scorePercent;
+                                    ?? storedAttemptScore(attempt).scorePercent;
 
                                 return (
                                     <label
@@ -702,9 +1048,8 @@ export default function StudentAnalyticsTab({
                             </p>
                             <div style={{ display: 'grid', gap: '0.5rem' }}>
                                 {studentRetakeAttempts.slice().reverse().slice(0, 5).map(attempt => {
-                                    const exam = examsById.get(attempt.examId);
                                     const scoreRate = attemptScoreById.get(attempt.id)?.scorePercent
-                                        ?? resolveAttemptScore(attempt, exam).scorePercent;
+                                        ?? storedAttemptScore(attempt).scorePercent;
                                     return (
                                         <Link
                                             key={attempt.id}
@@ -858,6 +1203,10 @@ export default function StudentAnalyticsTab({
                                                 >
                                                     유형 {detail.retakeIds.length}문항
                                                 </PremiumActionLink>
+                                            ) : detail.retakeDefinitionUnavailable ? (
+                                                <span role="status" style={{ color: 'var(--warning)', fontSize: '0.76rem', fontWeight: 800 }}>
+                                                    제출 정의 변경 · 재시험 불가
+                                                </span>
                                             ) : (
                                                 <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 800 }}>완료</span>
                                             )}

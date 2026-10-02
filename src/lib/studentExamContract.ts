@@ -1,4 +1,5 @@
 import type {
+    Attempt,
     Exam,
     FocusLossEvent,
     IdentityType,
@@ -7,11 +8,20 @@ import type {
     QuestionTiming,
     StoredDataRef,
 } from "@/types/omr";
+import type { AssignmentLifecycle } from "@/lib/assignmentLifecycle";
 
 export interface StudentExamAccessInput {
     examId: string;
+    assignmentId?: string;
+    /** Required whenever assignmentId is present; assignment ids are reused across revisions. */
+    assignmentRevision?: number;
     pin?: string;
     questionIds?: number[];
+    retake?: {
+        sourceAttemptId: string;
+        mode: "wrong" | "similar" | "custom";
+        questionIds: number[];
+    };
     student: {
         studentId: string;
         studentName: string;
@@ -33,8 +43,8 @@ export interface VerifiedStudentIdentity {
 
 export type StudentExamAccessResult =
     | { status: "allowed"; exam: StudentSolveExam; ticket: string }
-    | { status: "pin_required" | "login_required" | "group_denied" | "not_started" | "ended" | "archived"; at?: string }
-    | { status: "invalid_questions" }
+    | { status: "pin_required" | "pin_rate_limited" | "login_required" | "group_denied" | "not_started" | "ended" | "archived"; at?: string }
+    | { status: "invalid_questions" | "unsupported_retake" }
     | { status: "not_found" | "service_unavailable" | "misconfigured" | "local_only" };
 
 export type StudentExamPreviewResult =
@@ -52,8 +62,106 @@ export interface StudentExamPreview {
     archived?: boolean;
     questionCount: number;
     access: {
-        type: "public" | "group";
+        type: "public" | "group" | "targeted";
         requiresPin: boolean;
+    };
+}
+
+/** Minimal dashboard row. Full exam content and access checks load only on entry. */
+export interface StudentAssignmentPreview {
+    id: string;
+    /** Opaque server assignment scope. Student ids are never embedded here or in the URL. */
+    assignmentId?: string;
+    /** Immutable targeted-assignment generation; legacy null rows are review-only. */
+    assignmentRevision?: number;
+    assignmentMode?: "base" | "retake";
+    retakeSourceAttemptId?: string;
+    retakeQuestionIds?: number[];
+    title: string;
+    createdAt: string;
+    updatedAt?: string;
+    durationMin?: number;
+    lifecycle: AssignmentLifecycle;
+    startsAt?: string;
+    endsAt?: string;
+    archived?: boolean;
+    access: {
+        type: "public" | "group" | "targeted";
+        entryCheck: "required";
+    };
+}
+
+/**
+ * Minimal pre-entry submission row for the student dashboard.
+ * Ownership is enforced by the server query and is intentionally not repeated
+ * client-side. Answer/review/authoring/telemetry/artifact data is detail-only.
+ */
+export interface StudentAttemptSummary {
+    id: string;
+    examId: string;
+    assignmentId?: string;
+    /** Immutable targeted-assignment generation; legacy null rows are review-only. */
+    assignmentRevision?: number;
+    examTitle: string;
+    status: "completed" | "in_progress";
+    score: number;
+    totalScore: number;
+    startedAt: string;
+    finishedAt: string;
+    retakeSourceAttemptId?: string;
+    answeredQuestionCount?: number;
+    latestAnsweredAt?: string;
+}
+
+function answeredQuestionSummary(value: unknown): Pick<StudentAttemptSummary, "answeredQuestionCount" | "latestAnsweredAt"> {
+    if (!Array.isArray(value)) return {};
+    let answeredQuestionCount = 0;
+    let latestAnsweredAt = "";
+    for (const item of value) {
+        if (!item || typeof item !== "object") continue;
+        const note = item as { status?: unknown; answer?: unknown };
+        if (note.status !== "answered") continue;
+        answeredQuestionCount += 1;
+        if (!note.answer || typeof note.answer !== "object") continue;
+        const createdAt = (note.answer as { createdAt?: unknown }).createdAt;
+        if (
+            typeof createdAt === "string"
+            && createdAt.length <= 40
+            && /^\d{4}-\d{2}-\d{2}T/.test(createdAt)
+            && Number.isFinite(Date.parse(createdAt))
+            && (!latestAnsweredAt || createdAt > latestAnsweredAt)
+        ) latestAnsweredAt = createdAt;
+    }
+    return answeredQuestionCount > 0
+        ? {
+            answeredQuestionCount,
+            ...(latestAnsweredAt ? { latestAnsweredAt } : {}),
+        }
+        : {};
+}
+
+export function answeredQuestionSummaryFromListValue(value: unknown) {
+    return answeredQuestionSummary(value);
+}
+
+export function studentAttemptSummaryFromAttempt(attempt: Attempt): StudentAttemptSummary {
+    return {
+        id: attempt.id,
+        examId: attempt.examId,
+        ...(attempt.assignmentId ? { assignmentId: attempt.assignmentId } : {}),
+        ...(Number.isSafeInteger(attempt.assignmentRevision) && Number(attempt.assignmentRevision) > 0
+            ? { assignmentRevision: Number(attempt.assignmentRevision) }
+            : {}),
+        examTitle: attempt.examTitle,
+        status: attempt.status,
+        score: attempt.score,
+        totalScore: attempt.totalScore,
+        startedAt: attempt.startedAt,
+        finishedAt: attempt.finishedAt,
+        ...(attempt.retake?.sourceAttemptId
+            ? { retakeSourceAttemptId: attempt.retake.sourceAttemptId }
+            : {}),
+        ...answeredQuestionSummary(attempt.studentQuestions),
     };
 }
 
@@ -75,7 +183,7 @@ export interface StudentSolveExam {
     pdfData?: string;
     pdfDataRef?: StoredDataRef;
     access: {
-        type: "public" | "group";
+        type: "public" | "group" | "targeted";
         requiresPin: boolean;
     };
 }
@@ -92,6 +200,8 @@ export interface StudentAttemptSubmission {
 export interface ServerGradedAttemptReceipt {
     attemptId: string;
     examId: string;
+    assignmentId?: string;
+    assignmentRevision?: number;
     score: number;
     totalScore: number;
     correctCount: number;
@@ -140,7 +250,7 @@ export function studentSolveExamFromExam(exam: Exam): StudentSolveExam {
         ...(exam.pdfData ? { pdfData: exam.pdfData } : {}),
         ...(exam.pdfDataRef ? { pdfDataRef: exam.pdfDataRef } : {}),
         access: {
-            type: exam.accessConfig?.type === "group" ? "group" : "public",
+            type: exam.accessConfig?.type === "targeted" ? "targeted" : exam.accessConfig?.type === "group" ? "group" : "public",
             requiresPin: !!exam.accessConfig?.pin?.trim(),
         },
     };
@@ -158,7 +268,7 @@ export function studentExamPreviewFromExam(exam: Exam): StudentExamPreview {
         ...(typeof exam.archived === "boolean" ? { archived: exam.archived } : {}),
         questionCount: exam.questions.length,
         access: {
-            type: exam.accessConfig?.type === "group" ? "group" : "public",
+            type: exam.accessConfig?.type === "targeted" ? "targeted" : exam.accessConfig?.type === "group" ? "group" : "public",
             requiresPin: !!exam.accessConfig?.pin?.trim(),
         },
     };

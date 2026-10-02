@@ -28,6 +28,11 @@ function studentGroupKeys(student: RosterStudent): Set<string> {
     return new Set([student.group, scopedGroupKey(student.id)].map(clean).filter(Boolean));
 }
 
+/** Derive the current roster size rather than trusting persisted group metadata. */
+export function countDistributionGroupMembers(group: RosterGroup, students: RosterStudent[]): number {
+    return students.filter(student => rosterGroupMatchesStudent(group, student)).length;
+}
+
 export function summarizeDistributionTargets(params: {
     selectedGroupIds: string[];
     groups: RosterGroup[];

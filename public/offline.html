@@ -114,8 +114,9 @@
       <nav class="actions" aria-label="오프라인 빠른 이동">
         <a class="offline-action primary" href="/">홈으로</a>
         <a class="offline-action" href="/pwa-check">앱 상태 체크</a>
-        <button class="offline-action" type="button" onclick="window.location.reload()">다시 연결 시도</button>
+        <button id="offline-retry" class="offline-action" type="button">다시 연결 시도</button>
       </nav>
     </main>
+    <script src="/offline.js" defer></script>
   </body>
 </html>

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "dot/onboarding-setup-review-20261002": false,
+      "dot/omr-canonical-20261002": false,
+      "main": false
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/internal/asset-gc",
+      "schedule": "17 3 * * *"
+    },
+    {
+      "path": "/api/internal/reminders",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}

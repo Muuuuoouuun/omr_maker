@@ -5,6 +5,7 @@ import {
     gradeStudentAttemptOnServer,
     gradeTeacherForcedAttemptOnServer,
 } from "./serverAttemptGrading";
+import { attestCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 
 const exam: Exam = {
     id: "exam-1",
@@ -20,7 +21,7 @@ const exam: Exam = {
 };
 
 const ticket: StudentAttemptTicketClaims = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     audience: "omr-attempt",
     ticketId: "ticket-1",
     examId: "exam-1",
@@ -67,6 +68,71 @@ describe("server attempt grading", () => {
         const retry = gradeStudentAttemptOnServer(exam, ticket, { ticket: "two", answers: { 1: 3 } }, 2_100);
         expect(first.ok && first.attempt.id).toBe("attempt_ticket-1");
         expect(retry.ok && retry.attempt.id).toBe("attempt_ticket-1");
+    });
+
+    it("binds targeted grading evidence to the ticket assignment generation", () => {
+        const targetedTicket: StudentAttemptTicketClaims = {
+            ...ticket,
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+        };
+        const result = gradeStudentAttemptOnServer(
+            exam,
+            targetedTicket,
+            { ticket: "signed-ticket", answers: { 1: 3 } },
+            2_000,
+        );
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.attempt).toMatchObject({
+            assignmentId: "assignment-reused",
+            assignmentRevision: 8,
+        });
+        expect(result.attempt.questionResults).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                assignmentId: "assignment-reused",
+                assignmentRevision: 8,
+            }),
+        ]));
+        expect(result.attempt.questionResultsFullEvidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    });
+
+    it("binds an exact retake scope from the trusted ticket into canonical evidence", () => {
+        const retakeTicket: StudentAttemptTicketClaims = {
+            ...ticket,
+            ticketId: "ticket-retake",
+            allowedQuestionIds: [2],
+            retakeSourceAttemptId: "attempt-source",
+            retakeMode: "wrong",
+        };
+        const result = gradeStudentAttemptOnServer(
+            exam,
+            retakeTicket,
+            { ticket: "signed-ticket", answers: { 2: 1 } },
+            2_000,
+        );
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.attempt.retake).toEqual({
+            sourceAttemptId: "attempt-source",
+            questionIds: [2],
+            mode: "wrong",
+            createdAt: new Date(2_000).toISOString(),
+        });
+        expect(result.attempt.questionResults?.map(row => row.questionId)).toEqual([2]);
+        expect(result.attempt.questionResults).toEqual([
+            expect.objectContaining({
+                retakeSourceAttemptId: "attempt-source",
+                retakeMode: "wrong",
+            }),
+        ]);
+        expect(result.attempt.questionResultsFullEvidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+        expect(() => attestCanonicalQuestionResultEvidence(
+            result.attempt as Parameters<typeof attestCanonicalQuestionResultEvidence>[0],
+            result.attempt.questionResults || [],
+        )).not.toThrow();
     });
 
     it("rejects answers for unissued questions and invalid choices", () => {

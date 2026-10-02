@@ -6,6 +6,7 @@ import {
 } from "@/lib/omrPersistence";
 import { ROSTER_STORAGE_KEYS } from "@/lib/rosterStorage";
 import { ROSTER_TOMBSTONE_STORAGE_KEY } from "@/lib/rosterPersistence";
+import { INITIAL_OPERATIONS_LIMITS } from "@/lib/initialOperationsPolicy";
 import { STORAGE_KEYS } from "@/utils/storage";
 
 /**
@@ -22,7 +23,7 @@ import { STORAGE_KEYS } from "@/utils/storage";
  */
 
 /** Refresh at most once per window to avoid thrash on event bursts. */
-export const DASHBOARD_REVALIDATE_MIN_INTERVAL_MS = 10_000;
+export const DASHBOARD_REVALIDATE_MIN_INTERVAL_MS = INITIAL_OPERATIONS_LIMITS.backgroundRevalidationMs;
 
 const TEACHER_DASHBOARD_KEYS = new Set<string>([
     ATTEMPTS_STORAGE_KEY,

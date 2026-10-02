@@ -50,14 +50,15 @@ describe("teacher attempt scoped mutation contract", () => {
     it("authorizes same-origin signed teacher write roles before creating the admin client", () => {
         const action = source("src/app/actions/teacherAttempts.ts");
         expect(action).toContain("isSameOriginServerActionRequest");
-        expect(action).toContain("parseSignedTeacherSessionCookie");
+        expect(action).toContain("resolveAuthorizedTeacherSessionCookie");
         expect(action).toContain("canTeacherRoleWrite");
         expect(action.indexOf("canTeacherRoleWrite")).toBeLessThan(action.indexOf("createSupabaseAdminClient"));
         expect(action).toContain("answerTeacherCanonicalAttemptQuestion");
         expect(action).toContain("setTeacherCanonicalSubquestionReview");
         expect(action).toContain("forceFinishTeacherCanonicalAttempts");
+        expect(action).toContain("forceFinishTeacherCanonicalAttemptSessions");
         expect(action).not.toContain("saveTeacherCanonicalAttempt");
-        expect(action.match(/actionContext\(true\)/g)).toHaveLength(3);
+        expect(action.match(/actionContext\(true\)/g)).toHaveLength(4);
         expect(action.match(/actionContext\(\)/g)?.length).toBeGreaterThanOrEqual(2);
         expect(action).toContain("actorUserId");
         expect(action).toContain("actorLabel");

@@ -6,6 +6,7 @@
 
 import { useState } from "react";
 import NextLink from "next/link";
+import StudentConceptMasteryPanel from "@/components/teacher/student-results/StudentConceptMasteryPanel";
 import StatusPill from "@/components/dashboard/StatusPill";
 import {
     Users,
@@ -29,7 +30,7 @@ import {
 } from "@/lib/rosterCsvImport";
 import { type StudentProfileInsight, type StudentProfileWeaknessInsight } from "@/lib/studentProfileAnalytics";
 import { type GroupProfileInsight, type GroupProfileWeaknessInsight } from "@/lib/groupProfileAnalytics";
-import { DEFAULT_REGION_NAME } from "@/lib/regionalAnalytics";
+import { DEFAULT_REGION_NAME } from "@/lib/regionIdentity";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { PremiumActionLink } from "@/components/PremiumFeatureGate";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
@@ -48,11 +49,18 @@ export function rosterGroupForStudentInput(groupName: string, region: string, gr
 }
 
 export function hasArchivedHandwriting(attempt: Attempt): boolean {
-    return !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || attempt.drawingsRef);
+    const summaryStrokesRef = "handwritingStrokesRef" in attempt
+        ? attempt.handwritingStrokesRef
+        : undefined;
+    return !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || summaryStrokesRef || attempt.drawingsRef);
 }
 
 export function handwritingLabel(attempt: Attempt): string {
-    const questionCount = attempt.questionDrawings?.length || 0;
+    const summaryQuestionCount = "handwritingQuestionCount" in attempt
+        && typeof attempt.handwritingQuestionCount === "number"
+        ? attempt.handwritingQuestionCount
+        : 0;
+    const questionCount = attempt.questionDrawings?.length || summaryQuestionCount;
     if (questionCount > 0) return `${questionCount}문항`;
     if (attempt.drawingPageCount) return `${attempt.drawingPageCount}쪽`;
     return "저장됨";
@@ -117,6 +125,10 @@ export function MiniRegionMetric({ label, value }: { label: string; value: strin
             <div style={{ fontSize: '0.9rem', color: 'var(--foreground)', fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
         </div>
     );
+}
+
+export function RegionalAverageMetric({ averageScore }: { averageScore: number | null }) {
+    return <MiniRegionMetric label="평균" value={averageScore === null ? "미채점" : `${averageScore}점`} />;
 }
 
 // DEV-B: clickable/keyboard-focusable table header that toggles asc/desc
@@ -502,10 +514,12 @@ export function StudentProfileModal({
     // Score trend is exam-performance signal (an improving/declining trend),
     // not a system state — success for up, grade (not error) for down. See
     // docs/design-system.md's --error vs --grade-red rule.
-    const trendTone = profile.trendDelta >= 0 ? "success" : "grade";
-    const trendLabel = profile.trendDelta === 0
-        ? "변화 없음"
-        : `${profile.trendDelta > 0 ? "+" : ""}${profile.trendDelta}점`;
+    const trendTone = profile.trendDelta === null ? "muted" : profile.trendDelta >= 0 ? "success" : "grade";
+    const trendLabel = profile.trendDelta === null
+        ? "비교 불가"
+        : profile.trendDelta === 0
+            ? "변화 없음"
+            : `${profile.trendDelta > 0 ? "+" : ""}${profile.trendDelta}점`;
 
     return (
         <ModalShell title={`${student.name} 학생 성장 리포트`} onClose={onClose} maxWidth={900}>
@@ -548,14 +562,16 @@ export function StudentProfileModal({
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
-                    <ProfileMetric label="원시험 평균" value={`${profile.averageScore}점`} color="#4f46e5" icon={<BarChart3 size={15} />} />
-                    <ProfileMetric label="최근 원시험" value={`${profile.latestScore}점`} color={scoreColor(profile.latestScore)} icon={<TrendingUp size={15} />} />
+                    <ProfileMetric label="원시험 평균" value={profile.averageScore === null ? "확인 불가" : `${profile.averageScore}점`} color="#4f46e5" icon={<BarChart3 size={15} />} />
+                    <ProfileMetric label="최근 원시험" value={profile.latestScore === null ? "확인 불가" : `${profile.latestScore}점`} color={profile.latestScore === null ? "var(--muted)" : scoreColor(profile.latestScore)} icon={<TrendingUp size={15} />} />
                     <ProfileMetric label="재시험" value={`${profile.retakeAttemptCount}회`} color="#0f766e" icon={<RefreshCw size={15} />} />
                     <ProfileMetric label="오답/미응답" value={`${profile.wrongQuestionCount}/${profile.unansweredQuestionCount}`} color="#ef4444" icon={<AlertTriangle size={15} />} />
                     <ProfileMetric label="필기 보관" value={`${profile.handwritingArchiveCount}건`} color="#7c3aed" icon={<PenLine size={15} />} />
                     <ProfileMetric label="평균 시험시간" value={formatDuration(profile.averageElapsedTimeSec)} color="#0ea5e9" icon={<Clock size={15} />} />
                     <ProfileMetric label="문항 평균시간" value={formatDuration(profile.averageQuestionTimeSec)} color="#f59e0b" icon={<Clock size={15} />} />
                 </div>
+
+                {profile.conceptMastery ? <StudentConceptMasteryPanel summary={profile.conceptMastery} /> : null}
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
                     <section style={{ minWidth: 0 }}>
@@ -584,7 +600,7 @@ export function StudentProfileModal({
                                                 )}
                                             </div>
                                         </div>
-                                        <div style={{ color: scoreColor(attempt.scorePercent), fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{attempt.scorePercent}점</div>
+                                        <div style={{ color: attempt.scorePercent === null ? "var(--muted)" : scoreColor(attempt.scorePercent), fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{attempt.scorePercent === null ? "미채점" : `${attempt.scorePercent}점`}</div>
                                     </div>
                                     <div style={{ display: 'grid', gap: '0.35rem', marginTop: '0.65rem', color: 'var(--muted)', fontSize: '0.78rem' }}>
                                         <div>오답 {questionNumberLabel(attempt.wrongQuestionNumbers)}</div>
@@ -1521,4 +1537,3 @@ export function ConfirmModal({
         </ModalShell>
     );
 }
-

@@ -1,7 +1,11 @@
 import { pbkdf2Sync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildDeploymentReadiness } from "./deploymentReadiness";
+import {
+    buildDeploymentReadiness,
+    databaseProbeFailuresForIdentityMode,
+} from "./deploymentReadiness";
 import { TEACHER_PASSWORD_HASH_MIN_ITERATIONS } from "./teacherAuth";
+import type { SupabaseDeploymentProbe } from "./supabaseReadinessProbe";
 
 function teacherPasswordHash(password: string, saltHex = "00112233445566778899aabbccddeeff"): string {
     const iterations = TEACHER_PASSWORD_HASH_MIN_ITERATIONS;
@@ -9,9 +13,13 @@ function teacherPasswordHash(password: string, saltHex = "00112233445566778899aa
     return `pbkdf2-sha256:${iterations}:${saltHex}:${hashHex}`;
 }
 
+const STRONG_TEACHER_SESSION_SECRET = "teacher-session-secret-at-least-32-bytes";
+const STRONG_STUDENT_SESSION_SECRET = "student-session-secret-at-least-32-bytes";
+const STRONG_STUDENT_ATTEMPT_SECRET = "student-attempt-secret-at-least-32-bytes";
+
 const readyDatabaseProbe = {
     ready: true,
-    version: "202607280003",
+    version: "202608090001",
     browserSchemaPrivilegesDenied: true,
     anonTablePrivilegesDenied: true,
     authenticatedCanonicalPrivilegesDenied: true,
@@ -27,10 +35,72 @@ const readyDatabaseProbe = {
     serverGatewayCapabilitiesReady: true,
     queryPathIndexesReady: true,
     legacyBroadRpcsRemoved: true,
+    directUploadIntentLifecycleReady: true,
+    teacherUploadCleanupQueueReady: true,
+    teacherAssetFinalizePreauthorizationReady: true,
+    examReservationLeaseReady: true,
+    teacherAssetCleanupBacklogHealthy: true,
+    studentAttemptSessionsReady: true,
+    durableRateLimitsReady: true,
+    examRevisionReady: true,
+    teacherExamCasReady: true,
+    teacherNotificationSummaryReady: true,
+    teacherNotificationStateReady: true,
+    feedbackRevisionReady: true,
+    feedbackCasReady: true,
+    workspaceBootstrapPlanSafe: true,
+    sessionCleanupOptimizationReady: true,
+    feedbackReplayHardeningReady: true,
+    feedbackCoreFreeReady: true,
+    examEntryInvitesReady: true,
+    sessionCleanupFencingReady: true,
+    attemptCheckpointNullCasReady: true,
+    rosterSnapshotCasReady: true,
+    attemptMutationCasReady: true,
+    examDeleteSessionSafe: true,
+    studentQuestionAtomicReady: true,
+    teacherLiveSessionsReady: true,
+    teacherAccountLifecycleReady: true,
+    initialOperationsLoadControlReady: true,
+    individualStudentAssignmentsReady: true,
+    teacherAttemptReportingReady: true,
+    operationalJobStatusReady: true,
+    operatorPilotProvisioningReady: true,
+    provisionedTeacherLoginReady: true,
+    effectiveWorkspacePlanEnforcementReady: true,
+    studentSessionGenerationReady: true,
+    studentCredentialBatchReady: true,
+    canonicalQuestionResultEvidenceReady: true,
+    kakaoReminderEntitlementReady: true,
     failedChecks: [],
 };
 
 describe("deployment readiness", () => {
+    it("requires an exact non-PII provisioned teacher canary id only in provisioned mode", () => {
+        const base = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+        };
+        const missing = buildDeploymentReadiness(base, readyDatabaseProbe);
+        expect(missing.checks).toContainEqual(expect.objectContaining({
+            key: "provisioned_teacher_canary", tone: "error",
+        }));
+        const configured = buildDeploymentReadiness({
+            ...base,
+            OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: "teacher_0123456789abcdef",
+        }, readyDatabaseProbe);
+        expect(configured.checks).toContainEqual(expect.objectContaining({
+            key: "provisioned_teacher_canary", tone: "ready",
+        }));
+        const selfService = buildDeploymentReadiness({
+            ...base,
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+        }, readyDatabaseProbe);
+        expect(selfService.checks).toContainEqual(expect.objectContaining({
+            key: "provisioned_teacher_canary", tone: "ready",
+        }));
+    });
+
     it("flags production teacher login when no server credentials exist", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
@@ -55,6 +125,110 @@ describe("deployment readiness", () => {
             key: "student_session_secret",
             tone: "error",
         }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "rate_limit_hash_secret",
+            tone: "error",
+            detail: expect.stringContaining("OMR_RATE_LIMIT_HASH_SECRET"),
+        }));
+    });
+
+    it("accepts the private database teacher lifecycle without bootstrap credentials", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+        }, readyDatabaseProbe);
+
+        expect(summary.credentialCount).toBe(0);
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "teacher_credentials",
+            tone: "ready",
+            detail: expect.stringContaining("DB 교사 계정 수명주기"),
+        }));
+        expect(JSON.stringify(summary)).not.toContain("로그인 판별은 Supabase가 아니라");
+    });
+
+    it("requires pilot login capabilities only in provisioned mode, not explicit self-service", () => {
+        const lifecycleOnlyProbe: SupabaseDeploymentProbe = {
+            ...readyDatabaseProbe,
+            ready: false,
+            serverGatewayCapabilitiesReady: false,
+            operatorPilotProvisioningReady: false,
+            provisionedTeacherLoginReady: false,
+            failedChecks: [
+                "serverGatewayCapabilitiesReady",
+                "operatorPilotProvisioningReady",
+                "provisionedTeacherLoginReady",
+            ],
+        };
+        const baseEnv = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            TEACHER_ACCOUNTS: "",
+            OMR_TEACHER_ACCOUNTS: "",
+            TEACHER_LOGIN_ID: "",
+            TEACHER_PASSWORD: "",
+        };
+        expect(databaseProbeFailuresForIdentityMode({
+            ...readyDatabaseProbe,
+            ready: false,
+            operatorPilotProvisioningReady: false,
+            failedChecks: ["operatorPilotProvisioningReady"],
+        }, "self_service")).toEqual([]);
+        expect(databaseProbeFailuresForIdentityMode({
+            ...readyDatabaseProbe,
+            ready: false,
+            serverGatewayCapabilitiesReady: false,
+            operatorPilotProvisioningReady: false,
+            failedChecks: ["serverGatewayCapabilitiesReady", "operatorPilotProvisioningReady"],
+        }, "self_service")).toEqual(["serverGatewayCapabilitiesReady"]);
+        expect(databaseProbeFailuresForIdentityMode({
+            ...readyDatabaseProbe,
+            ready: false,
+            serverGatewayCapabilitiesReady: false,
+            provisionedTeacherLoginReady: false,
+            failedChecks: ["serverGatewayCapabilitiesReady", "provisionedTeacherLoginReady"],
+        }, "self_service")).toEqual([]);
+
+        const selfService = buildDeploymentReadiness({
+            ...baseEnv,
+            NODE_ENV: "test",
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+            OMR_PRODUCTION_RLS_APPLIED: "true",
+        }, lifecycleOnlyProbe);
+        expect(selfService.checks).toContainEqual(expect.objectContaining({
+            key: "teacher_credentials",
+            tone: "ready",
+        }));
+        expect(selfService.checks).toContainEqual(expect.objectContaining({
+            key: "production_rls",
+            tone: "ready",
+        }));
+
+        const unrelatedFailure = buildDeploymentReadiness({
+            ...baseEnv,
+            NODE_ENV: "test",
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+            OMR_PRODUCTION_RLS_APPLIED: "true",
+        }, {
+            ...lifecycleOnlyProbe,
+            canonicalTablesForceRls: false,
+            failedChecks: [...(lifecycleOnlyProbe.failedChecks || []), "canonicalTablesForceRls"],
+        });
+        expect(unrelatedFailure.checks).toContainEqual(expect.objectContaining({
+            key: "production_rls",
+            tone: "warning",
+        }));
+        expect(unrelatedFailure.label).toBe("배포 보강 권장");
+
+        const provisioned = buildDeploymentReadiness({
+            ...baseEnv,
+            NODE_ENV: "production",
+        }, lifecycleOnlyProbe);
+        expect(provisioned.checks).toContainEqual(expect.objectContaining({
+            key: "teacher_credentials",
+            tone: "error",
+        }));
     });
 
     it("fails closed when production has browser sync but no server grading gateway", () => {
@@ -71,10 +245,10 @@ describe("deployment readiness", () => {
         // the student server boundary (answer hiding, server grading) would
         // silently degrade to client trust.
         expect(summary.label).toBe("배포 확인 필요");
-        expect(summary.credentialCount).toBe(1);
+        expect(summary.credentialCount).toBe(0);
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "teacher_credentials",
-            tone: "warning",
+            tone: "error",
             detail: expect.stringContaining("passwordHash"),
         }));
         // In production a dedicated TEACHER_SESSION_SECRET is required: the app
@@ -119,17 +293,68 @@ describe("deployment readiness", () => {
         }));
     });
 
+    it("rejects short signing secrets in production while preserving local fixtures", () => {
+        const production = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{
+                id: "teacher-a",
+                passwordHash: teacherPasswordHash("pass-a"),
+            }]),
+            TEACHER_SESSION_SECRET: "short-teacher-secret",
+            STUDENT_SESSION_SECRET: "short-student-secret",
+            STUDENT_ATTEMPT_SECRET: "short-attempt-secret",
+        });
+
+        for (const key of ["teacher_session_secret", "student_session_secret", "student_attempt_secret"]) {
+            expect(production.checks).toContainEqual(expect.objectContaining({
+                key,
+                tone: "error",
+                detail: expect.stringContaining("32바이트"),
+            }));
+        }
+
+        const coupledStudentSecrets = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            STUDENT_ATTEMPT_SECRET: STRONG_STUDENT_ATTEMPT_SECRET,
+        });
+        expect(coupledStudentSecrets.checks).toContainEqual(expect.objectContaining({
+            key: "student_session_secret",
+            tone: "error",
+            detail: expect.stringContaining("STUDENT_SESSION_SECRET"),
+        }));
+        expect(coupledStudentSecrets.checks).toContainEqual(expect.objectContaining({
+            key: "student_attempt_secret",
+            tone: "ready",
+        }));
+
+        const development = buildDeploymentReadiness({
+            NODE_ENV: "development",
+            TEACHER_SESSION_SECRET: "local-teacher",
+            STUDENT_SESSION_SECRET: "local-student",
+            STUDENT_ATTEMPT_SECRET: "local-attempt",
+        });
+        for (const key of ["teacher_session_secret", "student_session_secret", "student_attempt_secret"]) {
+            expect(development.checks).toContainEqual(expect.objectContaining({ key, tone: "ready" }));
+        }
+    });
+
     it("recognizes explicit server session and service role readiness", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
             TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
-            TEACHER_SESSION_SECRET: "session-secret",
-            STUDENT_SESSION_SECRET: "student-session-secret",
-            STUDENT_ATTEMPT_SECRET: "student-attempt-secret",
+            TEACHER_SESSION_SECRET: STRONG_TEACHER_SESSION_SECRET,
+            STUDENT_SESSION_SECRET: STRONG_STUDENT_SESSION_SECRET,
+            STUDENT_ATTEMPT_SECRET: STRONG_STUDENT_ATTEMPT_SECRET,
+            OMR_RATE_LIMIT_HASH_SECRET: "rate-limit-secret-that-is-at-least-thirty-two-bytes",
             NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_public",
             SUPABASE_SERVICE_ROLE_KEY: "service-role",
             OMR_PRODUCTION_RLS_APPLIED: "true",
+            OMR_ASSET_GC_SCHEDULED: "1",
+            CRON_SECRET: "cron-secret-that-is-at-least-thirty-two-characters",
+            OMR_OPERATIONAL_SINK_URL: "https://ops.example.test/events",
+            OMR_OPERATIONAL_SINK_TOKEN: "ops_sink_token_0123456789_abcdef",
         }, readyDatabaseProbe);
 
         expect(summary.checks).toContainEqual(expect.objectContaining({
@@ -158,16 +383,98 @@ describe("deployment readiness", () => {
             tone: "ready",
             detail: expect.stringContaining("실효 권한"),
         }));
-        expect(summary.readyCount).toBe(7);
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "remote_asset_cleanup_schedule",
+            tone: "ready",
+        }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "rate_limit_hash_secret",
+            tone: "ready",
+        }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "operational_event_sink",
+            tone: "ready",
+        }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "teacher_account_delivery",
+            tone: "ready",
+            detail: expect.stringContaining("프로비저닝 전용 모드"),
+        }));
+        expect(summary.readyCount).toBe(11);
     });
 
-    it("reports actionable v4 boundary failures without exposing database payloads", () => {
+    it("fails production readiness when the central operational sink is missing or invalid", () => {
+        const missing = buildDeploymentReadiness({ NODE_ENV: "production" });
+        expect(missing.checks).toContainEqual(expect.objectContaining({
+            key: "operational_event_sink",
+            tone: "error",
+            detail: expect.stringContaining("OMR_OPERATIONAL_SINK_URL"),
+        }));
+
+        const invalid = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            OMR_OPERATIONAL_SINK_URL: "http://ops.example.test/events",
+            OMR_OPERATIONAL_SINK_TOKEN: "ops_sink_token_0123456789_abcdef",
+        });
+        expect(invalid.checks).toContainEqual(expect.objectContaining({
+            key: "operational_event_sink",
+            tone: "error",
+            detail: expect.stringContaining("HTTPS"),
+        }));
+    });
+
+    it("rejects a short production rate-limit hash secret", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            OMR_RATE_LIMIT_HASH_SECRET: "too-short",
+        });
+
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "rate_limit_hash_secret",
+            tone: "error",
+            detail: expect.stringContaining("32바이트"),
+        }));
+    });
+
+    it("recognizes only a complete teacher account delivery webhook configuration", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            OMR_TEACHER_ACCOUNT_DELIVERY_WEBHOOK_URL: "https://mailer.example.test/omr/accounts",
+            OMR_TEACHER_ACCOUNT_DELIVERY_WEBHOOK_SECRET: "delivery_secret_0123456789_abcdef_0123456789",
+        });
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "teacher_account_delivery",
+            tone: "ready",
+        }));
+    });
+
+    it("fails production readiness when remote asset cleanup is not explicitly scheduled", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
-            TEACHER_SESSION_SECRET: "session-secret",
-            STUDENT_SESSION_SECRET: "student-session-secret",
-            STUDENT_ATTEMPT_SECRET: "student-attempt-secret",
+            TEACHER_SESSION_SECRET: STRONG_TEACHER_SESSION_SECRET,
+            STUDENT_SESSION_SECRET: STRONG_STUDENT_SESSION_SECRET,
+            STUDENT_ATTEMPT_SECRET: STRONG_STUDENT_ATTEMPT_SECRET,
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_PRODUCTION_RLS_APPLIED: "true",
+        }, readyDatabaseProbe);
+
+        expect(summary.label).toBe("배포 확인 필요");
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "remote_asset_cleanup_schedule",
+            tone: "error",
+            detail: expect.stringContaining("OMR_ASSET_GC_SCHEDULED"),
+        }));
+    });
+
+    it("reports actionable v6 boundary failures without exposing database payloads", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
+            TEACHER_SESSION_SECRET: STRONG_TEACHER_SESSION_SECRET,
+            STUDENT_SESSION_SECRET: STRONG_STUDENT_SESSION_SECRET,
+            STUDENT_ATTEMPT_SECRET: STRONG_STUDENT_ATTEMPT_SECRET,
             SUPABASE_URL: "https://example.supabase.co",
             SUPABASE_SERVICE_ROLE_KEY: "service-role",
             OMR_PRODUCTION_RLS_APPLIED: "true",
@@ -193,6 +500,27 @@ describe("deployment readiness", () => {
         expect(JSON.stringify(summary)).not.toContain("raw-private-id");
     });
 
+    it("names missing cross-device teacher notification state readiness", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
+            TEACHER_SESSION_SECRET: STRONG_TEACHER_SESSION_SECRET,
+            STUDENT_SESSION_SECRET: STRONG_STUDENT_SESSION_SECRET,
+            STUDENT_ATTEMPT_SECRET: STRONG_STUDENT_ATTEMPT_SECRET,
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_PRODUCTION_RLS_APPLIED: "true",
+        }, {
+            ...readyDatabaseProbe,
+            ready: false,
+            teacherNotificationStateReady: false,
+            failedChecks: ["teacherNotificationStateReady"],
+        });
+
+        expect(summary.checks.find(check => check.key === "production_rls")?.detail)
+            .toContain("교사 알림 다중 기기 상태 gateway");
+    });
+
     it("does not report public Supabase keys as production browser synchronization", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
@@ -214,8 +542,8 @@ describe("deployment readiness", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
-            TEACHER_SESSION_SECRET: "session-secret",
-            STUDENT_ATTEMPT_SECRET: "student-attempt-secret",
+            TEACHER_SESSION_SECRET: STRONG_TEACHER_SESSION_SECRET,
+            STUDENT_ATTEMPT_SECRET: STRONG_STUDENT_ATTEMPT_SECRET,
             SUPABASE_URL: "https://example.supabase.co",
             SUPABASE_SERVICE_ROLE_KEY: "service-role",
             OMR_PRODUCTION_RLS_APPLIED: "true",
@@ -229,19 +557,19 @@ describe("deployment readiness", () => {
         }));
     });
 
-    it("does not trust a caller-provided ready bit when v4 evidence is incomplete", () => {
+    it("does not trust a caller-provided ready bit when v6 evidence is incomplete", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
-            TEACHER_SESSION_SECRET: "session-secret",
-            STUDENT_SESSION_SECRET: "student-session-secret",
-            STUDENT_ATTEMPT_SECRET: "student-attempt-secret",
+            TEACHER_SESSION_SECRET: STRONG_TEACHER_SESSION_SECRET,
+            STUDENT_SESSION_SECRET: STRONG_STUDENT_SESSION_SECRET,
+            STUDENT_ATTEMPT_SECRET: STRONG_STUDENT_ATTEMPT_SECRET,
             SUPABASE_URL: "https://example.supabase.co",
             SUPABASE_SERVICE_ROLE_KEY: "service-role",
             OMR_PRODUCTION_RLS_APPLIED: "true",
         }, {
             ready: true,
-            version: "202607280003",
+            version: "202608090001",
         });
 
         expect(summary.checks).toContainEqual(expect.objectContaining({
@@ -254,7 +582,7 @@ describe("deployment readiness", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", password: "pass-a" }]),
-            TEACHER_SESSION_SECRET: "session-secret",
+            TEACHER_SESSION_SECRET: STRONG_TEACHER_SESSION_SECRET,
             NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_public",
             // OMR_PRODUCTION_RLS_APPLIED intentionally unset

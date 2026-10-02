@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { continueSolveEntryIfPresent } from "./helpers";
+import { continueSolveEntryIfPresent, loginAsTeacher } from "./helpers";
 import type { Attempt, Exam } from "../src/types/omr";
 
 const tabletViewports = [
@@ -7,12 +7,15 @@ const tabletViewports = [
     { name: "iPad landscape", width: 1180, height: 820, orientation: "landscape" as const },
 ];
 
+const teacherRoutes = [
+    { path: "/teacher/dashboard", heading: "대시보드" },
+    { path: "/teacher/live", heading: "응시 결과 확인" },
+    { path: "/teacher/users", heading: "사용자 관리" },
+    { path: "/teacher/settings", heading: "설정" },
+    { path: "/teacher/billing", heading: "결제 및 플랜" },
+] as const;
+
 const layoutRoutes = [
-    "/teacher/dashboard",
-    "/teacher/live",
-    "/teacher/users",
-    "/teacher/settings",
-    "/teacher/billing",
     "/student/dashboard",
     "/student/history",
     "/solve/tablet-exam",
@@ -22,6 +25,8 @@ const layoutRoutes = [
 function tabletExam(): Exam {
     return {
         id: "tablet-exam",
+        organizationId: "default",
+        createdByUserId: "admin",
         title: "Tablet Layout Exam",
         createdAt: "2026-04-23T00:00:00.000Z",
         durationMin: 45,
@@ -45,6 +50,7 @@ function tabletAttempts(): Attempt[] {
     return [
         {
             id: "tablet-attempt",
+            organizationId: "default",
             examId: "tablet-exam",
             examTitle: "Tablet Layout Exam",
             studentName: "Tablet Student",
@@ -137,8 +143,8 @@ async function expectNoCriticalOverflow(page: Page) {
 }
 
 test.describe("tablet layout", () => {
-    test("orientation contract allows the installed app to follow tablet landscape without overflow", async ({ page }) => {
-        await page.setViewportSize({ width: 1180, height: 820 });
+    test("installed solve view follows tablet rotation without overflow", async ({ page }) => {
+        await page.setViewportSize({ width: 820, height: 1180 });
         await seedTabletStorage(page);
         await page.goto("/solve/tablet-exam");
         await continueSolveEntryIfPresent(page);
@@ -149,9 +155,24 @@ test.describe("tablet layout", () => {
         const currentManifest = await manifestResponse.json() as { orientation?: string };
         expect(currentManifest.orientation).toBe("any");
         await expectNoCriticalOverflow(page);
+        await page.setViewportSize({ width: 1180, height: 820 });
+        await expect(page.locator(".solve-body")).toBeVisible();
+        await expectNoCriticalOverflow(page);
+        await page.setViewportSize({ width: 820, height: 1180 });
+        await expect(page.locator(".solve-body")).toBeVisible();
+        await expectNoCriticalOverflow(page);
     });
 
     for (const viewport of tabletViewports) {
+        for (const route of teacherRoutes) {
+            test(`${viewport.name} keeps authenticated ${route.path} inside the viewport`, async ({ page }) => {
+                await page.setViewportSize({ width: viewport.width, height: viewport.height });
+                await loginAsTeacher(page, route.path);
+                await expect(page.getByRole("heading", { name: route.heading, exact: true })).toBeVisible();
+                await expectNoCriticalOverflow(page);
+            });
+        }
+
         for (const route of layoutRoutes) {
             test(`${viewport.name} keeps ${route} inside the viewport`, async ({ page }) => {
                 await page.setViewportSize({ width: viewport.width, height: viewport.height });

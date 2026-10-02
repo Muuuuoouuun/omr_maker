@@ -1,0 +1,296 @@
+.section {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    color: var(--foreground);
+    box-shadow: var(--shadow-sm);
+}
+
+.defaultDensity {
+    padding: 1.5rem;
+}
+
+.compact {
+    padding: 1rem;
+}
+
+.sectionHeader {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+}
+
+.sectionTitle {
+    margin: 0;
+    font-size: var(--type-heading-md);
+}
+
+.sectionDescription {
+    flex-basis: 100%;
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--type-body-sm);
+}
+
+.sectionMeta {
+    color: var(--muted);
+    font-size: var(--type-caption);
+}
+
+.sectionActions {
+    margin-inline-start: auto;
+}
+
+.sectionBody {
+    margin-block-start: 1rem;
+    min-width: 0;
+}
+
+.compact .sectionBody {
+    margin-block-start: 0.75rem;
+}
+
+.keepTogether {
+    break-inside: avoid-page;
+}
+
+.allowBreak {
+    break-inside: auto;
+}
+
+.metricGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+    gap: 0.75rem;
+    margin: 0;
+    min-width: 0;
+}
+
+.metricItem {
+    min-width: 0;
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+}
+
+.metricLabel {
+    color: var(--muted);
+    font-size: var(--type-label);
+}
+
+.metricDefinition {
+    margin: 0;
+}
+
+.metricValue {
+    display: flex;
+    align-items: baseline;
+    gap: 0.25rem;
+    margin: 0.375rem 0 0;
+    overflow-wrap: anywhere;
+    color: inherit;
+    font-size: var(--type-metric);
+    font-weight: 700;
+}
+
+.metricUnit {
+    font-size: var(--type-label);
+    font-weight: 600;
+    letter-spacing: normal;
+}
+
+.metricDetail,
+.metricTrend {
+    display: block;
+    margin: 0.5rem 0 0;
+    color: var(--muted);
+    font-size: var(--type-caption);
+}
+
+.metricTrend[data-direction="up"] {
+    color: var(--text-success);
+}
+
+.metricTrend[data-direction="down"] {
+    color: var(--text-error);
+}
+
+.toneNeutral {
+    color: var(--foreground);
+}
+
+.toneSuccess {
+    color: var(--text-success);
+}
+
+.toneWarning {
+    color: var(--text-warning);
+}
+
+.toneGrade {
+    color: var(--grade-red);
+    border-color: var(--grade-red-line);
+}
+
+.toneRetake {
+    color: var(--retake);
+    border-color: var(--retake-line);
+}
+
+.chartFrame {
+    min-width: 0;
+    min-height: var(--analytics-chart-height);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+}
+
+.chartVisualViewport,
+.chartContent,
+.chartScrollContent {
+    min-width: 0;
+}
+
+.chartVisual {
+    display: flex;
+    min-width: 0;
+    min-height: var(--analytics-chart-height);
+    align-items: center;
+    justify-content: center;
+}
+
+.chartState {
+    display: flex;
+    min-height: var(--analytics-chart-height);
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    color: var(--muted);
+    font-size: var(--type-body-sm);
+    text-align: center;
+}
+
+.chartError {
+    flex-direction: column;
+    gap: 0.75rem;
+    color: var(--text-error);
+}
+
+.chartError p {
+    margin: 0;
+}
+
+.retryButton {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--primary);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--type-label);
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.retryButton:hover {
+    background: var(--background);
+}
+
+.retryButton:focus-visible,
+.chartScrollRegion:focus-visible,
+.accessibleData:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.scrollHint,
+.tableScrollHint {
+    margin: 0;
+    padding: 0.5rem 0.75rem 0;
+    color: var(--muted);
+    font-size: var(--type-caption);
+    text-align: end;
+}
+
+.chartScrollRegion {
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    border-radius: var(--radius-md);
+}
+
+.chartScrollContent {
+    width: max-content;
+    min-width: 100%;
+}
+
+.accessibleData {
+    display: block;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding: 0.75rem;
+    border-block-start: 1px solid var(--border);
+    color: var(--foreground);
+    font-size: var(--type-body-sm);
+}
+
+.screenReaderOnly {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .retryButton {
+        transition: none;
+    }
+}
+
+:global(html[data-motion="off"]) .retryButton {
+    transition: none;
+}
+
+@media print {
+    .section,
+    .metricItem,
+    .chartFrame {
+        box-shadow: none;
+    }
+
+    .chartFrame {
+        min-height: 0;
+        overflow: visible;
+    }
+
+    .chartScrollRegion {
+        overflow: visible;
+    }
+
+    .chartScrollContent {
+        width: 100%;
+    }
+
+    .hasAccessibleData .chartVisualViewport,
+    .hasAccessibleData .scrollHint,
+    .tableScrollHint {
+        display: none;
+    }
+
+    .accessibleData {
+        display: block;
+        overflow: visible;
+    }
+}

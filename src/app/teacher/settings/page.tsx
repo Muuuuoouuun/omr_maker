@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
 import StatusPill from "@/components/dashboard/StatusPill";
 import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload, LogOut, Database, RefreshCw, AlertTriangle, CloudOff } from "lucide-react";
@@ -11,11 +12,13 @@ import { DEFAULT_SETTINGS, parseImportedSettings, readStoredSettings, type AppSe
 import { MAX_QUESTION_COUNT, MIN_QUESTION_COUNT } from "@/lib/questionCount";
 import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
 import type { DeploymentReadinessSummary, DeploymentReadinessTone } from "@/lib/deploymentReadiness";
-import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherAttemptSummaries } from "@/lib/teacherAttemptClient";
+import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { readRosterTombstones } from "@/lib/rosterPersistence";
 import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import { PRIMARY_NOTIFICATION_CHANNEL } from "@/lib/serviceRoadmap";
+import { resolveSectionAfterAdvancedToggle } from "@/lib/settingsDisclosureState";
 import {
     buildTeacherSessionDisplay,
     clearTeacherSession,
@@ -78,22 +81,35 @@ function readTeacherSessionDisplay(now = Date.now()): TeacherSessionDisplay {
     return buildTeacherSessionDisplay(session, now);
 }
 
-const SECTIONS: { key: Section; label: string; icon: React.ReactNode; color: string }[] = [
-    { key: "profile", label: "프로필", icon: <User size={18} />, color: "#4f46e5" },
+type SettingsSectionItem = { key: Section; label: string; icon: React.ReactNode; color: string };
+
+const PRIMARY_SECTIONS: SettingsSectionItem[] = [
     { key: "notifications", label: "알림", icon: <Bell size={18} />, color: "#ec4899" },
     { key: "exam-defaults", label: "시험 기본값", icon: <FileText size={18} />, color: "#8b5cf6" },
     { key: "grading", label: "채점", icon: <CheckCircle size={18} />, color: "#10b981" },
-    { key: "api", label: "API 키", icon: <Key size={18} />, color: "#f59e0b" },
     { key: "theme", label: "테마", icon: <Palette size={18} />, color: "#0ea5e9" },
+];
+
+const ADVANCED_SECTIONS: SettingsSectionItem[] = [
+    { key: "profile", label: "프로필", icon: <User size={18} />, color: "#4f46e5" },
+    { key: "api", label: "API 키", icon: <Key size={18} />, color: "#f59e0b" },
     { key: "data", label: "데이터 · DB", icon: <Database size={18} />, color: "#14b8a6" },
     { key: "security", label: "보안", icon: <Shield size={18} />, color: "#ef4444" },
 ];
+
+const ALL_SECTION_KEYS = new Set<Section>([...PRIMARY_SECTIONS, ...ADVANCED_SECTIONS].map(item => item.key));
+const ADVANCED_SECTION_KEYS = new Set<Section>(ADVANCED_SECTIONS.map(item => item.key));
+
+function sectionFromHash(hash: string): Section | null {
+    const candidate = hash.replace(/^#/, "") as Section;
+    return ALL_SECTION_KEYS.has(candidate) ? candidate : null;
+}
 
 const SECURITY_POSTURE_ITEMS = [
     {
         key: "credential-source",
         label: "교사 계정 원천",
-        detail: "현재 교사 계정은 서버 환경변수에서만 읽고 브라우저 설정에는 저장하지 않습니다.",
+        detail: "교사 계정은 서버에서만 확인하고 브라우저 설정에는 저장하지 않습니다.",
         tone: "ready",
     },
     {
@@ -154,9 +170,9 @@ const NOTIFICATION_STATUS_ITEMS: readonly CapabilityStatusItem[] = [
     {
         key: "kakao-delivery",
         label: "카카오 실제 발송",
-        detail: "현재는 후보 검토와 대기 기록까지만 지원합니다. 카카오 메시지 provider가 연결되기 전에는 실제 메시지를 보내지 않습니다.",
+        detail: "학습 알림 화면에서 솔라피 연결 상태, 학생 연락처, 시험별 마감 알림을 관리합니다.",
         tone: "warning",
-        statusLabel: "연동 전",
+        statusLabel: "학습 알림에서 설정",
     },
     {
         key: "browser-push",
@@ -318,7 +334,8 @@ function ResetSettingsConfirmDialog({
 }
 
 export default function SettingsPage() {
-    const [section, setSection] = useState<Section>("profile");
+    const [section, setSection] = useState<Section>("exam-defaults");
+    const [advancedDisclosureOpen, setAdvancedDisclosureOpen] = useState(false);
     const [showKey, setShowKey] = useState(false);
     // Draft state: edits live here until 저장 commits to localStorage.
     const [draft, setDraft] = useState<Settings>(DEFAULT_SETTINGS);
@@ -348,6 +365,19 @@ export default function SettingsPage() {
         setHydrated(true);
     }, []);
 
+    useEffect(() => {
+        const syncSectionFromUrl = () => {
+            const nextSection = sectionFromHash(window.location.hash);
+            if (!nextSection) return;
+            setSection(nextSection);
+            if (ADVANCED_SECTION_KEYS.has(nextSection)) setAdvancedDisclosureOpen(true);
+        };
+
+        syncSectionFromUrl();
+        window.addEventListener("hashchange", syncSectionFromUrl);
+        return () => window.removeEventListener("hashchange", syncSectionFromUrl);
+    }, []);
+
     // Apply theme whenever the draft theme changes — so the user sees a live preview.
     useEffect(() => {
         if (!hydrated) return;
@@ -369,16 +399,16 @@ export default function SettingsPage() {
 
     const saveSection = useCallback(<K extends keyof Settings>(key: K) => {
         const next: Settings = { ...persistedRef.current, [key]: draftRef.current[key] };
+        try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        } catch {
+            toast.error("설정 저장 실패", "브라우저 저장 공간 또는 권한을 확인해주세요. 변경한 내용은 그대로 유지됩니다.");
+            return false;
+        }
         persistedRef.current = next;
         setPersisted(next);
-        if (typeof window !== "undefined") {
-            try {
-                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-                if (key === "theme") persistThemeMode(next.theme);
-            } catch {
-                // ignore quota errors
-            }
-        }
+        if (key === "theme") persistThemeMode(next.theme);
+        return true;
     }, []);
 
     const cancelSection = useCallback(<K extends keyof Settings>(key: K) => {
@@ -388,15 +418,16 @@ export default function SettingsPage() {
     const importInputRef = useRef<HTMLInputElement | null>(null);
 
     const resetAllToDefaults = useCallback(() => {
+        try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_SETTINGS));
+        } catch {
+            toast.error("설정 초기화 실패", "브라우저 저장 공간 또는 권한을 확인해주세요. 기존 설정은 그대로 유지됩니다.");
+            return;
+        }
         setDraft(DEFAULT_SETTINGS);
         setPersisted(DEFAULT_SETTINGS);
         draftRef.current = DEFAULT_SETTINGS;
         persistedRef.current = DEFAULT_SETTINGS;
-        try {
-            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_SETTINGS));
-        } catch {
-            // ignore
-        }
         applyTheme(DEFAULT_SETTINGS.theme);
         persistThemeMode(DEFAULT_SETTINGS.theme);
         setResetConfirmOpen(false);
@@ -425,15 +456,16 @@ export default function SettingsPage() {
                 toast.error("가져오기 실패", "OMR Maker에서 내보낸 전체 설정 백업 파일을 선택해주세요.");
                 return;
             }
+            try {
+                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+            } catch {
+                toast.error("설정 가져오기 실패", "브라우저 저장 공간 또는 권한을 확인해주세요. 기존 설정은 그대로 유지됩니다.");
+                return;
+            }
             setDraft(merged);
             setPersisted(merged);
             draftRef.current = merged;
             persistedRef.current = merged;
-            try {
-                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-            } catch {
-                // ignore quota errors
-            }
             applyTheme(merged.theme);
             persistThemeMode(merged.theme);
             toast.success("설정 가져오기 완료", "백업 파일을 성공적으로 불러왔습니다.");
@@ -446,9 +478,10 @@ export default function SettingsPage() {
         if (typeof window === "undefined") return;
         setIsCheckingDataDb(true);
         try {
-            const [examResult, attemptResult, rosterResult] = await Promise.all([
+            const [examResult, attemptResult, aggregateResult, rosterResult] = await Promise.all([
                 loadTeacherExams(),
-                loadTeacherAttempts(),
+                loadTeacherAttemptSummaries(),
+                loadTeacherAttemptAggregate(),
                 loadTeacherRosterSnapshot(window.localStorage),
             ]);
             const summary = buildDataDbReadiness({
@@ -458,7 +491,9 @@ export default function SettingsPage() {
                     { ...rosterResult, sourceKey: "roster", sourceLabel: "명단" },
                 ],
                 examCount: examResult.items.length,
-                attemptCount: attemptResult.items.length,
+                attemptCount: aggregateResult.status === "loaded"
+                    ? aggregateResult.aggregate.totalAttemptCount
+                    : attemptResult.items.length,
                 rosterStudentCount: rosterResult.students.length,
                 rosterGroupCount: rosterResult.groups.length,
                 tombstones: readRosterTombstones(window.localStorage),
@@ -508,6 +543,36 @@ export default function SettingsPage() {
         void refreshDeploymentReadiness();
     }, [hydrated, refreshDeploymentReadiness, section]);
 
+    const selectSection = useCallback((nextSection: Section) => {
+        setSection(nextSection);
+        if (ADVANCED_SECTION_KEYS.has(nextSection)) setAdvancedDisclosureOpen(true);
+        if (typeof window !== "undefined") {
+            window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${nextSection}`);
+        }
+    }, []);
+
+    const advancedOpen = advancedDisclosureOpen || ADVANCED_SECTION_KEYS.has(section);
+
+    const renderSectionButton = (item: SettingsSectionItem) => (
+        <button
+            key={item.key}
+            type="button"
+            aria-current={section === item.key ? "page" : undefined}
+            onClick={() => selectSection(item.key)}
+            style={{
+                width: '100%', minHeight: 44, display: 'flex', alignItems: 'center', gap: '0.75rem',
+                padding: '0.75rem 0.9rem', borderRadius: 'var(--radius-md)',
+                background: section === item.key ? `color-mix(in srgb, ${item.color}, transparent 88%)` : 'transparent',
+                color: section === item.key ? item.color : 'var(--muted)',
+                fontWeight: section === item.key ? 700 : 500,
+                fontSize: '0.9rem', transition: 'var(--transition-base)', textAlign: 'left'
+            }}
+        >
+            {item.icon}
+            {item.label}
+        </button>
+    );
+
     return (
         <div className="layout-main">
             <TeacherHeader badge="SETTINGS" badgeColor="#6366f1" />
@@ -515,29 +580,30 @@ export default function SettingsPage() {
             <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
                 <div style={{ margin: '3rem 0 2rem' }}>
                     <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.2 }}>설정</h1>
-                    <p className="text-muted" style={{ fontSize: '1.05rem' }}>프로필, 알림, 시험 기본값을 관리하세요.</p>
+                    <p className="text-muted" style={{ fontSize: '1.05rem' }}>시험 기본값과 알림, 채점 및 화면 설정을 관리하세요.</p>
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: '1.5rem' }} className="settings-grid">
                     {/* Side nav */}
-                    <aside className="bento-card" style={{ padding: '0.75rem', alignSelf: 'flex-start', position: 'sticky', top: '5.5rem' }}>
-                        {SECTIONS.map(s => (
-                            <button
-                                key={s.key}
-                                onClick={() => setSection(s.key)}
-                                style={{
-                                    width: '100%', display: 'flex', alignItems: 'center', gap: '0.75rem',
-                                    padding: '0.75rem 0.9rem', borderRadius: 'var(--radius-md)',
-                                    background: section === s.key ? `color-mix(in srgb, ${s.color}, transparent 88%)` : 'transparent',
-                                    color: section === s.key ? s.color : 'var(--muted)',
-                                    fontWeight: section === s.key ? 700 : 500,
-                                    fontSize: '0.9rem', transition: 'var(--transition-base)', textAlign: 'left'
-                                }}
-                            >
-                                {s.icon}
-                                {s.label}
-                            </button>
-                        ))}
+                    <aside className="bento-card settings-section-nav" style={{ padding: '0.75rem', alignSelf: 'flex-start', position: 'sticky', top: '5.5rem' }}>
+                        {PRIMARY_SECTIONS.map(renderSectionButton)}
+                        <details
+                            className="settings-advanced-disclosure"
+                            open={advancedOpen}
+                            onToggle={(event) => {
+                                const nextSection = resolveSectionAfterAdvancedToggle(section, event.currentTarget.open);
+                                setAdvancedDisclosureOpen(event.currentTarget.open);
+                                if (nextSection !== section) selectSection(nextSection);
+                            }}
+                        >
+                            <summary>
+                                <span>고급 · 운영</span>
+                                <small>계정·API·DB·보안</small>
+                            </summary>
+                            <div className="settings-advanced-links">
+                                {ADVANCED_SECTIONS.map(renderSectionButton)}
+                            </div>
+                        </details>
                     </aside>
 
                     {/* Content */}
@@ -558,12 +624,13 @@ export default function SettingsPage() {
                         )}
 
                         {/* Global settings actions */}
-                        <div className="bento-card" style={{ padding: '1.5rem', marginTop: '0.25rem', background: 'var(--background)', border: '1px dashed var(--border)' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                                <div>
-                                    <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.25rem' }}>백업 · 복원</div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>전체 설정을 JSON으로 내보내거나, 다른 기기에서 불러올 수 있습니다.</div>
-                                </div>
+                        <details className="settings-backup-disclosure">
+                            <summary>
+                                <span><strong>백업 · 복원</strong><small>설정을 JSON으로 이동하거나 초기화</small></span>
+                                <span aria-hidden="true">열기</span>
+                            </summary>
+                            <div className="settings-backup-actions">
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <input
                                         ref={importInputRef}
@@ -598,8 +665,9 @@ export default function SettingsPage() {
                                         <RotateCcw size={14} /> 전체 초기화
                                     </button>
                                 </div>
+                                </div>
                             </div>
-                        </div>
+                        </details>
                     </section>
                 </div>
             </main>
@@ -608,6 +676,28 @@ export default function SettingsPage() {
                 @media (max-width: 768px) {
                     .settings-grid { grid-template-columns: minmax(0, 1fr) !important; }
                     .settings-grid > * { min-width: 0; }
+                    .settings-section-nav {
+                        position: static !important;
+                        display: grid;
+                        grid-template-columns: repeat(4, minmax(0, 1fr));
+                        gap: 0.25rem;
+                        padding: 0.45rem !important;
+                    }
+                    .settings-section-nav button {
+                        justify-content: center;
+                        gap: 0.35rem !important;
+                        min-height: 44px;
+                        padding: 0.5rem 0.25rem !important;
+                        font-size: 0.72rem !important;
+                        text-align: center !important;
+                    }
+                    .settings-section-nav button svg { width: 15px; height: 15px; }
+                    .settings-section-nav .settings-advanced-disclosure {
+                        grid-column: 1 / -1;
+                    }
+                    .settings-advanced-links {
+                        grid-template-columns: repeat(2, minmax(0, 1fr));
+                    }
                 }
             `}</style>
             {resetConfirmOpen && (
@@ -630,12 +720,15 @@ function Card({ title, desc, children }: { title: string; desc?: string; childre
     );
 }
 
-function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: React.ReactNode }) {
+function Field({ label, children, hint, controlId, error }: { label: string; children: React.ReactNode; hint?: React.ReactNode; controlId?: string; error?: string }) {
     return (
         <div style={{ marginBottom: '1.25rem' }}>
-            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.5rem', letterSpacing: '0.02em' }}>{label}</label>
+            {controlId
+                ? <label htmlFor={controlId} style={{ display: 'block', fontSize: 'var(--type-label)', fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.5rem' }}>{label}</label>
+                : <div style={{ fontSize: 'var(--type-label)', fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.5rem' }}>{label}</div>}
             {children}
             {hint && <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.4rem' }}>{hint}</div>}
+            {error && <p id={`${controlId}-error`} style={{ color: 'var(--error)', fontSize: 'var(--type-label)', marginTop: '0.4rem' }}>{error}</p>}
         </div>
     );
 }
@@ -669,7 +762,7 @@ function Toggle({ checked, onChange, label, desc }: { checked: boolean; onChange
     );
 }
 
-function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => void }) {
+function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => boolean }) {
     const [saved, setSaved] = useState(false);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -680,9 +773,10 @@ function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => voi
     }, []);
 
     const handleSave = () => {
-        onSave();
-        setSaved(true);
         if (timerRef.current) clearTimeout(timerRef.current);
+        const success = onSave();
+        setSaved(success);
+        if (!success) return;
         timerRef.current = setTimeout(() => setSaved(false), 1800);
     };
 
@@ -690,6 +784,7 @@ function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => voi
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)', alignItems: 'center' }}>
             {saved && (
                 <span
+                    role="status"
                     style={{
                         fontSize: '0.85rem',
                         fontWeight: 600,
@@ -702,8 +797,8 @@ function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => voi
                     저장됨
                 </span>
             )}
-            <button onClick={onCancel} style={{ padding: '0.7rem 1.4rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem' }}>취소</button>
-            <button onClick={handleSave} style={{ padding: '0.7rem 1.4rem', background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.4rem', boxShadow: '0 4px 12px rgba(99,102,241,0.3)' }}>
+            <button type="button" onClick={() => { setSaved(false); onCancel(); }} style={{ padding: '0.7rem 1.4rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem' }}>취소</button>
+            <button type="button" onClick={handleSave} style={{ padding: '0.7rem 1.4rem', background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.4rem', boxShadow: '0 4px 12px rgba(99,102,241,0.3)' }}>
                 <Save size={14} /> 저장
             </button>
         </div>
@@ -713,14 +808,27 @@ function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => voi
 type SectionProps<T> = {
     value: T;
     onChange: (v: Partial<T>) => void;
-    onSave: () => void;
+    onSave: () => boolean;
     onCancel: () => void;
 };
 
 function ProfileSection() {
+    const warningCount = PROFILE_STATUS_ITEMS.filter(item => item.tone === "warning").length;
+
     return (
         <Card title="프로필 상태" desc="서버 계정과 공개 프로필 기능의 현재 연결 상태를 보여줍니다.">
-            <CapabilityStatusList items={PROFILE_STATUS_ITEMS} />
+            <details className="settings-profile-summary">
+                <summary>
+                    <span>
+                        <strong>계정은 서버에서 안전하게 관리 중</strong>
+                        <small>{PROFILE_STATUS_ITEMS.length}개 상태 중 {warningCount}개 연동 전</small>
+                    </span>
+                    <StatusPill tone="warning" label={`${warningCount}개 확인`} size="sm" />
+                </summary>
+                <div className="settings-profile-detail">
+                    <CapabilityStatusList items={PROFILE_STATUS_ITEMS} />
+                </div>
+            </details>
             <p style={{ marginTop: '1rem', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
                 실제 교사 계정 정보는 보안 탭의 배포 로그인 진단에서 확인할 수 있습니다. 작동하지 않는 로컬 프로필 편집은 제공하지 않습니다.
             </p>
@@ -769,35 +877,56 @@ function NotificationsSection() {
         <Card title="알림 상태" desc={`${PRIMARY_NOTIFICATION_CHANNEL.label} 후보 계산과 실제 발송 연동 상태를 구분해 보여줍니다.`}>
             <CapabilityStatusList items={NOTIFICATION_STATUS_ITEMS} />
             <p style={{ marginTop: '1rem', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
-                이 화면은 현재 기능 상태를 안내합니다. 발송 provider가 연결되기 전에는 실제 전송 설정을 활성화할 수 없습니다.
+                마감 전·미제출 알림은 학습 알림 화면에서 관리합니다. 실제 전송은 서버의 솔라피 연결과 발송 모드 설정에 따릅니다.
             </p>
+            <Link href="/teacher/reminders" className="btn btn-primary">학습 알림 설정</Link>
         </Card>
     );
 }
 
 function ExamDefaultsSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["examDefaults"]>) {
+    const [validationAttempted, setValidationAttempted] = useState(false);
+    const errors: Partial<Record<keyof Settings["examDefaults"], string>> = {};
+    if (!Number.isInteger(value.questions) || value.questions < MIN_QUESTION_COUNT || value.questions > MAX_QUESTION_COUNT) {
+        errors.questions = `${MIN_QUESTION_COUNT}~${MAX_QUESTION_COUNT} 사이의 정수를 입력해주세요.`;
+    }
+    if (!Number.isInteger(value.duration) || value.duration < 1 || value.duration > 360) {
+        errors.duration = "1~360분 사이의 정수를 입력해주세요.";
+    }
+    if (!Number.isFinite(value.scorePerQ) || value.scorePerQ <= 0) {
+        errors.scorePerQ = "배점은 0보다 큰 숫자로 입력해주세요.";
+    }
+    if (value.choices !== 4 && value.choices !== 5) errors.choices = "4지선다 또는 5지선다를 선택해주세요.";
+    if (![0, 10, 30, 60].includes(value.autosaveSec)) errors.autosaveSec = "자동 저장 주기를 다시 선택해주세요.";
+    const visibleErrors = validationAttempted ? errors : {};
+    const saveDefaults = () => {
+        setValidationAttempted(true);
+        if (Object.keys(errors).length > 0) return false;
+        return onSave();
+    };
     return (
         <Card title="시험 기본값" desc="새 시험 생성 시 자동으로 적용될 값을 설정하세요.">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <Field label="기본 문항 수"><input className="input-field" type="number" min={MIN_QUESTION_COUNT} max={MAX_QUESTION_COUNT} step={1} value={value.questions} onChange={e => onChange({ questions: Number(e.target.value) })} /></Field>
-                <Field label="기본 시간 (분)"><input className="input-field" type="number" value={value.duration} onChange={e => onChange({ duration: Number(e.target.value) })} /></Field>
-                <Field label="문항당 기본 배점"><input className="input-field" type="number" value={value.scorePerQ} step={0.5} onChange={e => onChange({ scorePerQ: Number(e.target.value) })} /></Field>
-                <Field label="선택지 수">
-                    <select className="input-field" value={value.choices} onChange={e => onChange({ choices: Number(e.target.value) as 4 | 5 })}>
+                <Field label="기본 문항 수" controlId="exam-default-questions" error={visibleErrors.questions}><input id="exam-default-questions" className="input-field" type="number" min={MIN_QUESTION_COUNT} max={MAX_QUESTION_COUNT} step={1} value={value.questions} aria-invalid={Boolean(visibleErrors.questions)} aria-describedby={visibleErrors.questions ? "exam-default-questions-error" : undefined} onChange={e => onChange({ questions: Number(e.target.value) })} /></Field>
+                <Field label="기본 시간 (분)" controlId="exam-default-duration" error={visibleErrors.duration}><input id="exam-default-duration" className="input-field" type="number" min={1} max={360} step={1} value={value.duration} aria-invalid={Boolean(visibleErrors.duration)} aria-describedby={visibleErrors.duration ? "exam-default-duration-error" : undefined} onChange={e => onChange({ duration: Number(e.target.value) })} /></Field>
+                <Field label="문항당 기본 배점" controlId="exam-default-score" error={visibleErrors.scorePerQ}><input id="exam-default-score" className="input-field" type="number" value={value.scorePerQ} step={0.5} aria-invalid={Boolean(visibleErrors.scorePerQ)} aria-describedby={visibleErrors.scorePerQ ? "exam-default-score-error" : undefined} onChange={e => onChange({ scorePerQ: Number(e.target.value) })} /></Field>
+                <Field label="선택지 수" controlId="exam-default-choices" error={visibleErrors.choices}>
+                    <select id="exam-default-choices" className="input-field" value={value.choices} aria-invalid={Boolean(visibleErrors.choices)} aria-describedby={visibleErrors.choices ? "exam-default-choices-error" : undefined} onChange={e => onChange({ choices: Number(e.target.value) as 4 | 5 })}>
                         <option value={5}>5지선다</option>
                         <option value={4}>4지선다</option>
                     </select>
                 </Field>
             </div>
-            <Field label="자동 저장 주기" hint="편집 중 자동으로 저장됩니다.">
-                <select className="input-field" value={value.autosaveSec} onChange={e => onChange({ autosaveSec: Number(e.target.value) })}>
+            <Field label="자동 저장 주기" controlId="exam-default-autosave" error={visibleErrors.autosaveSec} hint="초안은 이 기기에 저장됩니다. 선택한 시간 동안 편집을 멈추면 자동 저장되며, 수동을 선택하면 직접 저장해야 합니다.">
+                <select id="exam-default-autosave" className="input-field" value={value.autosaveSec} aria-invalid={Boolean(visibleErrors.autosaveSec)} aria-describedby={visibleErrors.autosaveSec ? "exam-default-autosave-error" : undefined} onChange={e => onChange({ autosaveSec: Number(e.target.value) })}>
                     <option value={10}>10초</option>
                     <option value={30}>30초</option>
                     <option value={60}>1분</option>
                     <option value={0}>수동</option>
                 </select>
             </Field>
-            <SaveBar onCancel={onCancel} onSave={onSave} />
+            {validationAttempted && Object.keys(errors).length > 0 && <p role="alert" style={{ color: 'var(--error)', fontSize: 'var(--type-label)' }}>기본값을 저장하지 않았습니다. 표시된 입력값을 확인해주세요.</p>}
+            <SaveBar onCancel={() => { setValidationAttempted(false); onCancel(); }} onSave={saveDefaults} />
         </Card>
     );
 }
@@ -829,10 +958,12 @@ function ApiSection({ value, onChange, onSave, onCancel, showKey, setShowKey }: 
 
             <Field
                 label="개인 Gemini API Key"
+                controlId="settings-gemini-key"
                 hint={<span>키 발급: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', fontWeight: 600 }}>aistudio.google.com/apikey</a></span>}
             >
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <input
+                        id="settings-gemini-key"
                         className="input-field"
                         type={showKey ? "text" : "password"}
                         value={realKey}
@@ -1211,6 +1342,8 @@ function SecuritySection({
         clearTeacherSession();
         toast.success("세션 종료됨", "교사 세션을 종료했습니다. 다시 로그인해주세요.");
         void clearTeacherAuthSession().finally(() => {
+            // Drop the entire authenticated client/router state on logout.
+            // eslint-disable-next-line @next/next/no-location-assign-relative-destination
             window.location.href = "/?role=teacher";
         });
     };
@@ -1230,11 +1363,10 @@ function SecuritySection({
                         <Shield size={15} color="var(--primary)" />
                         서버 인증으로 관리됨
                     </div>
-                    {/* keep-all keeps Korean words intact; overflowWrap:anywhere lets long
-                        env-var tokens (TEACHER_LOGIN_ID/TEACHER_PASSWORD) break instead of
-                        overflowing the card at narrow widths. */}
-                    <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.65, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
-                        교사 계정 정보는 브라우저 설정에 저장하지 않습니다. 운영 환경에서는 <code style={{ fontWeight: 800 }}>TEACHER_ACCOUNTS</code> 또는 <code style={{ fontWeight: 800 }}>TEACHER_LOGIN_ID</code>/<code style={{ fontWeight: 800 }}>TEACHER_PASSWORD</code> 서버 환경변수를 변경한 뒤 다시 배포해 교체하세요.
+                    {/* User-facing copy only: operator steps (provisioning, env vars) live in
+                        docs/operator-teacher-provisioning.md, never on the teacher's screen. */}
+                    <p style={{ color: 'var(--muted)', fontSize: 'var(--type-label)', lineHeight: 1.65, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
+                        교사 계정 정보는 브라우저 설정에 저장하지 않습니다. 계정을 추가하거나 비밀번호를 바꾸려면 학원 관리자에게 요청하세요.
                     </p>
                 </div>
             </Field>

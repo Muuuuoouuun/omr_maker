@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
+import { buildQuestionResults } from "./premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 import {
     averageResolvedAttemptPercent,
     baseAttemptsOnly,
     buildAttemptScoreLookup,
+    groupBaseAttemptsByExam,
     resolveAttemptScore,
     retakeAttemptsOnly,
 } from "./attemptScores";
@@ -35,14 +38,27 @@ function attempt(overrides: Partial<Attempt> = {}): Attempt {
 }
 
 describe("attempt score resolution", () => {
-    it("uses current exam/question grading before stale stored totals", () => {
+    it("labels current-exam grading as legacy-derived when stored rows are absent", () => {
         const resolved = resolveAttemptScore(attempt({ score: 10, totalScore: 10 }), exam);
 
         expect(resolved).toMatchObject({
             earnedScore: 5,
             totalScore: 10,
             scorePercent: 50,
-            source: "questionResults",
+            source: "legacy_derived_current_exam",
+        });
+    });
+
+    it("reports canonical and stored-total provenance truthfully", () => {
+        const canonicalAttempt = attempt({ score: 5, totalScore: 10 });
+        canonicalAttempt.questionResults = buildQuestionResults(exam, canonicalAttempt);
+        Object.assign(canonicalAttempt, buildCanonicalQuestionResultEvidence(canonicalAttempt, canonicalAttempt.questionResults));
+
+        expect(resolveAttemptScore(canonicalAttempt, exam).source).toBe("canonical_submission");
+        expect(resolveAttemptScore(attempt({ questionResults: [] }), exam)).toMatchObject({
+            earnedScore: 10,
+            totalScore: 10,
+            source: "stored_totals_only",
         });
     });
 
@@ -51,6 +67,20 @@ describe("attempt score resolution", () => {
             earnedScore: 7,
             totalScore: 10,
             scorePercent: 70,
+            source: "storedScore",
+        });
+    });
+
+    it("uses canonical stored totals for lightweight summaries without answer detail", () => {
+        const summary = {
+            ...attempt({ score: 8, totalScore: 10, answers: {} }),
+            detailLevel: "summary" as const,
+        };
+
+        expect(resolveAttemptScore(summary, exam)).toMatchObject({
+            earnedScore: 8,
+            totalScore: 10,
+            scorePercent: 80,
             source: "storedScore",
         });
     });
@@ -83,5 +113,26 @@ describe("attempt score resolution", () => {
 
         expect(baseAttemptsOnly([original, retake]).map(item => item.id)).toEqual(["base"]);
         expect(retakeAttemptsOnly([original, retake]).map(item => item.id)).toEqual(["retake"]);
+    });
+
+    it("indexes original attempts by exam in one pass for dashboard exports", () => {
+        const first = attempt({ id: "base-1", examId: "exam-1" });
+        const second = attempt({ id: "base-2", examId: "exam-2" });
+        const retake = attempt({
+            id: "retake-1",
+            examId: "exam-1",
+            retake: {
+                sourceAttemptId: "base-1",
+                questionIds: [2],
+                mode: "wrong",
+                createdAt: "2026-06-15T10:20:00.000Z",
+            },
+        });
+
+        const grouped = groupBaseAttemptsByExam([first, retake, second]);
+
+        expect(grouped.get("exam-1")).toEqual([first]);
+        expect(grouped.get("exam-2")).toEqual([second]);
+        expect(grouped.has("missing")).toBe(false);
     });
 });

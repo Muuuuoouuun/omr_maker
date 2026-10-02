@@ -64,6 +64,19 @@ function extractCheckoutSteps(source = workflow): string[] {
 }
 
 describe("CI quality gates", () => {
+    it("runs every WebKit shard independently and retains separate sanitized entry evidence", () => {
+        const job = extractBlock("ios-webkit-pwa", 2);
+        expect(job).toContain("runs-on: macos-15");
+        expect(job).toContain("fail-fast: false");
+        expect(job).toContain("shard: [1, 2, 3]");
+        expect(job).toContain("npm run test:e2e:ios-webkit -- --shard=${{ matrix.shard }}/3");
+        expect(job).toContain("name: showcase-entry-diagnostics-${{ matrix.shard }}");
+        expect(job).toContain("path: showcase-entry-diagnostics/*.json");
+        expect(job).toContain("if: ${{ !cancelled() }}");
+        expect(job).not.toContain("path: |\n            playwright-report/");
+        expect(job).not.toContain("            test-results/");
+    });
+
     it("limits execution and permissions at the workflow level", () => {
         const triggers = extractBlock("on", 0);
         const push = extractBlock("push", 2, triggers);
@@ -72,10 +85,10 @@ describe("CI quality gates", () => {
         const permissions = extractBlock("permissions", 0);
 
         expect(push.split("\n").map((line) => line.trim())).toContain(
-            'branches: [main, "premier0.1"]',
+            'branches: ["**"]',
         );
         expect(pullRequest.split("\n").map((line) => line.trim())).toContain(
-            'branches: [main, "premier0.1"]',
+            'branches: ["**"]',
         );
         expect(concurrency.split("\n").map((line) => line.trim())).toEqual(
             expect.arrayContaining([
@@ -134,7 +147,7 @@ describe("CI quality gates", () => {
         expect(lines).toContain("runs-on: ubuntu-latest");
         expect(lines).toContain("needs: lint-and-test");
         expect(setupNode).toBeGreaterThanOrEqual(0);
-        expect(lines).toContain('node-version: "20"');
+        expect(lines).toContain('node-version: "22.13.0"');
         expect(lines).not.toContain('cache: "npm"');
         expect(lines).not.toContain("run: npm ci");
         expect(liveContract).toBeGreaterThan(setupNode);

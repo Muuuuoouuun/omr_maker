@@ -4,7 +4,6 @@ import Link from "next/link";
 import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { safeScorePercent } from "@/lib/scoreUtils";
 import {
     buildStudentResultHref,
     type StudentAttemptSeriesItem,
@@ -102,7 +101,8 @@ export default function StudentResultHeader({
     activeView,
 }: StudentResultHeaderProps) {
     const title = examTitle || attempt.examTitle;
-    const scorePercent = safeScorePercent(attempt.score, attempt.totalScore);
+    const scorePercent = series.find(item => item.attempt.id === attempt.id)?.scorePercent ?? null;
+    const hasGradableScore = scorePercent !== null;
 
     return (
         <header className={`${styles.header} student-result-report-screen-only`}>
@@ -118,8 +118,8 @@ export default function StudentResultHeader({
                     <h1>{attempt.studentName}</h1>
                     <p className={styles.finishedAt}>{formatKoreanDateTime(attempt.finishedAt)} 제출</p>
                 </div>
-                <p className={styles.score} aria-label={`점수 ${scorePercent}점`}>
-                    <strong>{scorePercent}점</strong>
+                <p className={styles.score} aria-label={hasGradableScore ? `점수 ${scorePercent}점` : "점수 미채점"}>
+                    <strong>{hasGradableScore ? `${scorePercent}점` : "미채점"}</strong>
                 </p>
             </div>
 

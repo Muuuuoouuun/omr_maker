@@ -5,6 +5,7 @@ export const SHARED_ORGANIZATION_NAME = "OMR Maker 테스트";
 export const SHARED_CLASS_ID = "teacher_sharedqa_test_class";
 export const TEACHER_LOGIN_PASSWORDS = Object.freeze({
     admin: "admin1234",
+    owner1: "owner1234",
     teacher1: "teacher1234",
     teacher2: "teacher1234",
     teacher3: "teacher1234",
@@ -15,9 +16,52 @@ export const STUDENT_START_CODES = Object.freeze({
     student3: "CDE456",
 });
 
+/** Public fixtures are dry-run/unit-test data, never deployed credentials. */
+export function deploymentCredentials(env) {
+    let teacherPasswords, studentStartCodes;
+    try {
+        teacherPasswords = JSON.parse(env.OMR_QA_TEACHER_PASSWORDS || "null");
+        studentStartCodes = JSON.parse(env.OMR_QA_STUDENT_START_CODES || "null");
+    } catch { throw new Error("QA credential settings must be valid JSON objects"); }
+    if (!teacherPasswords || !studentStartCodes) throw new Error("Private QA credentials are required before deployment");
+    for (const id of Object.keys(TEACHER_LOGIN_PASSWORDS)) {
+        const value = teacherPasswords[id];
+        if (typeof value !== "string" || value.length < 16 || value.length > 128) {
+            throw new Error("Every QA teacher requires a private 16–128 character password");
+        }
+    }
+    for (const id of Object.keys(STUDENT_START_CODES)) {
+        const value = studentStartCodes[id];
+        if (typeof value !== "string" || !/^[A-HJ-NP-Z2-9]{6}$/.test(value)
+            || Object.values(STUDENT_START_CODES).includes(value)) {
+            throw new Error("Every QA student requires a private six-character start code");
+        }
+    }
+    if (new Set(Object.keys(TEACHER_LOGIN_PASSWORDS).map(id => teacherPasswords[id])).size !== Object.keys(TEACHER_LOGIN_PASSWORDS).length
+        || new Set(Object.keys(STUDENT_START_CODES).map(id => studentStartCodes[id])).size !== Object.keys(STUDENT_START_CODES).length) {
+        throw new Error("QA credentials must be unique per account");
+    }
+    return { teacherPasswords, studentStartCodes };
+}
+
+/** QA may never share the production data plane, even under another URL path. */
+export function assertQaDatabaseIsolation(environments) {
+    const origin = (env) => {
+        const url = new URL((env?.SUPABASE_URL || env?.NEXT_PUBLIC_SUPABASE_URL || "").trim());
+        if (url.protocol !== "https:" || url.username || url.password || url.port
+            || !/^[a-z0-9-]+\.supabase\.co$/.test(url.hostname)) {
+            throw new Error("QA isolation requires valid production and preview Supabase project URLs");
+        }
+        return url.origin;
+    };
+    if (origin(environments.production) === origin(environments.preview)) {
+        throw new Error("QA fixtures require a preview Supabase project separate from production");
+    }
+}
+
 export function vercelReadableEnvArgs(name, target) {
     if (typeof name !== "string" || !name.trim()) throw new Error("Vercel environment variable name is required");
-    if (!new Set(["production", "preview", "development"]).has(target)) {
+    if (!new Set(["preview", "development"]).has(target)) {
         throw new Error("Vercel environment target is invalid");
     }
     return ["env", "add", name, target, "--force", "--no-sensitive"];
@@ -81,19 +125,20 @@ export function studentStartCodeHash(code) {
     return encodedPbkdf2(normalized);
 }
 
-export function buildDeploymentFixture({ studentSessionSecret, now = new Date().toISOString() }) {
+export function buildDeploymentFixture({ studentSessionSecret, now = new Date().toISOString(), teacherPasswords = TEACHER_LOGIN_PASSWORDS, studentStartCodes = STUDENT_START_CODES }) {
     if (typeof studentSessionSecret !== "string" || !studentSessionSecret.trim()) {
         throw new Error("studentSessionSecret is required");
     }
     const teachers = [
         { id: "admin", name: "관리자", email: "admin@omr.test", memberRole: "admin", plan: "academy" },
+        { id: "owner1", name: "원장 1", email: "owner1@omr.test", memberRole: "owner", plan: "academy" },
         { id: "teacher1", name: "강사 1", email: "teacher1@omr.test", memberRole: "teacher", plan: "free" },
         { id: "teacher2", name: "강사 2", email: "teacher2@omr.test", memberRole: "teacher", plan: "pro" },
         { id: "teacher3", name: "강사 3", email: "teacher3@omr.test", memberRole: "teacher", plan: "academy" },
     ];
     const teacherAccounts = teachers.map(teacher => ({
         ...teacher,
-        passwordHash: teacherPasswordHash(TEACHER_LOGIN_PASSWORDS[teacher.id]),
+        passwordHash: teacherPasswordHash(teacherPasswords[teacher.id]),
         organizationId: SHARED_ORGANIZATION_ID,
         organizationName: SHARED_ORGANIZATION_NAME,
     }));
@@ -174,7 +219,7 @@ export function buildDeploymentFixture({ studentSessionSecret, now = new Date().
         studentCredentials: students.map(row => ({
             organization_id: SHARED_ORGANIZATION_ID,
             student_profile_id: row.id,
-            start_code_hash: studentStartCodeHash(STUDENT_START_CODES[row.external_id]),
+            start_code_hash: studentStartCodeHash(studentStartCodes[row.external_id]),
             updated_at: now,
         })),
     };

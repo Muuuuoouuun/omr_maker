@@ -1,8 +1,9 @@
-const CACHE_VERSION = "omr-maker-v15";
+const CACHE_VERSION = "omr-maker-v17";
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const CACHE_FIRST_PATHS = new Set([
   "/offline.html",
+  "/offline.js",
   "/manifest.webmanifest",
   "/favicon.ico",
   "/icon.png",
@@ -10,6 +11,7 @@ const CACHE_FIRST_PATHS = new Set([
   "/apple-touch-icon.png",
   "/browserconfig.xml",
   "/pdf.worker.min.mjs",
+  "/react-pdf.worker.min.mjs",
   "/screenshots/omr-mobile-home.jpg",
   "/screenshots/omr-wide-home.jpg",
 ]);
@@ -18,6 +20,7 @@ const APP_SHELL = [
   "/",
   "/pwa-check",
   "/offline.html",
+  "/offline.js",
   "/manifest.webmanifest",
   "/favicon.ico",
   "/icon.png",

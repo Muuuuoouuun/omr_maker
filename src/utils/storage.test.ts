@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Attempt } from "@/types/omr";
+import { isCurrentLegacyStudentDraftRecovery } from "@/lib/studentAssignmentClassification";
 import {
     attemptBelongsToSession,
     attemptMatchesStudentProfile,
     clearSession,
     consumePendingGuestMerge,
+    getOrCreateGuestId,
     getSession,
+    getStudentSessionGeneration,
+    getStudentSharedIdentityEpoch,
     guestLoginIdFor,
     mergeGuestAttempts,
     previewGuestMerge,
@@ -16,6 +20,7 @@ import {
     STORAGE_KEYS,
     STUDENT_SESSION_CHANGED_EVENT,
     STUDENT_SESSION_GENERATION_KEY,
+    STUDENT_SHARED_IDENTITY_EPOCH_KEY,
     type StudentSession,
 } from "./storage";
 
@@ -71,6 +76,14 @@ afterEach(() => {
 });
 
 describe("student storage helpers", () => {
+    it("never invents a device-only guest identity in production", () => {
+        const localStorage = createStorage();
+        stubBrowserStorage(localStorage);
+
+        expect(getOrCreateGuestId("production")).toBe("");
+        expect(localStorage.getItem(STORAGE_KEYS.GUEST_ID)).toBeNull();
+    });
+
     it("announces a new opaque session generation whenever login is restored", () => {
         const localStorage = createStorage();
         const sessionStorage = createStorage({
@@ -118,10 +131,106 @@ describe("student storage helpers", () => {
             regionId: "서울",
             regionName: "서울",
         });
-        expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP) || "{}")).toMatchObject({
+        expect(JSON.parse(sessionStorage.getItem(STORAGE_KEYS.STUDENT_SESSION) || "{}")).toMatchObject({
             studentId: "class-a::김학생",
             name: "김학생",
         });
+    });
+
+    it("keeps student identity tab-scoped unless the learner explicitly remembers this device", () => {
+        const localStorage = createStorage();
+        const sessionStorage = createStorage();
+        stubBrowserStorage(localStorage, sessionStorage);
+        const session: StudentSession = {
+            studentId: "class-a::김학생",
+            name: "김학생",
+            groupId: "class-a",
+            isGuest: false,
+            identityType: "temporary",
+        };
+
+        saveSession(session);
+        expect(sessionStorage.getItem(STORAGE_KEYS.STUDENT_SESSION)).not.toBeNull();
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+
+        saveSession(session, { rememberDevice: true });
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).not.toBeNull();
+
+        saveSession(session, { rememberDevice: false });
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+    });
+
+    it("rotates a PII-free shared epoch when another tab logs in with remember disabled", () => {
+        const localStorage = createStorage();
+        const tabAStorage = createStorage();
+        stubBrowserStorage(localStorage, tabAStorage);
+        saveSession({
+            studentId: "student-a", name: "학생 A", isGuest: false, identityType: "registered",
+        }, { rememberDevice: false });
+        const epochA = getStudentSharedIdentityEpoch();
+        expect(epochA).toBeTruthy();
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+        expect(localStorage.getItem(STUDENT_SHARED_IDENTITY_EPOCH_KEY)).toBe(epochA);
+        expect(epochA).not.toContain("student-a");
+
+        const tabBStorage = createStorage();
+        stubBrowserStorage(localStorage, tabBStorage);
+        saveSession({
+            studentId: "student-b", name: "학생 B", isGuest: false, identityType: "registered",
+        }, { rememberDevice: false });
+        const epochB = getStudentSharedIdentityEpoch();
+        expect(epochB).toBeTruthy();
+        expect(epochB).not.toBe(epochA);
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+
+        clearSession();
+        expect(getStudentSharedIdentityEpoch()).not.toBe(epochB);
+    });
+
+    it("invalidates tab A recovery when tab B logs in without a remembered backup", () => {
+        const sharedLocalStorage = createStorage();
+        const tabAStorage = createStorage();
+        stubBrowserStorage(sharedLocalStorage, tabAStorage);
+        saveSession({
+            studentId: "student-a", name: "학생 A", isGuest: false, identityType: "registered",
+        }, { rememberDevice: false });
+        const binding = {
+            ownerStudentId: "student-a",
+            sessionGeneration: getStudentSessionGeneration(),
+            sharedIdentityEpoch: getStudentSharedIdentityEpoch(),
+            examId: "exam-a",
+        };
+
+        const tabBStorage = createStorage();
+        stubBrowserStorage(sharedLocalStorage, tabBStorage);
+        saveSession({
+            studentId: "student-b", name: "학생 B", isGuest: false, identityType: "registered",
+        }, { rememberDevice: false });
+        expect(sharedLocalStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+
+        // Tab A still has its old tab-local identity and generation, but the
+        // shared epoch prevents an identity-bound download after B's login.
+        stubBrowserStorage(sharedLocalStorage, tabAStorage);
+        expect(getSession()?.studentId).toBe("student-a");
+        expect(isCurrentLegacyStudentDraftRecovery(
+            binding,
+            getSession(),
+            getStudentSessionGeneration(),
+            getStudentSharedIdentityEpoch(),
+            "exam-a",
+        )).toBe(false);
+    });
+
+    it("fails closed when the shared localStorage getter is unavailable", () => {
+        const runtime = {} as { localStorage?: Storage };
+        Object.defineProperty(runtime, "localStorage", {
+            get() {
+                throw new Error("blocked");
+            },
+        });
+        vi.stubGlobal("window", runtime);
+
+        expect(getStudentSharedIdentityEpoch()).toBe("");
     });
 
     it("restores a same-device student session backup after tab session storage is gone", () => {
@@ -139,7 +248,7 @@ describe("student storage helpers", () => {
             isGuest: false,
             identityType: "temporary",
         };
-        saveSession(session);
+        saveSession(session, { rememberDevice: true });
         sessionStorage.removeItem(STORAGE_KEYS.STUDENT_SESSION);
 
         expect(getSession()).toMatchObject({

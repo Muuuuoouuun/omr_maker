@@ -1,11 +1,72 @@
+"use client";
+
 import Link from "next/link";
 import { Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
+import type { StudentAssignmentPreview } from "@/lib/studentExamContract";
+import type { AssignmentLifecycle } from "@/lib/assignmentLifecycle";
+import type { ReviewOnlyCompletedAssignment } from "@/lib/studentAssignmentClassification";
 import StatusPill from "@/components/dashboard/StatusPill";
+import { useMonotonicAssignmentTime, type AssignmentServerClock } from "@/components/dashboard/useAssignmentClock";
+import {
+  assignmentBoundary,
+  formatAssignmentDeadline,
+  formatAssignmentStart,
+  formatSubmittedDate,
+  presentTodoAssignments,
+  resolveAssignmentCardLifecycle,
+  type AssignmentClock,
+} from "@/lib/studentAssignmentPresentation";
+
+type AssignmentCard = (Exam | SolvableExam | StudentAssignmentPreview | ReviewOnlyCompletedAssignment) & {
+  attemptId?: string;
+  hasUnreadFeedback?: boolean;
+  answeredQuestionCount?: number;
+  hasLocalDraft?: boolean;
+  hasRemoteProgress?: boolean;
+  /** Submission time of the completed attempt (done cards only). */
+  finishedAt?: string;
+};
 
 interface AssignmentBlockProps {
-  exams: Array<(Exam | SolvableExam) & { attemptId?: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }>;
+  exams: AssignmentCard[];
   type: "todo" | "done";
+  readOnly?: boolean;
+  serverNow: string;
+  serverClock?: AssignmentServerClock;
+  onClockRefresh?: () => void;
+  /**
+   * Clock shared by the dashboard so every block and the headline agree on
+   * which assignments are open. Without it the block keeps its own clock.
+   */
+  clock?: AssignmentClock;
+  /** Called with the solve href when the student presses "시작"/"계속 풀기", before navigation. */
+  onStartAssignment?: (solveHref: string) => void;
+}
+
+const NO_EXAMS: readonly AssignmentCard[] = [];
+
+type RowPresentation = {
+  lifecycle: AssignmentLifecycle;
+  /** Status pill shown in the card meta line; open rows show their deadline instead. */
+  pill?: { label: string; tone: "success" | "primary" | "muted" | "warning"; detail?: string };
+  deadline?: { label: string; urgent: boolean };
+};
+
+function todoRowPresentation(exam: AssignmentCard, clock: AssignmentClock): RowPresentation {
+  const lifecycle = resolveAssignmentCardLifecycle(exam, clock);
+  if (lifecycle === "open") {
+    const deadline = formatAssignmentDeadline(assignmentBoundary(exam, "end"), clock.lowerNow);
+    return { lifecycle, ...(deadline ? { deadline: { label: deadline.label, urgent: deadline.urgent } } : {}) };
+  }
+  if (lifecycle === "scheduled") {
+    const start = formatAssignmentStart(assignmentBoundary(exam, "start"), clock.lowerNow);
+    return start
+      ? { lifecycle, pill: { label: `${start} 시작`, tone: "primary" } }
+      : { lifecycle: "invalid", pill: { label: "확인 필요", tone: "warning" } };
+  }
+  if (lifecycle === "closed") return { lifecycle, pill: { label: "마감", tone: "muted" } };
+  return { lifecycle: "invalid", pill: { label: "확인 필요", tone: "warning" } };
 }
 
 function BookIcon() {
@@ -45,8 +106,247 @@ function FolderIcon() {
   );
 }
 
-export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
+function assignmentSolveHref(exam: AssignmentCard): string {
+  if (!("assignmentId" in exam) || !exam.assignmentId) return `/solve/${exam.id}`;
+  const query = new URLSearchParams({ assignment: exam.assignmentId });
+  if (!("assignmentRevision" in exam) || !Number.isSafeInteger(exam.assignmentRevision) || Number(exam.assignmentRevision) < 1) {
+    return `/solve/${exam.id}`;
+  }
+  query.set("assignmentRevision", String(exam.assignmentRevision));
+  if (exam.assignmentMode === "retake" && exam.retakeSourceAttemptId && exam.retakeQuestionIds?.length) {
+    query.set("retakeFrom", exam.retakeSourceAttemptId);
+    query.set("questions", exam.retakeQuestionIds.join(","));
+    query.set("mode", "wrong");
+  }
+  return `/solve/${exam.id}?${query.toString()}`;
+}
+
+type TodoSection = "open" | "scheduled" | "invalid";
+
+const TODO_SECTION_TITLES: Record<TodoSection, string> = {
+  open: "지금 풀 수 있어요",
+  scheduled: "예정",
+  invalid: "확인이 필요해요",
+};
+
+export default function AssignmentBlock({ exams, type, readOnly = false, serverNow, serverClock, onClockRefresh, onStartAssignment, clock }: AssignmentBlockProps) {
   const isTodo = type === "todo";
+  // Hooks cannot be conditional: when the dashboard shares its clock, the
+  // internal one gets no exams (no boundary timers) and no refresh callback.
+  const internalClock = useMonotonicAssignmentTime(
+    serverNow,
+    serverClock,
+    clock ? NO_EXAMS : exams,
+    clock ? undefined : onClockRefresh,
+  );
+  const activeClock = clock ?? internalClock;
+  const todo = isTodo ? presentTodoAssignments(exams, activeClock) : null;
+  const openCount = todo?.open.length ?? 0;
+  const activeTodoCount = todo ? todo.open.length + todo.scheduled.length + todo.invalid.length : 0;
+
+  const renderRow = (exam: AssignmentCard) => {
+    const questionCount = "questions" in exam ? exam.questions.length : undefined;
+    // Shown on the card so a timed exam can start directly without an
+    // extra "are you ready" screen (PO decision B-7).
+    const durationMin = isTodo && "durationMin" in exam && typeof exam.durationMin === "number" && exam.durationMin > 0
+      ? exam.durationMin
+      : undefined;
+    const reviewOnly = "reviewOnly" in exam && exam.reviewOnly === true;
+    const accessType = reviewOnly
+      ? undefined
+      : "access" in exam
+        ? exam.access.type
+        : "accessConfig" in exam
+          ? exam.accessConfig?.type
+          : undefined;
+    const availability = isTodo ? todoRowPresentation(exam, activeClock) : null;
+    // Completed cards only say when the student submitted (PO decision B-5:
+    // no score here); availability no longer matters once it is done.
+    const submittedOn = isTodo ? null : formatSubmittedDate(exam.finishedAt);
+    return (
+    <div
+      key={("assignmentId" in exam && exam.assignmentId) || exam.id}
+      data-testid="student-assignment-row"
+      data-assignment-id={exam.id}
+      data-read-only={readOnly ? "true" : "false"}
+      className={`student-assignment-row${isTodo ? " card-hover" : ""}`}
+      style={{
+        padding: "1.1rem 1.25rem",
+        borderRadius: "var(--radius-lg)",
+        border: "1px solid var(--border)",
+        background: isTodo ? "var(--surface)" : "var(--background)",
+        display: "flex",
+        alignItems: "center",
+        gap: "1rem",
+        transition: "background-color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s",
+        opacity: isTodo ? 1 : 0.75,
+      }}
+    >
+      <div
+        className="student-assignment-icon"
+        style={{
+          width: "44px",
+          height: "44px",
+          borderRadius: "var(--radius-md)",
+          background: isTodo
+            ? "linear-gradient(135deg, var(--primary), var(--secondary))"
+            : "var(--border)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "white",
+          fontWeight: 800,
+          fontSize: "1.1rem",
+          flexShrink: 0,
+          boxShadow: isTodo ? "0 4px 10px rgba(99,102,241,0.28)" : "none",
+        }}
+      >
+        {exam.title.substring(0, 1)}
+      </div>
+
+      <div className="student-assignment-content" style={{ flex: 1, minWidth: 0 }}>
+        <div
+          className="student-assignment-title"
+          title={exam.title}
+          style={{
+            fontWeight: 700,
+            fontSize: "0.98rem",
+            color: "var(--foreground)",
+            marginBottom: "0.2rem",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {exam.title}
+        </div>
+        <div
+          className="student-assignment-meta"
+          style={{
+            fontSize: "0.82rem",
+            color: "var(--muted)",
+            display: "flex",
+            gap: "0.5rem",
+            alignItems: "center",
+          }}
+        >
+          {questionCount !== undefined && <span>{questionCount}문항</span>}
+          {durationMin !== undefined && <span className="student-assignment-duration">제한 시간 {durationMin}분</span>}
+          {questionCount !== undefined && <span
+            style={{
+              width: "3px",
+              height: "3px",
+              background: "var(--muted)",
+              borderRadius: "50%",
+              flexShrink: 0,
+            }}
+          />}
+          <span
+            className={
+              accessType === "group" || accessType === "targeted" ? "badge badge-primary" : "badge badge-success"
+            }
+            style={{ padding: "1px 7px", fontSize: "0.7rem" }}
+          >
+            {reviewOnly ? "복습 전용" : accessType === "targeted" ? "개별 배정" : accessType === "group" ? "클래스" : "공개"}
+          </span>
+          {availability?.deadline && (availability.deadline.urgent ? (
+            <StatusPill size="sm" tone="warning" label={availability.deadline.label} className="student-assignment-deadline" />
+          ) : (
+            <span className="student-assignment-deadline">
+              {/* Keep "D-2" whole on narrow phones; only wrap between the parts. */}
+              {availability.deadline.label.split(" · ").map((part, index) => (
+                <span key={part} style={{ whiteSpace: "nowrap" }}>{index > 0 ? ` · ${part}` : part}</span>
+              ))}
+            </span>
+          ))}
+          {availability?.pill && (
+            <StatusPill
+              size="sm"
+              tone={availability.pill.tone}
+              label={availability.pill.label}
+              detail={availability.pill.detail}
+            />
+          )}
+          {!isTodo && (
+            <StatusPill size="sm" tone="success" label={submittedOn ? `완료 · ${submittedOn} 제출` : "완료"} />
+          )}
+          {!isTodo && exam.hasUnreadFeedback && (
+            <StatusPill size="sm" tone="primary" label="새 피드백" />
+          )}
+          {!isTodo && (exam.answeredQuestionCount || 0) > 0 && (
+            <StatusPill
+              size="sm"
+              tone="primary"
+              label={`선생님 답변 ${exam.answeredQuestionCount}`}
+              style={{
+                color: "#0f766e",
+                background: "#f0fdfa",
+                border: "1px solid #99f6e4",
+              }}
+            />
+          )}
+        </div>
+      </div>
+
+      {isTodo && readOnly ? (
+        <span
+          className="btn btn-secondary student-assignment-action"
+          aria-disabled="true"
+          style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
+        >
+          읽기 전용
+        </span>
+      ) : isTodo && availability?.lifecycle === "open" ? (
+        <Link
+          href={assignmentSolveHref(exam)}
+          onClick={() => onStartAssignment?.(assignmentSolveHref(exam))}
+          className="btn btn-primary student-assignment-action"
+          style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
+        >
+          {exam.hasLocalDraft || exam.hasRemoteProgress ? "계속 풀기" : "시작"}
+        </Link>
+      ) : !isTodo ? (
+        <Link
+          href={`/student/review/${exam.attemptId || exam.id}`}
+          className="btn btn-secondary student-assignment-action"
+          style={{ minHeight: 44, padding: "0.5rem 1rem", fontSize: "0.85rem", flexShrink: 0 }}
+        >
+          복습
+        </Link>
+      ) : (
+        <span
+          className="btn btn-secondary student-assignment-action"
+          aria-disabled="true"
+          style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
+        >
+          {availability?.lifecycle === "scheduled" ? "시작 전" : availability?.lifecycle === "closed" ? "미응시 마감" : "확인 필요"}
+        </span>
+      )}
+    </div>
+    );
+  };
+
+  const emptyState = (message: string) => (
+    <div
+      style={{
+        textAlign: "center",
+        padding: "3rem 2rem",
+        color: "var(--muted)",
+        background: "var(--background)",
+        borderRadius: "var(--radius-lg)",
+        border: "1px dashed var(--border)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: "0.75rem",
+      }}
+    >
+      <div style={{ opacity: 0.35, color: "var(--muted)" }}>
+        {isTodo ? <CelebrationIcon /> : <FolderIcon />}
+      </div>
+      <span style={{ fontSize: "0.9rem", fontWeight: 500 }}>{message}</span>
+    </div>
+  );
 
   return (
     <div className={`bento-card ${isTodo ? "col-span-2 row-span-2" : "col-span-2 row-span-1"}`}>
@@ -79,19 +379,21 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
             {isTodo ? <BookIcon /> : <CheckCircleIcon />}
           </span>
           {isTodo ? "미완료 과제" : "완료 기록"}
-          {isTodo && exams.length > 0 && (
+          {isTodo && openCount > 0 && (
             <span
+              className="student-assignment-open-count"
+              aria-label={`지금 풀 수 있는 과제 ${openCount}개`}
               style={{
-                background: "var(--error)",
+                background: "var(--primary)",
                 color: "white",
-                fontSize: "0.72rem",
+                fontSize: "var(--type-micro)",
                 fontWeight: 700,
                 padding: "2px 8px",
                 borderRadius: "var(--radius-full)",
                 lineHeight: 1.5,
               }}
             >
-              {exams.length}
+              {openCount}
             </span>
           )}
         </h3>
@@ -107,144 +409,42 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
           paddingRight: "0.25rem",
         }}
       >
-        {exams.length === 0 ? (
-          <div
-            style={{
-              textAlign: "center",
-              padding: "3rem 2rem",
-              color: "var(--muted)",
-              background: "var(--background)",
-              borderRadius: "var(--radius-lg)",
-              border: "1px dashed var(--border)",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: "0.75rem",
-            }}
-          >
-            <div style={{ opacity: 0.35, color: "var(--muted)" }}>
-              {isTodo ? <CelebrationIcon /> : <FolderIcon />}
-            </div>
-            <span style={{ fontSize: "0.9rem", fontWeight: 500 }}>
-              {isTodo ? "모든 과제를 완료했습니다!" : "아직 완료한 시험이 없습니다."}
-            </span>
-          </div>
+        {!todo ? (
+          exams.length === 0 ? emptyState("아직 완료한 시험이 없습니다.") : exams.map(renderRow)
         ) : (
-          exams.map((exam) => (
-            <div
-              key={exam.id}
-              className={isTodo ? "card-hover" : ""}
-              style={{
-                padding: "1.1rem 1.25rem",
-                borderRadius: "var(--radius-lg)",
-                border: "1px solid var(--border)",
-                background: isTodo ? "var(--surface)" : "var(--background)",
-                display: "flex",
-                alignItems: "center",
-                gap: "1rem",
-                transition: "all 0.2s",
-                opacity: isTodo ? 1 : 0.75,
-              }}
-            >
-              <div
-                style={{
-                  width: "44px",
-                  height: "44px",
-                  borderRadius: "var(--radius-md)",
-                  background: isTodo
-                    ? "linear-gradient(135deg, var(--primary), var(--secondary))"
-                    : "var(--border)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "white",
-                  fontWeight: 800,
-                  fontSize: "1.1rem",
-                  flexShrink: 0,
-                  boxShadow: isTodo ? "0 4px 10px rgba(99,102,241,0.28)" : "none",
-                }}
+          <>
+            {activeTodoCount === 0 && emptyState(
+              exams.length === 0 ? "모든 과제를 완료했습니다!" : "지금 풀 수 있는 과제가 없어요.",
+            )}
+            {(["open", "scheduled", "invalid"] as const).map(section => todo[section].length > 0 && (
+              <section
+                key={section}
+                className="student-assignment-section"
+                data-assignment-section={section}
+                aria-labelledby={`student-assignment-section-${section}`}
               >
-                {exam.title.substring(0, 1)}
-              </div>
-
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontWeight: 700,
-                    fontSize: "0.98rem",
-                    color: "var(--foreground)",
-                    marginBottom: "0.2rem",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {exam.title}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.82rem",
-                    color: "var(--muted)",
-                    display: "flex",
-                    gap: "0.5rem",
-                    alignItems: "center",
-                  }}
-                >
-                  <span>{exam.questions.length}문항</span>
-                  <span
-                    style={{
-                      width: "3px",
-                      height: "3px",
-                      background: "var(--muted)",
-                      borderRadius: "50%",
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span
-                    className={
-                      exam.accessConfig?.type === "group" ? "badge badge-primary" : "badge badge-success"
-                    }
-                    style={{ padding: "1px 7px", fontSize: "0.7rem" }}
-                  >
-                    {exam.accessConfig?.type === "group" ? "클래스" : "공개"}
+                <h4 id={`student-assignment-section-${section}`} className="student-assignment-section-title">
+                  {TODO_SECTION_TITLES[section]}{" "}
+                  <span className="student-assignment-section-count">{todo[section].length}</span>
+                </h4>
+                {todo[section].map(renderRow)}
+              </section>
+            ))}
+            {todo.closed.length > 0 && (
+              <details className="student-assignment-closed" data-assignment-section="closed">
+                <summary>
+                  <span className="student-assignment-section-title">
+                    마감된 과제{" "}
+                    <span className="student-assignment-section-count">{todo.closed.length}</span>
                   </span>
-                  {!isTodo && exam.hasUnreadFeedback && (
-                    <StatusPill size="sm" tone="primary" label="새 피드백" />
-                  )}
-                  {!isTodo && (exam.answeredQuestionCount || 0) > 0 && (
-                    <StatusPill
-                      size="sm"
-                      tone="primary"
-                      label={`선생님 답변 ${exam.answeredQuestionCount}`}
-                      style={{
-                        color: "#0f766e",
-                        background: "#f0fdfa",
-                        border: "1px solid #99f6e4",
-                      }}
-                    />
-                  )}
+                  <span className="student-assignment-closed-toggle" aria-hidden="true" />
+                </summary>
+                <div className="student-assignment-closed-list">
+                  {todo.closed.map(renderRow)}
                 </div>
-              </div>
-
-              {isTodo ? (
-                <Link
-                  href={`/solve/${exam.id}`}
-                  className="btn btn-primary"
-                  style={{ padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
-                >
-                  시작
-                </Link>
-              ) : (
-                <Link
-                  href={`/student/review/${exam.attemptId || exam.id}`}
-                  className="btn btn-secondary"
-                  style={{ padding: "0.5rem 1rem", fontSize: "0.85rem", flexShrink: 0 }}
-                >
-                  복습
-                </Link>
-              )}
-            </div>
-          ))
+              </details>
+            )}
+          </>
         )}
       </div>
     </div>

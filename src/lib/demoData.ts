@@ -2,9 +2,14 @@ import type { Attempt, Exam, Question } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
 import type { TeacherSessionIdentity } from "@/lib/teacherSession";
+import { buildQuestionResults } from "@/lib/premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
+const DEMO_ATTEMPT_ID_PREFIX = "mock-attempt-";
+const MAX_DEMO_ATTEMPT_ID_LENGTH = 200;
+const DEMO_ATTEMPT_ID_SUFFIX = /^[a-z0-9-]+$/;
 
 const DEMO_CLASSES = [
     { id: "class-2-1", name: "2학년 1반", region: "본관", color: "#1769e0", avgScore: 87 },
@@ -118,8 +123,24 @@ export interface DemoDashboardData {
     rosterGroups: RosterGroup[];
 }
 
+export interface DemoAttemptDetail {
+    attempt: Attempt;
+    exam: Exam;
+    peerAttempts: Attempt[];
+    cumulativeAttempts: Attempt[];
+    exams: Exam[];
+    rosterStudent: RosterStudent | null;
+}
+
 export function shouldUseDemoData(identity: Partial<TeacherSessionIdentity> | null | undefined): boolean {
     return isMockupTeacherIdentity(identity);
+}
+
+export function isBoundedDemoAttemptId(value: string): boolean {
+    return value.length > DEMO_ATTEMPT_ID_PREFIX.length
+        && value.length <= MAX_DEMO_ATTEMPT_ID_LENGTH
+        && value.startsWith(DEMO_ATTEMPT_ID_PREFIX)
+        && DEMO_ATTEMPT_ID_SUFFIX.test(value.slice(DEMO_ATTEMPT_ID_PREFIX.length));
 }
 
 function stableUnitInterval(...values: number[]): number {
@@ -265,7 +286,7 @@ export function buildDemoDashboardData(now = Date.now()): DemoDashboardData {
 
             const finishedAt = now - Math.max(1, spec.daysAgo - 2) * DAY_MS + rosterIndex * 90_000;
             const elapsedMinutes = 34 + ((studentIndex * 3 + examIndex) % 16);
-            return {
+            const attempt: Attempt = {
                 id: `mock-attempt-${exam.id}-${student.id.replace(/[^a-z0-9-]/gi, "-")}`,
                 examId: exam.id,
                 examTitle: exam.title,
@@ -294,8 +315,38 @@ export function buildDemoDashboardData(now = Date.now()): DemoDashboardData {
                     answerChangeCount: (studentIndex + questionIndex) % 9 === 0 ? 1 : 0,
                 })),
             };
+            const questionResults = buildQuestionResults(exam, attempt);
+            return {
+                ...attempt,
+                questionResults,
+                ...buildCanonicalQuestionResultEvidence(attempt, questionResults),
+            };
         });
     });
 
     return { exams, attempts, rosterStudents, rosterGroups };
+}
+
+export function resolveDemoAttemptDetail(
+    identity: Partial<TeacherSessionIdentity> | null | undefined,
+    attemptId: string,
+    now = Date.now(),
+): DemoAttemptDetail | null {
+    if (!shouldUseDemoData(identity)) return null;
+    if (!isBoundedDemoAttemptId(attemptId)) return null;
+
+    const demo = buildDemoDashboardData(now);
+    const attempt = demo.attempts.find(candidate => candidate.id === attemptId);
+    if (!attempt) return null;
+    const exam = demo.exams.find(candidate => candidate.id === attempt.examId);
+    if (!exam) return null;
+
+    return {
+        attempt,
+        exam,
+        peerAttempts: demo.attempts.filter(candidate => candidate.examId === exam.id),
+        cumulativeAttempts: demo.attempts.filter(candidate => candidate.studentId === attempt.studentId),
+        exams: demo.exams,
+        rosterStudent: demo.rosterStudents.find(candidate => candidate.id === attempt.studentId) || null,
+    };
 }

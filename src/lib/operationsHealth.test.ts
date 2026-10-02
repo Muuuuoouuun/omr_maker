@@ -1,0 +1,458 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import {
+    authorizeReadinessRequest,
+    buildLivenessPayload,
+    probeOperationalReadiness,
+} from "./operationsHealth";
+import {
+    SUPABASE_READINESS_CHECK_KEYS,
+    type SupabaseDeploymentProbe,
+} from "./supabaseReadinessProbe";
+
+const readyConfigurationProbe = () => ({
+    label: "배포 준비됨",
+    detail: "ready",
+    credentialCount: 1,
+    readyCount: 1,
+    totalCount: 1,
+    checks: [{ key: "configuration", label: "configuration", detail: "ready", tone: "ready" as const }],
+});
+
+function pilotOnlyUnavailableProbe(): SupabaseDeploymentProbe {
+    return {
+        ...completeReadyProbe(),
+        ready: false,
+        serverGatewayCapabilitiesReady: false,
+        operatorPilotProvisioningReady: false,
+        provisionedTeacherLoginReady: false,
+        failedChecks: [
+            "serverGatewayCapabilitiesReady",
+            "operatorPilotProvisioningReady",
+            "provisionedTeacherLoginReady",
+        ],
+    };
+}
+
+function completeReadyProbe(): SupabaseDeploymentProbe {
+    return {
+        ...Object.fromEntries(SUPABASE_READINESS_CHECK_KEYS.map(key => [key, true])),
+        ready: true,
+        version: "202608090001",
+        failedChecks: [],
+    };
+}
+
+describe("operational health", () => {
+    it("requires a bounded redacted dynamic canary only in provisioned mode", async () => {
+        const env = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID: "teacher_0123456789abcdef",
+        };
+        const readyCanary = vi.fn(async () => "ready" as const);
+        await expect(probeOperationalReadiness(
+            env, async () => completeReadyProbe(), 20, async () => "ready",
+            readyConfigurationProbe, async () => "ready", async () => null, readyCanary,
+        )).resolves.toMatchObject({ status: "ready" });
+        expect(readyCanary).toHaveBeenCalledOnce();
+
+        for (const canary of [
+            vi.fn(async () => "not_ready" as const),
+            vi.fn(async () => { throw new Error(env.OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID); }),
+        ]) {
+            const result = await probeOperationalReadiness(
+                env, async () => completeReadyProbe(), 20, async () => "ready",
+                readyConfigurationProbe, async () => "ready", async () => null, canary,
+            );
+            expect(result).toMatchObject({
+                status: "not_ready",
+                configuration: "not_ready",
+                failedChecks: ["configuration:provisioned_teacher_canary"],
+            });
+            expect(JSON.stringify(result)).not.toContain(env.OMR_PROVISIONED_TEACHER_CANARY_ACCOUNT_ID);
+        }
+
+        let timeoutSignal: AbortSignal | undefined;
+        const hanging = vi.fn((_env: object, signal?: AbortSignal) => new Promise<"not_ready">(resolve => {
+            timeoutSignal = signal;
+            signal?.addEventListener("abort", () => resolve("not_ready"), { once: true });
+        }));
+        await expect(probeOperationalReadiness(
+            env, async () => completeReadyProbe(), 20, async () => "ready",
+            readyConfigurationProbe, async () => "ready", async () => null, hanging,
+        )).resolves.toMatchObject({
+            failedChecks: ["configuration:provisioned_teacher_canary"],
+        });
+        expect(timeoutSignal?.aborted).toBe(true);
+
+        const skipped = vi.fn(async () => "not_ready" as const);
+        await expect(probeOperationalReadiness(
+            { ...env, OMR_TEACHER_IDENTITY_MODE: "self_service" },
+            async () => completeReadyProbe(), 20, async () => "ready",
+            readyConfigurationProbe, async () => "ready", async () => null, skipped,
+        )).resolves.toMatchObject({ status: "ready" });
+        expect(skipped).not.toHaveBeenCalled();
+    });
+
+    it("exposes only a bounded public liveness payload", () => {
+        expect(buildLivenessPayload({
+            VERCEL_GIT_COMMIT_SHA: "abc123def456",
+            SUPABASE_SERVICE_ROLE_KEY: "must-never-leak",
+        }, new Date("2026-08-06T01:02:03.000Z"))).toEqual({
+            status: "alive",
+            build: "abc123def456",
+            timestamp: "2026-08-06T01:02:03.000Z",
+        });
+    });
+
+    it("requires an exact bearer token and fails closed when configuration is absent", () => {
+        const env = { OMR_READINESS_TOKEN: "readiness-token-0123456789" };
+        expect(authorizeReadinessRequest(new Headers(), env)).toBe(false);
+        expect(authorizeReadinessRequest(new Headers({ authorization: "Basic abc" }), env)).toBe(false);
+        expect(authorizeReadinessRequest(new Headers({ authorization: "Bearer wrong" }), env)).toBe(false);
+        expect(authorizeReadinessRequest(new Headers({ authorization: "Bearer readiness-token-0123456789" }), env)).toBe(true);
+        expect(authorizeReadinessRequest(new Headers({ authorization: "Bearer readiness-token-0123456789 extra" }), env)).toBe(false);
+        expect(authorizeReadinessRequest(new Headers({ authorization: "Bearer anything" }), {})).toBe(false);
+    });
+
+    it("reports ready only when configured Supabase evidence is complete", async () => {
+        const env = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_OPERATIONAL_SINK_URL: "https://ops.example.test/events",
+            OMR_OPERATIONAL_SINK_TOKEN: "ops_sink_token_0123456789_abcdef",
+        };
+        await expect(probeOperationalReadiness(env, async () => completeReadyProbe(), 50,
+        async () => "ready", readyConfigurationProbe, async () => "ready",
+        async () => null, async () => "ready")).resolves.toEqual({
+            status: "ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "ready",
+            version: "202608090001",
+        });
+
+        await expect(probeOperationalReadiness(env, async () => ({
+            ...completeReadyProbe(),
+            ready: false,
+            queryPathIndexesReady: false,
+            failedChecks: ["queryPathIndexesReady"],
+        }), 50, async () => "ready")).resolves.toEqual({
+            status: "not_ready",
+            database: "not_ready",
+            observability: "ready",
+            version: "202608090001",
+            failedChecks: ["queryPathIndexesReady", "databaseDeclaredReady"],
+        });
+    });
+
+    it("fails readiness when fatal deployment configuration is missing", async () => {
+        const env = {
+            NODE_ENV: "production",
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+        };
+        const configurationProbe = vi.fn(() => ({
+            label: "배포 확인 필요",
+            detail: "fatal configuration missing",
+            credentialCount: 0,
+            readyCount: 0,
+            totalCount: 1,
+            checks: [{
+                key: "teacher_account_delivery",
+                label: "교사 계정 이메일 전달",
+                detail: "missing",
+                tone: "error" as const,
+            }],
+        }));
+
+        await expect(probeOperationalReadiness(
+            env,
+            async () => completeReadyProbe(),
+            50,
+            async () => "ready",
+            configurationProbe,
+        )).resolves.toEqual({
+            status: "not_ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "not_ready",
+            version: "202608090001",
+            failedChecks: ["configuration:teacher_account_delivery"],
+        });
+        expect(configurationProbe).toHaveBeenCalledOnce();
+    });
+
+    it("fails readiness when the configured account delivery endpoint is unreachable", async () => {
+        const env = {
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+        };
+
+        await expect(probeOperationalReadiness(
+            env,
+            async () => completeReadyProbe(),
+            50,
+            async () => "ready",
+            readyConfigurationProbe,
+            async () => "probe_failed",
+        )).resolves.toEqual({
+            status: "not_ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "not_ready",
+            version: "202608090001",
+            failedChecks: ["configuration:teacher_account_delivery_probe"],
+        });
+    });
+
+    it("allows only pilot-derived DB failures in self-service mode", async () => {
+        const baseEnv = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+        };
+        await expect(probeOperationalReadiness({
+            ...baseEnv,
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+        }, async () => pilotOnlyUnavailableProbe(), 50, async () => "ready",
+        readyConfigurationProbe, async () => "ready")).resolves.toEqual({
+            status: "ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "ready",
+            version: "202608090001",
+        });
+
+        await expect(probeOperationalReadiness({
+            ...baseEnv,
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+        }, async () => ({
+            ...pilotOnlyUnavailableProbe(),
+            canonicalTablesForceRls: false,
+            failedChecks: [
+                ...(pilotOnlyUnavailableProbe().failedChecks || []),
+                "canonicalTablesForceRls",
+            ],
+        }), 50, async () => "ready", readyConfigurationProbe, async () => "ready"))
+            .resolves.toMatchObject({ status: "not_ready", database: "not_ready" });
+
+        await expect(probeOperationalReadiness({
+            ...baseEnv,
+            NODE_ENV: "production",
+        }, async () => pilotOnlyUnavailableProbe(), 50, async () => "ready",
+        readyConfigurationProbe, async () => "ready"))
+            .resolves.toMatchObject({ status: "not_ready", database: "not_ready" });
+
+        const unsafeSelfServiceProbes: Array<{
+            probe: SupabaseDeploymentProbe;
+            expectedFailure: string;
+        }> = [
+            {
+                probe: { ...pilotOnlyUnavailableProbe(), version: "202608080006" },
+                expectedFailure: "probeVersion",
+            },
+            { probe: {
+                ...pilotOnlyUnavailableProbe(),
+                failedChecks: [
+                    ...(pilotOnlyUnavailableProbe().failedChecks || []),
+                    "unknownCapability" as never,
+                ],
+            }, expectedFailure: "unknownCapability" },
+            { probe: {
+                ...pilotOnlyUnavailableProbe(),
+                operatorPilotProvisioningReady: true,
+                provisionedTeacherLoginReady: true,
+                failedChecks: ["serverGatewayCapabilitiesReady"],
+            }, expectedFailure: "serverGatewayCapabilitiesReady" },
+            { probe: {
+                ...pilotOnlyUnavailableProbe(),
+                ready: true,
+                serverGatewayCapabilitiesReady: true,
+                operatorPilotProvisioningReady: true,
+                provisionedTeacherLoginReady: true,
+                canonicalTablesForceRls: false,
+                failedChecks: ["canonicalTablesForceRls"],
+            }, expectedFailure: "canonicalTablesForceRls" },
+            { probe: {
+                ...pilotOnlyUnavailableProbe(),
+                ready: true,
+                version: "202608080006",
+                serverGatewayCapabilitiesReady: true,
+                operatorPilotProvisioningReady: true,
+                provisionedTeacherLoginReady: true,
+                failedChecks: [],
+            }, expectedFailure: "probeVersion" },
+        ];
+        for (const { probe: unsafeProbe, expectedFailure } of unsafeSelfServiceProbes) {
+            await expect(probeOperationalReadiness({
+                ...baseEnv,
+                OMR_TEACHER_IDENTITY_MODE: "self_service",
+            }, async () => unsafeProbe, 50, async () => "ready",
+            readyConfigurationProbe, async () => "ready"))
+                .resolves.toMatchObject({
+                    status: "not_ready",
+                    database: "not_ready",
+                    failedChecks: expect.arrayContaining([expectedFailure]),
+                });
+        }
+    });
+
+    it("attests the candidate build and hashed database binding for an explicit staging deployment", async () => {
+        const projectRef = "stagingprojectref";
+        const serviceRoleKey = "service-role-secret-that-must-not-leak";
+        const result = await probeOperationalReadiness({
+            SUPABASE_URL: `https://${projectRef}.supabase.co`,
+            SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
+            OMR_OPERATIONAL_SINK_URL: "https://ops.example.test/events",
+            OMR_OPERATIONAL_SINK_TOKEN: "ops_sink_token_0123456789_abcdef",
+            OMR_DEPLOYMENT_TIER: "staging",
+            VERCEL_GIT_COMMIT_SHA: "a".repeat(40),
+        }, async () => completeReadyProbe(), 50, async () => "ready",
+        readyConfigurationProbe, async () => "ready", async () => null, async () => "ready");
+
+        expect(result).toEqual({
+            status: "ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "ready",
+            version: "202608090001",
+            environment: "staging",
+            build: "a".repeat(40),
+            databaseProjectRefHash: createHash("sha256").update(projectRef).digest("hex"),
+        });
+        expect(JSON.stringify(result)).not.toContain(projectRef);
+        expect(JSON.stringify(result)).not.toContain(serviceRoleKey);
+    });
+
+    it("fails readiness when the central operational sink is absent or unreachable", async () => {
+        const databaseProbe = vi.fn(async () => completeReadyProbe());
+        const base = { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "key" };
+
+        await expect(probeOperationalReadiness(base, databaseProbe, 20, async () => "not_configured", readyConfigurationProbe, async () => "ready", async () => null, async () => "ready"))
+            .resolves.toEqual({
+                status: "degraded",
+                database: "ready",
+                observability: "not_configured",
+                configuration: "ready",
+                version: "202608090001",
+            });
+        await expect(probeOperationalReadiness({
+            ...base,
+            OMR_OPERATIONAL_SINK_URL: "https://ops.example.test/events",
+            OMR_OPERATIONAL_SINK_TOKEN: "ops_sink_token_0123456789_abcdef",
+        }, databaseProbe, 20, async () => "probe_failed", readyConfigurationProbe, async () => "ready", async () => null, async () => "ready")).resolves.toEqual({
+            status: "degraded",
+            database: "ready",
+            observability: "probe_failed",
+            configuration: "ready",
+            version: "202608090001",
+        });
+    });
+
+    it("fails closed for missing backend configuration, probe rejection, and timeout", async () => {
+        const probe = vi.fn(async () => ({ ready: true as const }));
+        await expect(probeOperationalReadiness({}, probe, 20)).resolves.toEqual({
+            status: "not_ready",
+            database: "not_configured",
+            observability: "not_configured",
+        });
+        expect(probe).not.toHaveBeenCalled();
+
+        const env = { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "key" };
+        await expect(probeOperationalReadiness(env, async () => {
+            throw new Error("raw database secret");
+        }, 20, async () => "not_configured")).resolves.toEqual({
+            status: "not_ready",
+            database: "probe_failed",
+            observability: "not_configured",
+        });
+
+        let receivedSignal: AbortSignal | undefined;
+        await expect(probeOperationalReadiness(env, (_probeEnv, signal) => {
+            receivedSignal = signal;
+            return new Promise(() => undefined);
+        }, 5, async () => "not_configured")).resolves.toEqual({
+            status: "not_ready",
+            database: "probe_timeout",
+            observability: "not_configured",
+        });
+        expect(receivedSignal?.aborted).toBe(true);
+    });
+
+    it("requires a live healthy asset cleanup heartbeat when the scheduler is configured", async () => {
+        const buildSha = "0123456789abcdef0123456789abcdef01234567";
+        const env = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_ASSET_GC_SCHEDULED: "1",
+            CRON_SECRET: "cron-secret-that-is-at-least-thirty-two-characters",
+            VERCEL_GIT_COMMIT_SHA: buildSha,
+        };
+        const databaseProbe = async () => completeReadyProbe();
+        const heartbeatAt = new Date().toISOString();
+
+        await expect(probeOperationalReadiness(
+            env,
+            databaseProbe,
+            50,
+            async () => "ready",
+            readyConfigurationProbe,
+            async () => "ready",
+            async () => null,
+            async () => "ready",
+        )).resolves.toEqual({
+            status: "not_ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "not_ready",
+            version: "202608090001",
+            failedChecks: ["configuration:remote_asset_cleanup_heartbeat"],
+        });
+
+        await expect(probeOperationalReadiness(
+            env,
+            databaseProbe,
+            50,
+            async () => "ready",
+            readyConfigurationProbe,
+            async () => "ready",
+            async () => ({
+                status: "healthy",
+                lastAttemptAt: heartbeatAt,
+                lastSuccessAt: heartbeatAt,
+                deadCount: 0,
+                buildSha,
+                failureCategory: null,
+                latestStartedSequence: 19,
+                latestCompletedSequence: 19,
+            }),
+            async () => "ready",
+        )).resolves.toMatchObject({ status: "ready" });
+    });
+
+    it("fails production readiness when the required asset cleanup scheduler is absent", async () => {
+        await expect(probeOperationalReadiness(
+            {
+                NODE_ENV: "production",
+                SUPABASE_URL: "https://example.supabase.co",
+                SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            },
+            async () => completeReadyProbe(),
+            50,
+            async () => "ready",
+            readyConfigurationProbe,
+            async () => "ready",
+            async () => null,
+            async () => "ready",
+        )).resolves.toEqual({
+            status: "not_ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "not_ready",
+            version: "202608090001",
+            failedChecks: ["configuration:remote_asset_cleanup_schedule"],
+        });
+    });
+});

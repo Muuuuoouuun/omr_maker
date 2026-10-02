@@ -2,11 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Bell, CheckCircle2, CreditCard, MessageCircle, Users, Clock } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Bell, CheckCircle2, CreditCard, MessageCircle, Users, Clock, X } from "lucide-react";
 import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
 import { readRosterGroups, readRosterInvites, readRosterStudents } from "@/lib/rosterStorage";
 import { buildKakaoNotificationCandidates } from "@/lib/kakaoNotificationQueue";
 import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
+import {
+    loadTeacherNotificationSummary,
+    mutateTeacherNotificationState,
+} from "@/app/actions/teacherNotifications";
+import {
+    resolveTeacherNotificationRefresh,
+    type TeacherNotificationStorageNamespace,
+} from "@/lib/teacherNotificationSummary";
+import { applyTeacherNotificationStates } from "@/lib/teacherNotificationState";
 
 interface Notification {
     id: string;
@@ -17,11 +28,9 @@ interface Notification {
     href?: string;
     kind: "info" | "success" | "warning" | "billing";
     /** Stable key for auto-generated notifications so we don't spawn duplicates on refresh */
-    source?: "invites" | "recent-exams" | "plan-renewal" | "kakao-candidates" | "student-questions";
+    source?: "invites" | "recent-exams" | "plan-renewal" | "kakao-candidates" | "student-questions" | "sync-status";
 }
 
-const STORAGE_KEY = "omr_notifications";
-const DISMISSED_KEY = "omr_notifications_dismissed";
 // Auto-notification dismissals self-expire so "모두 삭제" never permanently
 // silences a category. Auto ids are content-scoped (see below), so a genuinely
 // new event produces a new id and reappears immediately regardless of this TTL;
@@ -34,14 +43,18 @@ interface DismissedEntry {
     at: number;
 }
 
+function currentEpochMs(): number {
+    return Date.now();
+}
+
 // Compute what auto-generated notifications SHOULD exist right now based on
 // localStorage state. Returns an empty list when nothing applies.
 function computeAutoNotifications(): Notification[] {
     if (typeof window === "undefined") return [];
     const out: Notification[] = [];
 
-    // Parse the heavy localStorage blobs once and reuse them across every
-    // section below (this runs on mount and every 60s on all teacher pages).
+    // Parse the heavy localStorage blobs once for explicit local-only
+    // development fallback. Canonical production refreshes never call this.
     let attempts: ReturnType<typeof readLocalAttempts> = [];
     let exams: ReturnType<typeof readLocalExams> = [];
     try { attempts = readLocalAttempts(); } catch {}
@@ -140,9 +153,9 @@ function computeAutoNotifications(): Notification[] {
 // (e.g. "auto-recent-exams") are intentionally dropped: they matched every
 // future event and permanently silenced the category, which is the bug this
 // fixes. Content-scoped ids now carry a timestamp and expire after the TTL.
-function readDismissedEntries(): DismissedEntry[] {
+function readDismissedEntries(storageKey: string): DismissedEntry[] {
     try {
-        const raw = localStorage.getItem(DISMISSED_KEY);
+        const raw = localStorage.getItem(storageKey);
         if (!raw) return [];
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
@@ -159,6 +172,17 @@ function readDismissedEntries(): DismissedEntry[] {
     }
 }
 
+function readPersistedNotifications(storageKey: string): Notification[] {
+    try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed as Notification[] : [];
+    } catch {
+        return [];
+    }
+}
+
 const KIND_META: Record<Notification["kind"], { color: string; icon: React.ReactNode }> = {
     info: { color: "#4f46e5", icon: <Users size={16} /> },
     success: { color: "#10b981", icon: <CheckCircle2 size={16} /> },
@@ -169,60 +193,67 @@ const KIND_META: Record<Notification["kind"], { color: string; icon: React.React
 };
 
 export default function NotificationBell() {
+    const router = useRouter();
     const [open, setOpen] = useState(false);
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [hydrated, setHydrated] = useState(false);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+    const [mutationPending, setMutationPending] = useState(false);
+    const [mutationError, setMutationError] = useState("");
     const rootRef = useRef<HTMLDivElement | null>(null);
+    const refreshGenerationRef = useRef(0);
+    const storageNamespaceRef = useRef<TeacherNotificationStorageNamespace | null>(null);
+    const mutationGenerationRef = useRef(0);
+    const closeNotifications = useCallback(() => {
+        setOpen(false);
+        setClearConfirmOpen(false);
+    }, []);
+    const dialogRef = useDialogFocus(open, closeNotifications);
 
-    // Merge auto-generated (dynamic) notifications with persisted user
-    // notifications. The persisted list is what the user has dismissed/read
-    // on, so it always wins for notifications they touched. Auto notifs are
-    // injected fresh (but their unread state is preserved if we've seen them).
-    const refresh = useCallback(() => {
-        let persisted: Notification[] = [];
-        try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            if (raw) {
-                const parsed = JSON.parse(raw);
-                if (Array.isArray(parsed)) persisted = parsed as Notification[];
-            }
-        } catch {}
-        const dismissedSet = new Set(readDismissedEntries().map(entry => entry.id));
-
-        const auto = computeAutoNotifications().filter(n => !dismissedSet.has(n.id));
-
-        // Reconcile unread state: if the same auto id is already in the
-        // persisted list and the user marked it read, keep it read.
-        const persistedById = new Map(persisted.map(n => [n.id, n]));
-        const mergedAuto = auto.map(a => {
-            const prev = persistedById.get(a.id);
-            if (prev && prev.unread === false) return { ...a, unread: false };
-            return a;
+    const refresh = useCallback(async () => {
+        const generation = refreshGenerationRef.current + 1;
+        refreshGenerationRef.current = generation;
+        const result = await loadTeacherNotificationSummary();
+        if (refreshGenerationRef.current !== generation) return;
+        const resolution = resolveTeacherNotificationRefresh<Notification>(result, {
+            readPersisted: readPersistedNotifications,
+            readDismissed: readDismissedEntries,
+            computeLocalFallback: computeAutoNotifications,
         });
-
-        // Keep any user-added / non-auto persisted notifications
-        const userOnly = persisted.filter(n => !n.source);
-
-        const merged = [...mergedAuto, ...userOnly];
-        setNotifications(merged);
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        } catch {}
+        storageNamespaceRef.current = resolution.namespace;
+        const next = resolution.notifications as Notification[];
+        setNotifications(next);
+        if (resolution.shouldPersist && resolution.namespace) {
+            try {
+                localStorage.setItem(resolution.namespace.notificationsKey, JSON.stringify(next));
+            } catch {}
+        }
     }, []);
 
     // Hydrate once + refresh every 60s
     useEffect(() => {
         // Refresh derives notifications from client-only localStorage after mount.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        refresh();
-        setHydrated(true);
+        const initialRefreshId = window.setTimeout(() => {
+            void refresh();
+            setHydrated(true);
+        }, 0);
         const id = setInterval(() => {
             // Skip the localStorage parsing work while the tab is backgrounded.
             if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-            refresh();
+            void refresh();
         }, 60 * 1000);
-        return () => clearInterval(id);
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "hidden") return;
+            void refresh();
+        };
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        return () => {
+            refreshGenerationRef.current += 1;
+            mutationGenerationRef.current += 1;
+            clearTimeout(initialRefreshId);
+            clearInterval(id);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
     }, [refresh]);
 
     // Close on outside click
@@ -230,55 +261,86 @@ export default function NotificationBell() {
         if (!open) return;
         const onClick = (e: MouseEvent) => {
             if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-                setOpen(false);
+                closeNotifications();
             }
         };
         window.addEventListener("mousedown", onClick);
         return () => window.removeEventListener("mousedown", onClick);
-    }, [open]);
+    }, [closeNotifications, open]);
 
     const unreadCount = notifications.filter(n => n.unread).length;
 
-    const persist = (next: Notification[]) => {
+    const persistLocal = (next: Notification[]) => {
         setNotifications(next);
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {}
+        const namespace = storageNamespaceRef.current;
+        if (!namespace) return;
+        try { localStorage.setItem(namespace.notificationsKey, JSON.stringify(next)); } catch {}
+    };
+
+    const applyLocalMutation = (operation: "mark_read" | "dismiss", ids: string[]) => {
+        const idSet = new Set(ids);
+        if (operation === "dismiss") {
+            try {
+                const namespace = storageNamespaceRef.current;
+                if (namespace) {
+                    const now = currentEpochMs();
+                    const existing = readDismissedEntries(namespace.dismissedKey)
+                        .filter(entry => !idSet.has(entry.id));
+                    localStorage.setItem(namespace.dismissedKey, JSON.stringify([
+                        ...existing,
+                        ...ids.map(id => ({ id, at: now })),
+                    ]));
+                }
+            } catch {}
+        }
+        persistLocal(operation === "dismiss"
+            ? notifications.filter(notification => !idSet.has(notification.id))
+            : notifications.map(notification => idSet.has(notification.id)
+                ? { ...notification, unread: false }
+                : notification));
+    };
+
+    const runMutation = async (operation: "mark_read" | "dismiss", ids: string[]) => {
+        if (mutationPending || ids.length === 0) return;
+        const generation = mutationGenerationRef.current + 1;
+        mutationGenerationRef.current = generation;
+        setMutationPending(true);
+        setMutationError("");
+        const result = await mutateTeacherNotificationState({ operation, notificationIds: ids });
+        if (mutationGenerationRef.current !== generation) return;
+        if (result.status === "saved") {
+            setNotifications(current => applyTeacherNotificationStates(current, result.states));
+        } else if (result.status === "local_only") {
+            applyLocalMutation(operation, ids);
+        } else {
+            setMutationError("알림 상태를 동기화하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+            await refresh();
+        }
+        if (mutationGenerationRef.current === generation) setMutationPending(false);
     };
 
     const markAllRead = () => {
-        persist(notifications.map(n => ({ ...n, unread: false })));
+        void runMutation("mark_read", notifications.filter(notification => notification.unread).map(notification => notification.id));
     };
-    const markOneRead = (id: string) => {
-        persist(notifications.map(n => n.id === id ? { ...n, unread: false } : n));
+    const markOneRead = async (id: string) => {
+        await runMutation("mark_read", [id]);
     };
-    const clearAll = () => {
-        // Remember which auto-generated notifications were dismissed so they
-        // don't get re-added on the next refresh tick. Dismissals are stored
-        // with a timestamp and expire (see readDismissedEntries), and the auto
-        // ids are content-scoped, so this hides only the *current* state — a
-        // new event later produces a new id and reappears.
-        try {
-            const now = Date.now();
-            const dismissedIds = new Set(
-                notifications.map(n => n.id).filter(id => id.startsWith("auto-"))
-            );
-            if (dismissedIds.size > 0) {
-                const existing = readDismissedEntries().filter(entry => !dismissedIds.has(entry.id));
-                const merged: DismissedEntry[] = [
-                    ...existing,
-                    ...[...dismissedIds].map(id => ({ id, at: now })),
-                ];
-                localStorage.setItem(DISMISSED_KEY, JSON.stringify(merged));
-            }
-        } catch {}
-        persist([]);
+    const dismissOne = (id: string) => {
+        void runMutation("dismiss", [id]);
+    };
+    const handleClearAll = () => {
+        void runMutation("dismiss", notifications.map(notification => notification.id));
         setClearConfirmOpen(false);
     };
 
     return (
         <div ref={rootRef} style={{ position: 'relative' }}>
             <button
-                onClick={() => setOpen(prev => !prev)}
+                onClick={() => open ? closeNotifications() : setOpen(true)}
                 aria-label={unreadCount > 0 ? `알림 (읽지 않음 ${unreadCount}개)` : '알림 받기'}
+                aria-expanded={open}
+                aria-controls="teacher-notifications-dialog"
+                aria-haspopup="dialog"
                 style={{
                     width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
                     borderRadius: 'var(--radius-full)', background: 'var(--background)',
@@ -313,8 +375,11 @@ export default function NotificationBell() {
 
             {open && (
                 <div
+                    id="teacher-notifications-dialog"
+                    ref={dialogRef}
                     role="dialog"
                     aria-label="알림 목록"
+                    tabIndex={-1}
                     style={{
                         position: 'absolute', top: 'calc(100% + 0.5rem)', right: 0,
                         width: 360, maxWidth: '90vw',
@@ -344,6 +409,7 @@ export default function NotificationBell() {
                                 {unreadCount > 0 && (
                                     <button
                                         onClick={markAllRead}
+                                        disabled={mutationPending}
                                         style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 650 }}
                                     >
                                         모두 읽음
@@ -351,6 +417,7 @@ export default function NotificationBell() {
                                 )}
                                 <button
                                     onClick={() => setClearConfirmOpen(true)}
+                                    disabled={mutationPending}
                                     style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 550 }}
                                 >
                                     모두 삭제
@@ -384,7 +451,8 @@ export default function NotificationBell() {
                                     취소
                                 </button>
                                 <button
-                                    onClick={clearAll}
+                                    onClick={handleClearAll}
+                                    disabled={mutationPending}
                                     style={{
                                         minHeight: 44,
                                         padding: '0 0.7rem',
@@ -398,6 +466,12 @@ export default function NotificationBell() {
                                     삭제
                                 </button>
                             </div>
+                        </div>
+                    )}
+
+                    {mutationError && (
+                        <div role="alert" style={{ padding: '0.65rem 1rem', color: 'var(--error)', fontSize: 'var(--type-label)', borderBottom: '1px solid var(--border)' }}>
+                            {mutationError}
                         </div>
                     )}
 
@@ -441,23 +515,47 @@ export default function NotificationBell() {
                                 );
                                 const commonStyle: React.CSSProperties = {
                                     display: 'flex', alignItems: 'flex-start', gap: '0.75rem',
-                                    padding: '0.85rem 1rem', borderBottom: '1px solid var(--border)',
+                                    padding: '0.85rem 0.5rem 0.85rem 1rem',
                                     background: n.unread ? 'rgba(99,102,241,0.02)' : 'transparent',
                                     transition: 'background 0.15s', cursor: n.href ? 'pointer' : 'default',
                                     textAlign: 'left', width: '100%'
                                 };
-                                return n.href ? (
-                                    <Link
-                                        key={n.id}
-                                        href={n.href}
-                                        onClick={() => { markOneRead(n.id); setOpen(false); }}
-                                        style={commonStyle}
-                                    >
-                                        {content}
-                                    </Link>
-                                ) : (
-                                    <div key={n.id} onClick={() => markOneRead(n.id)} style={commonStyle}>
-                                        {content}
+                                return (
+                                    <div key={n.id} style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid var(--border)' }}>
+                                        {n.href ? (
+                                            <Link
+                                                href={n.href}
+                                                onClick={(event) => {
+                                                    event.preventDefault();
+                                                    void markOneRead(n.id).finally(() => {
+                                                        closeNotifications();
+                                                        router.push(n.href!);
+                                                    });
+                                                }}
+                                                style={commonStyle}
+                                            >
+                                                {content}
+                                            </Link>
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                onClick={() => { void markOneRead(n.id); }}
+                                                disabled={mutationPending}
+                                                style={commonStyle}
+                                            >
+                                                {content}
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            aria-label={`${n.title} 알림 삭제`}
+                                            title="알림 삭제"
+                                            onClick={() => dismissOne(n.id)}
+                                            disabled={mutationPending}
+                                            style={{ width: 44, minWidth: 44, color: 'var(--muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                        >
+                                            <X size={16} aria-hidden="true" />
+                                        </button>
                                     </div>
                                 );
                             })

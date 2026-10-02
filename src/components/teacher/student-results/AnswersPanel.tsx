@@ -1,12 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Ref } from "react";
 import { ListChecks, MessageSquare, Send } from "lucide-react";
-import StatusPill from "@/components/dashboard/StatusPill";
+import StatusPill, { GradingEvidenceNote } from "@/components/dashboard/StatusPill";
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
-import type { AttemptScoreSummary } from "@/lib/premiumAnalytics";
+import type { AttemptGradingSource, AttemptScoreSummary } from "@/lib/premiumAnalytics";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { safeScorePercent } from "@/lib/scoreUtils";
+import { hasGradableAttemptScore, safeScorePercent } from "@/lib/scoreUtils";
 import styles from "./StudentResultHub.module.css";
 
 export interface AnswerResultCounts {
@@ -19,7 +19,10 @@ export interface AnswerResultCounts {
 interface AnswersPanelProps {
     attempt: Attempt;
     exam?: Exam;
+    gradingSource?: AttemptGradingSource;
     questionResults: QuestionResult[];
+    requestedQuestionNumber?: number | null;
+    questionResultsLoading?: boolean;
     counts: AnswerResultCounts;
     score?: AttemptScoreSummary;
     subQuestionFilter: "needs_review" | "all";
@@ -60,12 +63,12 @@ function SmallStat({ label, value, accent, textColor }: { label: string; value: 
     );
 }
 
-function QuestionAnswerRow({ result, timeSec }: { result: QuestionResult; timeSec?: number }) {
+function QuestionAnswerRow({ result, timeSec, targeted, targetRef }: { result: QuestionResult; timeSec?: number; targeted: boolean; targetRef?: Ref<HTMLElement> }) {
     const status = STATUS_META[result.status];
     const timeLabel = formatQuestionTime(result.timeSec ?? timeSec);
 
     return (
-        <article style={{ display: "grid", gap: "0.35rem", padding: "0.75rem", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface)" }}>
+        <article ref={targetRef} tabIndex={targeted ? -1 : undefined} aria-label={`${result.questionNumber}번 문항${targeted ? " · 선택한 분석 근거" : ""}`} style={{ scrollMarginTop: "6rem", outline: targeted ? "2px solid var(--primary)" : undefined, display: "grid", gap: "0.35rem", padding: "0.75rem", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.7rem", flexWrap: "wrap" }}>
                 <strong style={{ fontSize: "0.86rem" }}>{result.questionNumber}번</strong>
                 <span style={{ color: status.color, fontSize: "0.75rem", fontWeight: 900 }}>{status.label}</span>
@@ -85,7 +88,10 @@ function QuestionAnswerRow({ result, timeSec }: { result: QuestionResult; timeSe
 export default function AnswersPanel({
     attempt,
     exam,
+    gradingSource,
     questionResults,
+    requestedQuestionNumber = null,
+    questionResultsLoading = false,
     counts,
     score,
     subQuestionFilter,
@@ -98,15 +104,24 @@ export default function AnswersPanel({
     savingQuestionId,
 }: AnswersPanelProps) {
     const [wrongOnly, setWrongOnly] = useState(false);
+    const targetRef = useRef<HTMLElement>(null);
+    const validRequestedNumber = Number.isSafeInteger(requestedQuestionNumber) && (requestedQuestionNumber ?? 0) > 0
+        ? requestedQuestionNumber : null;
+    const matchingResults = validRequestedNumber === null ? [] : questionResults.filter(result => result.questionNumber === validRequestedNumber);
+    const target = matchingResults.length === 1 ? matchingResults[0] : undefined;
+    const targetQuestionId = target?.questionId;
+    useEffect(() => {
+        if (targetQuestionId === undefined || questionResultsLoading) return;
+        const element = targetRef.current;
+        element?.focus({ preventScroll: true });
+        element?.scrollIntoView?.({ block: "center", behavior: "auto" });
+    }, [attempt.id, validRequestedNumber, targetQuestionId, questionResultsLoading]);
     const currentPercent = score?.scorePercent ?? safeScorePercent(attempt.score, attempt.totalScore);
     const currentEarnedScore = score?.earnedScore ?? attempt.score;
     const currentTotalScore = score?.totalScore ?? attempt.totalScore;
-    const storedPercent = safeScorePercent(attempt.score, attempt.totalScore);
-    const scoreRegraded = !!score
-        && attempt.totalScore > 0
-        && score.scorePercent !== storedPercent;
+    const hasGradableScore = hasGradableAttemptScore({ totalScore: currentTotalScore, scorePercent: currentPercent });
     const visibleQuestionResults = wrongOnly
-        ? questionResults.filter(result => result.status === "wrong" || result.status === "unanswered")
+        ? questionResults.filter(result => result.status === "wrong" || result.status === "unanswered" || result === target)
         : questionResults;
     const wrongQuestionCount = questionResults.filter(result => result.status === "wrong" || result.status === "unanswered").length;
     const timingByQuestionId = useMemo(
@@ -132,19 +147,12 @@ export default function AnswersPanel({
     return (
         <div className={styles.panelStack}>
             <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="answer-summary-title">
-                <div id="answer-summary-title" style={{ fontSize: "0.75rem", fontWeight: 800, color: "var(--muted)", letterSpacing: "0.08em", marginBottom: "0.6rem" }}>현재 채점 요약</div>
+                <div id="answer-summary-title" style={{ fontSize: "0.75rem", fontWeight: 800, color: "var(--muted)", letterSpacing: "0.08em", marginBottom: "0.6rem" }}>제출 채점 요약</div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: "0.6rem", flexWrap: "wrap" }}>
-                    <strong style={{ fontSize: "2.3rem", color: "var(--primary)", lineHeight: 1 }}>{currentPercent}%</strong>
-                    <span style={{ color: "var(--muted)", fontWeight: 800 }}>{currentEarnedScore} / {currentTotalScore}점</span>
+                    <strong style={{ fontSize: "2.3rem", color: "var(--primary)", lineHeight: 1 }}>{hasGradableScore ? `${currentPercent}%` : "미채점"}</strong>
+                    {hasGradableScore && <span style={{ color: "var(--muted)", fontWeight: 800 }}>{currentEarnedScore} / {currentTotalScore}점</span>}
                 </div>
-                {scoreRegraded && (
-                    <StatusPill
-                        tone="warning"
-                        label="현재 정답 기준 재채점됨"
-                        detail={`제출 당시 ${attempt.score}점 (${storedPercent}%)`}
-                        style={{ marginTop: "0.65rem" }}
-                    />
-                )}
+                <GradingEvidenceNote source={gradingSource} />
                 <div className={styles.statGrid} style={{ gridTemplateColumns: `repeat(${counts.ungradedCount > 0 ? 4 : 3}, minmax(0, 1fr))` }}>
                     <SmallStat label="정답" value={counts.correctCount} accent="var(--success)" textColor="var(--text-success)" />
                     <SmallStat label="오답" value={counts.incorrectCount} accent="var(--error)" textColor="var(--text-error)" />
@@ -161,10 +169,17 @@ export default function AnswersPanel({
                         <button type="button" className={`btn ${wrongOnly ? "btn-primary" : "btn-secondary"}`} onClick={() => setWrongOnly(true)} aria-pressed={wrongOnly}>오답/미응답 {wrongQuestionCount}</button>
                     </div>
                 </div>
+                {validRequestedNumber !== null ? (
+                    <p role="status" className={styles.emptyText}>
+                        {questionResultsLoading ? `${validRequestedNumber}번 문항 기록을 불러오는 중입니다.`
+                            : !target ? `${validRequestedNumber}번 문항 기록을 확인할 수 없습니다. 아래 답안 목록에서 확인해 주세요.`
+                                : `${validRequestedNumber}번 문항은 개념 분석에서 선택한 근거입니다.${wrongOnly && target.status !== "wrong" && target.status !== "unanswered" ? " 선택한 문항은 필터와 함께 표시합니다." : ""}`}
+                    </p>
+                ) : null}
                 {visibleQuestionResults.length > 0 ? (
                     <div className={styles.rowList}>
                         {visibleQuestionResults.map(result => (
-                            <QuestionAnswerRow key={result.questionId} result={result} timeSec={timingByQuestionId.get(result.questionId)} />
+                            <QuestionAnswerRow key={result.questionId} result={result} timeSec={timingByQuestionId.get(result.questionId)} targeted={result === target} targetRef={result === target ? targetRef : undefined} />
                         ))}
                     </div>
                 ) : (

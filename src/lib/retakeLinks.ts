@@ -1,8 +1,20 @@
 import type { RetakeMetadata } from "@/types/omr";
 
+export type ReviewAttemptSource = "server" | "local" | null;
+
+export function supportedReviewRetakeModes(
+    source: ReviewAttemptSource,
+): RetakeMetadata["mode"][] {
+    return source === "local"
+        ? ["wrong", "custom", "similar"]
+        : ["wrong"];
+}
+
 export interface RetakeLinkMetadata {
     labels?: string[];
     concepts?: string[];
+    /** Exact immutable submitted-definition cohorts; absent links are non-official/local only. */
+    cohortKeys?: string[];
 }
 
 function joinedMetadata(values: string[] | undefined): string {
@@ -31,5 +43,8 @@ export function buildRetakeHref(
     const concepts = joinedMetadata(metadata.concepts);
     if (labels) params.set("labels", labels);
     if (concepts) params.set("concepts", concepts);
+    if (metadata.cohortKeys?.length) {
+        params.set("cohorts", [...new Set(metadata.cohortKeys)].sort().join(","));
+    }
     return `/solve/${examId}?${params.toString()}`;
 }

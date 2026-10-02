@@ -1,0 +1,448 @@
+import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { continueSolveEntryIfPresent } from "./helpers";
+
+const LONG_TOKEN = "가".repeat(96);
+const EXAM_ID = "student-simplification-exam";
+const ATTEMPT_ID = "student-simplification-attempt";
+
+function samplePdfDataUrl(): string {
+    const bytes = readFileSync(path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf"));
+    return `data:application/pdf;base64,${bytes.toString("base64")}`;
+}
+
+async function seedStudentSurface(page: Page, options: { completed?: boolean; guest?: boolean; withoutPdf?: boolean } = {}) {
+    await page.addInitScript(({ examId, attemptId, completed, guest, longToken, pdfData }) => {
+        try { window.localStorage.clear(); } catch {}
+        try { window.sessionStorage.clear(); } catch {}
+
+        const studentId = guest ? "guest:student-simplification" : "student-simplification";
+        const guestId = guest ? "student-simplification" : undefined;
+        const session = {
+            studentId,
+            loginId: guest ? `guest-${longToken}` : studentId,
+            name: `${longToken}학생`,
+            groupId: "student-simplification-group",
+            groupName: `${longToken}반`,
+            isGuest: guest,
+            identityType: guest ? "guest" : "temporary",
+            guestId,
+        };
+        const question = {
+            id: 1,
+            number: 1,
+            label: longToken,
+            score: 10,
+            answer: 2,
+            choices: 5,
+            explanation: `https://example.test/${longToken}`,
+            tags: {
+                subject: "국어",
+                unit: "독해",
+                concept: longToken,
+                source: `https://example.test/source/${longToken}`,
+                difficulty: "medium",
+            },
+            subQuestions: [{
+                schemaVersion: 1,
+                id: "long-prompt",
+                prompt: `https://example.test/prompt/${longToken}`,
+                kind: "free_text",
+                templateId: "custom",
+            }],
+        };
+        const secondQuestion = {
+            id: 2,
+            number: 2,
+            label: "접근성 키보드 이동 확인",
+            score: 10,
+            answer: 2,
+            choices: 5,
+            explanation: "두 번째 문항의 키보드 이동 상태를 확인합니다.",
+        };
+        const exam = {
+            id: examId,
+            title: `${longToken}시험`,
+            createdAt: "2026-08-05T00:00:00.000Z",
+            durationMin: 45,
+            pdfData,
+            accessConfig: { type: "public", groupIds: [] },
+            questions: completed ? [question, secondQuestion] : [question],
+        };
+        const attempt = {
+            id: attemptId,
+            examId,
+            examTitle: exam.title,
+            studentName: session.name,
+            studentId,
+            guestId,
+            groupId: session.groupId,
+            groupName: session.groupName,
+            identityType: session.identityType,
+            startedAt: "2026-08-05T00:00:00.000Z",
+            finishedAt: "2026-08-05T00:20:00.000Z",
+            score: 10,
+            totalScore: 20,
+            answers: { 1: 1, 2: 2 },
+            questionResultsSource: "legacy_derived_current_exam",
+            subQuestionAnswers: {
+                1: {
+                    "long-prompt": {
+                        schemaVersion: 1,
+                        body: `https://example.test/answer/${longToken}`,
+                        reviewStatus: "reviewed",
+                    },
+                },
+            },
+            studentQuestions: [{
+                questionId: 1,
+                questionNumber: 1,
+                body: `https://example.test/student/${longToken}`,
+                createdAt: "2026-08-05T00:21:00.000Z",
+                status: "answered",
+                answer: {
+                    body: `https://example.test/teacher/${longToken}`,
+                    createdAt: "2026-08-05T00:22:00.000Z",
+                    teacherName: longToken,
+                },
+            }],
+            status: "completed",
+        };
+
+        window.localStorage.setItem(`omr_exam_${examId}`, JSON.stringify(exam));
+        window.localStorage.setItem("omr_attempts", JSON.stringify(completed ? [attempt] : []));
+        if (guestId) window.localStorage.setItem("omr_guest_id", guestId);
+        window.localStorage.setItem("omr_student_session_backup", JSON.stringify(session));
+        window.sessionStorage.setItem("omr_student_session", JSON.stringify(session));
+    }, {
+        examId: EXAM_ID,
+        attemptId: ATTEMPT_ID,
+        completed: options.completed ?? false,
+        guest: options.guest ?? false,
+        longToken: LONG_TOKEN,
+        pdfData: options.withoutPdf ? undefined : samplePdfDataUrl(),
+    });
+}
+
+async function expectInsideViewport(page: Page, selector: string) {
+    const violations = await page.locator(selector).evaluateAll(elements => elements.flatMap(element => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0) return [];
+        return rect.left < -1 || rect.right > window.innerWidth + 1
+            ? [{ left: rect.left, right: rect.right, viewport: window.innerWidth, text: element.textContent }]
+            : [];
+    }));
+    expect(violations).toEqual([]);
+}
+
+test.describe("student UI simplification regressions", () => {
+    for (const width of [320, 390]) {
+        test(`${width}px keeps alternate student entry methods in one collapsed disclosure`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 844 });
+            await page.goto("/?role=student");
+
+            await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
+            await expect(page.getByText("학생 포털", { exact: true })).toHaveCount(0);
+            await expect(page.getByRole("button", { name: "시험 시작하기" })).toBeVisible();
+
+            const disclosure = page.locator("details.student-alternate-entry");
+            await expect(disclosure).not.toHaveAttribute("open", "");
+            await expect(page.getByRole("button", { name: "반 코드로 게스트 시험보기" })).toBeHidden();
+            await disclosure.locator("summary").click();
+            await expect(disclosure).toHaveAttribute("open", "");
+            await expect(page.getByRole("button", { name: "반 코드로 게스트 시험보기" })).toBeVisible();
+            await expect(page.getByRole("button", { name: "코드 없이 게스트로 계속하기" })).toBeVisible();
+            await expectInsideViewport(page, "details.student-alternate-entry");
+        });
+    }
+
+    test("320px dashboard wraps long identity copy, hides zero completion KPI, and stacks assignment CTA", async ({ page }) => {
+        await page.setViewportSize({ width: 320, height: 844 });
+        await seedStudentSurface(page);
+        await page.goto("/student/dashboard");
+
+        await expect(page.getByTestId("student-dashboard-loading")).toBeHidden({ timeout: 15_000 });
+        await expect(page.locator(".student-dashboard-brand").getByText(/^(학생|게스트)$/)).toHaveCount(0);
+        await expect(page.locator(".student-dashboard-login-id")).toHaveCount(0);
+        await expect(page.getByText("완료한 시험", { exact: true })).toHaveCount(0);
+
+        const welcome = page.locator(".student-dashboard-welcome h1");
+        await expect(welcome).toHaveAttribute("title", `${LONG_TOKEN}학생님`);
+        await expect(welcome).toHaveCSS("overflow-wrap", "anywhere");
+
+        const row = page.locator(".student-assignment-row").first();
+        const title = row.locator(".student-assignment-title");
+        await expect(title).toHaveAttribute("title", `${LONG_TOKEN}시험`);
+        const layout = await row.evaluate(element => {
+            const titleRect = element.querySelector<HTMLElement>(".student-assignment-content")!.getBoundingClientRect();
+            const actionRect = element.querySelector<HTMLElement>(".student-assignment-action")!.getBoundingClientRect();
+            return { titleBottom: titleRect.bottom, actionTop: actionRect.top, actionHeight: actionRect.height };
+        });
+        expect(layout.actionTop).toBeGreaterThanOrEqual(layout.titleBottom - 1);
+        expect(layout.actionHeight).toBeGreaterThanOrEqual(44);
+        await expectInsideViewport(page, ".student-assignment-row");
+
+        const zeroGrid = page.locator(".student-dashboard-grid.is-zero-completions");
+        await expect(zeroGrid).toBeVisible();
+        const phoneGrid = await zeroGrid.evaluate(element => {
+            const grid = element.getBoundingClientRect();
+            const average = element.querySelector<HTMLElement>(".student-dashboard-average-card")!.getBoundingClientRect();
+            return { gridWidth: grid.width, averageWidth: average.width };
+        });
+        expect(Math.abs(phoneGrid.gridWidth - phoneGrid.averageWidth)).toBeLessThanOrEqual(2);
+
+        await page.setViewportSize({ width: 1280, height: 900 });
+        const desktopGrid = await zeroGrid.evaluate(element => {
+            const grid = element.getBoundingClientRect();
+            const primary = element.querySelector<HTMLElement>(".student-dashboard-primary-task")!.getBoundingClientRect();
+            const average = element.querySelector<HTMLElement>(".student-dashboard-average-card")!.getBoundingClientRect();
+            const completed = element.querySelector<HTMLElement>(".student-dashboard-completed-task")!.getBoundingClientRect();
+            return {
+                gridLeft: grid.left,
+                gridRight: grid.right,
+                primaryLeft: primary.left,
+                primaryRight: primary.right,
+                primaryTop: primary.top,
+                averageLeft: average.left,
+                averageRight: average.right,
+                averageTop: average.top,
+                averageBottom: average.bottom,
+                completedLeft: completed.left,
+                completedRight: completed.right,
+                completedTop: completed.top,
+            };
+        });
+        expect(Math.abs(desktopGrid.primaryLeft - desktopGrid.gridLeft)).toBeLessThanOrEqual(2);
+        expect(Math.abs(desktopGrid.averageRight - desktopGrid.gridRight)).toBeLessThanOrEqual(2);
+        expect(Math.abs(desktopGrid.completedLeft - desktopGrid.gridLeft)).toBeLessThanOrEqual(2);
+        expect(Math.abs(desktopGrid.primaryTop - desktopGrid.averageTop)).toBeLessThanOrEqual(2);
+        expect(desktopGrid.averageLeft).toBeGreaterThanOrEqual(desktopGrid.primaryRight - 1);
+        expect(desktopGrid.completedRight).toBeLessThanOrEqual(desktopGrid.averageLeft + 1);
+        expect(desktopGrid.completedTop).toBeGreaterThanOrEqual(desktopGrid.averageBottom - 1);
+        await expectInsideViewport(page, ".student-dashboard-grid > *");
+    });
+
+    for (const width of [320, 390]) {
+    test(`${width}px student solve tools hide the teacher preview and the PDF picker for an attached PDF`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 844 });
+        await seedStudentSurface(page, { guest: true });
+        await page.goto(`/solve/${EXAM_ID}`);
+        await continueSolveEntryIfPresent(page);
+
+        const tools = page.locator("details.solve-tools-disclosure");
+        await expect(page.getByRole("button", { name: "제출하기" })).toBeVisible();
+        await tools.locator("summary").click();
+        const toolsPanel = tools.locator(".solve-tools-panel");
+        await expect(tools.getByRole("button", { name: /모드로 전환/ })).toBeVisible();
+        await expect(toolsPanel.locator(".solve-teacher-toggle")).toHaveCount(0);
+        await expect(toolsPanel.getByLabel("선생님 모드")).toHaveCount(0);
+        await expect(toolsPanel.locator(".solve-pdf-button")).toHaveCount(0);
+        await expect(page.getByText("PDF 열기", { exact: true })).toHaveCount(0);
+        // The empty-state picker input stays mounted for the PDFViewer.
+        await expect(page.locator("#pdf-upload-input")).toHaveCount(1);
+        await expectInsideViewport(page, ".solve-header, .solve-header-content, .solve-tools-panel");
+    });
+
+    test(`${width}px solve header keeps secondary tools visible outside control clipping`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 844 });
+        // Teacher preview of an exam without an attached PDF: both secondary
+        // tools (teacher toggle and "PDF 열기") are offered.
+        await seedStudentSurface(page, { guest: true, withoutPdf: true });
+        await page.goto(`/solve/${EXAM_ID}?preview=teacher`);
+        await continueSolveEntryIfPresent(page);
+
+        const tools = page.locator("details.solve-tools-disclosure");
+        await expect(tools).not.toHaveAttribute("open", "");
+        await expect(page.getByRole("button", { name: "제출하기" })).toBeVisible();
+        await expect(page.getByRole("banner").getByRole("button", { name: /답안지 (접기|펼치기)/ })).toBeVisible();
+        await expect(page.getByText("선생님 모드", { exact: true })).toBeHidden();
+        await tools.locator("summary").click();
+        await expect(page.getByText("선생님 모드", { exact: true })).toBeVisible();
+        await expect(page.getByText("PDF 열기", { exact: true })).toBeVisible();
+        const toolsPanel = tools.locator(".solve-tools-panel");
+        const teacherToggle = toolsPanel.locator(".solve-teacher-toggle");
+        const pdfButton = toolsPanel.locator(".solve-pdf-button");
+        const themeToggle = tools.getByRole("button", { name: /모드로 전환/ });
+        await expect(teacherToggle).toBeVisible();
+        await expect(pdfButton).toBeVisible();
+        await expect(themeToggle).toBeVisible();
+        const toolBounds = await toolsPanel.evaluate(panel => {
+            const panelRect = panel.getBoundingClientRect();
+            const teacher = panel.querySelector<HTMLElement>(".solve-teacher-toggle")!.getBoundingClientRect();
+            const checkbox = panel.querySelector<HTMLInputElement>('.solve-teacher-toggle input[type="checkbox"]')!.getBoundingClientRect();
+            const label = panel.querySelector<HTMLElement>(".solve-teacher-toggle-label")!.getBoundingClientRect();
+            const pdf = panel.querySelector<HTMLElement>(".solve-pdf-button")!.getBoundingClientRect();
+            const theme = panel.querySelector<HTMLElement>('button[aria-label$="모드로 전환"]')!.getBoundingClientRect();
+            const controls = panel.closest<HTMLElement>(".solve-controls")!;
+            return {
+                panel: { left: panelRect.left, right: panelRect.right, top: panelRect.top, bottom: panelRect.bottom },
+                teacher: { width: teacher.width, height: teacher.height },
+                checkboxRight: checkbox.right,
+                labelLeft: label.left,
+                pdf: { left: pdf.left, right: pdf.right, height: pdf.height },
+                theme: { left: theme.left, right: theme.right, width: theme.width, height: theme.height },
+                controlsOverflowX: getComputedStyle(controls).overflowX,
+                viewport: { width: window.innerWidth, height: window.innerHeight },
+            };
+        });
+        expect(toolBounds.panel.left).toBeGreaterThanOrEqual(0);
+        expect(toolBounds.panel.right).toBeLessThanOrEqual(toolBounds.viewport.width);
+        expect(toolBounds.panel.top).toBeGreaterThanOrEqual(0);
+        expect(toolBounds.panel.bottom).toBeLessThanOrEqual(toolBounds.viewport.height);
+        expect(toolBounds.controlsOverflowX).toBe("visible");
+        expect(toolBounds.teacher.width).toBeGreaterThan(44);
+        expect(toolBounds.teacher.height).toBeGreaterThanOrEqual(44);
+        expect(toolBounds.labelLeft).toBeGreaterThanOrEqual(toolBounds.checkboxRight);
+        expect(toolBounds.pdf.left).toBeGreaterThanOrEqual(toolBounds.panel.left);
+        expect(toolBounds.pdf.right).toBeLessThanOrEqual(toolBounds.panel.right);
+        expect(toolBounds.pdf.height).toBeGreaterThanOrEqual(44);
+        expect(toolBounds.theme.left).toBeGreaterThanOrEqual(toolBounds.panel.left);
+        expect(toolBounds.theme.right).toBeLessThanOrEqual(toolBounds.panel.right);
+        const themeToggleBox = await themeToggle.boundingBox();
+        expect(themeToggleBox?.width).toBeGreaterThanOrEqual(44);
+        expect(themeToggleBox?.height).toBeGreaterThanOrEqual(44);
+        const currentTheme = await page.locator("html").getAttribute("data-theme");
+        const nextTheme = currentTheme === "dark" ? "light" : "dark";
+        await themeToggle.click();
+        await expect(page.locator("html")).toHaveAttribute("data-theme", nextTheme);
+
+        const rows = await page.locator(".solve-header-content").evaluate(element => {
+            const title = element.querySelector<HTMLElement>(".solve-title-group")!.getBoundingClientRect();
+            const status = element.querySelector<HTMLElement>(".solve-status-row")!.getBoundingClientRect();
+            const controls = element.querySelector<HTMLElement>(".solve-controls")!.getBoundingClientRect();
+            const header = element.closest("header")!.getBoundingClientRect();
+            const toolbar = document.querySelector<HTMLElement>(".pdf-viewer-toolbar")?.getBoundingClientRect();
+            return {
+                titleBottom: title.bottom,
+                statusTop: status.top,
+                statusBottom: status.bottom,
+                controlsTop: controls.top,
+                headerBottom: header.bottom,
+                toolbarTop: toolbar?.top ?? null,
+            };
+        });
+        expect(rows.statusTop).toBeGreaterThanOrEqual(rows.titleBottom - 1);
+        expect(rows.controlsTop).toBeGreaterThanOrEqual(rows.statusBottom - 1);
+        if (rows.toolbarTop !== null) expect(rows.toolbarTop).toBeGreaterThanOrEqual(rows.headerBottom - 1);
+        await expectInsideViewport(page, ".solve-header, .solve-header-content, .solve-body, .pdf-viewer-toolbar");
+    });
+    }
+
+    for (const viewport of [{ width: 320, height: 568 }, { width: 820, height: 1180 }]) {
+    test(`${viewport.width}px solve status row shows the save status chip without growing the header`, async ({ page }) => {
+        await page.setViewportSize(viewport);
+        await seedStudentSurface(page, { guest: true });
+        await page.goto(`/solve/${EXAM_ID}`);
+        await continueSolveEntryIfPresent(page);
+
+        const header = page.locator("header.solve-header");
+        await expect(page.getByRole("button", { name: "제출하기" })).toBeVisible();
+        const saveStatus = page.locator(".solve-status-row .solve-save-status");
+        await expect(saveStatus).toHaveAttribute("aria-live", "polite");
+        await expect(saveStatus).not.toHaveAttribute("role", /.+/);
+        const headerBefore = (await header.boundingBox())!;
+
+        const expandSheet = page.getByRole("banner").getByRole("button", { name: "답안지 펼치기" });
+        if (await expandSheet.isVisible()) await expandSheet.click();
+        await page.getByRole("radio", { name: "문제 1번 보기 2" }).dispatchEvent("click");
+        await expect(saveStatus).toHaveAttribute("data-state", "saved");
+        const pill = saveStatus.locator(".status-pill");
+        await expect(pill).toBeVisible();
+        await expect(pill).toContainText("저장됨");
+        await expect(page.locator(".solve-handwriting-status")).toHaveCount(0);
+
+        const geometry = await page.locator(".solve-header-content").evaluate(element => {
+            const status = element.querySelector<HTMLElement>(".solve-status-row")!.getBoundingClientRect();
+            const progress = element.querySelector<HTMLElement>(".solve-progress")!.getBoundingClientRect();
+            const chip = element.querySelector<HTMLElement>(".solve-save-status .status-pill")!.getBoundingClientRect();
+            const label = element.querySelector<HTMLElement>(".solve-save-status .status-pill-label")!;
+            return {
+                status: { top: status.top, bottom: status.bottom },
+                progressHeight: progress.height,
+                chip: { left: chip.left, right: chip.right, top: chip.top, bottom: chip.bottom, height: chip.height },
+                labelFontSize: parseFloat(getComputedStyle(label).fontSize),
+                rootFontSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+                viewportWidth: window.innerWidth,
+            };
+        });
+        expect(geometry.chip.left).toBeGreaterThanOrEqual(0);
+        expect(geometry.chip.right).toBeLessThanOrEqual(geometry.viewportWidth);
+        expect(geometry.chip.top).toBeGreaterThanOrEqual(geometry.status.top - 1);
+        expect(geometry.chip.bottom).toBeLessThanOrEqual(geometry.status.bottom + 1);
+        expect(geometry.chip.height).toBeLessThanOrEqual(geometry.progressHeight + 1);
+        if (viewport.width <= 768) {
+            // Phones: icon + short label at --type-micro (0.7rem).
+            expect(geometry.labelFontSize).toBeCloseTo(geometry.rootFontSize * 0.7, 1);
+            await expect(pill.locator(".status-pill-label-compact")).toBeVisible();
+        }
+        const headerAfter = (await header.boundingBox())!;
+        expect(headerAfter.height).toBeLessThanOrEqual(headerBefore.height + 1);
+        await expectInsideViewport(page, ".solve-header, .solve-header-content, .solve-status-row > *");
+    });
+    }
+
+    test("390px review contains long metadata, explanation, prompts, and Q&A tokens", async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await seedStudentSurface(page, { completed: true, guest: true });
+        await page.goto(`/student/review/${ATTEMPT_ID}`);
+
+        await expect(page.locator(".student-review-question-card")).toBeVisible({ timeout: 15_000 });
+        const gradingNote = page.getByRole("note", { name: "채점 근거 안내" });
+        const questionTabs = page.getByRole("tablist", { name: "문항 바로가기" }).getByRole("tab");
+        const allFilter = page.getByRole("button", { name: "전체 2" });
+        const wrongFilter = page.getByRole("button", { name: "오답·미응답 1" });
+
+        await expect(gradingNote).toContainText("과거 기록 · 현재 시험지 기준 참고 채점");
+        await expect(gradingNote).toContainText("문항별 제출 채점 결과가 저장되기 전 기록으로, 현재 시험지에서 산출한 참고값입니다.");
+        await expect(questionTabs).toHaveCount(2);
+        expect(await questionTabs.evaluateAll(tabs => tabs.every(tab => {
+            const controlledId = tab.getAttribute("aria-controls");
+            return !!controlledId && !!document.getElementById(controlledId);
+        }))).toBe(true);
+        await expect(questionTabs.nth(0)).toHaveAccessibleName("문항 1 오답");
+        await expect(questionTabs.nth(1)).toHaveAccessibleName("문항 2 정답");
+        await expect(questionTabs.nth(0)).toHaveAttribute("aria-selected", "true");
+        await questionTabs.nth(0).focus();
+        await questionTabs.nth(0).press("ArrowRight");
+        await expect(questionTabs.nth(1)).toBeFocused();
+        await expect(questionTabs.nth(1)).toHaveAttribute("aria-selected", "true");
+        await expect(page.getByRole("tabpanel", { name: "문항 2 정답" })).toBeVisible();
+
+        await allFilter.focus();
+        await allFilter.press("ArrowLeft");
+        await expect(allFilter).toBeFocused();
+        await expect(questionTabs.nth(1)).toHaveAttribute("aria-selected", "true");
+        await expect(allFilter).toHaveAttribute("aria-pressed", "true");
+        await expect(wrongFilter).toHaveAttribute("aria-pressed", "false");
+        await wrongFilter.click();
+        await expect(allFilter).toHaveAttribute("aria-pressed", "false");
+        await expect(wrongFilter).toHaveAttribute("aria-pressed", "true");
+
+        await allFilter.click();
+        await questionTabs.nth(0).click();
+        const explanationButton = page.getByRole("button", { name: /^해설/ });
+        if (await explanationButton.isVisible()) await explanationButton.click();
+        await expect(page.locator(".student-review-explanation")).toBeVisible();
+        await expect(page.locator(".student-review-question-box")).toBeVisible();
+
+        await expectInsideViewport(page, [
+            ".student-review-meta-chip",
+            ".student-review-recommendation-row span",
+            ".student-review-recommendation-row small",
+            ".student-review-explanation",
+            ".student-review-question-card .student-review-long-copy",
+            ".student-review-question-box",
+        ].join(","));
+
+        const longCopyStyles = await page.locator(".student-review-long-copy").evaluateAll(elements => elements.map(element => ({
+            minWidth: getComputedStyle(element).minWidth,
+            overflowWrap: getComputedStyle(element).overflowWrap,
+            maxWidth: getComputedStyle(element).maxWidth,
+        })));
+        expect(longCopyStyles.length).toBeGreaterThanOrEqual(4);
+        expect(longCopyStyles.every(style => style.minWidth === "0px" && style.overflowWrap === "anywhere" && style.maxWidth === "100%"))
+            .toBe(true);
+    });
+});

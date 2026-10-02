@@ -1,6 +1,8 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+
+import { CANONICAL_TABLES } from "../../scripts/canonical-table-manifest.mjs";
 
 const rootDir = process.cwd();
 
@@ -71,22 +73,6 @@ function createdPolicies(sql: string): Array<{ name: string; table: string }> {
         .map(match => ({ name: match[1], table: match[2] }));
 }
 
-function discoveredPublicAppTables(): string[] {
-    const migrationDir = path.join(rootDir, "supabase/migrations");
-    const sources = [
-        read("supabase/schema.sql"),
-        ...readdirSync(migrationDir)
-            .filter(name => name.endsWith(".sql"))
-            .sort()
-            .map(name => read(`supabase/migrations/${name}`)),
-    ];
-    return [...new Set(
-        sources.flatMap(sql => [...sql.matchAll(
-            /create\s+table\s+(?:if\s+not\s+exists\s+)?public\.(omr_[a-z0-9_]+)/gi,
-        )].map(match => match[1])),
-    )].sort();
-}
-
 describe("production server-only database boundary", () => {
     const profile = readOptional("supabase/production-server-boundary.sql");
     const schema = read("supabase/schema.sql");
@@ -94,8 +80,16 @@ describe("production server-only database boundary", () => {
     const livePrelude = read("supabase/live-test-prelude.sql");
     const verifier = read("scripts/verify-supabase-live.mjs");
     const liveAssertions = read("supabase/live-test-assertions.sql");
+    const boundaryAssertions = read("supabase/live-test-boundary-assertions.sql");
+    const rollback = read("supabase/production-server-boundary-rollback.sql");
     const supabaseReadme = read("supabase/README.md");
     const productionReadiness = read("docs/production-readiness.md");
+    const operationalJobStatusMigration = readOptional(
+        "supabase/migrations/202608080005_operational_job_status.sql",
+    );
+    const operatorProvisioningMigration = readOptional(
+        "supabase/migrations/202608080006_initial_operator_provisioning.sql",
+    );
     const ci = read(".github/workflows/ci.yml");
     const readinessV4 = readOptional(
         "supabase/migrations/202607280003_service_readiness_probe_v4.sql",
@@ -327,8 +321,17 @@ describe("production server-only database boundary", () => {
         expect(liveAssertions).toContain(
             "v4 readiness accepted a server gateway procedure impostor",
         );
-        expect(supabaseReadme).toContain("202607280003");
-        expect(productionReadiness).toContain("202607280003");
+        expect(supabaseReadme).toContain("202608090001");
+        expect(supabaseReadme).toContain("rosterSnapshotCasReady");
+        expect(supabaseReadme).toContain("attemptMutationCasReady");
+        expect(supabaseReadme).toContain("examDeleteSessionSafe");
+        expect(supabaseReadme).toContain("teacherAccountLifecycleReady");
+        expect(productionReadiness).toContain("202608090001");
+        expect(productionReadiness).toContain("rosterSnapshotCasReady");
+        expect(productionReadiness).toContain("attemptMutationCasReady");
+        expect(productionReadiness).toContain("examDeleteSessionSafe");
+        expect(productionReadiness).toContain("teacherAccountLifecycleReady");
+        expect(productionReadiness).toContain("initialOperationsLoadControlReady");
     });
 
     it("runs the organization preflight before atomically closing every public app surface", () => {
@@ -357,8 +360,11 @@ describe("production server-only database boundary", () => {
         expect(profile).toMatch(/grant all on all sequences in schema public to service_role;/i);
         expect(profile).toMatch(/grant all on all functions in schema public to service_role;/i);
 
-        expect([...canonicalTables].sort()).toEqual(discoveredPublicAppTables());
-        for (const table of canonicalTables) {
+        const discoveredTables = [...CANONICAL_TABLES];
+        expect(discoveredTables).toHaveLength(48);
+        expect(discoveredTables).toEqual([...discoveredTables].sort());
+        expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
+        for (const table of CANONICAL_TABLES) {
             expect(profile, `${table} must ENABLE RLS`).toMatch(
                 new RegExp(`alter table(?: if exists)? public\\.${table} enable row level security;`, "i"),
             );
@@ -366,6 +372,210 @@ describe("production server-only database boundary", () => {
                 new RegExp(`alter table(?: if exists)? public\\.${table} force row level security;`, "i"),
             );
         }
+        expect(profile).toContain("public.omr_operational_job_status");
+        expect(profile).toContain("public.omr_pilot_plan_grants");
+        expect(profile).toContain("public.omr_begin_operational_job_run_v1(text,text)");
+        expect(profile).toContain("public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)");
+        expect(profile).toContain("public.omr_read_operational_job_status_v1(text)");
+        expect(profile).toContain("pg_catalog.pg_get_function_result(routine.oid) <> 'jsonb'");
+        expect(operatorProvisioningMigration).toContain(
+            "atomic-operator-pilot-teacher-provisioning:202608080006",
+        );
+        expect(profile).toContain("operatorPilotProvisioningReady");
+    });
+
+    it("keeps operational job heartbeat state RPC-only, bounded, and monotonic", () => {
+        expect(operationalJobStatusMigration).not.toBe("");
+        expect(operationalJobStatusMigration).toContain(
+            "create table public.omr_operational_job_status",
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /alter table public\.omr_operational_job_status enable row level security/i,
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /alter table public\.omr_operational_job_status force row level security/i,
+        );
+        expect(operationalJobStatusMigration).toContain("security definer");
+        expect(operationalJobStatusMigration).toContain("set search_path = ''");
+        expect(operationalJobStatusMigration).toMatch(/on conflict \(job_key\) do update/i);
+        expect(operationalJobStatusMigration).not.toContain("p_dead_count");
+        expect(operationalJobStatusMigration).not.toContain("p_attempted_at");
+        expect(operationalJobStatusMigration).toContain("latest_started_sequence");
+        expect(operationalJobStatusMigration).toContain("latest_completed_sequence");
+        expect(operationalJobStatusMigration).toContain("active_lease_until");
+        expect(operationalJobStatusMigration).toContain("active_lease_started_at");
+        expect(operationalJobStatusMigration).toContain("interval '15 minutes'");
+        expect(operationalJobStatusMigration).toMatch(
+            /active_lease_until = active_lease_started_at \+ interval '15 minutes'/i,
+        );
+        expect(operationalJobStatusMigration).toContain("v_now + interval '15 minutes'");
+        expect(operationalJobStatusMigration).toContain("'admitted', false");
+        expect(operationalJobStatusMigration).toContain("'busy', true");
+        expect(operationalJobStatusMigration).toContain("'duplicate', v_duplicate");
+        expect(operationalJobStatusMigration).toContain("operational job completion conflict");
+        expect(operationalJobStatusMigration).toMatch(
+            /greatest\([\s\S]{0,240}v_job_status\.last_attempt_at \+ interval '1 microsecond'/i,
+        );
+        expect(operationalJobStatusMigration).toContain("create sequence public.omr_operational_job_run_sequence");
+        expect(operationalJobStatusMigration).toContain("maxvalue 9007199254740991");
+        expect(operationalJobStatusMigration).toContain("pg_advisory_xact_lock");
+        expect(operationalJobStatusMigration).toContain("pg_catalog.clock_timestamp()");
+        expect(operationalJobStatusMigration).not.toContain(
+            "where excluded.last_attempt_at > current_status.last_attempt_at",
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /create index[\s\S]*omr_remote_asset_cleanup_dead_idx[\s\S]*where status = 'dead'/i,
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /count\(\*\)[\s\S]*omr_remote_asset_cleanup_queue[\s\S]*status = 'dead'/i,
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /omr_begin_operational_job_run_v1[\s\S]*returns jsonb/i,
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /omr_complete_operational_job_run_v1[\s\S]*returns jsonb/i,
+        );
+        expect(operationalJobStatusMigration).toContain("'deadCount', v_dead_count");
+        expect(operationalJobStatusMigration).toContain("'dead_backlog'");
+        expect(operationalJobStatusMigration).toMatch(
+            /v_job_status\.last_attempt_at \+ interval '1 microsecond'/i,
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /when v_effective_status = 'healthy' then v_recorded_at\s+else last_success_at/i,
+        );
+        for (const role of ["public", "anon", "authenticated"]) {
+            expect(operationalJobStatusMigration).toMatch(
+                new RegExp(`from public, anon, authenticated`, "i"),
+            );
+            expect(liveAssertions).toContain(
+                `operational job status exposed to ${role}`,
+            );
+        }
+        expect(liveAssertions).toContain(
+            "operational job status service role boundary failed",
+        );
+        expect(liveAssertions).toContain(
+            "operational job older completion was not superseded",
+        );
+        expect(liveAssertions).toContain("operational job active lease admitted overlapping cleanup");
+        expect(liveAssertions).toContain("operational job expired lease was not recovered");
+        expect(liveAssertions).toContain("operational job rollback clock extended active lease");
+        expect(liveAssertions).toContain("operational job wrong generation cleared active lease");
+        expect(liveAssertions).toContain("operational job duplicate completion changed terminal state");
+        expect(liveAssertions).toContain("operational job conflicting terminal replay was accepted");
+        expect(liveAssertions).toContain("operational job expired lease completion was accepted");
+        expect(liveAssertions).toContain("operational job mutable backlog broke idempotent completion");
+        expect(liveAssertions).toContain("operational job concurrent begins did not admit exactly one cleanup");
+        expect(liveAssertions).toContain(
+            "operational job failure advanced last success",
+        );
+        expect(liveAssertions).toContain(
+            "operational job status accepted malformed input",
+        );
+        expect(boundaryAssertions).toContain("public.omr_operational_job_status");
+        expect(boundaryAssertions).toContain("public.omr_begin_operational_job_run_v1");
+        expect(boundaryAssertions).toContain("public.omr_complete_operational_job_run_v1");
+        for (const catalogAssertion of [
+            "index_record.indrelid = 'public.omr_remote_asset_cleanup_queue'::pg_catalog.regclass",
+            "index_record.indisvalid",
+            "index_record.indisready",
+            "not index_record.indisunique",
+            "index_record.indnatts = 1",
+            "pg_catalog.pg_get_indexdef(index_record.indexrelid, 1, true) = 'status'",
+            "pg_catalog.pg_get_expr",
+        ]) expect(profile).toContain(catalogAssertion);
+        for (const assertion of [
+            "prosecdef",
+            "pg_get_userbyid",
+            "proconfig",
+            "search_path=\"\"",
+            "statement_timeout=5s",
+            "lock_timeout=2s",
+        ]) expect(profile).toContain(assertion);
+        for (const leaseAssertion of [
+            "attribute.attname = 'active_lease_until'",
+            "attribute.attname = 'active_lease_started_at'",
+            "timestamp with time zone",
+            "v_job_status.active_lease_until > v_now",
+            "active_lease_until = null",
+            "interval ''15 minutes''",
+            "''duplicate'', v_duplicate",
+            "operational job completion conflict",
+        ]) expect(profile).toContain(leaseAssertion);
+        expect(rollback).toContain(
+            "revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role",
+        );
+        expect(rollback).toContain("'omr_begin_operational_job_run_v1'");
+        expect(rollback).toContain("'omr_complete_operational_job_run_v1'");
+        expect(rollback).toContain("'omr_read_operational_job_status_v1'");
+        expect(rollback.match(
+            /revoke all on sequence public\.omr_operational_job_run_sequence/g,
+        )).toHaveLength(1);
+    });
+
+    it("documents the canonical final-schema contract and exact table count", () => {
+        const expectedCanonicalTableCount = CANONICAL_TABLES.length;
+        for (const document of [
+            productionReadiness,
+            read("docs/operations/backup-restore-runbook.md"),
+            supabaseReadme,
+        ]) {
+            expect(document).toContain("schema.sql baseline + sorted migrations = final schema");
+            expect(document).toMatch(
+                new RegExp(`canonical ${expectedCanonicalTableCount}(?:개| tables)`, "i"),
+            );
+        }
+        expect(read("docs/initial-ops-user-journey-audit-2026-08-07.md"))
+            .toContain(`${expectedCanonicalTableCount}개 canonical 테이블 FORCE RLS`);
+    });
+
+    it("integrates durable rate limits, cleanup epochs, revisioned exams, and feedback CAS into the exact boundary", () => {
+        for (const table of ["omr_rate_limit_buckets", "omr_exam_mutations", "omr_feedback_mutations"]) {
+            expect(profile).toContain(`revoke all on table public.${table} from public, anon, authenticated, service_role`);
+        }
+        for (const signature of [
+            "public.omr_authorize_remote_asset_cleanup_delete_v1(text,text,integer)",
+            "public.omr_ack_remote_asset_cleanup_v1(text,text,integer)",
+            "public.omr_fail_remote_asset_cleanup_v1(text,text,integer,text)",
+            "public.omr_consume_rate_limit_v1(text,text,integer,integer,integer)",
+            "public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)",
+            "public.omr_bootstrap_workspace_organization_v1(text,text,jsonb,timestamptz)",
+            "public.omr_save_feedback_v2(text,jsonb,bigint,text)",
+            "public.omr_return_feedback_v2(text,text,bigint,text)",
+            "public.omr_save_feedback_v3(text,jsonb,bigint,text)",
+            "public.omr_return_feedback_v3(text,text,bigint,text)",
+        ]) {
+            expect(profile).toContain(signature);
+        }
+        for (const legacySignature of [
+            "public.omr_ack_remote_asset_cleanup_v1(text,text)",
+            "public.omr_fail_remote_asset_cleanup_v1(text,text,text)",
+            "public.omr_save_exam_v1(jsonb,jsonb,jsonb,text)",
+            "public.omr_save_feedback_v1(text,jsonb)",
+            "public.omr_return_feedback_v1(text,text,timestamptz)",
+        ]) {
+            expect(profile).toContain(`revoke execute on function ${legacySignature} from service_role`);
+        }
+        expect(profile).toContain(
+            "revoke all on function public.omr_normalize_exam_save_request_v10(jsonb)",
+        );
+        expect(profile).toContain("'version', '202608090001'");
+        expect(profile).toContain("'operationalJobStatusReady'");
+        expect(profile).toContain("'durableRateLimitsReady'");
+        expect(profile).toContain("'teacherExamCasReady'");
+        expect(profile).toContain("'examRevisionReady'");
+        expect(profile).toContain("'feedbackCasReady'");
+        expect(profile).toContain("'workspaceBootstrapPlanSafe'");
+        expect(profile).toContain("'feedbackReplayHardeningReady'");
+        expect(profile).toContain("'feedbackCoreFreeReady'");
+        expect(profile).toContain("'sessionCleanupFencingReady'");
+        expect(profile).toContain("'attemptCheckpointNullCasReady'");
+        expect(profile).toContain("'rosterSnapshotCasReady'");
+        expect(profile).toContain(
+            "revoke all on table public.omr_initial_ops_metrics from public, anon, authenticated, service_role",
+        );
+        expect(profile).toContain("'initialOperationsLoadControlReady'");
+        expect(profile).toContain("'omr_initial_ops_reserve_upload_v1'");
     });
 
     it("removes every known alpha and browser-auth policy by explicit name", () => {

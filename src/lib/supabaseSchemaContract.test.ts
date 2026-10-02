@@ -54,6 +54,36 @@ function readProductionBoundaryPreflightMigration(): string {
     return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
 }
 
+function readInitialListKeysetIndexesMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202608060001_initial_list_keyset_indexes.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
+function readAttemptQuestionSummaryMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202608060003_lightweight_list_summaries.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
+function readHistoricalCloneMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202608060002_exam_clone_lifecycle.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
+function readDirectRemoteAssetUploadMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202608060004_direct_remote_asset_uploads.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
+function readTeacherAssetGuardAndCleanupMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202608060005_teacher_asset_guards_and_cleanup.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
+function readTeacherAssetFinalizeAndReservationLeaseMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202608060006_teacher_asset_finalize_and_reservation_leases.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
 function readLiveAssertions(): string {
     return readFileSync(path.join(rootDir, "supabase/live-test-assertions.sql"), "utf8");
 }
@@ -88,6 +118,291 @@ describe("Supabase schema contract", () => {
     const teacherExamDelete = readTeacherExamDeleteMigration();
     const feedbackGateway = readFeedbackGatewayMigration();
     const studentCredentialRevocation = readStudentCredentialRevocationMigration();
+    const initialListKeysetIndexes = readInitialListKeysetIndexesMigration();
+    const attemptQuestionSummary = readAttemptQuestionSummaryMigration();
+    const historicalCloneMigration = readHistoricalCloneMigration();
+    const directRemoteAssetUpload = readDirectRemoteAssetUploadMigration();
+    const teacherAssetGuardAndCleanup = readTeacherAssetGuardAndCleanupMigration();
+    const teacherAssetFinalizeAndReservationLease = readTeacherAssetFinalizeAndReservationLeaseMigration();
+
+    it("preauthorizes teacher asset finalization without an existence oracle", () => {
+        const normalized = teacherAssetFinalizeAndReservationLease.replace(/\s+/g, " ").toLowerCase();
+
+        expect(teacherAssetFinalizeAndReservationLease).not.toBe("");
+        expect(normalized).toContain("create or replace function public.omr_authorize_teacher_asset_finalize_v1(");
+        expect(normalized).toContain("p_organization_id text");
+        expect(normalized).toContain("p_created_by_user_id text");
+        expect(normalized).toContain("p_upload_id text");
+        expect(normalized).toContain("p_declaration jsonb");
+        expect(normalized).toContain("teacher upload scope denied");
+        expect(normalized).toContain("intent.status in ('pending', 'uploaded')");
+        expect(normalized).toContain("intent.expires_at > now()");
+        expect(normalized).toContain("intent.status = 'finalized'");
+        expect(normalized).toContain("from public.omr_remote_assets asset");
+        expect(normalized).toContain("from public.omr_remote_asset_cleanup_queue queue");
+        expect(normalized).toContain("revoke all on function public.omr_authorize_teacher_asset_finalize_v1(text, text, text, jsonb) from public, anon, authenticated");
+        expect(normalized).toContain("grant execute on function public.omr_authorize_teacher_asset_finalize_v1(text, text, text, jsonb) to service_role");
+    });
+
+    it("leases provisional exam reservations and makes canonical reservations durable", () => {
+        const normalized = teacherAssetFinalizeAndReservationLease.replace(/\s+/g, " ").toLowerCase();
+
+        expect(normalized).toContain("add column if not exists expires_at timestamptz");
+        expect(normalized).toContain("now() + interval '2 hours'");
+        expect(normalized).toContain("for update skip locked");
+        expect(normalized).toContain("limit 50");
+        expect(normalized).toContain("greatest(v_actual_exam_floor");
+        expect(normalized).toContain("reservation.expires_at > now()");
+        expect(normalized).toContain("set expires_at = null");
+        expect(normalized).toContain("'version', '202608060006'");
+        expect(normalized).toContain("'teacherassetfinalizepreauthorizationready'");
+    });
+
+    it("bounds the between-drain admission window and sweeps only unreferenced finalized uploads", () => {
+        const normalized = teacherAssetFinalizeAndReservationLease.replace(/\s+/g, " ").toLowerCase();
+
+        expect(normalized).toContain("interval '24 hours'");
+        expect(normalized).toContain("v_actor_object_count >= 20");
+        expect(normalized).toContain("v_organization_object_count >= 100");
+        expect(normalized).toContain("v_global_object_count >= 100");
+        expect(normalized).toContain("v_actor_byte_size + v_upload_byte_size > 1073741824");
+        expect(normalized).toContain("v_organization_byte_size + v_upload_byte_size > 5368709120");
+        expect(normalized).toContain("v_global_byte_size + v_upload_byte_size > 5368709120");
+        expect(normalized).toContain("pg_catalog.hashtextextended('omr:teacher-upload-global', 604006)");
+        expect(normalized).toContain("intent.status = 'finalized'");
+        expect(normalized).toContain("exam.payload #>> '{pdfdataref,key}' = intent.id");
+        expect(normalized).toContain("exam.payload #>> '{answerkeypdfref,key}' = intent.id");
+        expect(normalized).toContain("'teacherassetcleanupbackloghealthy'");
+        expect(normalized).toContain("v_unmaterialized_cleanup_count");
+        expect(normalized).toContain("queue.status in ('pending', 'leased')");
+        expect(normalized).toContain("<= 100");
+    });
+
+    it("serializes canonical asset promotion against cleanup eligibility", () => {
+        const normalized = teacherAssetFinalizeAndReservationLease.replace(/\s+/g, " ").toLowerCase();
+
+        expect(normalized).toContain("rename to omr_save_exam_v6_snapshot");
+        expect(normalized).toContain("order by intent.id for update");
+        expect(normalized).toContain("intent.status = 'expired'");
+        expect(normalized).toContain("intent.expires_at <= now()");
+        expect(normalized).toContain("from public.omr_remote_asset_cleanup_queue queue");
+        expect(normalized).toContain("queue.source_id = supplied.value");
+        expect(normalized).toContain("from public.omr_remote_assets asset");
+        expect(normalized).toContain("order by asset.id for update");
+        expect(normalized).toContain("teacher asset intent is not ready");
+        expect(normalized).toContain("return public.omr_save_exam_v6_snapshot(");
+        expect(normalized).toContain("omr_remote_asset_upload_intents_cleanup_eligibility_idx");
+    });
+
+    it("allows cleanup paths to be reused and keeps internal helpers closed on rollback", () => {
+        const normalized = teacherAssetFinalizeAndReservationLease.replace(/\s+/g, " ").toLowerCase();
+        const rollback = readFileSync(path.join(rootDir, "supabase/production-server-boundary-rollback.sql"), "utf8");
+
+        expect(normalized).toContain("delete from public.omr_remote_asset_cleanup_queue");
+        for (const helper of [
+            "omr_enqueue_remote_asset_cleanup_v1",
+            "omr_enqueue_exam_asset_cleanup_v1",
+            "omr_remote_assets_enqueue_cleanup_v1",
+            "omr_exams_enqueue_asset_cleanup_v1",
+            "omr_save_exam_v6_snapshot",
+        ]) {
+            expect(rollback).toContain(`'${helper}'`);
+        }
+    });
+
+    it("authorizes and bounds teacher upload preparation in the database", () => {
+        const normalized = teacherAssetGuardAndCleanup.replace(/\s+/g, " ").toLowerCase();
+
+        expect(teacherAssetGuardAndCleanup).not.toBe("");
+        expect(normalized).toContain("from public.omr_organization_members member");
+        expect(normalized).toContain("member.status = 'active'");
+        expect(normalized).toContain("member.role in ('owner', 'admin', 'teacher', 'assistant')");
+        expect(normalized).toContain("teacher upload scope denied");
+        expect(normalized).toContain("teacher upload exam reservation required");
+        expect(normalized).toContain("teacher upload prepare rate exceeded");
+        expect(normalized).toContain("teacher upload active intent limit exceeded");
+        expect(normalized).toContain("pg_catalog.timezone('asia/seoul', now())");
+        expect(normalized).toContain("'exam:' || v_upload.exam_id");
+        expect(normalized).toContain("pg_catalog.pg_advisory_xact_lock");
+        expect(normalized).toContain("status in ('pending', 'uploaded')");
+        expect(normalized).toContain("sum(intent.byte_size)");
+        expect(normalized).toContain("v_active_bytes + v_upload.byte_size > 209715200");
+    });
+
+    it("queues storage cleanup durably before metadata becomes unreachable", () => {
+        const normalized = teacherAssetGuardAndCleanup.replace(/\s+/g, " ").toLowerCase();
+
+        expect(normalized).toContain("create table if not exists public.omr_remote_asset_cleanup_queue");
+        expect(normalized).toContain("byte_size bigint not null default 52428800");
+        expect(normalized).toContain("v_byte_size bigint");
+        expect(normalized).toContain("byte_size = excluded.byte_size");
+        expect(normalized).toContain("intent.object_path, intent.byte_size, 'expired_upload'");
+        expect(normalized).toContain("check (status in ('pending', 'leased', 'done', 'dead'))");
+        expect(normalized).toContain("unique (storage_bucket, object_path)");
+        expect(normalized).toContain("omr_remote_asset_cleanup_claim_idx");
+        expect(normalized).toContain("for update skip locked");
+        expect(normalized).toContain("omr_claim_remote_asset_cleanup_v1");
+        expect(normalized).toContain("omr_ack_remote_asset_cleanup_v1");
+        expect(normalized).toContain("omr_fail_remote_asset_cleanup_v1");
+        expect(normalized).toContain("intent.status in ('pending', 'uploaded')");
+        expect(normalized).toContain("intent.expires_at <= now()");
+        expect(normalized).toContain("expired_candidates as materialized");
+        expect(normalized).toContain("dead_candidates as materialized");
+        expect(normalized).toContain("limit p_limit");
+        expect(normalized).toContain("p_limit is null or p_limit not between 1 and 100");
+        expect(normalized).toContain("p_lease_seconds is null or p_lease_seconds not between 15 and 900");
+        expect(normalized).toContain("intent.status in ('pending', 'uploaded', 'finalized')");
+        expect(normalized).toContain("create trigger omr_remote_assets_enqueue_cleanup");
+        expect(normalized).toContain("create trigger omr_exams_enqueue_asset_cleanup");
+        expect(normalized).toContain("'version', '202608060005'");
+        expect(normalized).toContain("'teacheruploadcleanupqueueready'");
+        expect(normalized).not.toContain("cron.schedule");
+
+        for (const signature of [
+            "public.omr_claim_remote_asset_cleanup_v1(text, integer, integer)",
+            "public.omr_ack_remote_asset_cleanup_v1(text, text)",
+            "public.omr_fail_remote_asset_cleanup_v1(text, text, text)",
+        ]) {
+            expect(normalized).toContain(`revoke all on function ${signature} from public, anon, authenticated`);
+            expect(normalized).toContain(`grant execute on function ${signature} to service_role`);
+        }
+    });
+
+    it("stages teacher uploads behind a service-role-only idempotent intent ledger", () => {
+        const normalized = directRemoteAssetUpload.replace(/\s+/g, " ").toLowerCase();
+
+        expect(normalized).toContain("create table if not exists public.omr_remote_asset_upload_intents");
+        expect(normalized).toContain("constraint omr_remote_asset_upload_intents_status_check");
+        expect(normalized).toContain("check (status in ('pending', 'uploaded', 'finalized', 'expired'))");
+        expect(normalized).toContain("unique (organization_id, created_by_user_id, idempotency_key)");
+        expect(normalized).toContain("unique (storage_bucket, object_path)");
+        expect(normalized).toContain("omr_remote_asset_upload_intents_gc_idx");
+        expect(normalized).toContain("where status in ('pending', 'uploaded')");
+        expect(normalized).toContain("enable row level security");
+        expect(normalized).toContain("force row level security");
+        expect(normalized).toContain("revoke all on table public.omr_remote_asset_upload_intents from public, anon, authenticated");
+        expect(normalized).toContain("grant select, insert, update, delete on table public.omr_remote_asset_upload_intents to service_role");
+        expect(schema).toContain("create table if not exists public.omr_remote_asset_upload_intents");
+        expect(schema).toContain("alter table public.omr_remote_asset_upload_intents force row level security");
+
+        expect(normalized).toContain("create or replace function public.omr_prepare_teacher_asset_upload_v1( p_upload jsonb )");
+        expect(normalized).toContain("on conflict (organization_id, created_by_user_id, idempotency_key)");
+        expect(normalized).toContain("upload idempotency key belongs to another request");
+        expect(normalized).toContain("create or replace function public.omr_finalize_teacher_asset_upload_v1(");
+        expect(normalized).toContain("p_organization_id text");
+        expect(normalized).toContain("p_upload_id text");
+        expect(normalized).toContain("p_created_by_user_id text");
+        expect(normalized).toContain("p_observation jsonb");
+        expect(normalized).toContain("storage observation mismatch");
+
+        for (const signature of [
+            "public.omr_prepare_teacher_asset_upload_v1(jsonb)",
+            "public.omr_finalize_teacher_asset_upload_v1(text, text, text, jsonb)",
+        ]) {
+            expect(normalized).toContain(`revoke all on function ${signature} from public, anon, authenticated`);
+            expect(normalized).toContain(`grant execute on function ${signature} to service_role`);
+        }
+    });
+
+    it("promotes uploaded teacher intents atomically with canonical exam save", () => {
+        const normalized = directRemoteAssetUpload.replace(/\s+/g, " ").toLowerCase();
+
+        expect(normalized).toContain("drop function public.omr_save_exam_v1(jsonb, jsonb)");
+        expect(normalized).toContain("p_teacher_asset_intent_ids jsonb default '[]'::jsonb");
+        expect(normalized).toContain("p_asset_actor_user_id text default null");
+        expect(normalized).toContain("inline pdf data is forbidden in canonical exam payload");
+        expect(normalized).toContain("teacher asset refs do not match supplied intent ids");
+        expect(normalized).toContain("for update");
+        expect(normalized).toContain("teacher asset intent is not ready");
+        expect(normalized).toContain("insert into public.omr_remote_assets");
+        expect(normalized).toContain("status = 'finalized'");
+        expect(normalized).toContain("v_saved := public.omr_save_exam_plan_unlocked_v1(p_exam, p_questions)");
+        expect(normalized).not.toContain("insert into storage.objects");
+        expect(normalized).not.toContain("update storage.objects");
+        expect(normalized).not.toContain("delete from storage.objects");
+        expect(normalized).toContain(
+            "revoke all on function public.omr_save_exam_v1(jsonb, jsonb, jsonb, text) from public, anon, authenticated",
+        );
+        expect(normalized).toContain(
+            "grant execute on function public.omr_save_exam_v1(jsonb, jsonb, jsonb, text) to service_role",
+        );
+        expect(normalized).toContain("'version', '202608060004'");
+        expect(normalized).toContain("'directuploadintentlifecycleready'");
+        expect(normalized).toContain("('omr_save_exam_v1', 'jsonb, jsonb, jsonb, text')");
+    });
+
+    it("preserves migration 002 and retires clone RPCs in a new migration", () => {
+        expect(historicalCloneMigration).toContain("create or replace function public.omr_create_exam_clone_target_v1");
+        expect(historicalCloneMigration).toContain("create or replace function public.omr_cleanup_exam_clone_target_v1");
+        expect(attemptQuestionSummary).toContain("drop function if exists public.omr_create_exam_clone_target_v1");
+        expect(attemptQuestionSummary).toContain("drop function if exists public.omr_cleanup_exam_clone_target_v1");
+    });
+
+    it("stores immutable redacted student-question and exam-question summaries", () => {
+        const normalized = attemptQuestionSummary.replace(/\s+/g, " ").toLowerCase();
+        expect(normalized).toContain("create or replace function public.omr_student_question_summaries_v1(p_payload jsonb)");
+        expect(normalized).toContain("language sql immutable parallel safe set search_path = ''");
+        expect(normalized).toContain("student_question_summaries jsonb generated always as");
+        expect(normalized).toContain("public.omr_student_question_summaries_v1(payload)");
+        expect(normalized).toContain("'body', ''");
+        expect(normalized).not.toContain("note -> 'body'");
+        expect(normalized).not.toContain("note ->> 'body'");
+        expect(normalized).not.toContain("'teachername'");
+        expect(normalized).toContain("create or replace function public.omr_exam_question_summaries_v1(p_payload jsonb)");
+        expect(normalized).toContain("question_summaries jsonb generated always as");
+        expect(normalized).toContain("public.omr_exam_question_summaries_v1(payload)");
+        const examHelper = normalized.slice(
+            normalized.indexOf("create or replace function public.omr_exam_question_summaries_v1"),
+            normalized.indexOf("alter table public.omr_attempts"),
+        );
+        for (const forbidden of ["explanation", "subquestions", "pdfregion", "pdflocation", "imageassetref", "passagepdfregions"]) {
+            expect(examHelper).not.toContain(`'${forbidden}'`);
+        }
+        expect(normalized).toContain("create or replace function public.omr_submit_attempt_v1");
+        expect(normalized).toContain("create or replace function public.omr_submit_session_attempt_v1");
+        expect(normalized).toContain("create or replace function public.omr_save_exam_plan_unlocked_v1");
+        expect(normalized).toContain("create or replace function public.omr_save_exam_v1");
+        expect(normalized).toContain("return public.omr_save_exam_plan_unlocked_v1(p_exam, p_questions)");
+        expect(normalized).toContain("from public.omr_reserve_plan_usage(");
+        expect(normalized).toContain("raise exception 'plan entitlement required'");
+        expect(normalized).toContain(
+            "revoke all on function public.omr_save_exam_plan_unlocked_v1(jsonb, jsonb) from public, anon, authenticated, service_role",
+        );
+        expect(normalized).toContain("insert into public.omr_attempts (");
+        expect(normalized).toContain("insert into public.omr_exams (");
+        expect(normalized).not.toContain("select (v_attempt).*");
+        expect(schema).toContain("student_question_summaries jsonb generated always as");
+        expect(schema).toContain("question_summaries jsonb generated always as");
+        expect(schema).toContain("grant execute on function public.omr_student_question_summaries_v1(jsonb) to anon, authenticated, service_role");
+        expect(schema).toContain("grant execute on function public.omr_exam_question_summaries_v1(jsonb) to anon, authenticated, service_role");
+        expect(normalized).toContain("revoke all on function public.omr_student_question_summaries_v1(jsonb) from public, anon, authenticated");
+        expect(normalized).toContain("revoke all on function public.omr_exam_question_summaries_v1(jsonb) from public, anon, authenticated");
+        expect(readLiveAssertions()).toContain("student question list summary leaked free text");
+        expect(readLiveAssertions()).toContain("exam question list summary leaked secret detail");
+        expect(readLiveAssertions()).toContain("removed clone lifecycle RPC still exists");
+    });
+
+    it("indexes every bounded id-keyset attempt list with exact equality scopes", () => {
+        const normalizedSchema = schema.replace(/\s+/g, " ").toLowerCase();
+        const normalizedMigration = initialListKeysetIndexes.replace(/\s+/g, " ").toLowerCase();
+        const definitions = [
+            "omr_attempts_org_id_idx on public.omr_attempts (organization_id, id)",
+            "omr_attempts_org_exam_id_idx on public.omr_attempts (organization_id, exam_id, id)",
+            "omr_attempts_student_completed_id_idx on public.omr_attempts (organization_id, student_profile_id, student_id, id) where status = 'completed'",
+        ];
+
+        for (const definition of definitions) {
+            expect(normalizedSchema).toContain(definition);
+            expect(normalizedMigration).toContain(definition);
+        }
+        expect(normalizedSchema).toContain(
+            "omr_attempts_owner_id_idx on public.omr_attempts (organization_id, student_id, id)",
+        );
+        expect(attemptQuestionSummary.replace(/\s+/g, " ").toLowerCase()).toContain(
+            "omr_attempts_owner_id_idx on public.omr_attempts (organization_id, student_id, id)",
+        );
+        expect(readLiveAssertions()).toContain("initial list keyset index shape mismatch");
+    });
     const productionBoundaryPreflight = readProductionBoundaryPreflightMigration();
     const liveAssertions = readLiveAssertions();
 

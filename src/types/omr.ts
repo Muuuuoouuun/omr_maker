@@ -59,6 +59,13 @@ export interface MissingRequiredSubQuestion {
     subQuestionId: string;
 }
 
+export interface QuestionContentAnalysis {
+    concepts: string[];
+    trapPoints: string[];
+    summary: string;
+    status: 'draft' | 'reviewed';
+}
+
 export interface Question {
     id: number;
     number: number;
@@ -69,6 +76,8 @@ export interface Question {
     choices?: 4 | 5;
     /** Optional teacher-authored explanation shown in review. */
     explanation?: string;
+    /** Teacher-only AI content analysis; drafts require teacher review. */
+    contentAnalysis?: QuestionContentAnalysis;
     /** Optional advanced design metadata for teacher diagnostics. */
     tags?: {
         subject?: string;
@@ -109,6 +118,8 @@ export function questionChoiceCount(question: Pick<Question, "choices">, fallbac
 export interface Exam {
     id: string; // generated ID
     title: string;
+    /** Canonical server revision used for optimistic-concurrency saves. New unsaved exams omit it. */
+    revision?: number;
     /** App workspace/organization scope for remote persistence. */
     organizationId?: string;
     /** Optional class scope when an exam belongs to one class. */
@@ -135,7 +146,7 @@ export interface Exam {
     answerKeyPdfRef?: StoredDataRef;
     // Distribution
     accessConfig?: {
-        type: 'public' | 'group';
+        type: 'public' | 'group' | 'targeted';
         groupIds?: string[];
         pin?: string;
     };
@@ -191,6 +202,8 @@ export interface AttemptFeedback {
     studentProfileId?: string;
     teacherUserId?: string;
     status: FeedbackStatus;
+    /** Server-owned optimistic-concurrency revision. New rows start at 0 locally. */
+    revision?: number;
     summary?: string;
     questionComments: QuestionFeedbackComment[];
     markup?: FeedbackMarkup;
@@ -221,6 +234,8 @@ export interface QuestionResult {
     classId?: string;
     /** Optional assignment scope for future gradebook flows. */
     assignmentId?: string;
+    /** Immutable targeted-assignment generation paired with assignmentId. */
+    assignmentRevision?: number;
     /** Canonical roster/student profile id. Falls back to studentId when absent. */
     studentProfileId?: string;
     studentName: string;
@@ -341,6 +356,8 @@ export interface Attempt {
     classId?: string;
     /** Optional assignment scope for future gradebook flows. */
     assignmentId?: string;
+    /** Immutable targeted-assignment generation paired with assignmentId. */
+    assignmentRevision?: number;
     /** Canonical roster/student profile id. Falls back to studentId when absent. */
     studentProfileId?: string;
     studentName: string; // "Student" for anonymous
@@ -380,6 +397,15 @@ export interface Attempt {
     questionDrawings?: QuestionDrawingSummary[];
     /** Stable per-question result rows used for student/class/exam/type analytics. */
     questionResults?: QuestionResult[];
+    /** Server-generated immutable question-definition row count. Legacy rows omit it. */
+    questionResultsQuestionCount?: number;
+    /** Server-only SHA-256 over submitted question ids/numbers/scores/answer keys. */
+    questionResultsDefinitionManifestHash?: string;
+    /** Server-only SHA-256 over exact submission scope and all official result evidence. */
+    questionResultsFullEvidenceHash?: string;
+    /** Request-local server projection attestation; stripped from persistence writes. */
+    /** Present only when an explicit repair derived legacy rows from a current exam snapshot. */
+    questionResultsSource?: 'legacy_derived_current_exam' | 'incomplete_or_invalid';
     status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
     /** If true, submitted because the timer hit zero. */

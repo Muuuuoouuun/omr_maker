@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { MOCKUP_TEACHER_ID, MOCKUP_TEACHER_IDENTITY } from "./mockupAccount";
 import { createSignedTeacherSessionCookie } from "./teacherServerSession";
 import { TEACHER_SESSION_TTL_MS } from "./teacherSession";
 
@@ -12,13 +14,14 @@ vi.mock("next/headers", () => ({
     }),
 }));
 
-import { authorizeExamCreation } from "@/app/actions/premiumAccess";
+import { authorizeExamCreation, getServerPlanSnapshot } from "@/app/actions/premiumAccess";
 
 const TOKEN = "tkn_contract_0123456789abcdef0123456789abcdef";
 const SESSION_SECRET = "premium-access-contract-session-secret";
 
 function configureUnhostedRuntime(nodeEnv: "test" | "production") {
     vi.stubEnv("NODE_ENV", nodeEnv);
+    if (nodeEnv === "test") vi.stubEnv("OMR_TEACHER_IDENTITY_MODE", "self_service");
     vi.stubEnv("TEACHER_SESSION_SECRET", SESSION_SECRET);
     vi.stubEnv("SUPABASE_URL", "");
     vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
@@ -26,6 +29,12 @@ function configureUnhostedRuntime(nodeEnv: "test" | "production") {
     vi.stubEnv("OMR_PLAN_DEV_SIMULATION", "");
     vi.stubEnv("OMR_DEV_PLAN", "");
     vi.stubEnv("TEACHER_PLAN", "");
+    vi.stubEnv("TEACHER_ACCOUNTS", JSON.stringify([{
+        id: "admin",
+        password: "test-only-password",
+        plan: "free",
+    }]));
+    vi.stubEnv("OMR_TEACHER_ACCOUNTS", "");
 
     // Browser-readable values must never configure or elevate the server plan
     // store. These intentionally claim an Academy-like local environment.
@@ -45,6 +54,15 @@ function signTeacher(teacherId: string, issuedAt = Date.now()) {
     ) || undefined;
 }
 
+function signExactMockupTeacher(issuedAt = Date.now()) {
+    cookieState.value = createSignedTeacherSessionCookie(
+        TOKEN,
+        { ...MOCKUP_TEACHER_IDENTITY, sessionAuthority: "mockup" },
+        { NODE_ENV: process.env.NODE_ENV, TEACHER_SESSION_SECRET: SESSION_SECRET },
+        issuedAt,
+    ) || undefined;
+}
+
 describe("premium access local fallback security contract", () => {
     beforeEach(() => {
         cookieState.value = undefined;
@@ -53,6 +71,7 @@ describe("premium access local fallback security contract", () => {
     afterEach(() => {
         cookieState.value = undefined;
         vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
     });
 
     it("uses the quota-limited free dev store only for an active signed teacher outside production", async () => {
@@ -101,11 +120,53 @@ describe("premium access local fallback security contract", () => {
         await expect(authorizeExamCreation("production-exam")).resolves.toMatchObject({
             ok: false,
             access: {
-                authenticated: true,
+                authenticated: false,
                 authoritative: false,
                 source: "unavailable",
                 plan: "free",
             },
         });
+    });
+
+    it("does not elevate a signed Free teacher from a forged browser showcase identity", async () => {
+        configureUnhostedRuntime("test");
+        signTeacher("admin");
+        vi.stubGlobal("sessionStorage", {
+            getItem: vi.fn().mockReturnValue(JSON.stringify({ teacherId: MOCKUP_TEACHER_ID })),
+        });
+
+        await expect(getServerPlanSnapshot()).resolves.toMatchObject({
+            authenticated: true,
+            authoritative: true,
+            source: "dev-simulation",
+            plan: "free",
+        });
+
+        const attemptPage = readFileSync("src/app/teacher/attempt/[attemptId]/page.tsx", "utf8");
+        expect(attemptPage).not.toMatch(/isMockupTeacherIdentity|isMockupAccount|reportPlan/);
+        expect(attemptPage).toMatch(/hasPlanEntitlement\(currentPlan, "studentGrowthReports"\)/);
+    });
+
+    it("shows Academy display entitlements only for the signed mockup teacher", async () => {
+        configureUnhostedRuntime("test");
+        signExactMockupTeacher();
+
+        await expect(getServerPlanSnapshot()).resolves.toMatchObject({
+            authenticated: true,
+            authoritative: true,
+            source: "dev-simulation",
+            plan: "academy",
+        });
+        await expect(authorizeExamCreation("mockup-mutation-stays-free")).resolves.toMatchObject({
+            ok: false,
+            access: { authenticated: false, authoritative: false, plan: "free" },
+        });
+    });
+
+    it("does not trust the showcase query parameter as mockup authority", () => {
+        const dashboardPage = readFileSync("src/app/teacher/dashboard/page.tsx", "utf8");
+
+        expect(dashboardPage).not.toContain("useState(showcaseRequested)");
+        expect(dashboardPage).toContain("isMockupTeacherIdentity(readTeacherSession())");
     });
 });

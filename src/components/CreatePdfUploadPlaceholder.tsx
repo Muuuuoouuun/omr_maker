@@ -14,7 +14,10 @@ export interface CreatePdfUploadPlaceholderProps {
 }
 
 export function isPdfUploadFile(file: Pick<File, "name" | "type">): boolean {
-    return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    return file.type === "application/pdf"
+        || file.type === "application/x-pdf"
+        || file.type === ""
+        || file.name.toLowerCase().endsWith(".pdf");
 }
 
 export default function CreatePdfUploadPlaceholder({

@@ -16,3 +16,13 @@ export function isMockupTeacherIdentity(identity: TeacherIdentityLike): boolean 
     return identity?.teacherId?.trim().toLowerCase() === MOCKUP_TEACHER_ID;
 }
 
+export function isExactMockupTeacherIdentity(identity: TeacherIdentityLike): boolean {
+    return identity?.teacherId === MOCKUP_TEACHER_IDENTITY.teacherId
+        && identity.email === MOCKUP_TEACHER_IDENTITY.email
+        && identity.displayName === MOCKUP_TEACHER_IDENTITY.displayName
+        && identity.plan === MOCKUP_TEACHER_IDENTITY.plan
+        && identity.organizationId === undefined
+        && identity.organizationName === undefined
+        && identity.memberRole === undefined
+        && identity.accountSessionGeneration === undefined;
+}

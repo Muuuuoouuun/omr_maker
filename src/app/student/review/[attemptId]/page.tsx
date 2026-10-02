@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -16,23 +16,21 @@ import {
     MessageSquare,
     Printer,
     Repeat2,
+    RotateCcw,
     Send,
     Target,
-    TrendingUp,
 } from "lucide-react";
 import type { Attempt, AttemptFeedback, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming, StudentQuestionNote } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
 import {
-    loadAttempt,
-    loadExam,
     readLocalAttempts,
     saveLocalAttempt,
     saveLocalServerConfirmedAttempt,
 } from "@/lib/omrPersistence";
-import { askAttemptQuestion, loadExamForReview, loadMyAttempt, submitAttempt } from "@/app/actions/studentExam";
-import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
-import { stripTeacherOnlySubQuestionFields } from "@/lib/examSolvePayload";
+import { askAttemptQuestion, loadMyAttemptHandwriting, submitAttempt } from "@/app/actions/studentExam";
+import { loadStudentOfficialAttempt } from "@/lib/studentAttemptClient";
+import type { StudentTrustedOfficialReview } from "@/lib/studentAttemptHistoryContract";
 import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
 import {
     flushPendingStudentQuestions,
@@ -44,18 +42,21 @@ import { buildAttemptRetakeRecovery, buildSourceAttemptRecovery } from "@/lib/re
 import { toast } from "@/components/Toast";
 import ThemeToggle from "@/components/ThemeToggle";
 import CountUp from "@/components/dashboard/CountUp";
+import HandwritingUploadRecoveryCard from "@/components/student/HandwritingUploadRecoveryCard";
+import StatusPill, { GradingEvidenceNote } from "@/components/dashboard/StatusPill";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { safeScorePercent } from "@/lib/scoreUtils";
 import { awaySeverity } from "@/lib/examAwayTracker";
 import {
     buildLearningRecommendations,
     buildRetakeQuestionIds,
     buildStudentWeaknessGroups,
-    getAttemptQuestionResults,
-    summarizeAttemptScore,
+    buildStudentReviewQuestionSnapshot,
+    resolveAttemptGrading,
+    summarizeCanonicalQuestionSubset,
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
-import { buildRetakeHref } from "@/lib/retakeLinks";
+import type { AttemptGradingSource } from "@/lib/premiumAnalytics";
+import { buildRetakeHref, supportedReviewRetakeModes, type ReviewAttemptSource } from "@/lib/retakeLinks";
 import { buildAnnotatedPdfBlob } from "@/lib/annotatedPdfExport";
 import {
     buildFeedbackDownloadText,
@@ -81,8 +82,33 @@ import {
     type SubmissionReceipt,
     type SubmissionReceiptReconciledDetail,
 } from "@/lib/studentAttemptReceipt";
+import { downloadRemoteStudentHandwriting } from "@/lib/studentRemoteHandwritingClient";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
+
+type StudentReviewModel = Omit<StudentTrustedOfficialReview, "gradingSource"> & {
+    gradingSource: AttemptGradingSource;
+};
+
+function buildLocalStudentReviewModel(exam: Exam, attempt: Attempt): StudentReviewModel {
+    const questions = buildStudentReviewQuestionSnapshot(exam, attempt);
+    const reviewExam: Exam = { ...exam, questions };
+    const grading = resolveAttemptGrading(reviewExam, attempt);
+    return {
+        gradingSource: grading.source,
+        questions,
+        questionResults: grading.questionResults,
+        scoreSummary: grading.scoreSummary,
+        weaknessGroups: buildStudentWeaknessGroups(reviewExam, attempt).slice(0, 3),
+        recommendations: buildLearningRecommendations(reviewExam, [attempt], {
+            scope: "attempt",
+            attempt,
+            includeSlowCorrect: true,
+            limit: 5,
+        }),
+        behavior: summarizeAttemptBehavior(attempt),
+    };
+}
 
 function hasDrawings(drawings?: PdfDrawings): boolean {
     return !!drawings && Object.values(drawings).some(paths => paths.length > 0);
@@ -180,7 +206,7 @@ function questionStatusLabel(status: QuestionResultStatus): string {
     return "미채점";
 }
 
-function MetaChip({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "primary" | "teal" | "amber" }) {
+function MetaChip({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "primary" | "teal" | "amber" | "retake" }) {
     // Palette lives in globals.css tone classes so both themes render correctly.
     return (
         <span className={`student-review-meta-chip tone-${tone}`}>
@@ -220,7 +246,7 @@ function QuestionCard({
     draft: string;
     submittedQuestion?: StudentQuestionNote;
     subQuestionAnswers?: NonNullable<Attempt["subQuestionAnswers"]>[number];
-    retakeHref: string;
+    retakeHref: string | null;
     explanationRequestArmed?: boolean;
     onToggleExplanation: () => void;
     onToggleQuestionBox: () => void;
@@ -257,7 +283,7 @@ function QuestionCard({
 
             {(recovered || question.label || question.tags?.concept || question.tags?.source || timing) && (
                 <div className="student-review-meta-row">
-                    {recovered && <MetaChip tone="teal">재시험 회복</MetaChip>}
+                    {recovered && <MetaChip tone="retake">재시험에서 맞힘</MetaChip>}
                     {question.label && <MetaChip>#{question.label}</MetaChip>}
                     {question.tags?.concept && <MetaChip tone="primary">{question.tags.concept}</MetaChip>}
                     {question.tags?.source && <MetaChip tone="teal">{question.tags.source}</MetaChip>}
@@ -265,11 +291,13 @@ function QuestionCard({
                 </div>
             )}
 
-            <div className="student-review-question-actions">
-                <Link href={retakeHref} className="btn btn-secondary student-review-compact-button">
-                    <FileText size={13} />
-                    다시 풀기
-                </Link>
+            <div className="student-review-question-actions mobile-action-row">
+                {retakeHref && (
+                    <Link href={retakeHref} className="btn btn-secondary student-review-compact-button">
+                        <FileText size={13} />
+                        다시 풀기
+                    </Link>
+                )}
                 {hasExplanation ? (
                     <button
                         type="button"
@@ -310,13 +338,13 @@ function QuestionCard({
             </div>
 
             {hasExplanation && explanationOpen && (
-                <div className="student-review-explanation">
+                <div className="student-review-explanation student-review-long-copy">
                     {question.explanation}
                 </div>
             )}
 
             {!!question.subQuestions?.length && (
-                <div style={{ marginTop: '0.75rem', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', display: 'grid', gap: '0.6rem' }}>
+                <div className="student-review-subquestions" style={{ marginTop: '0.75rem', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', display: 'grid', gap: '0.6rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'center' }}>
                         <strong style={{ fontSize: '0.8rem' }}>내 심화 응답</strong>
                         <span style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>점수 미반영</span>
@@ -324,9 +352,9 @@ function QuestionCard({
                     {question.subQuestions.map((subQuestion, index) => {
                         const answer = subQuestionAnswers?.[subQuestion.id];
                         return (
-                            <div key={subQuestion.id} style={{ display: 'grid', gap: '0.25rem' }}>
-                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem', fontWeight: 800 }}>{String.fromCharCode(65 + index)}. {subQuestion.prompt}</span>
-                                <div style={{ whiteSpace: 'pre-wrap', fontSize: '0.82rem', lineHeight: 1.55, color: answer ? 'var(--foreground)' : 'var(--muted)' }}>{answer?.body || '작성하지 않음'}</div>
+                            <div key={subQuestion.id} className="student-review-subquestion" style={{ display: 'grid', gap: '0.25rem' }}>
+                                <span className="student-review-long-copy" style={{ color: 'var(--muted)', fontSize: '0.72rem', fontWeight: 800 }}>{String.fromCharCode(65 + index)}. {subQuestion.prompt}</span>
+                                <div className="student-review-long-copy" style={{ whiteSpace: 'pre-wrap', fontSize: '0.82rem', lineHeight: 1.55, color: answer ? 'var(--foreground)' : 'var(--muted)' }}>{answer?.body || '작성하지 않음'}</div>
                                 {answer?.reviewStatus === 'reviewed' && <span style={{ color: 'var(--success)', fontSize: '0.66rem', fontWeight: 800 }}>선생님 검토 완료</span>}
                             </div>
                         );
@@ -346,7 +374,7 @@ function QuestionCard({
                         </div>
                     )}
                     {submittedQuestion && (
-                        <div style={{
+                        <div className="student-review-long-copy" style={{
                             padding: '0.65rem 0.75rem',
                             borderRadius: 'var(--radius-md)',
                             border: '1px solid var(--border)',
@@ -361,14 +389,14 @@ function QuestionCard({
                         </div>
                     )}
                     {submittedQuestion?.status === "answered" && submittedQuestion.answer && (
-                        <div style={{
+                        <div className="student-review-teacher-answer" style={{
                             padding: '0.7rem 0.8rem',
                             borderRadius: 'var(--radius-md)',
                             border: '1px solid color-mix(in srgb, var(--success) 45%, var(--border))',
                             background: 'color-mix(in srgb, var(--success) 10%, var(--surface))',
                             marginBottom: '0.65rem',
                         }}>
-                            <div style={{
+                            <div className="student-review-teacher-answer-head" style={{
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: '0.35rem',
@@ -385,7 +413,7 @@ function QuestionCard({
                                     · {formatKoreanDateTime(submittedQuestion.answer.createdAt)}
                                 </span>
                             </div>
-                            <div style={{ color: 'var(--foreground)', fontSize: '0.85rem', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
+                            <div className="student-review-long-copy" style={{ color: 'var(--foreground)', fontSize: '0.85rem', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
                                 {submittedQuestion.answer.body}
                             </div>
                         </div>
@@ -421,6 +449,9 @@ export default function ReviewPage() {
     const id = params?.attemptId as string;
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
+    const [attemptSource, setAttemptSource] = useState<ReviewAttemptSource>(null);
+    const [serverRetakeEligibleQuestionIds, setServerRetakeEligibleQuestionIds] = useState<number[]>([]);
+    const [trustedReview, setTrustedReview] = useState<StudentTrustedOfficialReview | null>(null);
     const [exam, setExam] = useState<Exam | null>(null);
     const [submissionReceipt, setSubmissionReceipt] = useState<SubmissionReceipt | null>(null);
     const [submissionRetrying, setSubmissionRetrying] = useState(false);
@@ -457,6 +488,7 @@ export default function ReviewPage() {
             if (detail.previousAttemptId !== id && detail.attempt.id !== id) return;
             attemptRef.current = detail.attempt;
             setAttempt(detail.attempt);
+            setAttemptSource("server");
             setSubmissionReceipt(detail.receipt);
             setSubmissionRetryFeedback("서버 반영을 확인했습니다.");
             if (detail.attempt.id !== id) {
@@ -496,38 +528,6 @@ export default function ReviewPage() {
     // question. A ref + a submission mutex keep local writes serialized.
     const attemptRef = useRef<Attempt | null>(null);
     const questionSaveInFlightRef = useRef(false);
-    // Latest question-navigation state for the keyboard handler. Updated during
-    // render (below, once filteredQuestions/selectedQuestion exist) so the
-    // window-level listener always sees the current, filter-aware list without
-    // re-subscribing on every render.
-    const navStateRef = useRef<{ ids: number[]; selectedId: number | null }>({ ids: [], selectedId: null });
-
-    // D2: ←/→ move the selected question through the (possibly wrong-filtered)
-    // list. Clamped at both ends — no wrap — so the arrows have a clear "start"
-    // and "end". Ignored while a text field is focused so arrows still move the
-    // caret inside the question textarea.
-    useEffect(() => {
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-            if (event.altKey || event.ctrlKey || event.metaKey) return;
-            const target = event.target as HTMLElement | null;
-            const tag = target?.tagName;
-            if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
-            const { ids, selectedId } = navStateRef.current;
-            if (ids.length === 0) return;
-            const currentIndex = selectedId != null ? ids.indexOf(selectedId) : 0;
-            const baseIndex = currentIndex < 0 ? 0 : currentIndex;
-            const nextIndex = event.key === "ArrowLeft"
-                ? Math.max(0, baseIndex - 1)
-                : Math.min(ids.length - 1, baseIndex + 1);
-            if (nextIndex === baseIndex) return;
-            event.preventDefault();
-            setSelectedQuestionId(ids[nextIndex]);
-        };
-        window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
-    }, []);
-
     useEffect(() => {
         let cancelled = false;
         const loadReview = async () => {
@@ -539,32 +539,34 @@ export default function ReviewPage() {
             }
             // Reset the error flag so a retry starts clean.
             setLoadError(false);
-            // Both server round-trips key off the route attemptId, so start the
-            // review-exam fetch in parallel with the attempt load instead of
-            // chaining them — halves the wait on slow networks.
-            const serverExamPromise = loadExamForReview(id).catch(() => ({ status: "error" as const }));
-            // Server-first: the action returns the attempt only when the signed
-            // session cookie owns it. Device-local records fall back to the
-            // existing client-side ownership check.
-            const result = await loadMyAttemptClient(id, {
-                server: (attemptId) => loadMyAttempt(attemptId),
-                localFallback: (attemptId) => loadAttempt(attemptId),
-            });
-            const found = result.status === "ok" ? result.attempt : undefined;
+            const session = getSession();
+            if (!session) {
+                setAccessDenied(true);
+                return;
+            }
+            // One signed owner-detail action returns the immutable submitted
+            // grading rows plus the exact-id current explanation projection.
+            // Digest columns and raw provider rows never cross this Flight edge.
+            const detail = await loadStudentOfficialAttempt(id, session);
+            const found = detail?.attempt;
             if (found && !cancelled) {
-                const session = getSession();
-                if (result.source === "local") {
-                    if (!session || !attemptBelongsToSession(found, session)) {
+                if (detail.source === "local") {
+                    if (!attemptBelongsToSession(found, session)) {
                         setAccessDenied(true);
                         return;
                     }
                 }
                 attemptRef.current = found;
                 setAttempt(found);
+                setAttemptSource(detail.source);
+                setTrustedReview(detail.source === "server" ? detail.trustedReview || null : null);
+                setServerRetakeEligibleQuestionIds(detail.source === "server"
+                    ? detail.retakeEligibleQuestionIds || []
+                    : []);
                 const storedReceipt = readSubmissionReceipt(found.id);
-                const nextReceipt = submissionReceiptForAttempt(found, storedReceipt, result.source);
+                const nextReceipt = submissionReceiptForAttempt(found, storedReceipt, detail.source);
                 try {
-                    if (result.source === "server") await saveLocalServerConfirmedAttempt(found);
+                    if (detail.source === "server") await saveLocalServerConfirmedAttempt(found);
                     await persistSubmissionReceipt(nextReceipt);
                 } catch (error) {
                     console.warn("Review receipt persistence failed", error);
@@ -619,7 +621,14 @@ export default function ReviewPage() {
 
                 const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
                 if (drawingsRef) {
-                    loadJsonRecord<PdfDrawings>(drawingsRef)
+                    const drawingsPromise = drawingsRef.store === "remote"
+                        ? loadMyAttemptHandwriting(found.id).then(handwriting => (
+                            handwriting.status === "ok" && handwriting.signedUrl
+                                ? downloadRemoteStudentHandwriting(handwriting.signedUrl)
+                                : null
+                        ))
+                        : loadJsonRecord<PdfDrawings>(drawingsRef);
+                    drawingsPromise
                         .then(drawings => {
                             if (cancelled) return;
                             if (drawings) {
@@ -632,7 +641,7 @@ export default function ReviewPage() {
                             }
                         })
                         .catch(err => {
-                            console.error("Failed to restore drawings from IndexedDB", err);
+                            console.error("Failed to restore submitted handwriting", err);
                             if (!cancelled && found.drawings) setRestoredDrawings(found.drawings);
                             else if (!cancelled) setHandwritingUnavailable(true);
                         });
@@ -640,17 +649,7 @@ export default function ReviewPage() {
                     setRestoredDrawings(found.drawings);
                 }
 
-                // Server-first review payload: answers/explanations included
-                // (post-submit), PIN and answer-key PDF withheld server-side.
-                // The server fetch was already started above, in parallel.
-                const examResult = await loadReviewExamClient(found.id, {
-                    server: () => serverExamPromise,
-                    localFallback: async () => {
-                        const localExam = await loadExam(found.examId);
-                        return localExam ? stripTeacherOnlySubQuestionFields(localExam) : null;
-                    },
-                });
-                const parsedExam = examResult.status === "ok" ? examResult.exam ?? null : null;
+                const parsedExam = detail.exam;
                 if (parsedExam && !cancelled) {
                     setExam(parsedExam);
                     setPdfFile(null);
@@ -675,11 +674,8 @@ export default function ReviewPage() {
                 // and self-references are skipped.
                 const sourceId = found.retake?.sourceAttemptId;
                 if (sourceId && !sourceId.includes(":") && sourceId !== found.id) {
-                    const sourceResult = await loadMyAttemptClient(sourceId, {
-                        server: (attemptId) => loadMyAttempt(attemptId),
-                        localFallback: (attemptId) => loadAttempt(attemptId),
-                    });
-                    if (!cancelled && sourceResult.status === "ok" && sourceResult.attempt) {
+                    const sourceResult = await loadStudentOfficialAttempt(sourceId, session);
+                    if (!cancelled && sourceResult) {
                         const src = sourceResult.attempt;
                         if (sourceResult.source === "server") {
                             setSourceAttempt(src);
@@ -690,10 +686,7 @@ export default function ReviewPage() {
                     }
                 }
             } else if (!cancelled) {
-                // No attempt: distinguish an ownership denial from a load
-                // failure so the student sees the right screen (and a retry).
-                if (result.status === "denied") setAccessDenied(true);
-                else setLoadError(true);
+                setLoadError(true);
             }
         };
         void loadReview();
@@ -753,7 +746,7 @@ export default function ReviewPage() {
                 </header>
                 <main className="container student-review-main">
                     <section className="student-review-shell" aria-hidden="true">
-                        <aside className="student-review-sidebar" style={{ display: 'grid', gap: '0.9rem', alignContent: 'start' }}>
+                        <aside className="student-review-summary" style={{ display: 'grid', gap: '0.9rem', alignContent: 'start' }}>
                             {skeletonBlock(170)}
                             {skeletonBlock(64)}
                             {skeletonBlock(210)}
@@ -766,6 +759,15 @@ export default function ReviewPage() {
                         </section>
                     </section>
                 </main>
+            </div>
+        );
+    }
+
+    if (attemptSource === "server" && !trustedReview) {
+        return (
+            <div style={{ padding: "2rem", textAlign: "center" }}>
+                <h2>공식 채점 근거를 확인할 수 없습니다.</h2>
+                <p style={{ color: "var(--muted)", marginTop: "0.5rem" }}>결과는 보존되어 있으며, 잠시 후 다시 확인해주세요.</p>
             </div>
         );
     }
@@ -796,25 +798,19 @@ export default function ReviewPage() {
         }
     };
 
-    const reviewQuestionIds = attempt.retake?.questionIds?.length
-        ? new Set(attempt.retake.questionIds)
-        : null;
-    const reviewQuestions = reviewQuestionIds
-        ? exam.questions.filter(q => reviewQuestionIds.has(q.id))
-        : exam.questions;
+    const reviewModel = attemptSource === "server"
+        ? trustedReview!
+        : buildLocalStudentReviewModel(exam, attempt);
+    const reviewQuestions = reviewModel.questions;
     const reviewExam: Exam = { ...exam, questions: reviewQuestions };
-    const questionResults = getAttemptQuestionResults(reviewExam, attempt);
+    const gradingResolution = {
+        source: reviewModel.gradingSource,
+        questionResults: reviewModel.questionResults,
+        scoreSummary: reviewModel.scoreSummary,
+    };
+    const questionResults = reviewModel.questionResults;
     const resultByQuestionId = new Map(questionResults.map(result => [result.questionId, result]));
-    const scoreSummary = summarizeAttemptScore(reviewExam, attempt);
-    // F6: getAttemptQuestionResults recomputes each question's status from the
-    // LIVE exam, so a teacher editing the answer key after submission can shift
-    // the review percent away from the score stored at submission time. Detect
-    // that divergence so the report can flag "재채점됨" with the original score.
-    const storedScorePercent = safeScorePercent(attempt.score, attempt.totalScore);
-    const storedEarnedScore = Math.round((attempt.score || 0) * 100) / 100;
-    const scoreRegraded = Number.isFinite(attempt.totalScore)
-        && attempt.totalScore > 0
-        && scoreSummary.scorePercent !== storedScorePercent;
+    const scoreSummary = gradingResolution.scoreSummary;
     const resultCounts = questionResults.reduce((counts, result) => {
         if (result.status === "correct") counts.correctCount += 1;
         if (result.status === "wrong") counts.incorrectCount += 1;
@@ -836,16 +832,15 @@ export default function ReviewPage() {
     const canDownloadMarkupFile = canDownloadReturnedMarkup(returnedFeedback) && hasDrawings(combinedReviewDrawings);
     const canDownloadAnnotatedPdf = canDownloadMarkupFile && !!pdfFile;
     const visibleFeedbackComments = returnedFeedback?.questionComments.filter(comment => comment.visibility === "student_visible") || [];
-    const retakeQuestionIds = buildRetakeQuestionIds(reviewExam, attempt);
-    const weaknessGroups = buildStudentWeaknessGroups(reviewExam, attempt).slice(0, 3);
-    const recommendationGroups = buildLearningRecommendations(reviewExam, [attempt], {
-        scope: "attempt",
-        attempt,
-        // Show the student their own "정답이지만 느린" unstable concepts too.
-        includeSlowCorrect: true,
-        limit: 5,
-    });
-    const behaviorSummary = summarizeAttemptBehavior(attempt);
+    const retakeQuestionIds = attemptSource === "server"
+        ? serverRetakeEligibleQuestionIds
+        : buildRetakeQuestionIds(reviewExam, attempt);
+    const retakeDefinitionUnavailable = attemptSource === "server"
+        && serverRetakeEligibleQuestionIds.length === 0
+        && questionResults.some(result => result.status === "wrong" || result.status === "unanswered");
+    const weaknessGroups = reviewModel.weaknessGroups;
+    const recommendationGroups = reviewModel.recommendations;
+    const behaviorSummary = reviewModel.behavior;
     const retakeRecovery = attempt.retake && sourceAttempt
         ? buildAttemptRetakeRecovery(exam, attempt, sourceAttempt)
         : null;
@@ -854,24 +849,26 @@ export default function ReviewPage() {
         ? buildSourceAttemptRecovery(exam, attempt, readLocalAttempts())
         : null;
     const recoveredQuestionIdSet = new Set(sourceRecovery?.recoveredQuestionIds || []);
+    const allReviewQuestionIds = reviewQuestions.map(question => question.id);
     // Source score over the SAME scoped question set, so the two percentages compare 1:1.
     const sourceScoreSummary = retakeRecovery && sourceAttempt
-        ? summarizeAttemptScore(reviewExam, sourceAttempt)
+        ? summarizeCanonicalQuestionSubset(exam, sourceAttempt, allReviewQuestionIds)
         : null;
     const timingByQuestionId = new Map((attempt.questionTimings || []).map(timing => [timing.questionId, timing]));
     const questionNumberById = new Map(reviewQuestions.map(question => [question.id, question.number]));
-    const allReviewQuestionIds = reviewQuestions.map(question => question.id);
     const explainedCount = reviewQuestions.filter(question => question.explanation?.trim()).length;
     const allQuestionNotes = Object.values(studentQuestions);
     const queuedQuestionCount = allQuestionNotes.filter(note => note.status !== "answered").length;
     const answeredQuestionCount = allQuestionNotes.filter(note => note.status === "answered").length;
     const wrongAndUnansweredCount = resultCounts.incorrectCount + resultCounts.unansweredCount;
+    const canUseScopedRetakes = supportedReviewRetakeModes(attemptSource).includes("custom");
     const resolveQuestionState = (question: Question) => {
         const result = resultByQuestionId.get(question.id);
-        const userAnswer = result?.selectedAnswer ?? attempt.answers[question.id];
-        const correctAnswer = result?.correctAnswer ?? question.answer;
+        const isLegacyDerived = gradingResolution.source === "legacy_derived_current_exam";
+        const userAnswer = result?.selectedAnswer ?? (isLegacyDerived ? attempt.answers[question.id] : undefined);
+        const correctAnswer = result?.correctAnswer ?? (isLegacyDerived ? question.answer : undefined);
         const status: QuestionResultStatus = result?.status
-            ?? (correctAnswer === undefined
+            ?? (!isLegacyDerived || correctAnswer === undefined
                 ? "ungraded"
                 : userAnswer === undefined || userAnswer === null || userAnswer === 0
                     ? "unanswered"
@@ -886,17 +883,16 @@ export default function ReviewPage() {
             timing: timingByQuestionId.get(question.id),
         };
     };
+    // Until the student picks a question, land on the first wrong/unanswered
+    // one — that is what they came to the review for.
     const selectedQuestion = filteredQuestions.find(question => question.id === selectedQuestionId)
+        || filteredQuestions.find(question => wrongQuestionIds.has(question.id))
         || filteredQuestions[0]
         || null;
+    const allGradedCorrect = reviewQuestions.length > 0
+        && wrongAndUnansweredCount === 0
+        && resultCounts.ungradedCount === 0;
     const selectedQuestionState = selectedQuestion ? resolveQuestionState(selectedQuestion) : null;
-    // Keep the keyboard-nav handler in sync with the current filtered list and
-    // effective selection (D2). Assigning a ref during render is safe — no state
-    // update, just the "latest value" pattern.
-    navStateRef.current = {
-        ids: filteredQuestions.map(question => question.id),
-        selectedId: selectedQuestion?.id ?? null,
-    };
     const formatRetakeNumbers = (questionIds: number[]) => questionIds
         .map(questionId => questionNumberById.get(questionId))
         .filter((questionNumber): questionNumber is number => typeof questionNumber === "number")
@@ -924,6 +920,21 @@ export default function ReviewPage() {
         const next = wrongOrdered.find(questionId => orderedIds.indexOf(questionId) > currentIndex)
             ?? wrongOrdered[0];
         setSelectedQuestionId(next);
+    };
+
+    const moveQuestionTab = (event: ReactKeyboardEvent<HTMLButtonElement>, questionId: number) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        const currentIndex = filteredQuestions.findIndex(question => question.id === questionId);
+        if (currentIndex < 0) return;
+        event.preventDefault();
+        const direction = event.key === "ArrowLeft" ? -1 : 1;
+        const nextIndex = (currentIndex + direction + filteredQuestions.length) % filteredQuestions.length;
+        if (nextIndex === currentIndex) return;
+        const nextQuestion = filteredQuestions[nextIndex];
+        setSelectedQuestionId(nextQuestion.id);
+        const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+        tabs?.[nextIndex]?.focus();
     };
 
     const submitQuestionBody = async (question: Question, rawBody: string) => {
@@ -1068,7 +1079,7 @@ export default function ReviewPage() {
 
     return (
         <div className="layout-main student-review-page">
-            <header className="header">
+            <header className="header student-review-header">
                 <div className="container header-content">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
                         <button
@@ -1082,7 +1093,7 @@ export default function ReviewPage() {
                         </button>
                         <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>결과 리포트</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div className="student-review-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <button
                             type="button"
                             onClick={() => window.print()}
@@ -1103,8 +1114,8 @@ export default function ReviewPage() {
 
             <main className="container animate-fade-in student-review-main">
                 <section className="student-review-shell">
-                    <aside className="student-review-sidebar">
-                        <section className="bento-card student-review-score-card kpi-spring">
+                    <aside className="student-review-summary">
+                        <section className="bento-card student-review-score-card mobile-section-stack kpi-spring">
                             <div className="student-review-score-copy">
                                 <h1>{attempt.examTitle}</h1>
                                 <p>{formatKoreanDateTime(attempt.finishedAt)} 응시 완료</p>
@@ -1114,28 +1125,40 @@ export default function ReviewPage() {
                                 <strong><CountUp value={scoreSummary.scorePercent} delayMs={200} /><span>%</span></strong>
                                 <div>{scoreSummary.earnedScore} / {scoreSummary.totalScore}점</div>
                             </div>
-                            {scoreRegraded && (
+                            <div
+                                className="student-review-score-bar-track"
+                                role="progressbar"
+                                aria-label="점수 성취율"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={scoreSummary.scorePercent}
+                                style={{
+                                    height: '6px',
+                                    width: '100%',
+                                    background: 'var(--border)',
+                                    borderRadius: 'var(--radius-full)',
+                                    overflow: 'hidden',
+                                    margin: '0.2rem 0 0.4rem',
+                                }}
+                            >
                                 <div
-                                    className="student-review-regrade-badge"
+                                    className="student-review-score-bar-fill"
                                     style={{
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '0.3rem',
-                                        alignSelf: 'flex-start',
-                                        padding: '0.3rem 0.55rem',
+                                        height: '100%',
+                                        width: `${Math.min(100, Math.max(0, scoreSummary.scorePercent))}%`,
+                                        background: scoreSummary.scorePercent >= 80
+                                            ? 'linear-gradient(90deg, #10b981, #059669)'
+                                            : scoreSummary.scorePercent >= 60
+                                            ? 'linear-gradient(90deg, #6366f1, #4f46e5)'
+                                            : scoreSummary.scorePercent >= 40
+                                            ? 'linear-gradient(90deg, #f59e0b, #d97706)'
+                                            : 'linear-gradient(90deg, #f43f5e, #e11d48)',
                                         borderRadius: 'var(--radius-full)',
-                                        border: '1px solid var(--warning)',
-                                        background: 'color-mix(in srgb, var(--warning) 14%, transparent)',
-                                        color: 'var(--warning)',
-                                        fontSize: '0.68rem',
-                                        fontWeight: 800,
-                                        lineHeight: 1.35,
+                                        transition: 'width 0.9s cubic-bezier(0.16, 1, 0.3, 1)',
                                     }}
-                                    title={`제출 당시 점수는 ${storedEarnedScore}점(${storedScorePercent}%)이었습니다. 현재 정답 기준으로 다시 채점된 점수를 표시합니다.`}
-                                >
-                                    현재 정답 기준 재채점됨 · 제출 당시 {storedEarnedScore}점 ({storedScorePercent}%)
-                                </div>
-                            )}
+                                />
+                            </div>
+                            <GradingEvidenceNote source={gradingResolution.source} />
                             <div className="student-review-pill-row">
                                 {attempt.handwritingArchived && (
                                     <MetaChip tone="primary">필기 보관 {attempt.questionDrawings?.length || attempt.drawingPageCount || 0}문항</MetaChip>
@@ -1212,70 +1235,12 @@ export default function ReviewPage() {
                                     )}
                                 </div>
                             )}
+                            <HandwritingUploadRecoveryCard
+                                attemptId={attempt.id}
+                        examId={attempt.examId || exam?.id || ""}
+                                onRecovered={() => setReloadKey(value => value + 1)}
+                            />
                         </section>
-
-                        {returnedFeedback && (
-                            <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '90ms' }} aria-labelledby="student-feedback-title">
-                                <div className="student-review-card-head">
-                                    <div>
-                                        <div className="student-review-section-title">
-                                            <MessageSquare size={17} />
-                                            <strong id="student-feedback-title">교사 피드백</strong>
-                                        </div>
-                                        {returnedFeedback.summary && (
-                                            <p style={{ whiteSpace: "pre-wrap" }}>{returnedFeedback.summary}</p>
-                                        )}
-                                    </div>
-                                    <MetaChip tone="primary">새 피드백</MetaChip>
-                                </div>
-
-                                {visibleFeedbackComments.length > 0 && (
-                                    <div style={{ display: "grid", gap: "0.45rem" }}>
-                                        {visibleFeedbackComments.map((comment) => (
-                                            <div
-                                                key={comment.id}
-                                                style={{
-                                                    padding: "0.65rem",
-                                                    borderRadius: "var(--radius-md)",
-                                                    background: "var(--surface-elevated)",
-                                                    border: "1px solid var(--border)",
-                                                    lineHeight: 1.55,
-                                                }}
-                                            >
-                                                <strong style={{ marginRight: "0.4rem" }}>{comment.questionNumber}번</strong>
-                                                <span>{comment.body}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                <div className="student-review-side-actions">
-                                    {canDownloadFeedback ? (
-                                        <button
-                                            type="button"
-                                            onClick={downloadFeedback}
-                                            className="btn btn-secondary student-review-full-button"
-                                        >
-                                            <FileText size={15} />
-                                            피드백 저장
-                                        </button>
-                                    ) : (
-                                        <span className="student-review-success-note">다운로드 제한</span>
-                                    )}
-                                    {canDownloadMarkupFile && (
-                                        <button
-                                            type="button"
-                                            onClick={() => void downloadFeedbackMarkup()}
-                                            disabled={annotationDownloading}
-                                            className="btn btn-secondary student-review-full-button"
-                                        >
-                                            <Download size={15} />
-                                            {annotationDownloading ? "생성 중" : canDownloadAnnotatedPdf ? "첨삭 PDF 저장" : "첨삭 파일 저장"}
-                                        </button>
-                                    )}
-                                </div>
-                            </section>
-                        )}
 
                         <section className="student-review-stat-grid" aria-label="채점 요약">
                             <MiniStat label="정답" value={resultCounts.correctCount} color="var(--success)" />
@@ -1284,153 +1249,6 @@ export default function ReviewPage() {
                             {resultCounts.ungradedCount > 0 && (
                                 <MiniStat label="미채점" value={resultCounts.ungradedCount} color="var(--muted)" />
                             )}
-                        </section>
-
-                        {retakeRecovery && (
-                            <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '160ms' }}>
-                                <div className="student-review-section-title">
-                                    <TrendingUp size={16} />
-                                    <strong>재시험 회복</strong>
-                                </div>
-                                <p>
-                                    {retakeRecovery.targetCount > 0
-                                        ? `원시험에서 틀린 ${retakeRecovery.targetCount}문항 중 ${retakeRecovery.recoveredCount}문항을 이번에 맞혔어요.`
-                                        : "이번 범위에는 원시험에서 틀린 문항이 없었습니다."}
-                                </p>
-                                <div className="student-review-behavior-grid">
-                                    <MiniStat
-                                        label="회복"
-                                        value={retakeRecovery.recoveryRate !== undefined
-                                            ? `${retakeRecovery.recoveredCount}/${retakeRecovery.targetCount} (${retakeRecovery.recoveryRate}%)`
-                                            : "대상 없음"}
-                                        color="var(--success)"
-                                    />
-                                    <MiniStat
-                                        label="점수 변화"
-                                        value={sourceScoreSummary
-                                            ? `${sourceScoreSummary.scorePercent}% → ${scoreSummary.scorePercent}%`
-                                            : "-"}
-                                        color="#4f46e5"
-                                    />
-                                    {retakeRecovery.regressedCount > 0 && (
-                                        <MiniStat label="다시 틀림" value={`${retakeRecovery.regressedCount}문항`} color="var(--error)" />
-                                    )}
-                                </div>
-                            </section>
-                        )}
-
-                        <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '230ms' }}>
-                            <div className="student-review-section-title">
-                                <Target size={17} />
-                                <strong>오답 재시험</strong>
-                            </div>
-                            <p>오답과 같은 유형을 바로 다시 풉니다.</p>
-                            {sourceRecovery && sourceRecovery.recoveredQuestionIds.length > 0 && (
-                                <p className="student-review-success-note" style={{ marginBottom: '0.6rem' }}>
-                                    이미 재시험으로 {sourceRecovery.recoveredQuestionIds.length}문항을 회복했어요.
-                                    {sourceRecovery.unrecoveredQuestionIds.length > 0
-                                        ? ` 남은 오답은 ${sourceRecovery.unrecoveredQuestionIds.length}문항입니다.`
-                                        : ' 모든 오답을 회복했습니다.'}
-                                </p>
-                            )}
-                            <div className="student-review-side-actions">
-                                {retakeQuestionIds.length > 0 ? (
-                                    <Link href={buildRetakeHref(attempt.examId, attempt.id, retakeQuestionIds, "wrong")} className="btn btn-primary student-review-full-button">
-                                        <Repeat2 size={15} />
-                                        오답만
-                                    </Link>
-                                ) : (
-                                    <span className="student-review-success-note">재시험할 오답이 없습니다</span>
-                                )}
-                                <Link href={buildRetakeHref(attempt.examId, attempt.id, allReviewQuestionIds, "custom")} className="btn btn-secondary student-review-full-button">
-                                    전체
-                                </Link>
-                            </div>
-
-                            {recommendationGroups.length > 0 && (
-                                <div className="student-review-recommendations">
-                                    <div className="student-review-recommendation-head">
-                                        <span>유형 큐</span>
-                                        <strong>{recommendationGroups.length}개 유형</strong>
-                                    </div>
-                                    {recommendationGroups.map(group => {
-                                        const retakeIds = group.retakeQuestionIds;
-                                        const retakeNumbers = formatRetakeNumbers(retakeIds);
-                                        return (
-                                            <Link
-                                                key={group.key}
-                                                href={buildRetakeHref(attempt.examId, group.sourceAttemptId, retakeIds, group.retakeMode, {
-                                                    labels: group.retakeLabels,
-                                                    concepts: group.retakeConcepts,
-                                                })}
-                                                className="student-review-recommendation-row"
-                                            >
-                                                <span>{group.title}</span>
-                                                <small>
-                                                    {retakeNumbers || group.questionNumbers.join(", ")}번 · {group.wrongCount > 0
-                                                        ? `오답 ${group.wrongCount}/${group.totalCount}`
-                                                        : `시간 지연 ${group.slowCorrectCount}문항`}
-                                                </small>
-                                            </Link>
-                                        );
-                                    })}
-                                </div>
-                            )}
-
-                            {recommendationGroups.length === 0 && weaknessGroups.length > 0 && (
-                                <div className="student-review-recommendations">
-                                    {weaknessGroups.map(group => (
-                                        <Link
-                                            key={group.key}
-                                            href={buildRetakeHref(attempt.examId, attempt.id, group.questionIds, "similar", {
-                                                labels: group.labels,
-                                                concepts: group.concepts,
-                                            })}
-                                            className="student-review-recommendation-row"
-                                        >
-                                            <span>{group.title}</span>
-                                            <small>{group.questionNumbers.join(", ")}번 · 오답률 {group.wrongRate}%</small>
-                                        </Link>
-                                    ))}
-                                </div>
-                            )}
-                        </section>
-
-                        {(attempt.questionTimings?.length || behaviorSummary.focusLossCount > 0) && (
-                            <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '300ms' }}>
-                                <div className="student-review-section-title">
-                                    <Clock size={16} />
-                                    <strong>풀이 행동</strong>
-                                </div>
-                                <div className="student-review-behavior-grid">
-                                    <MiniStat label="추적" value={formatSeconds(behaviorSummary.totalTrackedTimeSec)} color="var(--foreground)" />
-                                    <MiniStat label="평균" value={formatSeconds(behaviorSummary.averageTimeSec)} color="var(--foreground)" />
-                                    <MiniStat label="재방문" value={behaviorSummary.revisitedQuestionNumbers.length ? `${behaviorSummary.revisitedQuestionNumbers.join(", ")}번` : "없음"} color="var(--foreground)" />
-                                    {behaviorSummary.focusLossCount > 0 && (
-                                        <span
-                                            className="away-severity-badge"
-                                            data-away-severity={awaySeverity(behaviorSummary.focusLossCount)}
-                                        >
-                                            시험 중 화면을 벗어난 기록 {behaviorSummary.focusLossCount}회
-                                        </span>
-                                    )}
-                                </div>
-                            </section>
-                        )}
-
-                        <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '370ms' }}>
-                            <div className="student-review-section-title">
-                                <HelpCircle size={16} />
-                                <strong>질문/해설</strong>
-                            </div>
-                            <p>궁금한 문항은 대기 목록에 보관됩니다.</p>
-                            <div className="student-review-support-grid">
-                                <MiniStat label="해설" value={`${explainedCount}/${reviewQuestions.length}`} color="#4f46e5" />
-                                <MiniStat label="질문 대기" value={queuedQuestionCount} color="#0f766e" />
-                                {answeredQuestionCount > 0 && (
-                                    <MiniStat label="답변 완료" value={answeredQuestionCount} color="#4f46e5" />
-                                )}
-                            </div>
                         </section>
                     </aside>
 
@@ -1471,7 +1289,7 @@ export default function ReviewPage() {
                             )}
 
                             <section className="student-review-question-panel">
-                                <div className="student-review-question-toolbar">
+                                <div className="student-review-question-toolbar mobile-section-stack">
                                     <div>
                                         <h2>문항 상세</h2>
                                         <p>
@@ -1486,6 +1304,7 @@ export default function ReviewPage() {
                                             type="button"
                                             onClick={() => setFilterWrong(false)}
                                             className={`btn ${!filterWrong ? "btn-primary" : "btn-secondary"}`}
+                                            aria-pressed={!filterWrong}
                                         >
                                             전체 {reviewQuestions.length}
                                         </button>
@@ -1493,24 +1312,28 @@ export default function ReviewPage() {
                                             type="button"
                                             onClick={() => setFilterWrong(true)}
                                             className={`btn ${filterWrong ? "btn-primary" : "btn-secondary"}`}
+                                            aria-pressed={filterWrong}
                                         >
-                                            오답 {wrongAndUnansweredCount}
+                                            오답·미응답 {wrongAndUnansweredCount}
                                         </button>
-                                        <button
-                                            type="button"
-                                            onClick={goToNextWrongQuestion}
-                                            disabled={wrongAndUnansweredCount === 0}
-                                            className="btn btn-secondary"
-                                            title="현재 문항 다음의 오답/미응답 문항으로 이동합니다"
-                                        >
-                                            다음 오답 →
-                                        </button>
+                                        {wrongAndUnansweredCount > 0 ? (
+                                            <button
+                                                type="button"
+                                                onClick={goToNextWrongQuestion}
+                                                className="btn btn-secondary"
+                                                title="현재 문항 다음의 오답/미응답 문항으로 이동합니다"
+                                            >
+                                                다음 오답 →
+                                            </button>
+                                        ) : allGradedCorrect ? (
+                                            <StatusPill tone="success" label="모두 맞혔어요" icon={<CheckCircle2 size={13} />} />
+                                        ) : null}
                                     </div>
                                 </div>
 
                                 {filteredQuestions.length > 0 ? (
                                 <div className="student-review-question-dock">
-                                    <div className="student-review-question-map" aria-label="문항 바로가기">
+                                    <div className="student-review-question-map" role="tablist" aria-label="문항 바로가기">
                                         {filteredQuestions.map(question => {
                                             const { status } = resolveQuestionState(question);
                                             const isActive = question.id === selectedQuestion?.id;
@@ -1520,8 +1343,14 @@ export default function ReviewPage() {
                                                     key={question.id}
                                                     type="button"
                                                     onClick={() => setSelectedQuestionId(question.id)}
+                                                    onKeyDown={(event) => moveQuestionTab(event, question.id)}
                                                     className={`student-review-question-dot is-${status} ${isActive ? "is-active" : ""}`}
-                                                    aria-pressed={isActive}
+                                                    id={`student-review-question-tab-${question.id}`}
+                                                    role="tab"
+                                                    aria-label={`문항 ${question.number} ${questionStatusLabel(status)}`}
+                                                    aria-selected={isActive}
+                                                    aria-controls="student-review-question-panel"
+                                                    tabIndex={isActive ? 0 : -1}
                                                     title={`문항 ${question.number} ${questionStatusLabel(status)}`}
                                                 >
                                                     <span>{question.number}</span>
@@ -1532,27 +1361,33 @@ export default function ReviewPage() {
                                     </div>
 
                                     {selectedQuestion && selectedQuestionState && (
-                                        <QuestionCard
-                                            key={selectedQuestion.id}
-                                            question={selectedQuestion}
-                                            userAnswer={selectedQuestionState.userAnswer}
-                                            correctAnswer={selectedQuestionState.correctAnswer}
-                                            status={selectedQuestionState.status}
-                                            recovered={recoveredQuestionIdSet.has(selectedQuestion.id)}
-                                            timing={selectedQuestionState.timing}
-                                            explanationOpen={!!openExplanations[selectedQuestion.id]}
-                                            questionBoxOpen={!!openQuestionBoxes[selectedQuestion.id]}
-                                            draft={questionDrafts[selectedQuestion.id] || ""}
-                                            submittedQuestion={studentQuestions[selectedQuestion.id]}
-                                            subQuestionAnswers={attempt.subQuestionAnswers?.[selectedQuestion.id]}
-                                            retakeHref={buildRetakeHref(attempt.examId, attempt.id, [selectedQuestion.id], "custom")}
-                                            explanationRequestArmed={explanationRequestArmedId === selectedQuestion.id}
-                                            onToggleExplanation={() => toggleExplanation(selectedQuestion.id)}
-                                            onToggleQuestionBox={() => toggleQuestionBox(selectedQuestion.id)}
-                                            onDraftChange={(value) => updateQuestionDraft(selectedQuestion.id, value)}
-                                            onSubmitQuestion={() => submitStudentQuestion(selectedQuestion)}
-                                            onRequestExplanation={() => requestExplanation(selectedQuestion)}
-                                        />
+                                        <div
+                                            id="student-review-question-panel"
+                                            role="tabpanel"
+                                            aria-labelledby={`student-review-question-tab-${selectedQuestion.id}`}
+                                        >
+                                            <QuestionCard
+                                                key={selectedQuestion.id}
+                                                question={selectedQuestion}
+                                                userAnswer={selectedQuestionState.userAnswer}
+                                                correctAnswer={selectedQuestionState.correctAnswer}
+                                                status={selectedQuestionState.status}
+                                                recovered={recoveredQuestionIdSet.has(selectedQuestion.id)}
+                                                timing={selectedQuestionState.timing}
+                                                explanationOpen={!!openExplanations[selectedQuestion.id]}
+                                                questionBoxOpen={!!openQuestionBoxes[selectedQuestion.id]}
+                                                draft={questionDrafts[selectedQuestion.id] || ""}
+                                                submittedQuestion={studentQuestions[selectedQuestion.id]}
+                                                subQuestionAnswers={attempt.subQuestionAnswers?.[selectedQuestion.id]}
+                                                retakeHref={canUseScopedRetakes ? buildRetakeHref(attempt.examId, attempt.id, [selectedQuestion.id], "custom") : null}
+                                                explanationRequestArmed={explanationRequestArmedId === selectedQuestion.id}
+                                                onToggleExplanation={() => toggleExplanation(selectedQuestion.id)}
+                                                onToggleQuestionBox={() => toggleQuestionBox(selectedQuestion.id)}
+                                                onDraftChange={(value) => updateQuestionDraft(selectedQuestion.id, value)}
+                                                onSubmitQuestion={() => submitStudentQuestion(selectedQuestion)}
+                                                onRequestExplanation={() => requestExplanation(selectedQuestion)}
+                                            />
+                                        </div>
                                     )}
                                 </div>
                                 ) : (
@@ -1566,6 +1401,243 @@ export default function ReviewPage() {
                             </section>
                         </div>
                     </section>
+
+                    <aside className="student-review-secondary">
+                        <section className="bento-card student-review-side-card student-review-next-action mobile-section-stack kpi-spring" style={{ animationDelay: '90ms' }}>
+                            <div className="student-review-section-title">
+                                <Target size={17} />
+                                <strong>오답 재시험</strong>
+                            </div>
+                            <p>이번 시험에서 틀린 문항을 바로 다시 풉니다.</p>
+                            {sourceRecovery && sourceRecovery.recoveredQuestionIds.length > 0 && (
+                                <p className="student-review-success-note" style={{ marginBottom: '0.6rem' }}>
+                                    재시험에서 {sourceRecovery.recoveredQuestionIds.length}문항을 다시 맞혔어요.
+                                    {sourceRecovery.unrecoveredQuestionIds.length > 0
+                                        ? ` 남은 오답은 ${sourceRecovery.unrecoveredQuestionIds.length}문항입니다.`
+                                        : ' 남은 오답이 없어요.'}
+                                </p>
+                            )}
+                            <div className="student-review-side-actions mobile-action-row">
+                                {retakeQuestionIds.length > 0 ? (
+                                    <Link href={buildRetakeHref(attempt.examId, attempt.id, retakeQuestionIds, "wrong")} className="btn btn-primary student-review-full-button">
+                                        <Repeat2 size={15} />
+                                        오답만
+                                    </Link>
+                                ) : retakeDefinitionUnavailable ? (
+                                    <span role="status" className="student-review-muted-note">
+                                        제출 당시 문항 정의가 현재 시험과 달라 자동 재시험을 만들 수 없습니다.
+                                    </span>
+                                ) : (
+                                    <span className="student-review-success-note">재시험할 오답이 없습니다</span>
+                                )}
+                                {canUseScopedRetakes ? (
+                                    <Link href={buildRetakeHref(attempt.examId, attempt.id, allReviewQuestionIds, "custom")} className="btn btn-secondary student-review-full-button">
+                                        전체
+                                    </Link>
+                                ) : (
+                                    <span className="student-review-success-note">운영 기록은 서버가 검증한 오답 전체 재시험만 지원합니다.</span>
+                                )}
+                            </div>
+
+                            {canUseScopedRetakes && recommendationGroups.length > 0 && (
+                                <div className="student-review-recommendations">
+                                    <div className="student-review-recommendation-head">
+                                        <span>유형 큐</span>
+                                        <strong>{recommendationGroups.length}개 유형</strong>
+                                    </div>
+                                    {recommendationGroups.map(group => {
+                                        const retakeIds = group.retakeQuestionIds;
+                                        const retakeNumbers = formatRetakeNumbers(retakeIds);
+                                        return (
+                                            <Link
+                                                key={group.key}
+                                                href={buildRetakeHref(attempt.examId, group.sourceAttemptId, retakeIds, group.retakeMode, {
+                                                    labels: group.retakeLabels,
+                                                    concepts: group.retakeConcepts,
+                                                })}
+                                                className="student-review-recommendation-row"
+                                            >
+                                                <span>{group.title}</span>
+                                                <small>
+                                                    {retakeNumbers || group.questionNumbers.join(", ")}번 · {group.wrongCount > 0
+                                                        ? `오답 ${group.wrongCount}/${group.totalCount}`
+                                                        : `시간 지연 ${group.slowCorrectCount}문항`}
+                                                </small>
+                                            </Link>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {canUseScopedRetakes && recommendationGroups.length === 0 && weaknessGroups.length > 0 && (
+                                <div className="student-review-recommendations">
+                                    {weaknessGroups.map(group => (
+                                        <Link
+                                            key={group.key}
+                                            href={buildRetakeHref(attempt.examId, attempt.id, group.questionIds, "similar", {
+                                                labels: group.labels,
+                                                concepts: group.concepts,
+                                            })}
+                                            className="student-review-recommendation-row"
+                                        >
+                                            <span>{group.title}</span>
+                                            <small>{group.questionNumbers.join(", ")}번 · 오답률 {group.wrongRate}%</small>
+                                        </Link>
+                                    ))}
+                                </div>
+                            )}
+                        </section>
+
+                        {returnedFeedback && (
+                            <section className="bento-card student-review-side-card student-review-feedback-card kpi-spring" style={{ animationDelay: '90ms' }} aria-labelledby="student-feedback-title">
+                                <div className="student-review-card-head">
+                                    <div>
+                                        <div className="student-review-section-title">
+                                            <MessageSquare size={17} />
+                                            <strong id="student-feedback-title">교사 피드백</strong>
+                                        </div>
+                                        {returnedFeedback.summary && (
+                                            <p className="student-review-long-copy" style={{ whiteSpace: "pre-wrap" }}>{returnedFeedback.summary}</p>
+                                        )}
+                                    </div>
+                                    <MetaChip tone="primary">새 피드백</MetaChip>
+                                </div>
+
+                                {visibleFeedbackComments.length > 0 && (
+                                    <div style={{ display: "grid", gap: "0.45rem" }}>
+                                        {visibleFeedbackComments.map((comment) => (
+                                            <div
+                                                key={comment.id}
+                                                style={{
+                                                    padding: "0.65rem",
+                                                    borderRadius: "var(--radius-md)",
+                                                    background: "var(--surface)",
+                                                    border: "1px solid var(--border)",
+                                                    lineHeight: 1.55,
+                                                }}
+                                            >
+                                                <strong style={{ marginRight: "0.4rem" }}>{comment.questionNumber}번</strong>
+                                                <span>{comment.body}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                <div className="student-review-side-actions mobile-action-row">
+                                    {canDownloadFeedback ? (
+                                        <button
+                                            type="button"
+                                            onClick={downloadFeedback}
+                                            className="btn btn-secondary student-review-full-button"
+                                        >
+                                            <FileText size={15} />
+                                            피드백 저장
+                                        </button>
+                                    ) : (
+                                        <span className="student-review-success-note">다운로드 제한</span>
+                                    )}
+                                    {canDownloadMarkupFile && (
+                                        <button
+                                            type="button"
+                                            onClick={() => void downloadFeedbackMarkup()}
+                                            disabled={annotationDownloading}
+                                            className="btn btn-secondary student-review-full-button"
+                                        >
+                                            <Download size={15} />
+                                            {annotationDownloading ? "생성 중" : canDownloadAnnotatedPdf ? "첨삭 PDF 저장" : "첨삭 파일 저장"}
+                                        </button>
+                                    )}
+                                </div>
+                            </section>
+                        )}
+
+                        {retakeRecovery && (
+                            // Re-answering the same items after seeing the explanation is not
+                            // independent evidence of mastery (docs/remediation-management.md),
+                            // so this card reports what happened without celebrating a "recovery".
+                            <section
+                                className="bento-card student-review-side-card kpi-spring"
+                                style={{
+                                    animationDelay: '160ms',
+                                    ...(retakeRecovery.recoveredCount > 0 ? {
+                                        background: 'var(--retake-soft)',
+                                        borderColor: 'var(--retake-line)',
+                                    } : {})
+                                }}
+                            >
+                                <div className="student-review-section-title">
+                                    <RotateCcw size={16} color="var(--retake)" />
+                                    <strong>재시험 결과</strong>
+                                </div>
+                                <p>
+                                    {retakeRecovery.targetCount > 0
+                                        ? `원시험에서 틀린 ${retakeRecovery.targetCount}문항 중 ${retakeRecovery.recoveredCount}문항을 다시 풀어 맞혔어요.`
+                                        : "이번 범위에는 원시험에서 틀린 문항이 없었습니다."}
+                                </p>
+                                <p style={{ color: 'var(--muted)', fontSize: 'var(--type-caption)', lineHeight: 1.6, wordBreak: 'keep-all' }}>
+                                    같은 문제를 해설을 본 뒤 다시 맞힌 결과예요. 실력이 늘었는지는 비슷한 유형의 새 문제로 확인해보세요.
+                                </p>
+                                <div className="student-review-behavior-grid">
+                                    <MiniStat
+                                        label="다시 맞힘"
+                                        value={retakeRecovery.recoveryRate !== undefined
+                                            ? `${retakeRecovery.recoveredCount}/${retakeRecovery.targetCount} (${retakeRecovery.recoveryRate}%)`
+                                            : "대상 없음"}
+                                        color="var(--retake)"
+                                    />
+                                    <MiniStat
+                                        label="재시험 범위 점수"
+                                        value={sourceScoreSummary
+                                            ? `${sourceScoreSummary.scorePercent}% → ${scoreSummary.scorePercent}%`
+                                            : "-"}
+                                        color="var(--foreground)"
+                                    />
+                                    {retakeRecovery.regressedCount > 0 && (
+                                        <MiniStat label="다시 틀림" value={`${retakeRecovery.regressedCount}문항`} color="var(--grade-red)" />
+                                    )}
+                                </div>
+                            </section>
+                        )}
+
+
+                        {(attempt.questionTimings?.length || behaviorSummary.focusLossCount > 0) && (
+                            <details className="bento-card student-review-side-card student-review-detail-disclosure kpi-spring" style={{ animationDelay: '300ms' }}>
+                                <summary className="student-review-section-title">
+                                    <Clock size={16} />
+                                    <strong>풀이 행동</strong>
+                                </summary>
+                                <div className="student-review-behavior-grid">
+                                    <MiniStat label="추적" value={formatSeconds(behaviorSummary.totalTrackedTimeSec)} color="var(--foreground)" />
+                                    <MiniStat label="평균" value={formatSeconds(behaviorSummary.averageTimeSec)} color="var(--foreground)" />
+                                    <MiniStat label="재방문" value={behaviorSummary.revisitedQuestionNumbers.length ? `${behaviorSummary.revisitedQuestionNumbers.join(", ")}번` : "없음"} color="var(--foreground)" />
+                                    {behaviorSummary.focusLossCount > 0 && (
+                                        <span
+                                            className="away-severity-badge"
+                                            data-away-severity={awaySeverity(behaviorSummary.focusLossCount)}
+                                        >
+                                            시험 중 화면을 벗어난 기록 {behaviorSummary.focusLossCount}회
+                                        </span>
+                                    )}
+                                </div>
+                            </details>
+                        )}
+
+                        <details className="bento-card student-review-side-card student-review-detail-disclosure kpi-spring" style={{ animationDelay: '370ms' }} aria-label="학생 질문/해설 지원">
+                            <summary className="student-review-section-title">
+                                <HelpCircle size={16} />
+                                <strong>질문/해설</strong>
+                            </summary>
+                            <p>궁금한 문항은 대기 목록에 보관됩니다.</p>
+                            <div className="student-review-support-grid">
+                                <MiniStat label="해설" value={`${explainedCount}/${reviewQuestions.length}`} color="#4f46e5" />
+                                <MiniStat label="질문 대기" value={queuedQuestionCount} color="#0f766e" />
+                                {answeredQuestionCount > 0 && (
+                                    <MiniStat label="답변 완료" value={answeredQuestionCount} color="#4f46e5" />
+                                )}
+                            </div>
+                        </details>
+                    </aside>
+
                 </section>
             </main>
         </div>

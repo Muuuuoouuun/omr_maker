@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     SUBMISSION_RECEIPT_REQUEST_PREFIX,
 } from "./studentAttemptReceipt";
-import { persistStudentSubmissionDisposition } from "./studentSubmissionDurability";
+import {
+    persistStudentSubmissionDisposition,
+    shouldBlockSubmissionCompletion,
+} from "./studentSubmissionDurability";
 
 function storageThatFailsRequestWrites(): Storage {
     const data = new Map<string, string>([["omr_draft_exam_student_base", JSON.stringify({
@@ -38,6 +41,19 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("student submission durability gate", () => {
+    it("does not reverse an official server confirmation when only the device cache fails", () => {
+        expect(shouldBlockSubmissionCompletion({
+            source: "server",
+            receiptStatus: "confirmed",
+            durable: false,
+        })).toBe(false);
+        expect(shouldBlockSubmissionCompletion({
+            source: "local",
+            receiptStatus: "pending",
+            durable: false,
+        })).toBe(true);
+    });
+
     it("reports non-durable when a large pending replay request cannot be queued", async () => {
         const localStorage = storageThatFailsRequestWrites();
         vi.stubGlobal("window", { localStorage });

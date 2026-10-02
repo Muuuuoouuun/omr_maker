@@ -3,6 +3,7 @@ import {
     STUDENT_LOGIN_IDENTIFIER_MAX_LENGTH,
     STUDENT_START_CODE_MAX_LENGTH,
     hashStudentStartCode,
+    validateVerifiedStudentCredentialSession,
     verifyStudentCredentials,
     verifyStudentStartCode,
     type StudentCredentialClient,
@@ -17,6 +18,8 @@ function mockClient(options: {
     profileStatus?: string;
     returnedProfileOrganizationId?: string;
     returnedProfileId?: string;
+    accountId?: string;
+    credentialGeneration?: number;
 } = {}) {
     const calls: Array<{ table: string; filters: Array<[string, string]> }> = [];
     const client: StudentCredentialClient = {
@@ -42,6 +45,7 @@ function mockClient(options: {
                                 organization_id: options.returnedProfileOrganizationId || options.organizationId || "org-1",
                                 display_name: "김학생",
                                 status: options.profileStatus || "active",
+                                credential_generation: options.credentialGeneration ?? 1,
                                 metadata: {
                                     studentAccessCode: { version: 1, hash: "legacy-hmac-only" },
                                 },
@@ -57,7 +61,14 @@ function mockClient(options: {
                         if (options.credentialOrganizationId && organizationFilter !== options.credentialOrganizationId) {
                             return { data: null, error: null };
                         }
-                        return { data: { start_code_hash: options.codeHash }, error: null };
+                        return {
+                            data: {
+                                start_code_hash: options.codeHash,
+                                account_id: options.accountId || `student_credential_${"a".repeat(32)}`,
+                                credential_generation: options.credentialGeneration ?? 1,
+                            },
+                            error: null,
+                        };
                     }
                     return { data: null, error: null };
                 },
@@ -118,6 +129,8 @@ describe("student credential verifier", () => {
                 studentId: "student-1",
                 studentName: "김학생",
                 identityType: "registered",
+                accountId: `student_credential_${"a".repeat(32)}`,
+                credentialGeneration: 1,
             },
         });
         expect(calls[0].filters).toEqual(expect.arrayContaining([
@@ -203,5 +216,71 @@ describe("student credential verifier", () => {
             studentProfileId: "student-1",
             code: "ABC234",
         })).resolves.toEqual({ status: "service_unavailable", error: "credential db down" });
+    });
+
+    it("validates the exact verified credential incarnation before login minting", async () => {
+        const calls: Array<{ name: string; params: Record<string, unknown> }> = [];
+        const identity = {
+            organizationId: "org-1",
+            studentId: "student-1",
+            studentName: "김학생",
+            identityType: "registered" as const,
+            accountId: `student_credential_${"a".repeat(32)}`,
+            credentialGeneration: 7,
+        };
+        const client = {
+            async rpc(name: string, params: Record<string, unknown>) {
+                calls.push({ name, params });
+                return { data: true, error: null };
+            },
+        };
+
+        await expect(validateVerifiedStudentCredentialSession(client, identity)).resolves.toBe("active");
+        expect(calls).toEqual([{
+            name: "omr_validate_student_session_v1",
+            params: {
+                p_account_id: identity.accountId,
+                p_organization_id: "org-1",
+                p_student_id: "student-1",
+                p_credential_generation: 7,
+            },
+        }]);
+    });
+
+    it("fails closed for stale, malformed, errored, and hung validation responses", async () => {
+        const identity = {
+            organizationId: "org-1",
+            studentId: "student-1",
+            studentName: "김학생",
+            identityType: "registered" as const,
+            accountId: `student_credential_${"a".repeat(32)}`,
+            credentialGeneration: 1,
+        };
+        for (const response of [
+            { data: false, error: null },
+            { data: "true", error: null },
+            { data: { active: true }, error: null },
+        ]) {
+            await expect(validateVerifiedStudentCredentialSession({
+                rpc: async () => response,
+            }, identity)).resolves.toBe("stale");
+        }
+        await expect(validateVerifiedStudentCredentialSession({
+            rpc: async () => ({ data: true, error: { message: "sensitive database detail" } }),
+        }, identity)).resolves.toBe("service_unavailable");
+        await expect(validateVerifiedStudentCredentialSession({
+            rpc: async () => { throw new Error("network failure"); },
+        }, identity)).resolves.toBe("service_unavailable");
+        await expect(validateVerifiedStudentCredentialSession({
+            rpc: () => new Promise(() => undefined),
+        }, identity, 5)).resolves.toBe("service_unavailable");
+    });
+
+    it("rejects stored zero generation instead of replacing it with a mock default", async () => {
+        await expect(verifyStudentCredentials(mockClient({ codeHash, credentialGeneration: 0 }).client, {
+            organizationId: "org-1",
+            studentProfileId: "student-1",
+            code: "ABC234",
+        })).resolves.toEqual({ status: "invalid_credentials" });
     });
 });

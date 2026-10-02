@@ -66,31 +66,19 @@ describe("analytics data repair", () => {
         expect(item?.repairedAttempt).toMatchObject({
             score: 4,
             totalScore: 10,
+            questionResultsSource: "legacy_derived_current_exam",
         });
         expect(item?.repairedAttempt.questionResults?.map(result => result.status)).toEqual(["correct", "wrong"]);
     });
 
-    it("fills partial rows while preserving derived timing and metadata merge behavior", () => {
+    it("fails closed for explicit partial rows instead of pseudo-regrading them", () => {
         const item = repairAttemptQuestionResults(exam, attempt({
             id: "attempt-partial",
             questionResults: [partialResult()],
         }));
 
-        expect(item).toMatchObject({
-            existingQuestionResultCount: 1,
-            missingQuestionResultCount: 1,
-        });
-        expect(item?.repairedAttempt.questionResults).toHaveLength(2);
-        expect(item?.repairedAttempt.questionResults?.[0]).toMatchObject({
-            questionId: 1,
-            concept: "높임 표현",
-            status: "correct",
-        });
-        expect(item?.repairedAttempt.questionResults?.[1]).toMatchObject({
-            questionId: 2,
-            concept: "인과 추론",
-            status: "wrong",
-        });
+        expect(item).toBeNull();
+        expect(repairAttemptQuestionResults(exam, attempt({ questionResults: [] }))).toBeNull();
     });
 
     it("repairs retake attempts against the retake question set only", () => {

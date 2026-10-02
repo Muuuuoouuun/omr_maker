@@ -43,7 +43,9 @@ describe("security response headers", () => {
         expect(headers.get("Content-Security-Policy")).toContain("form-action 'self'");
         expect(headers.get("Content-Security-Policy")).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
         expect(headers.get("Content-Security-Policy")).toContain("style-src 'self' 'unsafe-inline'");
-        expect(headers.get("Content-Security-Policy")).toContain("connect-src 'self' https: wss: data: blob:");
+        expect(headers.get("Content-Security-Policy")).toContain("connect-src 'self' data: blob:");
+        expect(headers.get("Content-Security-Policy")).not.toContain(" https: ");
+        expect(headers.get("Content-Security-Policy")).not.toContain(" wss: ");
         expect(headers.get("Content-Security-Policy")).toContain("worker-src 'self' blob:");
         expect(headers.get("Permissions-Policy")).toBe("camera=(), microphone=(), geolocation=(), payment=(), usb=()");
         expect(headers.has("Strict-Transport-Security")).toBe(false);
@@ -54,7 +56,7 @@ describe("security response headers", () => {
         const { headers } = await loadSecurityHeaders("production");
 
         expect(headers.get("Strict-Transport-Security")).toBe("max-age=31536000; includeSubDomains");
-        expect(headers.get("Content-Security-Policy")).toContain("script-src 'self' 'unsafe-inline'");
+        expect(headers.get("Content-Security-Policy")).toContain("script-src 'self';");
         expect(headers.get("Content-Security-Policy")).not.toContain("'unsafe-eval'");
     });
 });

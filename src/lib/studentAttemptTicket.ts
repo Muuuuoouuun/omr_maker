@@ -1,5 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import type { IdentityType } from "@/types/omr";
+import type { IdentityType, RetakeMetadata } from "@/types/omr";
+import { resolveServerSigningSecret } from "@/lib/serverSigningSecret";
 
 export const STUDENT_ATTEMPT_TICKET_TTL_MS = 12 * 60 * 60 * 1000;
 export const STUDENT_ATTEMPT_TICKET_CLOCK_SKEW_MS = 30 * 1000;
@@ -7,12 +8,13 @@ export const STUDENT_ATTEMPT_TICKET_CLOCK_SKEW_MS = 30 * 1000;
 type Env = Record<string, string | undefined>;
 
 export interface StudentAttemptTicketClaims {
-    schemaVersion: 1;
+    schemaVersion: 2;
     audience: "omr-attempt";
     ticketId: string;
     examId: string;
     organizationId: string;
     assignmentId?: string;
+    assignmentRevision?: number;
     studentId: string;
     studentName: string;
     identityType: IdentityType;
@@ -20,6 +22,8 @@ export interface StudentAttemptTicketClaims {
     groupName?: string;
     guestId?: string;
     allowedQuestionIds: number[];
+    retakeSourceAttemptId?: string;
+    retakeMode?: RetakeMetadata["mode"];
     issuedAt: number;
     expiresAt: number;
 }
@@ -28,6 +32,7 @@ export interface StudentAttemptTicketInput {
     examId: string;
     organizationId: string;
     assignmentId?: string;
+    assignmentRevision?: number;
     studentId: string;
     studentName: string;
     identityType: IdentityType;
@@ -35,6 +40,8 @@ export interface StudentAttemptTicketInput {
     groupName?: string;
     guestId?: string;
     allowedQuestionIds: number[];
+    retakeSourceAttemptId?: string;
+    retakeMode?: RetakeMetadata["mode"];
 }
 
 function clean(value: unknown): string {
@@ -43,7 +50,7 @@ function clean(value: unknown): string {
 
 export function resolveStudentAttemptSecret(env: Env = process.env): string | null {
     const explicit = clean(env.STUDENT_ATTEMPT_SECRET) || clean(env.OMR_STUDENT_ATTEMPT_SECRET);
-    if (explicit) return explicit;
+    if (explicit) return resolveServerSigningSecret(explicit, env.NODE_ENV);
     return env.NODE_ENV === "production" ? null : "dev-student-attempt-secret";
 }
 
@@ -73,15 +80,27 @@ export function createStudentAttemptTicket(
     const studentId = clean(input.studentId);
     const studentName = clean(input.studentName);
     const allowedQuestionIds = normalizeQuestionIds(input.allowedQuestionIds);
-    if (!secret || !examId || !organizationId || !studentId || !studentName || allowedQuestionIds.length === 0) return null;
+    const retakeSourceAttemptId = clean(input.retakeSourceAttemptId);
+    const assignmentId = clean(input.assignmentId);
+    const assignmentRevision = Number.isSafeInteger(input.assignmentRevision) && Number(input.assignmentRevision) > 0
+        ? Number(input.assignmentRevision)
+        : null;
+    const validRetakeMode = input.retakeMode === "wrong" || input.retakeMode === "similar" || input.retakeMode === "custom";
+    if (
+        !secret || !examId || !organizationId || !studentId || !studentName
+        || allowedQuestionIds.length === 0 || allowedQuestionIds.length > 500
+        || Boolean(retakeSourceAttemptId) !== Boolean(input.retakeMode)
+        || Boolean(assignmentId) !== Boolean(assignmentRevision)
+        || (input.retakeMode !== undefined && !validRetakeMode)
+    ) return null;
 
     const claims: StudentAttemptTicketClaims = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         audience: "omr-attempt",
         ticketId,
         examId,
         organizationId,
-        ...(clean(input.assignmentId) ? { assignmentId: clean(input.assignmentId) } : {}),
+        ...(assignmentId && assignmentRevision ? { assignmentId, assignmentRevision } : {}),
         studentId,
         studentName,
         identityType: input.identityType,
@@ -89,6 +108,12 @@ export function createStudentAttemptTicket(
         ...(clean(input.groupName) ? { groupName: clean(input.groupName) } : {}),
         ...(clean(input.guestId) ? { guestId: clean(input.guestId) } : {}),
         allowedQuestionIds,
+        ...(retakeSourceAttemptId && validRetakeMode
+            ? {
+                retakeSourceAttemptId,
+                retakeMode: input.retakeMode as RetakeMetadata["mode"],
+            }
+            : {}),
         issuedAt: now,
         expiresAt: now + STUDENT_ATTEMPT_TICKET_TTL_MS,
     };
@@ -102,7 +127,7 @@ export function parseStudentAttemptTicket(
     now = Date.now(),
 ): StudentAttemptTicketClaims | null {
     const secret = resolveStudentAttemptSecret(env);
-    if (!secret || !rawTicket) return null;
+    if (!secret || !rawTicket || rawTicket.length > 32_768) return null;
     const [payload, signature, ...rest] = rawTicket.split(".");
     if (!payload || !signature || rest.length > 0) return null;
     if (!signatureMatches(signature, sign(payload, secret))) return null;
@@ -110,8 +135,15 @@ export function parseStudentAttemptTicket(
     try {
         const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<StudentAttemptTicketClaims>;
         const allowedQuestionIds = normalizeQuestionIds(Array.isArray(claims.allowedQuestionIds) ? claims.allowedQuestionIds : []);
+        const retakeSourceAttemptId = clean(claims.retakeSourceAttemptId);
+        const assignmentId = clean(claims.assignmentId);
+        const assignmentRevision = Number.isSafeInteger(claims.assignmentRevision) && Number(claims.assignmentRevision) > 0
+            ? Number(claims.assignmentRevision)
+            : null;
+        const hasRetakeMode = claims.retakeMode !== undefined && claims.retakeMode !== null;
+        const validRetakeMode = claims.retakeMode === "wrong" || claims.retakeMode === "similar" || claims.retakeMode === "custom";
         if (
-            claims.schemaVersion !== 1
+            claims.schemaVersion !== 2
             || claims.audience !== "omr-attempt"
             || !clean(claims.ticketId)
             || !clean(claims.examId)
@@ -120,21 +152,25 @@ export function parseStudentAttemptTicket(
             || !clean(claims.studentName)
             || !(["guest", "temporary", "registered"] as const).includes(claims.identityType as IdentityType)
             || allowedQuestionIds.length === 0
+            || allowedQuestionIds.length > 500
             || !Number.isFinite(claims.issuedAt)
             || !Number.isFinite(claims.expiresAt)
             || (claims.issuedAt as number) > now + STUDENT_ATTEMPT_TICKET_CLOCK_SKEW_MS
             || (claims.expiresAt as number) - (claims.issuedAt as number) > STUDENT_ATTEMPT_TICKET_TTL_MS
             || (claims.expiresAt as number) <= now
+            || Boolean(retakeSourceAttemptId) !== hasRetakeMode
+            || Boolean(assignmentId) !== Boolean(assignmentRevision)
+            || (hasRetakeMode && !validRetakeMode)
         ) {
             return null;
         }
         return {
-            schemaVersion: 1,
+            schemaVersion: 2,
             audience: "omr-attempt",
             ticketId: clean(claims.ticketId),
             examId: clean(claims.examId),
             organizationId: clean(claims.organizationId),
-            ...(clean(claims.assignmentId) ? { assignmentId: clean(claims.assignmentId) } : {}),
+            ...(assignmentId && assignmentRevision ? { assignmentId, assignmentRevision } : {}),
             studentId: clean(claims.studentId),
             studentName: clean(claims.studentName),
             identityType: claims.identityType as IdentityType,
@@ -142,6 +178,12 @@ export function parseStudentAttemptTicket(
             ...(clean(claims.groupName) ? { groupName: clean(claims.groupName) } : {}),
             ...(clean(claims.guestId) ? { guestId: clean(claims.guestId) } : {}),
             allowedQuestionIds,
+            ...(retakeSourceAttemptId && validRetakeMode
+                ? {
+                    retakeSourceAttemptId,
+                    retakeMode: claims.retakeMode as RetakeMetadata["mode"],
+                }
+                : {}),
             issuedAt: claims.issuedAt as number,
             expiresAt: claims.expiresAt as number,
         };

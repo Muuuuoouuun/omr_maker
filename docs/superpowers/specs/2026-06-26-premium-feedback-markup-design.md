@@ -232,14 +232,14 @@ MVP는 payload가 빠르고, 확장은 검색/알림/이력에 유리하다. 초
 
 - `feedbackMarkup`
 - `returnedFeedback`
-- `remoteHandwritingArchive`
+- `handwritingArchive`
 
-초기에는 `handwritingArchive`에 묶어도 되지만, 가격 정책상 메시지가 더 선명해지려면 분리하는 편이 좋다.
+현재 구현에서는 `handwritingArchive`를 비공개 원격 필기 원본 보관까지 포함하는 canonical key로 사용한다. 별도 원격 보관 alias는 두지 않는다.
 
 ### 접근 규칙
 
-- Free: 자동 채점 결과와 기본 리뷰만 가능. 제출 필기 장기 보관/교사 첨삭 반환은 잠김.
-- Pro: 단일 교사 또는 소규모 학원 기준으로 모든 첨삭/반환 기능 가능.
+- Free: 자동 채점 결과, 기본 리뷰, 텍스트 요약·문항별 코멘트 반환과 학생 열람 확인 가능. 제출 필기 장기 보관과 필기 마크업·주석 파일은 잠김.
+- Pro: Free 기능 + 비공개 필기 원본 보관, 필기 마크업·주석 파일, 카카오 발송 후보·큐 기능 사용 가능. 카카오 실제 provider 발송은 아직 비활성이다.
 - Academy: Pro 기능 + 교사별 작성자, 감사 로그, 보관 기간, 역할별 권한.
 
 ### RLS 방향

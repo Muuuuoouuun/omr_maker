@@ -41,10 +41,9 @@ export function buildStudentLoginRateLimitKeys(params: {
 }): string[] {
     const workspace = clean(params.workspaceId) || "unknown-workspace";
     const lookup = clean(params.studentLookup) || "blank-lookup";
-    const client = clean(params.clientFingerprint) || "unknown-client";
+    void params.clientFingerprint;
     return [
-        `student-login:identity-client:${hash(`${workspace}:${lookup}:${client}`)}`,
-        `student-login:client:${hash(`${workspace}:${client}`)}`,
+        `student-login:identity:${hash(`${workspace}:${lookup}`)}`,
     ];
 }
 

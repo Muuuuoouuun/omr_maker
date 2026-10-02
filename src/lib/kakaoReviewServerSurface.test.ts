@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
 describe("Kakao review server persistence", () => {
-    it("removes browser publishable writes and enforces teacher server scope", () => {
+    it("routes writes through the atomic paid-plan gateway without direct service-role DML", () => {
         const persistence = source("src/lib/kakaoCandidateReviewPersistence.ts");
         const action = source("src/app/actions/kakaoReview.ts");
         expect(persistence).not.toContain("NEXT_PUBLIC_SUPABASE");
@@ -13,13 +13,14 @@ describe("Kakao review server persistence", () => {
         expect(action).toContain("TEACHER_SERVER_SESSION_COOKIE");
         expect(action).toContain("isSameOriginServerActionRequest");
         expect(action).toContain("workspaceContextFromTeacherSession");
-        expect(action).toContain("reviewed_by_user_id: gateway.workspace.actorUserId");
-        expect(action).toContain('verifyScopedRow(gateway.client, "omr_exams"');
-        expect(action).toMatch(/verifyScopedRow\([\s\S]*?"omr_kakao_candidate_reviews"/);
-        expect(action).toContain('canUpsertScopedId(gateway.client, "omr_kakao_candidate_reviews"');
-        expect(action).toContain('canUpsertScopedId(gateway.client, "omr_kakao_dispatch_logs"');
-        expect(action).toContain("{ exam_id: examId }");
-        expect(action).toContain("await Promise.all([");
-        expect(action).not.toContain("result.error.message } : { status: \"saved\"");
+        expect(action).toContain("saveKakaoCandidateReviewWithGateway");
+        expect(action).toContain("saveKakaoSimulationDispatchWithGateway");
+        expect(action).not.toContain(".from(");
+        expect(action).not.toContain(".upsert(");
+        expect(action).not.toContain("verifyScopedRow");
+        expect(action).not.toContain("canUpsertScopedId");
+        expect(action).toContain("현재 서버 플랜에서 카카오 리마인더를 사용할 수 없습니다.");
+        expect(action).toContain("기존 카카오 리마인더 기록의 운영자 조정이 필요합니다.");
+        expect(action).not.toContain("result.error.message");
     });
 });

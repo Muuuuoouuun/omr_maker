@@ -5,7 +5,22 @@ import {
 
 type Env = Record<string, string | undefined>;
 
-export const SUPABASE_READINESS_VERSION = "202607280003";
+export const SUPABASE_READINESS_VERSION = "202608090001";
+
+export const SUPABASE_ASSIGNMENT_GENERATION_REQUIRED_RPCS = Object.freeze([
+    "omr_list_student_assignments_v2",
+    "omr_resolve_student_assignment_v2",
+    "omr_open_attempt_session_v3",
+    "omr_checkpoint_attempt_session_v2",
+    "omr_heartbeat_attempt_session_v2",
+    "omr_takeover_attempt_session_v2",
+    "omr_prepare_attempt_session_submit_v2",
+    "omr_commit_attempt_session_submit_v2",
+    "omr_list_active_attempt_sessions_v2",
+    "omr_resolve_legacy_attempt_session_scope_v1",
+    "omr_prepare_teacher_force_finish_sessions_compact_v2",
+    "omr_force_finish_attempt_sessions_compact_v2",
+]);
 
 export const SUPABASE_READINESS_CHECK_KEYS = [
     "browserSchemaPrivilegesDenied",
@@ -23,6 +38,43 @@ export const SUPABASE_READINESS_CHECK_KEYS = [
     "serverGatewayCapabilitiesReady",
     "queryPathIndexesReady",
     "legacyBroadRpcsRemoved",
+    "directUploadIntentLifecycleReady",
+    "teacherUploadCleanupQueueReady",
+    "teacherAssetFinalizePreauthorizationReady",
+    "examReservationLeaseReady",
+    "teacherAssetCleanupBacklogHealthy",
+    "studentAttemptSessionsReady",
+    "durableRateLimitsReady",
+    "examRevisionReady",
+    "teacherExamCasReady",
+    "teacherNotificationSummaryReady",
+    "teacherNotificationStateReady",
+    "feedbackRevisionReady",
+    "feedbackCasReady",
+    "workspaceBootstrapPlanSafe",
+    "sessionCleanupOptimizationReady",
+    "feedbackReplayHardeningReady",
+    "feedbackCoreFreeReady",
+    "examEntryInvitesReady",
+    "sessionCleanupFencingReady",
+    "attemptCheckpointNullCasReady",
+    "rosterSnapshotCasReady",
+    "attemptMutationCasReady",
+    "examDeleteSessionSafe",
+    "studentQuestionAtomicReady",
+    "teacherLiveSessionsReady",
+    "teacherAccountLifecycleReady",
+    "initialOperationsLoadControlReady",
+    "individualStudentAssignmentsReady",
+    "teacherAttemptReportingReady",
+    "operationalJobStatusReady",
+    "operatorPilotProvisioningReady",
+    "provisionedTeacherLoginReady",
+    "effectiveWorkspacePlanEnforcementReady",
+    "studentSessionGenerationReady",
+    "studentCredentialBatchReady",
+    "canonicalQuestionResultEvidenceReady",
+    "kakaoReminderEntitlementReady",
 ] as const;
 
 export type SupabaseReadinessCheckKey = typeof SUPABASE_READINESS_CHECK_KEYS[number];
@@ -41,10 +93,15 @@ export type SupabaseDeploymentProbe = {
 } & Partial<Record<SupabaseReadinessCheckKey, boolean>>;
 
 export interface SupabaseProbeClient {
-    rpc(name: string): Promise<{
+    rpc(name: string): PromiseLike<{
         data: unknown;
         error: { message?: string } | null;
-    }>;
+    }> & {
+        abortSignal?(signal: AbortSignal): PromiseLike<{
+            data: unknown;
+            error: { message?: string } | null;
+        }>;
+    };
 }
 
 function invalidProbePayload(): SupabaseDeploymentProbe {
@@ -85,9 +142,11 @@ export function parseSupabaseDeploymentProbe(value: unknown): SupabaseDeployment
 
 export async function probeSupabaseDeployment(
     client: SupabaseProbeClient,
+    signal?: AbortSignal,
 ): Promise<SupabaseDeploymentProbe> {
     try {
-        const result = await client.rpc("omr_service_readiness_v1");
+        const request = client.rpc("omr_service_readiness_v1");
+        const result = await (signal && request.abortSignal ? request.abortSignal(signal) : request);
         if (result.error) {
             return {
                 ready: false,
@@ -107,9 +166,10 @@ export async function probeSupabaseDeployment(
 
 export async function probeSupabaseDeploymentWithServiceRole(
     env: Env = process.env,
+    signal?: AbortSignal,
 ): Promise<SupabaseDeploymentProbe | null> {
     const config = getSupabaseServerConfigFromEnv(env);
     if (!config) return null;
     const client = createSupabaseAdminClient(config) as unknown as SupabaseProbeClient;
-    return probeSupabaseDeployment(client);
+    return probeSupabaseDeployment(client, signal);
 }

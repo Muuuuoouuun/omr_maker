@@ -9,10 +9,16 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    ".next-e2e/**",
+    // Security CLI tests create and remove private fixtures during parallel QA.
+    ".operator-provisioning-test-*/**",
+    ".omr-alert-*/**",
+    ".omr-device-attestor-test-*/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
     "public/pdf.worker.min.mjs",
+    "public/react-pdf.worker.min.mjs",
     "playwright-report/**",
     "test-results/**",
     // Capacitor native shell (generated Android/Gradle project + web-dir fallback).

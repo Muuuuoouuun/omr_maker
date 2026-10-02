@@ -24,16 +24,19 @@ describe("stripExamForSolving", () => {
     });
 
     it("removes the answer key PDF and inline pin, exposing only hasPin", () => {
-        const solvable = stripExamForSolving(EXAM);
+        const solvable = stripExamForSolving({ ...EXAM, organizationId: "private-org" });
         expect(solvable.answerKeyPdf).toBeUndefined();
         expect(solvable.answerKeyPdfRef).toBeUndefined();
-        expect(solvable.accessConfig).toEqual({ type: "public", groupIds: undefined, hasPin: true });
+        expect(solvable.accessConfig).toEqual({ type: "public", hasPin: true });
         expect(JSON.stringify(solvable)).not.toContain("1234");
+        expect(solvable).not.toHaveProperty("organizationId");
+        expect(JSON.stringify(solvable)).not.toContain("private-org");
     });
 
     it("reports hasPin false when no pin is set", () => {
         const solvable = stripExamForSolving({ ...EXAM, accessConfig: { type: "group", groupIds: ["g1"] } });
-        expect(solvable.accessConfig).toEqual({ type: "group", groupIds: ["g1"], hasPin: false });
+        expect(solvable.accessConfig).toEqual({ type: "group", hasPin: false });
+        expect(JSON.stringify(solvable)).not.toContain("g1");
     });
 
     it("strips the teacher explanation (it can reveal the answer)", () => {

@@ -45,6 +45,72 @@ describe("exam access helpers", () => {
         });
     });
 
+    it("opens at startsAt and ends at the exact exclusive end boundary", () => {
+        const scheduled = exam({
+            accessConfig: { type: "public" },
+            startAt: "2026-06-15T10:00:00.000Z",
+            endAt: "2026-06-15T11:00:00.000Z",
+        });
+
+        expect(evaluateExamAccess(scheduled, { now: Date.parse(scheduled.startAt!) }))
+            .toEqual({ status: "allowed" });
+        expect(evaluateExamAccess(scheduled, { now: Date.parse(scheduled.endAt!) }))
+            .toEqual({ status: "ended", at: scheduled.endAt });
+    });
+
+    it.each([
+        ["blank start", { startAt: "" }],
+        ["malformed start", { startAt: "tomorrow" }],
+        ["impossible start", { startAt: "2026-02-30T00:00:00.000Z" }],
+        ["blank end", { endAt: "" }],
+        ["malformed end", { endAt: "tomorrow" }],
+        ["date-only end", { endAt: "2026-06-15" }],
+        ["reversed window", {
+            startAt: "2026-06-15T12:00:00.000Z",
+            endAt: "2026-06-15T10:00:00.000Z",
+        }],
+        ["empty window", {
+            startAt: "2026-06-15T11:00:00.000Z",
+            endAt: "2026-06-15T11:00:00.000Z",
+        }],
+    ])("fails closed for %s", (_label, window) => {
+        expect(evaluateExamAccess(exam({
+            accessConfig: { type: "public" },
+            ...window,
+        }), { now: Date.parse("2026-06-15T11:00:00.000Z") })).toEqual({ status: "ended" });
+    });
+
+    it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+        "fails closed for invalid supplied now %s",
+        now => {
+            expect(evaluateExamAccess(exam({ accessConfig: { type: "public" } }), { now }))
+                .toEqual({ status: "ended" });
+        },
+    );
+
+    it("does not turn malformed time data into allowed access when a submission clock is rewound", () => {
+        const malformed = exam({ accessConfig: { type: "public" }, endAt: "not-an-iso-time" });
+        const now = Date.parse("2026-06-15T11:00:00.000Z");
+        expect(evaluateExamAccess(malformed, { now })).toEqual({ status: "ended" });
+        expect(evaluateExamAccess(malformed, { now: now - 2 * 60 * 1000 })).toEqual({ status: "ended" });
+    });
+
+    it("preserves a valid submission grace rewind without relaxing other gates", () => {
+        const valid = exam({
+            accessConfig: { type: "public" },
+            startAt: "2026-06-15T10:00:00.000Z",
+            endAt: "2026-06-15T11:00:00.000Z",
+        });
+        const now = Date.parse(valid.endAt!);
+        expect(evaluateExamAccess(valid, { now })).toEqual({ status: "ended", at: valid.endAt });
+        expect(evaluateExamAccess(valid, { now: now - 2 * 60 * 1000 })).toEqual({ status: "allowed" });
+    });
+
+    it("keeps archived status authoritative even when stored timestamps are malformed", () => {
+        expect(evaluateExamAccess(exam({ archived: true, startAt: "bad", endAt: "worse" })))
+            .toEqual({ status: "archived" });
+    });
+
     it("requires a matching student group for group-distributed exams", () => {
         const groupOnly = exam({ accessConfig: { type: "group", groupIds: ["class-a"] } });
 

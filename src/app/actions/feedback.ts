@@ -13,12 +13,12 @@ import {
 } from "@/lib/feedbackServerGateway";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import {
-    parseSignedStudentSessionCookie,
+    resolveAuthorizedStudentSessionCookie,
     STUDENT_SERVER_SESSION_COOKIE,
     type StudentServerSession,
 } from "@/lib/studentServerSession";
 import {
-    parseSignedTeacherSessionCookie,
+    resolveAuthorizedTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
 } from "@/lib/teacherServerSession";
 import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
@@ -28,10 +28,14 @@ import {
 } from "@/lib/supabaseServerAdmin";
 import { workspaceContextFromTeacherSession, type WorkspaceContext } from "@/lib/workspaceContext";
 import type { AttemptFeedback, PdfDrawings } from "@/types/omr";
+import { reportServerError } from "@/lib/reportServerError";
 
 type ActionFailure = {
-    status: "local_only" | "unauthorized" | "not_found" | "invalid_feedback" | "service_unavailable";
+    status: "local_only" | "unauthorized" | "plan_denied" | "not_found" | "invalid_feedback" | "service_unavailable" | "conflict";
     error?: string;
+    currentRevision?: number;
+    currentStatus?: string;
+    serverUpdatedAt?: string;
 };
 
 type TeacherActionContext = {
@@ -50,10 +54,24 @@ function unavailable(): ActionFailure {
         : { status: "local_only" };
 }
 
-async function teacherContext(requireWrite = false): Promise<TeacherActionContext> {
+function planDenied(): ActionFailure {
+    return {
+        status: "plan_denied",
+        error: "현재 서버 플랜에서 사용할 수 없는 기능입니다.",
+    };
+}
+
+function isPlanEntitlementError(result: { status: string; error?: string }): boolean {
+    return result.status === "service_unavailable"
+        && /plan entitlement required/i.test(result.error || "");
+}
+
+async function teacherContext(
+    requireWrite = false,
+): Promise<TeacherActionContext> {
     if (!isSameOriginServerActionRequest(await headers())) return { status: "unauthorized" };
     const cookieStore = await cookies();
-    const session = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
+    const session = await resolveAuthorizedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!session) return { status: "unauthorized" };
     if (requireWrite && !isTeacherMutationAuthorized(session)) return { status: "unauthorized" };
     const config = getSupabaseServerConfigFromEnv();
@@ -66,13 +84,19 @@ async function teacherContext(requireWrite = false): Promise<TeacherActionContex
 
 async function studentContext(): Promise<StudentActionContext> {
     if (!isSameOriginServerActionRequest(await headers())) return { status: "unauthorized" };
-    const cookieStore = await cookies();
-    const session = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
-    if (!session) return { status: "unauthorized" };
     const config = getSupabaseServerConfigFromEnv();
     if (!config) return unavailable();
+    const client = createSupabaseAdminClient(config) as unknown as FeedbackGatewayClient;
+    const cookieStore = await cookies();
+    const validation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (validation.status === "service_unavailable") return { status: "service_unavailable" };
+    if (validation.status !== "active") return { status: "unauthorized" };
+    const session = validation.identity;
     return {
-        client: createSupabaseAdminClient(config) as unknown as FeedbackGatewayClient,
+        client,
         session,
     };
 }
@@ -83,9 +107,15 @@ export async function loadTeacherCanonicalFeedback(attemptId: string): Promise<
     try {
         const gateway = await teacherContext();
         if ("status" in gateway) return gateway;
-        return loadTeacherFeedbackWithGateway(gateway.client, attemptId, gateway.context);
+        const result = await loadTeacherFeedbackWithGateway(gateway.client, attemptId, gateway.context);
+        if (result.status === "service_unavailable") {
+            await reportServerError("feedback-read", { status: result.status, code: "service_unavailable" });
+            return { status: result.status, error: "피드백을 불러올 수 없습니다." };
+        }
+        return result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Feedback load failed" };
+        await reportServerError("feedback-read", error);
+        return { status: "service_unavailable", error: "피드백을 불러올 수 없습니다." };
     }
 }
 
@@ -96,21 +126,43 @@ export async function saveTeacherCanonicalFeedback(
     try {
         const gateway = await teacherContext(true);
         if ("status" in gateway) return gateway;
-        return saveTeacherFeedbackWithGateway(gateway.client, feedback, gateway.context, markupDrawings);
+        const result = await saveTeacherFeedbackWithGateway(gateway.client, feedback, gateway.context, markupDrawings);
+        if (result.status === "service_unavailable" && !isPlanEntitlementError(result)) {
+            await reportServerError("feedback-save", {
+                status: result.status,
+                code: "service_unavailable",
+            });
+        }
+        if (result.status === "service_unavailable" && !isPlanEntitlementError(result)) {
+            return { status: result.status, error: "피드백을 저장할 수 없습니다." };
+        }
+        return isPlanEntitlementError(result) ? planDenied() : result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Feedback save failed" };
+        await reportServerError("feedback-save", error);
+        return { status: "service_unavailable", error: "피드백을 저장할 수 없습니다." };
     }
 }
 
-export async function returnTeacherCanonicalFeedback(feedbackId: string): Promise<
+export async function returnTeacherCanonicalFeedback(feedback: AttemptFeedback): Promise<
     { status: "returned"; item: FeedbackEnvelope } | ActionFailure
 > {
     try {
         const gateway = await teacherContext(true);
         if ("status" in gateway) return gateway;
-        return returnTeacherFeedbackWithGateway(gateway.client, feedbackId, gateway.context);
+        const result = await returnTeacherFeedbackWithGateway(gateway.client, feedback, gateway.context);
+        if (result.status === "service_unavailable" && !isPlanEntitlementError(result)) {
+            await reportServerError("feedback-return", {
+                status: result.status,
+                code: "service_unavailable",
+            });
+        }
+        if (result.status === "service_unavailable" && !isPlanEntitlementError(result)) {
+            return { status: result.status, error: "피드백을 반환할 수 없습니다." };
+        }
+        return isPlanEntitlementError(result) ? planDenied() : result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Feedback return failed" };
+        await reportServerError("feedback-return", error);
+        return { status: "service_unavailable", error: "피드백을 반환할 수 없습니다." };
     }
 }
 
@@ -120,13 +172,19 @@ export async function listStudentCanonicalFeedback(): Promise<
     try {
         const gateway = await studentContext();
         if ("status" in gateway) return gateway;
-        return listStudentFeedbackWithGateway(
+        const result = await listStudentFeedbackWithGateway(
             gateway.client,
             gateway.session.organizationId,
             gateway.session.studentId,
         );
+        if (result.status === "service_unavailable") {
+            await reportServerError("feedback-read", { status: result.status, code: "service_unavailable" });
+            return { status: result.status, error: "피드백 목록을 불러올 수 없습니다." };
+        }
+        return result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Feedback list failed" };
+        await reportServerError("feedback-read", error);
+        return { status: "service_unavailable", error: "피드백 목록을 불러올 수 없습니다." };
     }
 }
 
@@ -136,14 +194,20 @@ export async function loadStudentCanonicalFeedback(attemptId: string): Promise<
     try {
         const gateway = await studentContext();
         if ("status" in gateway) return gateway;
-        return loadStudentFeedbackWithGateway(
+        const result = await loadStudentFeedbackWithGateway(
             gateway.client,
             attemptId,
             gateway.session.organizationId,
             gateway.session.studentId,
         );
+        if (result.status === "service_unavailable") {
+            await reportServerError("feedback-read", { status: result.status, code: "service_unavailable" });
+            return { status: result.status, error: "피드백을 불러올 수 없습니다." };
+        }
+        return result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Feedback load failed" };
+        await reportServerError("feedback-read", error);
+        return { status: "service_unavailable", error: "피드백을 불러올 수 없습니다." };
     }
 }
 
@@ -153,13 +217,19 @@ export async function markStudentCanonicalFeedbackOpened(feedbackId: string): Pr
     try {
         const gateway = await studentContext();
         if ("status" in gateway) return gateway;
-        return markStudentFeedbackOpenedWithGateway(
+        const result = await markStudentFeedbackOpenedWithGateway(
             gateway.client,
             feedbackId,
             gateway.session.organizationId,
             gateway.session.studentId,
         );
+        if (result.status === "service_unavailable") {
+            await reportServerError("feedback-read", { status: result.status, code: "service_unavailable" });
+            return { status: result.status, error: "피드백 확인 상태를 저장할 수 없습니다." };
+        }
+        return result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Feedback receipt failed" };
+        await reportServerError("feedback-read", error);
+        return { status: "service_unavailable", error: "피드백 확인 상태를 저장할 수 없습니다." };
     }
 }

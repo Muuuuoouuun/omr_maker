@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { headers } from "next/headers";
 // Pretendard's dynamic subset: 92 @font-face rules that split the Korean glyph
 // set by unicode-range, so the browser fetches only the ranges a page actually
 // renders. See the --font-pretendard note in globals.css for why this is not
@@ -12,17 +12,10 @@ import MobileInstallPrompt from "@/components/MobileInstallPrompt";
 import SyncFlusher from "@/components/SyncFlusher";
 import ViewportHeightSync from "@/components/ViewportHeightSync";
 import NativePlatformSync from "@/components/NativePlatformSync";
+import TeacherIdentityModeProvider from "@/components/TeacherIdentityModeProvider";
 import { PWA_STARTUP_IMAGE_LINKS } from "@/lib/pwaStartupImages";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+import { TEACHER_RECOVERY_SAFE_NEXT_PATHS } from "@/lib/teacherRecoveryCanonical";
+import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode.server";
 
 export const metadata: Metadata = {
   applicationName: "OMR Maker",
@@ -120,22 +113,58 @@ const themeInitScript = `
 })();
 `;
 
-export default function RootLayout({
+// Provisioned deployments must replace legacy lifecycle URLs before React or
+// Next's client router can retain the token-bearing route as an action target.
+// The non-secret sentinel restores the honest operator-recovery surface after
+// the canonical, token-free document has loaded.
+const teacherLegacyLinkCanonicalizationScript = `
+(function() {
+  try {
+    var url = new URL(window.location.href);
+    var hasLegacyTeacherToken = url.searchParams.has('teacherResetToken') || url.searchParams.has('teacherVerifyToken');
+    if (!hasLegacyTeacherToken) return;
+    var canonicalSearch = new URLSearchParams();
+    canonicalSearch.set('role', 'teacher');
+    canonicalSearch.set('teacherRecovery', 'legacy_link');
+    var requestedNextValues = url.searchParams.getAll('next');
+    var requestedNext = requestedNextValues.length === 1 ? requestedNextValues[0] : '';
+    var safeNextPaths = ${JSON.stringify(TEACHER_RECOVERY_SAFE_NEXT_PATHS)};
+    if (safeNextPaths.indexOf(requestedNext) !== -1) {
+      canonicalSearch.set('next', requestedNext);
+    }
+    var canonicalUrl = '/?' + canonicalSearch.toString();
+    window.location.replace(canonicalUrl);
+  } catch (e) {
+    // The client effect provides a second fail-closed redirect if URL parsing
+    // is unavailable during the pre-hydration pass.
+  }
+})();
+`;
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const teacherIdentityMode = resolveTeacherIdentityMode();
+  const nonce = (await headers()).get("x-nonce") || undefined;
+
   return (
     <html lang="ko" data-theme="light" data-scroll-behavior="smooth" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {teacherIdentityMode === "provisioned_only" ? (
+          <script nonce={nonce} dangerouslySetInnerHTML={{ __html: teacherLegacyLinkCanonicalizationScript }} />
+        ) : null}
       </head>
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body>
         <NativePlatformSync />
         <ViewportHeightSync />
         <PWARegister />
         <SyncFlusher />
-        {children}
+        <TeacherIdentityModeProvider mode={teacherIdentityMode}>
+          {children}
+        </TeacherIdentityModeProvider>
         <MobileInstallPrompt />
         <ToastHost />
       </body>

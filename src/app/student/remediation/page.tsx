@@ -1,0 +1,48 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { loadStudentRemediation } from "@/app/actions/remediation";
+import { REMEDIATION_STATE_LABELS, type StudentRemediationCase } from "@/lib/remediation";
+import styles from "../../teacher/remediation/remediation.module.css";
+import RetakeEntry from "./RetakeEntry";
+import { buildStudentLoginHref } from "@/lib/studentRedirect";
+
+export default function StudentRemediationPage() {
+    const [cases, setCases] = useState<StudentRemediationCase[] | null>(null);
+    const [error, setError] = useState("");
+    const [loginRequired, setLoginRequired] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const generation = useRef(0);
+    const load = useCallback(async () => {
+        const current = ++generation.current;
+        setLoading(true); setError(""); setLoginRequired(false); setCases(null);
+        try {
+            const result = await loadStudentRemediation();
+            if (current !== generation.current) return;
+            if (result.status === "loaded") setCases(result.cases);
+            else { setError(result.error); setLoginRequired(result.code === "unauthorized"); } // server returns student-facing copy
+        } catch { if (current === generation.current) setError("보강 목록을 불러오지 못했습니다. 다시 시도해주세요."); }
+        finally { if (current === generation.current) setLoading(false); }
+    }, []);
+    useEffect(() => { const counter = generation; void load(); return () => { counter.current++; }; }, [load]);
+    return <main id="main-content" className={styles.main}>
+        <Link href="/student/dashboard" className={styles.link}>← 학습 홈</Link>
+        <header className={styles.heading}><div><span className={styles.eyebrow}>나의 보강</span><h1>틀린 문제, 다시 확인하기</h1>
+            <p>오답을 다시 풀고 선생님에게 풀이를 설명해보세요. 문제를 수정한 뒤 선생님의 확인을 받으면 완료됩니다.</p></div>
+            <button className="btn btn-secondary" disabled={loading} onClick={() => void load()}>새로고침</button></header>
+        {error && <p role="alert" className={styles.error}>{error}</p>}
+        {loginRequired && <Link className="btn btn-primary" href={buildStudentLoginHref("/student/remediation")}>다시 로그인</Link>}
+        {loading && <p role="status">보강 목록을 확인하고 있습니다…</p>}
+        {cases && !cases.length && <section className={styles.card}><p>배정된 보강이 없습니다.</p></section>}
+        {cases && <div className={styles.grid}>{cases.map(item => <article className={styles.card} key={item.sourceAttemptId}>
+            <span className={styles.badge} data-state={item.state}>{REMEDIATION_STATE_LABELS[item.state]}</span><h2>{item.examTitle}</h2>
+            <p>수정한 오답 {item.correctedCount} / {item.targetCount}문항<br />기한 {new Date(item.dueAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</p>
+            {["assigned", "overdue", "recheck"].includes(item.state) && <RetakeEntry sourceAttemptId={item.sourceAttemptId} />}
+            {item.state === "handoff" || item.state === "paused" ? <p>선생님에게 보강 진행 여부를 확인해주세요.</p>
+                : <Link className={styles.link} href={`/student/review/${encodeURIComponent(item.sourceAttemptId)}`}>원시험 오답 복습 →</Link>}
+            {item.state === "awaiting_review" && <p>오답 수정이 끝났습니다. 선생님에게 풀이를 설명하고 확인을 받아주세요.</p>}
+        </article>)}</div>}
+        <p>보강 목록은 최대 50건입니다. 다시 풀기는 선생님이 배정한 개별 재시험으로 연결됩니다. 보강 기한과 시험 응시 기간은 서로 다릅니다.</p>
+    </main>;
+}

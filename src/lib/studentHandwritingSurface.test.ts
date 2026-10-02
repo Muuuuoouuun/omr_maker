@@ -23,7 +23,7 @@ describe("student handwriting result surface", () => {
         expect(initialLoad).not.toContain("storedDataUrlToFile(");
         expect(initialLoad).not.toContain("getTeacherRemoteAssetUrl(");
         expect(initialLoad).not.toContain("loadFeedbackMarkupDrawings(");
-        expect(page).toContain('activeView === "handwriting" && handwritingArchiveEnabled && attempt?.handwritingArchived');
+        expect(page).toContain('activeView === "handwriting" && (handwritingArchiveEnabled || feedback?.status === "returned") && attempt?.handwritingArchived');
         expect(page).toContain("void loadHandwritingResources()");
     });
 
@@ -63,6 +63,34 @@ describe("student handwriting result surface", () => {
         expect(panel).toContain("onClick={onRetry}");
         expect(panel).toContain("다시 시도");
         expect(panel).toContain("const canShowReviewPdf = !!pdfFile;");
+    });
+
+    it("labels the archived plan as the plan captured when the submission was made", () => {
+        const panel = readProjectFile("src/components/teacher/student-results/HandwritingPanel.tsx");
+
+        expect(panel).toContain("제출 당시 보관 플랜:");
+    });
+
+    it("keeps core text feedback editable after downgrade while markup stays premium", () => {
+        const panel = readProjectFile("src/components/teacher/student-results/HandwritingPanel.tsx");
+        const page = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+
+        expect(panel).toContain("const feedbackReturned = feedback?.status === \"returned\"");
+        expect(panel).toContain("feedbackMarkupEnabled: boolean");
+        expect(panel).toContain("const canEditFeedbackMarkup = feedbackMarkupEnabled && feedbackViewMode === \"markup\"");
+        expect(panel).toContain("전체 피드백");
+        expect(panel).toContain("초안 저장");
+        expect(panel).toContain("학생에게 반환");
+        expect(panel).toContain("교사 첨삭과 첨삭 PDF 다운로드는 Pro 이상에서 사용할 수 있습니다.");
+        expect(panel).toContain("disabled={!feedbackMarkupEnabled}");
+        expect(panel).toContain("feedbackSummary");
+        expect(panel).toContain("hasStudentDrawings && handwritingArchiveEnabled");
+        expect(page).toContain('feedback?.status === "returned"');
+        expect(page).toContain("if (!attempt) return;");
+        expect(page).toContain("feedbackMarkupEnabled");
+        expect(page).toContain("feedbackMarkupEnabled && handwritingStatus === \"ready\"");
+        expect(page).not.toContain("if (!attempt || !feedbackEnabled) return;");
+        expect(page).not.toContain("remoteError?.includes(\"기존 반환본\")");
     });
 
     it("renders the handwriting panel only for the handwriting tab", () => {

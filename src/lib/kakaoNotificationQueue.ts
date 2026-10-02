@@ -114,27 +114,30 @@ function eligibleStudentsForExam(exam: Exam, students: RosterStudent[], groups: 
 }
 
 function matchedRosterStudent(attempt: Attempt, students: RosterStudent[]): RosterStudent | undefined {
+    const exactId = clean(attempt.studentProfileId) || clean(attempt.studentId);
+    if (exactId) {
+        const exact = students.find(student => student.id === exactId);
+        if (exact) return exact;
+    }
     return students.find(student => attemptMatchesStudentProfile(attempt, student));
 }
 
-function studentIdsForAttempts(attempts: Attempt[], students: RosterStudent[]): string[] {
-    const ids = new Set<string>();
+function studentTargetsForAttempts(
+    attempts: Attempt[],
+    students: RosterStudent[],
+): { studentIds: string[]; studentNames: string[] } {
+    const targets = new Map<string, string>();
     for (const attempt of attempts) {
         const matched = matchedRosterStudent(attempt, students);
         const id = clean(matched?.id) || clean(attempt.studentId);
-        if (id) ids.add(id);
-    }
-    return [...ids].sort();
-}
-
-function studentNamesForAttempts(attempts: Attempt[], students: RosterStudent[]): string[] {
-    const names = new Set<string>();
-    for (const attempt of attempts) {
-        const matched = matchedRosterStudent(attempt, students);
         const name = clean(matched?.name) || clean(attempt.studentName);
-        if (name) names.add(name);
+        if (id && name && !targets.has(id)) targets.set(id, name);
     }
-    return [...names].sort((a, b) => a.localeCompare(b, "ko"));
+    const entries = [...targets].sort(([left], [right]) => left.localeCompare(right));
+    return {
+        studentIds: entries.map(([id]) => id),
+        studentNames: entries.map(([, name]) => name),
+    };
 }
 
 function submittedStudentIdsForExam(exam: Exam, attempts: Attempt[], students: RosterStudent[]): Set<string> {
@@ -241,8 +244,7 @@ function retakeRecommendationCandidate(exam: Exam, attempts: Attempt[], students
     })[0];
     if (!recommendation || recommendation.retakeQuestionIds.length === 0) return null;
 
-    const studentIds = studentIdsForAttempts(baseAttempts, students);
-    const studentNames = studentNamesForAttempts(baseAttempts, students);
+    const { studentIds, studentNames } = studentTargetsForAttempts(baseAttempts, students);
     const groupNames = Array.from(new Set(baseAttempts.map(attempt => attempt.groupName || attempt.groupId || "").filter(Boolean))).sort((a, b) => a.localeCompare(b, "ko"));
     const regionNames = Array.from(new Set(baseAttempts.map(attempt => attempt.regionName || attempt.regionId || "").filter(Boolean))).sort((a, b) => a.localeCompare(b, "ko"));
 
@@ -289,8 +291,7 @@ function classRetakeRecommendationCandidates(
         if (!recommendation || recommendation.retakeQuestionIds.length === 0 || row.attemptCount === 0) return [];
 
         const rowAttempts = attemptsForClassRow(exam, baseAttempts, row.groupKey, row.groupName, students, groups);
-        const studentIds = studentIdsForAttempts(rowAttempts, students);
-        const studentNames = studentNamesForAttempts(rowAttempts, students);
+        const { studentIds, studentNames } = studentTargetsForAttempts(rowAttempts, students);
         const groupNames = [row.groupName].filter(Boolean);
         const regionNames = Array.from(new Set([
             row.regionName,

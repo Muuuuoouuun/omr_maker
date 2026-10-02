@@ -19,6 +19,7 @@ interface PremiumActionLinkProps {
     lockedTitle?: string;
     className?: string;
     style?: CSSProperties;
+    unavailableReason?: string;
 }
 
 export function PremiumActionLink({
@@ -30,10 +31,19 @@ export function PremiumActionLink({
     lockedTitle,
     className,
     style,
+    unavailableReason,
 }: PremiumActionLinkProps) {
     const requiredPlanName = PLAN_BY_KEY[requiredPlan].name;
     const resolvedLockedLabel = lockedLabel ?? (requiredPlan === DEFAULT_REQUIRED_PLAN ? DEFAULT_LOCKED_LABEL : `${requiredPlanName} 필요`);
     const resolvedLockedTitle = lockedTitle ?? (requiredPlan === DEFAULT_REQUIRED_PLAN ? DEFAULT_LOCKED_TITLE : `${requiredPlanName} 이상에서 사용할 수 있습니다.`);
+
+    if (unavailableReason) {
+        return (
+            <span role="status" title={unavailableReason} className={className} style={style}>
+                {unavailableReason}
+            </span>
+        );
+    }
 
     if (enabled) {
         return (

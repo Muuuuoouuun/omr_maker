@@ -105,7 +105,8 @@ describe("canonical browser data-plane boundary", () => {
         const questionStart = action.indexOf("export async function askAttemptQuestion");
         const questionAction = action.slice(questionStart);
         expect(questionAction).toContain("isSameOriginServerActionRequest");
-        expect(questionAction).toContain("validateStudentQuestionForAttempt");
+        expect(questionAction).toContain("upsertStudentQuestionWithGateway");
+        expect(questionAction).not.toContain('from("omr_attempts").upsert');
         expect(questionAction.indexOf("isSameOriginServerActionRequest"))
             .toBeLessThan(questionAction.indexOf("resolveCtx()"));
     });

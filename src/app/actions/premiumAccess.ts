@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
-import { parseSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
+import { resolveAuthorizedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
 import {
     createDevServerPlanStore,
     createServerPlanStoreFromEnv,
@@ -17,6 +17,7 @@ import {
     type ServerPlanUsage,
 } from "@/lib/serverPlan";
 import { isTeacherSessionActive } from "@/lib/teacherSession";
+import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
 import { hasPlanEntitlement, type PlanEntitlementKey, type PlanLimitMetric } from "@/utils/plans";
 
 export interface ServerPlanSnapshot extends ServerPlanAccess {
@@ -32,15 +33,16 @@ export interface PremiumMutationGuardResult {
     error?: string;
 }
 
-async function signedTeacherSession() {
-    return parseSignedTeacherSessionCookie(
+async function signedTeacherSession(options: { allowMockup?: boolean } = {}) {
+    return resolveAuthorizedTeacherSessionCookie(
         (await cookies()).get(TEACHER_SERVER_SESSION_COOKIE)?.value,
+        { allowMockup: options.allowMockup === true },
     );
 }
 
-async function accessAndStore() {
-    const session = await signedTeacherSession();
-    let store = createServerPlanStoreFromEnv();
+async function accessAndStore(options: { allowMockup?: boolean } = {}) {
+    const session = await signedTeacherSession(options);
+    let store = createServerPlanStoreFromEnv(process.env, session);
 
     // Local development must still support the complete teacher workflow when
     // a hosted Supabase backend has not been configured. Keep that fallback
@@ -54,7 +56,7 @@ async function accessAndStore() {
     }
 
     const access = await resolveServerPlanAccess(session, { store });
-    return { access, store };
+    return { access, store, session };
 }
 
 function limitsFor(access: ServerPlanAccess): Record<PlanLimitMetric, number> {
@@ -67,11 +69,14 @@ function limitsFor(access: ServerPlanAccess): Record<PlanLimitMetric, number> {
 
 /** Authoritative server snapshot for client display. localStorage is never consulted. */
 export async function getServerPlanSnapshot(): Promise<ServerPlanSnapshot> {
-    const { access, store } = await accessAndStore();
-    const snapshot: ServerPlanSnapshot = { ...access, limits: limitsFor(access) };
-    if (!access.authoritative || !store) return snapshot;
+    const { access, store, session } = await accessAndStore({ allowMockup: true });
+    const displayAccess = isMockupTeacherIdentity(session)
+        ? { ...access, plan: "academy" as const }
+        : access;
+    const snapshot: ServerPlanSnapshot = { ...displayAccess, limits: limitsFor(displayAccess) };
+    if (!displayAccess.authoritative || !store) return snapshot;
     try {
-        return { ...snapshot, usage: await readServerPlanUsage(access, store) };
+        return { ...snapshot, usage: await readServerPlanUsage(displayAccess, store) };
     } catch (error) {
         return {
             ...snapshot,
@@ -92,19 +97,15 @@ async function reserveMetric(
         return { ok: false, access, error: serverPlanUnavailableMessage(access) };
     }
     const limit = planLimit(access.plan, metric);
-    if (!Number.isFinite(limit)) {
-        return { ok: true, access, quota: evaluateServerPlanQuota(access.plan, metric, 0, attempted) };
-    }
     try {
         const period = seoulBillingPeriod();
-        const observedUsed = await store.readUsage(access.organizationId, metric, period);
         const reserved = await store.reserveUsage({
             organizationId: access.organizationId,
             metric,
             period,
             resourceKey,
             attempted,
-            observedUsed,
+            observedUsed: 0,
             limit,
         });
         const quota = {
@@ -133,7 +134,6 @@ async function releaseMetric(
         return { ok: false, released: false, error: serverPlanUnavailableMessage(access) };
     }
     if (!resourceKey.trim()) return { ok: false, released: false, error: "사용량 예약 키가 없습니다." };
-    if (!Number.isFinite(planLimit(access.plan, metric))) return { ok: true, released: false };
     try {
         const result = await store.releaseUsage({
             organizationId: access.organizationId,
@@ -183,23 +183,11 @@ export async function authorizeRosterStudentSet(studentIds: string[]): Promise<P
         .map(id => id.trim())
         .filter(Boolean))];
     const limit = planLimit(access.plan, "students");
-    if (!Number.isFinite(limit)) {
-        return { ok: true, access, quota: evaluateServerPlanQuota(access.plan, "students", resourceKeys.length, 0) };
-    }
-    if (resourceKeys.length > limit) {
-        return {
-            ok: false,
-            access,
-            quota: { ...evaluateServerPlanQuota(access.plan, "students", resourceKeys.length, 0), allowed: false },
-            error: `현재 플랜은 학생 ${limit}명까지 등록할 수 있습니다.`,
-        };
-    }
     try {
-        const observedUsed = await store.readUsage(access.organizationId, "students", seoulBillingPeriod());
         const synced = await store.syncStudentUsage({
             organizationId: access.organizationId,
             resourceKeys,
-            observedUsed,
+            observedUsed: 0,
             limit,
         });
         const quota = {

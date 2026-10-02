@@ -1,10 +1,11 @@
 import {
+    isProvisionedTeacherMemberRole,
     isTeacherSessionActive,
     readTeacherSession,
     type TeacherSession,
     type TeacherSessionStorage,
 } from "@/lib/teacherSession";
-import type { TeacherMemberRole } from "@/lib/teacherSession";
+import type { TeacherMemberRole, TeacherSessionAuthority } from "@/lib/teacherSession";
 
 export const DEFAULT_WORKSPACE_ORGANIZATION_ID = "default";
 export const DEFAULT_WORKSPACE_ORGANIZATION_NAME = "OMR Maker";
@@ -13,6 +14,9 @@ export interface WorkspaceContext {
     organizationId: string;
     organizationName: string;
     actorUserId?: string;
+    accountId?: string;
+    accountSessionGeneration?: number;
+    sessionAuthority?: TeacherSessionAuthority;
     actorEmail?: string;
     actorLabel?: string;
     memberRole?: TeacherMemberRole;
@@ -88,7 +92,26 @@ export function stableWorkspaceHash(value: string): string {
     return (hash >>> 0).toString(36).padStart(7, "0");
 }
 
-export function workspaceContextFromIdentity(identity: WorkspaceIdentity | null | undefined): WorkspaceContext {
+export function workspaceContextFromIdentity(
+    identity: WorkspaceIdentity | null | undefined,
+    sessionAuthority: TeacherSessionAuthority = "bootstrap",
+): WorkspaceContext {
+    if (sessionAuthority === "account") {
+        const organizationId = clean(identity?.organizationId).toLowerCase();
+        const actorUserId = clean(identity?.teacherId).toLowerCase();
+        const organizationName = clean(identity?.organizationName);
+        if (!/^pilot_org_[a-f0-9]{24}$/.test(organizationId)
+            || !/^teacher_[a-f0-9]{16}$/.test(actorUserId)
+            || !organizationName || !isProvisionedTeacherMemberRole(identity?.memberRole)) return DEFAULT_CONTEXT;
+        return {
+            organizationId,
+            organizationName,
+            actorUserId,
+            actorEmail: clean(identity?.email).toLowerCase() || undefined,
+            actorLabel: clean(identity?.displayName) || clean(identity?.email) || actorUserId,
+            memberRole: identity.memberRole,
+        };
+    }
     const key = identityKey(identity);
     if (!key) return DEFAULT_CONTEXT;
 
@@ -174,7 +197,18 @@ export function workspaceContextFromTeacherSession(
     now = Date.now(),
 ): WorkspaceContext {
     if (!isTeacherSessionActive(session, now)) return DEFAULT_CONTEXT;
-    return workspaceContextFromIdentity(session);
+    const context = workspaceContextFromIdentity(session, session.sessionAuthority);
+    if ((session.sessionAuthority === "account" || session.sessionAuthority === "legacy_account")
+        && Number.isSafeInteger(session.accountSessionGeneration)
+        && (session.accountSessionGeneration ?? 0) >= 1) {
+        return {
+            ...context,
+            accountId: clean(session.teacherId).toLowerCase(),
+            accountSessionGeneration: session.accountSessionGeneration,
+            sessionAuthority: session.sessionAuthority,
+        };
+    }
+    return context;
 }
 
 export function readActiveWorkspaceContext(

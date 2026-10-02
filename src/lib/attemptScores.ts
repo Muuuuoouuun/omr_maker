@@ -1,22 +1,23 @@
 import type { Attempt, Exam } from "@/types/omr";
-import { summarizeAttemptScore } from "@/lib/premiumAnalytics";
+import { resolveAttemptGrading, type AttemptGradingSource } from "@/lib/premiumAnalytics";
 import { safeScorePercent } from "@/lib/scoreUtils";
 
 export interface ResolvedAttemptScore {
     earnedScore: number;
     totalScore: number;
     scorePercent: number;
-    source: "questionResults" | "storedScore";
+    source: AttemptGradingSource | "storedScore";
     gradedQuestionCount: number;
     ungradedQuestionCount: number;
 }
 
 export function resolveAttemptScore(attempt: Attempt, exam?: Exam | null): ResolvedAttemptScore {
-    if (exam && exam.id === attempt.examId) {
-        const summary = summarizeAttemptScore(exam, attempt);
+    const isSummary = (attempt as Attempt & { detailLevel?: unknown }).detailLevel === "summary";
+    if (!isSummary && exam && exam.id === attempt.examId) {
+        const grading = resolveAttemptGrading(exam, attempt);
         return {
-            ...summary,
-            source: "questionResults",
+            ...grading.scoreSummary,
+            source: grading.source,
         };
     }
 
@@ -44,8 +45,23 @@ export function isRetakeAttempt(attempt: Attempt): boolean {
     return !!attempt.retake;
 }
 
+export function completedAttemptsOnly(attempts: Attempt[]): Attempt[] {
+    return attempts.filter(attempt => attempt.status === "completed");
+}
+
 export function baseAttemptsOnly(attempts: Attempt[]): Attempt[] {
     return attempts.filter(attempt => !isRetakeAttempt(attempt));
+}
+
+export function groupBaseAttemptsByExam(attempts: Attempt[]): Map<string, Attempt[]> {
+    const grouped = new Map<string, Attempt[]>();
+    for (const attempt of attempts) {
+        if (isRetakeAttempt(attempt)) continue;
+        const existing = grouped.get(attempt.examId);
+        if (existing) existing.push(attempt);
+        else grouped.set(attempt.examId, [attempt]);
+    }
+    return grouped;
 }
 
 export function retakeAttemptsOnly(attempts: Attempt[]): Attempt[] {

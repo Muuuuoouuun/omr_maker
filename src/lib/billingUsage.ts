@@ -85,7 +85,13 @@ export function buildBillingUsageSummary(
         attemptsThisMonth: attemptsThisMonth.length,
         handwritingArchivesThisMonth: handwritingAttempts.length,
         handwritingQuestionCount: handwritingAttempts.reduce((sum, attempt) => (
-            sum + (attempt.questionDrawings?.length || attempt.handwriting?.summary.questionCount || 0)
+            sum + (
+                attempt.questionDrawings?.length
+                || attempt.handwriting?.summary.questionCount
+                || ("handwritingQuestionCount" in attempt && typeof attempt.handwritingQuestionCount === "number"
+                    ? attempt.handwritingQuestionCount
+                    : 0)
+            )
         ), 0),
         handwritingStrokeCount: handwritingAttempts.reduce((sum, attempt) => (
             sum + (attempt.drawingStrokeCount || attempt.handwriting?.summary.strokeCount || 0)

@@ -1,25 +1,6 @@
+import { contentSecurityPolicy } from "./src/lib/contentSecurityPolicy";
+
 const isProduction = process.env.NODE_ENV === "production";
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "object-src 'none'",
-  "frame-ancestors 'none'",
-  "form-action 'self'",
-  // Next.js emits inline bootstrap scripts and the UI uses inline component
-  // styles. Development additionally needs eval for source maps/HMR.
-  `script-src 'self' 'unsafe-inline'${isProduction ? "" : " 'unsafe-eval'"}`,
-  "style-src 'self' 'unsafe-inline'",
-  // Remote API/storage traffic is HTTPS/WSS. PDF.js also reads locally
-  // generated data/blob URLs without granting another network origin.
-  "connect-src 'self' https: wss: data: blob:",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  // pdf.js and generated previews use blob-backed workers/resources.
-  "worker-src 'self' blob:",
-  "frame-src 'self' blob:",
-  "media-src 'self' data: blob:",
-  "manifest-src 'self'",
-].join("; ");
 
 const baselineSecurityHeaders = [
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
@@ -30,7 +11,7 @@ const baselineSecurityHeaders = [
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
   {
     key: "Content-Security-Policy",
-    value: contentSecurityPolicy,
+    value: contentSecurityPolicy(process.env),
   },
 ];
 
@@ -45,7 +26,11 @@ const isDesktopRuntime = process.env.OMR_DESKTOP_RUNTIME === "1";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  ...(process.env.OMR_ISOLATED_E2E === "1" ? { distDir: ".next-e2e" } : {}),
   poweredByHeader: false,
+  // The development toolbar owns the first tab stop inside a shadow-root
+  // portal. Keep local/E2E keyboard order representative of the production UI.
+  devIndicators: false,
   ...(deploymentId ? { deploymentId } : {}),
   ...(isDesktopRuntime
     ? {
@@ -58,11 +43,24 @@ const nextConfig = {
     : {}),
   turbopack: {
     root: process.cwd(),
+    resolveAlias: {
+      // The modern PDF.js build calls brand-new built-ins such as
+      // Map.prototype.getOrInsertComputed and crashes the solve/create pages on
+      // browsers without them (e.g. Chromium 141, older iOS/Android WebViews).
+      // The legacy build ships core-js polyfills. An exact-key alias rewrites
+      // react-pdf's internal `import * as pdfjs from 'pdfjs-dist'` as well;
+      // subpaths (`pdfjs-dist/legacy/...`) and server bundles are untouched.
+      // Keep public/*.worker.min.mjs on the same legacy build (src/lib/pdfjsRuntime.ts).
+      "pdfjs-dist": { browser: "pdfjs-dist/legacy/build/pdf.mjs" },
+    },
   },
   allowedDevOrigins: ["127.0.0.1"],
   experimental: {
     serverActions: {
-      bodySizeLimit: '52mb', // 비공개 Storage에 전달할 최대 50MB PDF + multipart 여유
+      // PDF bytes use browser-to-storage signed uploads. Keep only enough room
+      // for the largest legal action payload (10 MiB handwriting JSON) plus
+      // React Action serialization overhead.
+      bodySizeLimit: "12mb",
     },
   },
   async headers() {
@@ -86,9 +84,8 @@ const nextConfig = {
         // student solve pages authenticate with signed session cookies, so
         // block framing (clickjacking against force-finish/delete/distribute
         // buttons), MIME sniffing, unsafe base/object/form targets, and Referer
-        // leakage of exam ids. Next bootstrap/component styles require inline
-        // allowances until nonce-based rendering is adopted; remote data
-        // traffic is limited to HTTPS/WSS and workers to same-origin/blob.
+        // leakage of exam ids. Page responses receive a request-specific
+        // script nonce in src/proxy.ts; other resources retain the baseline.
         source: "/:path*",
         headers: globalHeaders,
       },

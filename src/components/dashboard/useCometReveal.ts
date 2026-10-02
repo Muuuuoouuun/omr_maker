@@ -25,8 +25,18 @@ const LINE_EASING = "cubic-bezier(0.33, 1, 0.68, 1)";
 // Mirrors --ease-spring in globals.css — keep in sync if that token's value changes
 // (WAAPI's easing option can't resolve var(), so this has to stay a literal copy).
 const SPRING_EASING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
-const TAIL_COUNT = 5;
-const TAIL_LAG_MS = 42;
+const TAIL_COUNT = 4;
+const TAIL_LAG_MS = 28;
+
+export const DEFAULT_COMET_DURATION_MS = 650;
+export const DEFAULT_COMET_DELAY_MS = 80;
+
+export function shouldReduceCometMotion(
+    osPrefersReducedMotion: boolean,
+    appMotionSetting: string | null,
+): boolean {
+    return osPrefersReducedMotion || appMotionSetting === "off";
+}
 
 /**
  * 시안 B — comet line draw. Attach to a container wrapping a recharts chart
@@ -44,8 +54,8 @@ export default function useCometReveal(
     containerRef: RefObject<HTMLElement | null>,
     {
         color = "var(--primary)",
-        durationMs = 1150,
-        delayMs = 150,
+        durationMs = DEFAULT_COMET_DURATION_MS,
+        delayMs = DEFAULT_COMET_DELAY_MS,
         endPing = true,
         replayKey,
         enabled = true,
@@ -55,7 +65,10 @@ export default function useCometReveal(
         if (!enabled) return;
         const container = containerRef.current;
         if (!container) return;
-        if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+        if (shouldReduceCometMotion(
+            window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+            document.documentElement.getAttribute("data-motion"),
+        )) return;
         if (document.hidden) return;
 
         let cancelled = false;
@@ -167,7 +180,7 @@ export default function useCometReveal(
                 // (WAAPI's easing option can't resolve var(), so this has to stay a literal copy).
                 const areaAnim = area.animate(
                     [{ opacity: 0 }, { opacity: 1 }],
-                    { duration: 650, delay: delayMs + durationMs * 0.6, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "both" },
+                    { duration: 420, delay: delayMs + durationMs * 0.45, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "both" },
                 );
                 cleanups.push(() => {
                     areaAnim.cancel();
@@ -188,8 +201,8 @@ export default function useCometReveal(
                 const pop = dot.animate(
                     [{ transform: "scale(0)" }, { transform: "scale(1)" }],
                     {
-                        duration: 480,
-                        delay: delayMs + durationMs * 0.55 + i * 60,
+                        duration: 300,
+                        delay: delayMs + durationMs * 0.45 + Math.min(i, 8) * 35,
                         easing: SPRING_EASING,
                         fill: "both",
                     },
@@ -220,9 +233,9 @@ export default function useCometReveal(
                         { transform: "scale(2.4)", opacity: 0 },
                     ],
                     {
-                        duration: 1000,
+                        duration: 650,
                         delay: delayMs + durationMs,
-                        iterations: 2,
+                        iterations: 1,
                         easing: "cubic-bezier(0.22, 1, 0.36, 1)",
                     },
                 );

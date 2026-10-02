@@ -16,6 +16,15 @@ export type StudentSubmissionDurabilityResult =
     | { durable: true }
     | { durable: false; error: string };
 
+export function shouldBlockSubmissionCompletion(result: {
+    source: "server" | "local";
+    receiptStatus: SubmissionReceiptStatus;
+    durable: boolean;
+}): boolean {
+    if (result.durable) return false;
+    return result.source !== "server" || result.receiptStatus !== "confirmed";
+}
+
 const STORAGE_ERROR = "제출 재시도 정보를 저장하지 못했습니다. 브라우저 저장 공간을 확보한 뒤 다시 제출해주세요.";
 
 export async function persistStudentSubmissionDisposition(

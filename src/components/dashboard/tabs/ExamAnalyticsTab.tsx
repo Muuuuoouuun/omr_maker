@@ -1,25 +1,23 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef, type CSSProperties } from "react";
-import { DEFAULT_CHOICE_COUNT, Exam, Attempt, questionChoiceCount, type PlanKey } from "@/types/omr";
+import { DEFAULT_CHOICE_COUNT, Exam, Attempt, type PlanKey } from "@/types/omr";
 import type { QuestionResult } from "@/types/omr";
 import {
-    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
+    BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
     Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ReferenceLine
 } from 'recharts';
+import type { ValueType } from "recharts/types/component/DefaultTooltipContent";
 import {
     AlertTriangle,
-    ArrowRight,
     BarChart2,
     CalendarDays,
     CheckCircle,
     ChevronDown,
-    ChevronRight,
     ChevronUp,
     Database,
     Download,
     FileQuestion,
-    Lightbulb,
     List,
     MapPin,
     MessageCircle,
@@ -32,6 +30,7 @@ import { PremiumActionLink, PremiumFeatureCard } from "@/components/PremiumFeatu
 import styles from "./ExamAnalyticsTab.module.css";
 import {
     attemptElapsedTimeSec,
+    buildCanonicalAttemptAnalyticsIndex,
     buildClassExamScoreGroups,
     buildClassExamWeaknessMatrix,
     buildExamQuestionPointBiserial,
@@ -42,13 +41,15 @@ import {
     buildSimilarQuestionGroups,
     collectQuestionResults,
     formatParticipationRateLabel,
-    getAttemptQuestionResults,
+    resolveAttemptGrading,
+    hasGradableAttemptScore,
     studentScopeKeyForAttempt,
     summarizeAttemptScore,
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
 import { computeGroupScoreSummary, computeScoreDistribution } from "@/lib/scoreDistribution";
-import type { LearningRecommendation } from "@/lib/premiumAnalytics";
+import { completedAttemptsOnly } from "@/lib/attemptScores";
+import type { AttemptGradingSource, LearningRecommendation } from "@/lib/premiumAnalytics";
 import { buildQuestionBankReadiness, type QuestionBankReadinessStatus } from "@/lib/questionBank";
 import {
     buildRegionalActionPlans,
@@ -61,7 +62,13 @@ import {
 } from "@/lib/regionalAnalytics";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { formatRegionScopedLabel, resolveExamSelection, resolveExamSelectionInputValue, resolveScopedSelection } from "@/lib/dashboardSelection";
-import { safeRatePercent } from "@/lib/scoreUtils";
+import { safeRatePercent, safeScorePercent } from "@/lib/scoreUtils";
+import {
+    currentTeacherCanonicalAnalyticsSnapshot,
+    exactTeacherCanonicalWrongRetakeCohorts,
+    teacherCanonicalQuestionCohortCsvRows,
+    type TeacherCanonicalAnalyticsSnapshotMap,
+} from "@/lib/teacherCanonicalAnalyticsSnapshotContract";
 import { serializeCsvRows } from "@/lib/csv";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { buildKakaoNotificationCandidates, type KakaoNotificationCandidate, type KakaoNotificationCandidateKind } from "@/lib/kakaoNotificationQueue";
@@ -84,9 +91,18 @@ import {
 } from "@/lib/kakaoCandidateReviewPersistence";
 import { getKakaoProviderReadiness, type KakaoProviderReadinessStatus } from "@/lib/kakaoProvider";
 import { hasPlanEntitlement } from "@/utils/plans";
-import CountUp from "@/components/dashboard/CountUp";
 import WaveBar from "@/components/dashboard/WaveBar";
 import StatusPill from "@/components/dashboard/StatusPill";
+import type { AnalyticsMetricItem } from "@/components/AnalyticsMetricGrid";
+import {
+    buildExamHeadlineInsight,
+    examAnalyticsSampleStatusNote,
+} from "@/lib/examAnalyticsReport";
+import type { ExamAnalyticsSampleStatus } from "@/lib/examAnalyticsReport";
+import ExamAnalyticsReportOverview, {
+    type ExamOverviewAction,
+    type ExamOverviewWeakQuestion,
+} from "./ExamAnalyticsReportOverview";
 
 interface ExamAnalyticsTabProps {
     exams: Exam[];
@@ -95,7 +111,61 @@ interface ExamAnalyticsTabProps {
     rosterGroups?: RosterGroup[];
     initialExamId?: string;
     currentPlan?: PlanKey;
+    sampleStatus?: ExamAnalyticsSampleStatus;
+    /** Present for real remote data; absent only for bounded local/demo analysis. */
+    canonicalAnalyticsSnapshots?: TeacherCanonicalAnalyticsSnapshotMap;
 }
+
+export function filterGradableQuestionEvidence<T extends { totalCount: number }>(items: T[]): T[] {
+    return items.filter(item => item.totalCount > 0);
+}
+
+export function buildQuestionCorrectRateChartData<T extends {
+    index: number;
+    totalCount: number;
+    correctRate: number;
+}>(items: T[]): Array<Omit<T, "correctRate"> & {
+    correctRate: number | null;
+    correctRateLabel: string;
+}> {
+    return items.map(item => ({
+        ...item,
+        correctRate: item.totalCount > 0 ? item.correctRate : null,
+        correctRateLabel: item.totalCount > 0 ? `${item.correctRate}%` : "미채점",
+    }));
+}
+
+export function QuestionCorrectRateTooltip({
+    active,
+    label,
+    payload,
+}: {
+    active?: boolean;
+    label?: string | number;
+    payload?: ReadonlyArray<{ value?: number | string | null }>;
+}) {
+    if (!active || !payload?.length) return null;
+    const value = payload[0]?.value;
+
+    return (
+        <div
+            role="status"
+            className="recharts-default-tooltip"
+            style={{
+                padding: "10px",
+                border: "1px solid var(--border)",
+                borderRadius: "8px",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
+                background: "var(--background)",
+            }}
+        >
+            <p>{label}번 문항</p>
+            <p>정답률: {value === null || value === undefined ? "미채점" : `${value}%`}</p>
+        </div>
+    );
+}
+
+const EXAM_ANALYTICS_SAMPLE_QUALIFIER_ID = "exam-analytics-sample-qualifier";
 
 const difficultyLabelMap: Record<string, string> = {
     easy: "기초",
@@ -110,6 +180,23 @@ const difficultyLabelMap: Record<string, string> = {
  * "marginal", ≥.30 "good") used to flag the 문항별 상세 table's 진단 badge.
  */
 const WEAK_POINT_BISERIAL_THRESHOLD = 0.2;
+
+export function summarizeRiskyQuestions<T>(items: T[]): {
+    displayQuestions: T[];
+    totalCount: number;
+} {
+    return {
+        displayQuestions: items.slice(0, 5),
+        totalCount: items.length,
+    };
+}
+
+export function buildQuestionQualityActionTitle(
+    riskyQuestionCount: number,
+    tooEasyCount: number,
+): string {
+    return `문항 품질 ${riskyQuestionCount + tooEasyCount}개 점검`;
+}
 
 // Shared card surface so every analytics section reads as one coherent grammar
 // (rounded, subtly elevated, consistently bordered) — the `.card` class carries no
@@ -156,6 +243,40 @@ function resultStatusLabel(result?: QuestionResult): string {
     return "미채점";
 }
 
+export function buildStudentQuestionAnalysisCsvRows(input: {
+    gradingSource: AttemptGradingSource;
+    questionResults: readonly QuestionResult[];
+    labelScores: Record<string, { earned: number; total: number }>;
+}): unknown[][] {
+    const gradingSourceLabel = input.gradingSource === "canonical_submission"
+        ? "제출 당시 저장 채점"
+        : input.gradingSource === "legacy_derived_current_exam"
+            ? "과거 기록 · 현재 시험지 기준 참고 채점"
+            : input.gradingSource === "stored_totals_only"
+                ? "저장 총점만 확인 가능"
+                : "채점 근거 불완전";
+    const rows: unknown[][] = [
+        ["채점 근거", gradingSourceLabel],
+        [],
+        ["문항 번호", "라벨(장르)", "배점", "학생 선택", "정답", "정오"],
+    ];
+    [...input.questionResults]
+        .sort((left, right) => left.questionNumber - right.questionNumber || left.questionId - right.questionId)
+        .forEach(result => rows.push([
+            result.questionNumber,
+            result.label || "일반",
+            result.score,
+            result.selectedAnswer ?? "-",
+            result.correctAnswer ?? "-",
+            resultStatusLabel(result),
+        ]));
+    rows.push([], ["장르별 통계"], ["장르", "획득 점수", "만점"]);
+    Object.entries(input.labelScores).forEach(([label, data]) => {
+        rows.push([label, roundScoreValue(data.earned), roundScoreValue(data.total)]);
+    });
+    return rows;
+}
+
 type AnalysisScope = "exam" | "class" | "student";
 type AnalyticsWorkspaceView = "overview" | "questions" | "students" | "operations";
 const ALL_REGION_KEY = "__all_regions__";
@@ -183,13 +304,15 @@ function regionalScopeLabel(scope: RegionalLearningScope | undefined): string {
     return scope?.regionName || "전체 지역";
 }
 
-function severityLabel(severity: "watch" | "review" | "urgent"): string {
+function severityLabel(severity: "watch" | "review" | "urgent" | null): string {
+    if (severity === null) return "근거 없음";
     if (severity === "urgent") return "긴급";
     if (severity === "review") return "점검";
     return "관찰";
 }
 
-function severityColor(severity: "watch" | "review" | "urgent"): string {
+function severityColor(severity: "watch" | "review" | "urgent" | null): string {
+    if (severity === null) return "var(--muted)";
     if (severity === "urgent") return "var(--error)";
     if (severity === "review") return "var(--warning)";
     return "var(--primary)";
@@ -256,42 +379,28 @@ export default function ExamAnalyticsTab({
     rosterGroups = [],
     initialExamId,
     currentPlan = "free",
+    sampleStatus = "ready",
+    canonicalAnalyticsSnapshots,
 }: ExamAnalyticsTabProps) {
     const [selectedExamId, setSelectedExamId] = useState<string>(initialExamId || (exams.length > 0 ? exams[0].id : ""));
     const [isSelectOpen, setIsSelectOpen] = useState(false);
     const [inputValue, setInputValue] = useState("");
+    const [activeOptionIndex, setActiveOptionIndex] = useState(-1);
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
     const [activeWorkspaceView, setActiveWorkspaceView] = useState<AnalyticsWorkspaceView>("overview");
-    // Gauge entrance sweep (시안 C): render the arc at 0 for the first paint,
-    // then let the CSS stroke-dasharray transition fill it to the real value —
-    // synced with the CountUp rolling the score number up beside it.
-    const [gaugeReady, setGaugeReady] = useState(false);
-    useEffect(() => {
-        if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-            setGaugeReady(true);
-            return;
-        }
-        // Double rAF so the 0-state actually paints before the transition target.
-        let raf2 = 0;
-        const raf1 = requestAnimationFrame(() => {
-            raf2 = requestAnimationFrame(() => setGaugeReady(true));
-        });
-        return () => {
-            cancelAnimationFrame(raf1);
-            cancelAnimationFrame(raf2);
-        };
-    }, []);
     const [analysisScope, setAnalysisScope] = useState<AnalysisScope>("exam");
     const [selectedClassKey, setSelectedClassKey] = useState("");
     const [selectedStudentKey, setSelectedStudentKey] = useState("");
     const [kakaoReviews, setKakaoReviews] = useState<KakaoCandidateReviewMap>({});
     const [kakaoDispatchLogs, setKakaoDispatchLogs] = useState<KakaoDispatchLog[]>([]);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const shouldScrollActiveOptionRef = useRef(false);
     const lastAppliedInitialExamIdRef = useRef<string | undefined>(initialExamId);
     const advancedAnalyticsEnabled = hasPlanEntitlement(currentPlan, "advancedAnalytics");
     const retakeAssignmentsEnabled = hasPlanEntitlement(currentPlan, "retakeAssignments");
     const remindersEnabled = hasPlanEntitlement(currentPlan, "reminders");
     const kakaoProviderReadiness = useMemo(() => getKakaoProviderReadiness(), []);
+    const sampleStatusCopy = examAnalyticsSampleStatusNote(sampleStatus);
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -311,6 +420,7 @@ export default function ExamAnalyticsTab({
         const handleClickOutside = (event: MouseEvent) => {
             if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
                 setIsSelectOpen(false);
+                setActiveOptionIndex(-1);
             }
         };
         document.addEventListener("mousedown", handleClickOutside);
@@ -324,6 +434,27 @@ export default function ExamAnalyticsTab({
         if (currentSelected && inputValue === currentSelected.title && !isSelectOpen) return exams;
         return exams.filter(exam => exam.title.toLowerCase().includes(inputValue.toLowerCase()));
     }, [exams, inputValue, selectedExamId, isSelectOpen]);
+    const filteredExamKey = filteredExams.map(exam => exam.id).join("\u0000");
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            setActiveOptionIndex(isSelectOpen && filteredExams.length > 0 ? 0 : -1);
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [filteredExamKey, filteredExams.length, isSelectOpen]);
+
+    useEffect(() => {
+        if (!shouldScrollActiveOptionRef.current) return;
+        shouldScrollActiveOptionRef.current = false;
+        if (!isSelectOpen || activeOptionIndex < 0) return;
+
+        const activeOption = dropdownRef.current?.querySelector<HTMLElement>(
+            `#exam-analytics-option-${activeOptionIndex}`,
+        );
+        if (activeOption && typeof activeOption.scrollIntoView === "function") {
+            activeOption.scrollIntoView({ block: "nearest" });
+        }
+    }, [activeOptionIndex, filteredExamKey, isSelectOpen]);
 
     // Keep input in sync with selected exam when not open
     useEffect(() => {
@@ -352,16 +483,21 @@ export default function ExamAnalyticsTab({
     }, [exams, selectedExamId]);
 
     const selectedExam = useMemo(() => exams.find(e => e.id === selectedExamId), [exams, selectedExamId]);
-    const allSelectedExamAttempts = useMemo(() => attempts.filter(a => a.examId === selectedExamId), [attempts, selectedExamId]);
+    const selectedExamCollectionAttempts = useMemo(() => (
+        attempts.filter(attempt => attempt.examId === selectedExamId)
+    ), [attempts, selectedExamId]);
+    const allSelectedExamAttempts = useMemo(() => (
+        completedAttemptsOnly(selectedExamCollectionAttempts)
+    ), [selectedExamCollectionAttempts]);
     const baseExamAttempts = useMemo(() => allSelectedExamAttempts.filter(a => !a.retake), [allSelectedExamAttempts]);
     const regionScopeOptions = useMemo(() => (
-        buildRegionalLearningScopes({
+        canonicalAnalyticsSnapshots !== undefined ? [] : buildRegionalLearningScopes({
             students: rosterStudents,
             groups: rosterGroups,
             attempts: baseExamAttempts,
             exams: selectedExam ? [selectedExam] : [],
         }).filter(scope => scope.attemptCount > 0)
-    ), [baseExamAttempts, rosterGroups, rosterStudents, selectedExam]);
+    ), [baseExamAttempts, canonicalAnalyticsSnapshots, rosterGroups, rosterStudents, selectedExam]);
     const activeRegionKey = selectedRegionKey === ALL_REGION_KEY || regionScopeOptions.some(scope => scope.regionKey === selectedRegionKey)
         ? selectedRegionKey
         : ALL_REGION_KEY;
@@ -372,6 +508,38 @@ export default function ExamAnalyticsTab({
             ? baseExamAttempts
             : filterAttemptsByRegion(baseExamAttempts, activeRegionKey, rosterStudents, rosterGroups)
     ), [activeRegionKey, baseExamAttempts, rosterGroups, rosterStudents]);
+    const requiresCanonicalSnapshot = canonicalAnalyticsSnapshots !== undefined;
+    const canonicalSnapshot = useMemo(() => {
+        if (!requiresCanonicalSnapshot || !selectedExam || activeRegionKey !== ALL_REGION_KEY) return null;
+        return currentTeacherCanonicalAnalyticsSnapshot(
+            canonicalAnalyticsSnapshots[selectedExam.id],
+            selectedExam.id,
+            selectedExamCollectionAttempts,
+        );
+    }, [activeRegionKey, canonicalAnalyticsSnapshots, requiresCanonicalSnapshot, selectedExam, selectedExamCollectionAttempts]);
+    const buildAnalyticsRetakeHref = (
+        sourceAttemptId: string,
+        questionIds: number[],
+        mode: "wrong" | "similar" | "custom",
+        metadata: { labels?: string[]; concepts?: string[] } = {},
+    ): string | null => {
+        if (!selectedExam || questionIds.length === 0) return null;
+        const cohortKeys = requiresCanonicalSnapshot
+            ? mode === "wrong" && canonicalSnapshot
+                ? exactTeacherCanonicalWrongRetakeCohorts(canonicalSnapshot, sourceAttemptId, questionIds)
+                : null
+            : undefined;
+        if (requiresCanonicalSnapshot && !cohortKeys) return null;
+        return buildRetakeHref(selectedExam.id, sourceAttemptId, questionIds, mode, {
+            ...metadata,
+            ...(cohortKeys ? { cohortKeys } : {}),
+        });
+    };
+    const analyticsIndex = useMemo(() => (
+        !requiresCanonicalSnapshot && selectedExam
+            ? buildCanonicalAttemptAnalyticsIndex(selectedExam, examAttempts)
+            : undefined
+    ), [examAttempts, requiresCanonicalSnapshot, selectedExam]);
     const scopedRosterStudents = useMemo(() => (
         activeRegionKey === ALL_REGION_KEY
             ? rosterStudents
@@ -386,12 +554,17 @@ export default function ExamAnalyticsTab({
     const examStats = useMemo(() => {
         if (!selectedExam || examAttempts.length === 0) return null;
 
-        const scores = examAttempts.map(attempt => summarizeAttemptScore(selectedExam, attempt).scorePercent);
-        const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
-        // reduce instead of Math.max(...scores)/Math.min(...scores) so we never blow the
-        // call stack spreading a very large scores array.
-        const maxScore = scores.reduce((hi, value) => Math.max(hi, value), scores[0]);
-        const minScore = scores.reduce((lo, value) => Math.min(lo, value), scores[0]);
+        // A stored legacy score remains valid when it carries a positive totalScore.
+        // Rows with no computed or stored denominator are submission evidence only,
+        // never zero-score performance evidence.
+        const scores = requiresCanonicalSnapshot
+            ? examAttempts
+                .filter(attempt => Number.isFinite(attempt.totalScore) && attempt.totalScore > 0)
+                .map(attempt => safeScorePercent(attempt.score, attempt.totalScore))
+            : examAttempts
+                .map(attempt => summarizeAttemptScore(selectedExam, attempt, analyticsIndex))
+                .filter(hasGradableAttemptScore)
+                .map(summary => summary.scorePercent);
         const distribution = computeScoreDistribution(scores);
         const elapsedTimes = examAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
         const avgElapsedTimeSec = elapsedTimes.length > 0
@@ -402,25 +575,28 @@ export default function ExamAnalyticsTab({
         )).length;
 
         return {
-            avgScore: Math.round(avgScore),
-            maxScore: Math.round(maxScore),
-            minScore: Math.round(minScore),
-            medianScore: distribution.median,
-            standardDeviation: distribution.standardDeviation,
+            avgScore: distribution.count > 0 ? Math.round(distribution.mean) : null,
+            maxScore: distribution.count > 0 ? Math.round(distribution.max) : null,
+            minScore: distribution.count > 0 ? Math.round(distribution.min) : null,
+            medianScore: distribution.count > 0 ? distribution.median : null,
+            standardDeviation: distribution.count > 0 ? distribution.standardDeviation : null,
             distributionBuckets: distribution.buckets,
-            count: examAttempts.length,
+            submissionCount: examAttempts.length,
+            performanceCount: distribution.count,
             avgElapsedTimeSec,
             handwritingArchiveCount,
         };
-    }, [selectedExam, examAttempts]);
+    }, [analyticsIndex, examAttempts, requiresCanonicalSnapshot, selectedExam]);
 
     const questionBankReadiness = useMemo(() => {
         if (!selectedExam) return null;
+        if (requiresCanonicalSnapshot) return null;
         return buildQuestionBankReadiness(selectedExam, examAttempts);
-    }, [selectedExam, examAttempts]);
+    }, [examAttempts, requiresCanonicalSnapshot, selectedExam]);
 
     const regionalActionPlans = useMemo(() => {
         if (!selectedExam) return [];
+        if (requiresCanonicalSnapshot) return [];
         return buildRegionalActionPlans({
             students: rosterStudents,
             groups: rosterGroups,
@@ -434,7 +610,7 @@ export default function ExamAnalyticsTab({
                 weaknessKinds: ["concept", "mistakeType"],
             },
         }).filter(plan => plan.attemptCount > 0);
-    }, [baseExamAttempts, rosterGroups, rosterStudents, selectedExam]);
+    }, [baseExamAttempts, requiresCanonicalSnapshot, rosterGroups, rosterStudents, selectedExam]);
     const visibleRegionalActionPlans = useMemo(() => (
         activeRegionKey === ALL_REGION_KEY
             ? regionalActionPlans
@@ -443,6 +619,7 @@ export default function ExamAnalyticsTab({
 
     const kakaoCandidateSummary = useMemo(() => {
         if (!selectedExam) return null;
+        if (requiresCanonicalSnapshot) return null;
         return buildKakaoNotificationCandidates({
             exams: [selectedExam],
             attempts: examAttempts,
@@ -450,7 +627,7 @@ export default function ExamAnalyticsTab({
             groups: scopedRosterGroups,
             limit: 6,
         });
-    }, [examAttempts, scopedRosterGroups, scopedRosterStudents, selectedExam]);
+    }, [examAttempts, requiresCanonicalSnapshot, scopedRosterGroups, scopedRosterStudents, selectedExam]);
     const kakaoReviewSummary = useMemo(() => {
         if (!kakaoCandidateSummary) return null;
         return summarizeKakaoCandidateReviews(kakaoCandidateSummary.candidates, kakaoReviews);
@@ -510,76 +687,147 @@ export default function ExamAnalyticsTab({
     const questionAnalytics = useMemo(() => {
         if (!selectedExam || examAttempts.length === 0) return [];
 
-        const resultStats = buildExamQuestionResultStats(selectedExam, examAttempts);
-        const statByQuestionId = new Map(resultStats.map(stat => [stat.questionId, stat]));
-        const pointBiserialByQuestionId = buildExamQuestionPointBiserial(selectedExam, examAttempts);
+        if (requiresCanonicalSnapshot && canonicalSnapshot?.status !== "ready") return [];
+        const resultStats = canonicalSnapshot?.questionStats
+            || buildExamQuestionResultStats(selectedExam, examAttempts, analyticsIndex);
+        const pointBiserialByQuestionId = canonicalSnapshot
+            ? new Map(canonicalSnapshot.pointBiserial)
+            : buildExamQuestionPointBiserial(selectedExam, examAttempts, analyticsIndex);
+        const cohortCountsByQuestionId = new Map<number, number>();
+        resultStats.forEach(stat => cohortCountsByQuestionId.set(
+            stat.questionId,
+            (cohortCountsByQuestionId.get(stat.questionId) ?? 0) + 1,
+        ));
 
-        return selectedExam.questions.map((q, qIndex) => {
-            const stat = statByQuestionId.get(q.id);
-            const choices = questionChoiceCount(q);
+        return resultStats.map((stat) => {
+            const choices = Math.max(5, stat.correctAnswer || 0, ...Object.keys(stat.optionCounts).map(Number));
             const optionCounts: Record<number, number> = {
                 ...Object.fromEntries(Array.from({ length: choices }, (_, i) => [i + 1, 0])),
-                ...(stat?.optionCounts || {}),
+                ...stat.optionCounts,
             };
-            const correctRate = stat?.correctRate ?? 0;
-            const unansweredRate = stat?.unansweredRate ?? 0;
+            const correctRate = stat.correctRate;
+            const unansweredRate = stat.unansweredRate;
 
             const optionRates = Object.entries(optionCounts).map(([opt, count]) => ({
                 option: parseInt(opt),
                 count,
-                rate: safeRatePercent(count, stat?.totalCount)
+                rate: safeRatePercent(count, stat.totalCount)
             }));
             const topWrongOption = optionRates
-                .filter(item => item.option !== q.answer)
+                .filter(item => item.option !== stat.correctAnswer)
                 .sort((a, b) => b.rate - a.rate)[0];
 
             return {
-                index: qIndex + 1,
-                id: q.id,
-                label: q.label || '일반',
-                concept: q.tags?.concept || q.label || '일반',
-                unit: q.tags?.unit,
-                difficulty: q.tags?.difficulty,
-                mistakeTypes: q.tags?.mistakeTypes || [],
-                expectedTimeSec: stat?.expectedTimeSec ?? q.tags?.expectedTimeSec,
-                averageTimeSec: stat?.averageTimeSec,
-                timeOverExpectedRate: stat?.timeOverExpectedRate,
-                averageVisitCount: stat?.averageVisitCount,
-                revisitRate: stat?.revisitRate ?? 0,
-                answerChangeCount: stat?.answerChangeCount ?? 0,
+                index: stat.questionNumber,
+                id: stat.questionId,
+                cohortKey: stat.cohortKey,
+                definitionManifestHash: stat.definitionManifestHash,
+                cohortLabel: (cohortCountsByQuestionId.get(stat.questionId) ?? 0) > 1
+                    ? `제출 정의 ${stat.definitionManifestHash.slice(7, 15)}`
+                    : "",
+                label: stat.label || '일반',
+                concept: stat.concept || stat.label || '일반',
+                unit: stat.unit,
+                difficulty: stat.difficulty,
+                mistakeTypes: stat.mistakeTypes || [],
+                expectedTimeSec: stat.expectedTimeSec,
+                averageTimeSec: stat.averageTimeSec,
+                timeOverExpectedRate: stat.timeOverExpectedRate,
+                averageVisitCount: stat.averageVisitCount,
+                revisitRate: stat.revisitRate,
+                answerChangeCount: stat.answerChangeCount,
                 correctRate,
-                correctCount: stat?.correctCount ?? 0,
-                totalCount: stat?.totalCount ?? 0,
-                wrongRate: stat?.wrongRate ?? 0,
+                correctCount: stat.correctCount,
+                totalCount: stat.totalCount,
+                wrongRate: stat.wrongRate,
                 unansweredRate,
                 // 점이연 상관 기준 — the unified item-discrimination index (null when the
                 // respondent pool is below DISCRIMINATION_MIN_RESPONDENTS → rendered "-").
-                pointBiserial: pointBiserialByQuestionId.get(q.id) ?? null,
+                pointBiserial: pointBiserialByQuestionId.get(stat.cohortKey) ?? null,
                 topWrongOption,
                 optionRates,
-                answer: q.answer,
+                answer: stat.correctAnswer,
                 choices,
             };
         }).sort((a: { correctRate: number }, b: { correctRate: number }) => a.correctRate - b.correctRate); // Sort by hardest first
-    }, [selectedExam, examAttempts]);
+    }, [analyticsIndex, canonicalSnapshot, examAttempts, requiresCanonicalSnapshot, selectedExam]);
+
+    const gradableQuestionAnalytics = useMemo(
+        () => filterGradableQuestionEvidence(questionAnalytics),
+        [questionAnalytics],
+    );
+    const questionCorrectRateChartData = useMemo(
+        () => buildQuestionCorrectRateChartData(
+            [...questionAnalytics].sort((a, b) => a.index - b.index),
+        ),
+        [questionAnalytics],
+    );
+    const questionCorrectRateChartSummary = `문항별 상세 정답률 데이터: ${questionCorrectRateChartData
+        .map(question => `${question.index}번${question.cohortLabel ? ` (${question.cohortLabel})` : ""} ${question.correctRateLabel}`)
+        .join(", ")}.`;
+
+    const avgQuestionCorrectRate = useMemo(() => {
+        const valid = questionCorrectRateChartData.filter(q => q.correctRate !== null);
+        if (valid.length === 0) return null;
+        const sum = valid.reduce((acc, q) => acc + (q.correctRate || 0), 0);
+        return Math.round(sum / valid.length);
+    }, [questionCorrectRateChartData]);
+
+    const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState<"all" | "killer" | "medium" | "easy">("all");
+
+    const filteredQuestionAnalytics = useMemo(() => {
+        const list = [...questionAnalytics].sort((a, b) => a.index - b.index);
+        if (questionDifficultyFilter === "killer") {
+            return list.filter(q => q.correctRate !== null && q.correctRate < 40);
+        }
+        if (questionDifficultyFilter === "medium") {
+            return list.filter(q => q.correctRate !== null && q.correctRate >= 40 && q.correctRate < 70);
+        }
+        if (questionDifficultyFilter === "easy") {
+            return list.filter(q => q.correctRate !== null && q.correctRate >= 70);
+        }
+        return list;
+    }, [questionAnalytics, questionDifficultyFilter]);
 
     const examLabels = useMemo(() => {
-        if (!selectedExam) return [];
-        return Array.from(new Set(selectedExam.questions.map(q => q.label || '일반')));
-    }, [selectedExam]);
+        return Array.from(new Set(questionAnalytics.map(q => q.label || '일반')));
+    }, [questionAnalytics]);
 
     const maxChoiceCount = useMemo(() => {
-        if (!selectedExam) return DEFAULT_CHOICE_COUNT;
-        return Math.max(DEFAULT_CHOICE_COUNT, ...selectedExam.questions.map(q => questionChoiceCount(q)));
-    }, [selectedExam]);
+        return Math.max(DEFAULT_CHOICE_COUNT, ...questionAnalytics.map(q => q.choices));
+    }, [questionAnalytics]);
 
     const studentScores = useMemo(() => {
         if (!selectedExam || examAttempts.length === 0) return [];
+        if (requiresCanonicalSnapshot) {
+            if (canonicalSnapshot?.status !== "ready" || !canonicalSnapshot.studentAggregatesComplete) return [];
+            const attemptById = new Map(examAttempts.map(attempt => [attempt.id, attempt]));
+            return canonicalSnapshot.studentRows.flatMap(row => {
+                const attempt = attemptById.get(row.attemptId);
+                if (!attempt) return [];
+                return [{
+                    studentName: row.studentName,
+                    gradingSource: row.gradingSource,
+                    questionResults: [] as QuestionResult[],
+                    totalScore: row.totalScore,
+                    scorePercentage: row.scorePercentage,
+                    hasPerformanceScore: row.hasPerformanceScore,
+                    labelScores: row.labelScores,
+                    behavior: row.behavior,
+                    topWeakness: row.topWeakness || undefined,
+                    retakeQuestionIds: row.retakeQuestionIds,
+                    questionCsvRows: row.questionCsvRows,
+                    attempt,
+                }];
+            });
+        }
         return examAttempts.map(attempt => {
             const labelScores: Record<string, { earned: number, total: number }> = {};
             examLabels.forEach(l => labelScores[l] = { earned: 0, total: 0 });
 
-            const results = getAttemptQuestionResults(selectedExam, attempt);
+            const gradingResolution = analyticsIndex?.resolutionFor(attempt)
+                || resolveAttemptGrading(selectedExam, attempt);
+            const results = gradingResolution.questionResults;
             results.forEach(result => {
                 if (!isGradableResult(result)) return;
                 const label = result.label || '일반';
@@ -587,17 +835,36 @@ export default function ExamAnalyticsTab({
                 labelScores[label].total += result.score;
                 labelScores[label].earned += result.earnedScore;
             });
-            const scoreSummary = summarizeAttemptScore(selectedExam, attempt);
+            const scoreSummary = gradingResolution.scoreSummary;
 
             return {
                 studentName: attempt.studentName,
+                gradingSource: gradingResolution.source,
+                questionResults: results,
                 totalScore: scoreSummary.earnedScore,
                 scorePercentage: scoreSummary.scorePercent,
+                hasPerformanceScore: hasGradableAttemptScore(scoreSummary),
                 labelScores,
+                behavior: summarizeAttemptBehavior(attempt),
+                topWeakness: undefined,
+                retakeQuestionIds: buildRetakeQuestionIds(selectedExam, attempt),
+                questionCsvRows: undefined,
                 attempt
             };
         });
-    }, [selectedExam, examAttempts, examLabels]);
+    }, [analyticsIndex, canonicalSnapshot, examAttempts, examLabels, requiresCanonicalSnapshot, selectedExam]);
+
+    const performanceStudentScores = useMemo(
+        () => studentScores.filter(student => student.hasPerformanceScore),
+        [studentScores],
+    );
+    const excludedGradingEvidence = useMemo(() => studentScores.reduce((summary, student) => {
+        if (student.gradingSource === "legacy_derived_current_exam") summary.legacy += 1;
+        if (student.gradingSource === "stored_totals_only" || student.gradingSource === "incomplete_or_invalid") {
+            summary.incomplete += 1;
+        }
+        return summary;
+    }, { legacy: 0, incomplete: 0 }), [studentScores]);
 
     const [sortField, setSortField] = useState<'name' | 'score'>('score');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -624,7 +891,7 @@ export default function ExamAnalyticsTab({
             mistakeTypes: Set<string>;
         }> = {};
 
-        questionAnalytics.forEach(q => {
+        gradableQuestionAnalytics.forEach(q => {
             const concept = q.concept || q.label || '일반';
             if (!conceptMap[concept]) {
                 conceptMap[concept] = {
@@ -656,13 +923,13 @@ export default function ExamAnalyticsTab({
                 mistakeTypes: Array.from(data.mistakeTypes),
             }))
             .sort((a, b) => a.correctRate - b.correctRate);
-    }, [selectedExam, examAttempts, questionAnalytics]);
+    }, [selectedExam, examAttempts, gradableQuestionAnalytics]);
 
     // B4: this panel is about the HIGHEST wrong rate, so sort by wrongRate desc rather
     // than reusing questionAnalytics' lowest-correctRate ordering (which unanswered skews).
     const topWrongQuestions = useMemo(
-        () => [...questionAnalytics].sort((a, b) => b.wrongRate - a.wrongRate).slice(0, 3),
-        [questionAnalytics],
+        () => [...gradableQuestionAnalytics].sort((a, b) => b.wrongRate - a.wrongRate).slice(0, 3),
+        [gradableQuestionAnalytics],
     );
 
     const teachingInsights = useMemo(() => {
@@ -676,42 +943,43 @@ export default function ExamAnalyticsTab({
         const hasWeakDiscrimination = (q: typeof questionAnalytics[number]) =>
             q.pointBiserial !== null && q.pointBiserial < WEAK_POINT_BISERIAL_THRESHOLD
             && q.correctRate >= 35 && q.correctRate <= 85;
-        const riskyQuestions = questionAnalytics.filter(q =>
+        const riskyQuestionSummary = summarizeRiskyQuestions(gradableQuestionAnalytics.filter(q =>
             q.correctRate < 50 ||
             hasWeakDiscrimination(q) ||
             q.unansweredRate >= 20 ||
             (q.topWrongOption?.rate || 0) >= 30
-        );
-        const tooEasyCount = questionAnalytics.filter(q => q.correctRate >= 90).length;
-        const weakDiscriminationCount = questionAnalytics.filter(hasWeakDiscrimination).length;
-        const lowStudents = studentScores.filter(student => student.scorePercentage < 60);
-        const borderlineStudents = studentScores.filter(student => student.scorePercentage >= 60 && student.scorePercentage < 80);
-        const advancedStudents = studentScores.filter(student => student.scorePercentage >= 90);
+        ));
+        const tooEasyCount = gradableQuestionAnalytics.filter(q => q.correctRate >= 90).length;
+        const weakDiscriminationCount = gradableQuestionAnalytics.filter(hasWeakDiscrimination).length;
+        const lowStudents = performanceStudentScores.filter(student => student.scorePercentage < 60);
+        const borderlineStudents = performanceStudentScores.filter(student => student.scorePercentage >= 60 && student.scorePercentage < 80);
+        const advancedStudents = performanceStudentScores.filter(student => student.scorePercentage >= 90);
 
         return {
             weakConcept,
-            riskyQuestions: riskyQuestions.slice(0, 5),
+            riskyQuestions: riskyQuestionSummary.displayQuestions,
+            riskyQuestionCount: riskyQuestionSummary.totalCount,
             tooEasyCount,
             weakDiscriminationCount,
             lowStudents,
             borderlineStudents,
             advancedStudents,
             actionCopy: weakConcept
-                ? `${weakConcept.concept} 보강 후 ${weakConcept.questionNumbers.slice(0, 4).join(", ")}번 유사문항 재응시`
+                ? `${weakConcept.concept} 보강 후 ${weakConcept.questionNumbers.slice(0, 4).join(", ")}번 관련 오답 재응시`
                 : "응시 데이터가 쌓이면 보강 우선순위를 계산합니다.",
         };
-    }, [conceptAnalytics, examStats, questionAnalytics, studentScores]);
+    }, [conceptAnalytics, examStats, gradableQuestionAnalytics, performanceStudentScores]);
 
     const studentAchievementBands = useMemo(() => {
         const definitions = [
-            { key: "under40", label: "40점 미만", min: 0, max: 40, color: "#ef4444" },
-            { key: "under60", label: "40~59점", min: 40, max: 60, color: "#f97316" },
-            { key: "under80", label: "60~79점", min: 60, max: 80, color: "#eab308" },
-            { key: "over80", label: "80~100점", min: 80, max: 101, color: "#10b981" },
+            { key: "under40", label: "40점 미만", min: 0, max: 40, tone: "grade" as const },
+            { key: "under60", label: "40~59점", min: 40, max: 60, tone: "warning" as const },
+            { key: "under80", label: "60~79점", min: 60, max: 80, tone: "neutral" as const },
+            { key: "over80", label: "80~100점", min: 80, max: 101, tone: "success" as const },
         ];
-        const total = studentScores.length;
+        const total = performanceStudentScores.length;
         return definitions.map(definition => {
-            const count = studentScores.filter(student => (
+            const count = performanceStudentScores.filter(student => (
                 student.scorePercentage >= definition.min && student.scorePercentage < definition.max
             )).length;
             return {
@@ -720,48 +988,128 @@ export default function ExamAnalyticsTab({
                 rate: safeRatePercent(count, total),
             };
         });
-    }, [studentScores]);
+    }, [performanceStudentScores]);
 
-    const averageDistributionLabel = examStats?.distributionBuckets.find(bucket => (
-        examStats.avgScore >= bucket.min
-        && (examStats.avgScore < bucket.max || (bucket.max === 100 && examStats.avgScore <= 100))
-    ))?.label;
     const overviewRetakeQuestionIds = (
         teachingInsights?.riskyQuestions.length
             ? teachingInsights.riskyQuestions
-            : questionAnalytics
+            : gradableQuestionAnalytics
     )
         .map(question => question.id)
         .slice(0, 5);
     const overviewRetakeHref = selectedExam && examAttempts[0] && overviewRetakeQuestionIds.length > 0
-        ? buildRetakeHref(selectedExam.id, examAttempts[0].id, overviewRetakeQuestionIds, "custom", {
+        ? buildAnalyticsRetakeHref(examAttempts[0].id, overviewRetakeQuestionIds, "custom", {
             concepts: teachingInsights?.weakConcept?.concept ? [teachingInsights.weakConcept.concept] : undefined,
         })
         : null;
+    const overviewHeadline = useMemo(() => buildExamHeadlineInsight({
+        performanceCount: examStats?.performanceCount ?? 0,
+        totalSubmissionCount: examStats?.submissionCount ?? 0,
+        weakConcept: teachingInsights?.weakConcept?.concept,
+        weakConceptRate: teachingInsights?.weakConcept?.correctRate,
+        hasGradableEvidence: gradableQuestionAnalytics.length > 0,
+        lowStudentCount: teachingInsights?.lowStudents.length ?? 0,
+        riskyQuestionCount: teachingInsights?.riskyQuestionCount ?? 0,
+    }), [examStats?.performanceCount, examStats?.submissionCount, gradableQuestionAnalytics.length, teachingInsights]);
+    const overviewMetrics = useMemo<AnalyticsMetricItem[]>(() => examStats ? [
+        { id: "mean", label: "평균", value: examStats.avgScore ?? "-", unit: examStats.avgScore === null ? undefined : "점", detail: examStats.standardDeviation === null ? "채점 가능한 점수 없음" : `표준편차 ${examStats.standardDeviation}`, animate: true },
+        { id: "median", label: "중앙값", value: examStats.medianScore ?? "-", unit: examStats.medianScore === null ? undefined : "점", animate: true },
+        { id: "maximum", label: "최고", value: examStats.maxScore ?? "-", unit: examStats.maxScore === null ? undefined : "점", animate: true },
+        { id: "minimum", label: "최저", value: examStats.minScore ?? "-", unit: examStats.minScore === null ? undefined : "점", tone: "grade", animate: true },
+        { id: "submissions", label: "채점 응시", value: examStats.performanceCount, unit: "명", detail: `전체 제출 ${examStats.submissionCount}건`, animate: true },
+        { id: "elapsed", label: "평균 시간", value: formatSeconds(examStats.avgElapsedTimeSec) },
+    ] : [], [examStats]);
+    const overviewWeakQuestions = useMemo<ExamOverviewWeakQuestion[]>(() => (
+        gradableQuestionAnalytics.slice(0, 5).map(question => ({
+            key: question.cohortKey,
+            questionNumber: question.index,
+            title: question.concept,
+            correctRate: question.correctRate,
+            evidence: question.topWrongOption
+                ? `정답 ${question.correctCount}/${question.totalCount}명 · 최다 오답 ${question.topWrongOption.option}번 ${question.topWrongOption.rate}%`
+                : `정답 ${question.correctCount}/${question.totalCount}명 · 오답 없음`,
+        }))
+    ), [gradableQuestionAnalytics]);
+    const overviewActions = useMemo<ExamOverviewAction[]>(() => {
+        if (!teachingInsights) return [];
+
+        const actions: ExamOverviewAction[] = teachingInsights.weakConcept ? [{
+            key: "weak-concept",
+            title: `취약 개념 보강 · ${teachingInsights.weakConcept.concept}`,
+            detail: teachingInsights.actionCopy,
+            onAction: () => setActiveWorkspaceView("questions"),
+        }] : [{
+            key: "evidence-readiness",
+            title: "채점 근거 확인",
+            detail: "미채점 문항을 확인한 뒤 취약 개념과 행동 추천을 계산합니다.",
+            onAction: () => setActiveWorkspaceView("questions"),
+        }];
+
+        if (gradableQuestionAnalytics.length > 0) actions.push(
+            {
+                key: "question-quality",
+                title: buildQuestionQualityActionTitle(teachingInsights.riskyQuestionCount, teachingInsights.tooEasyCount),
+                detail: `변별 약함 ${teachingInsights.weakDiscriminationCount}개 · 지나치게 쉬움 ${teachingInsights.tooEasyCount}개`,
+                onAction: () => setActiveWorkspaceView("questions"),
+            },
+            {
+                key: "student-support",
+                title: `지원이 필요한 학생 ${teachingInsights.lowStudents.length}명`,
+                detail: `60~79점 경계 구간 ${teachingInsights.borderlineStudents.length}명 · 심화 ${teachingInsights.advancedStudents.length}명`,
+                onAction: () => setActiveWorkspaceView("students"),
+            },
+        );
+
+        if (overviewRetakeHref) {
+            actions.push({
+                key: `retake:${gradableQuestionAnalytics.slice(0, 5).map(question => question.cohortKey).join("|")}`,
+                title: "보강 세트 만들기",
+                detail: "취약 문항으로 재시험 보강 세트를 구성합니다.",
+                href: overviewRetakeHref,
+                enabled: retakeAssignmentsEnabled,
+                lockedTitle: "Pro 이상에서 취약 문항 보강 세트를 만들 수 있습니다.",
+            });
+        } else if (gradableQuestionAnalytics.length > 0) {
+            actions.push({
+                key: "questions",
+                title: "취약 문항 보기",
+                detail: "문항별 정답률과 오답 근거를 확인합니다.",
+                onAction: () => setActiveWorkspaceView("questions"),
+            });
+        }
+
+        return actions;
+    }, [gradableQuestionAnalytics, overviewRetakeHref, retakeAssignmentsEnabled, teachingInsights]);
 
     const examTypeWeaknessGroups = useMemo(() => {
         // Feeds Pro-gated UI only — skip the recommendation pass when locked.
         if (!advancedAnalyticsEnabled) return [];
         if (!selectedExam || examAttempts.length === 0) return [];
+        if (requiresCanonicalSnapshot) return canonicalSnapshot?.status === "ready"
+            ? canonicalSnapshot.recommendations.slice(0, 6)
+            : [];
         return buildLearningRecommendations(selectedExam, examAttempts, {
             scope: "exam",
             kinds: ["concept"],
             limit: 6,
-        });
-    }, [advancedAnalyticsEnabled, selectedExam, examAttempts]);
+        }, analyticsIndex);
+    }, [advancedAnalyticsEnabled, analyticsIndex, canonicalSnapshot, examAttempts, requiresCanonicalSnapshot, selectedExam]);
 
     const classWeaknessMatrixRows = useMemo(() => {
         // Feeds Pro-gated UI only — skip the per-class matrix when locked.
         if (!advancedAnalyticsEnabled) return [];
         if (!selectedExam || examAttempts.length === 0) return [];
+        if (requiresCanonicalSnapshot) return canonicalSnapshot?.status === "ready"
+            ? canonicalSnapshot.classMatrix.slice(0, 6)
+            : [];
         return buildClassExamWeaknessMatrix(selectedExam, examAttempts, {
             kinds: ["concept"],
             recommendationLimit: 2,
             classLimit: 6,
             rosterGroups: scopedRosterGroups,
             rosterStudents: scopedRosterStudents,
-        });
-    }, [advancedAnalyticsEnabled, examAttempts, scopedRosterGroups, scopedRosterStudents, selectedExam]);
+        }, analyticsIndex);
+    }, [advancedAnalyticsEnabled, analyticsIndex, canonicalSnapshot, examAttempts, requiresCanonicalSnapshot, scopedRosterGroups, scopedRosterStudents, selectedExam]);
 
     // Feeds the "반별 점수 비교" range-bar card — same Pro gate and grouping as the weakness
     // matrix above, but only needs raw score percentages (min/median/average/max), not the
@@ -769,16 +1117,17 @@ export default function ExamAnalyticsTab({
     const groupScoreSummaries = useMemo(() => {
         if (!advancedAnalyticsEnabled) return [];
         if (!selectedExam || examAttempts.length === 0) return [];
+        if (requiresCanonicalSnapshot) return [];
         const groups = buildClassExamScoreGroups(selectedExam, examAttempts, {
             rosterGroups: scopedRosterGroups,
             rosterStudents: scopedRosterStudents,
-        });
+        }, analyticsIndex);
         return computeGroupScoreSummary(groups.map(group => ({
             groupKey: group.groupKey,
             groupName: formatRegionScopedLabel(group.groupName, group.regionName),
             scores: group.scores,
         })));
-    }, [advancedAnalyticsEnabled, examAttempts, scopedRosterGroups, scopedRosterStudents, selectedExam]);
+    }, [advancedAnalyticsEnabled, analyticsIndex, examAttempts, requiresCanonicalSnapshot, scopedRosterGroups, scopedRosterStudents, selectedExam]);
 
     const classTypeWeaknessRows = useMemo(() => classWeaknessMatrixRows
         .flatMap(row => {
@@ -823,6 +1172,7 @@ export default function ExamAnalyticsTab({
                     attemptRegionName(student.attempt),
                 ].filter(Boolean).join(" · "),
                 scorePercentage: student.scorePercentage,
+                hasPerformanceScore: student.hasPerformanceScore,
                 attempt: student.attempt,
             }))
             .filter(student => {
@@ -837,10 +1187,32 @@ export default function ExamAnalyticsTab({
 
     const scopedLabelAnalytics = useMemo(() => {
         if (!selectedExam || examAttempts.length === 0) return [];
+        if (requiresCanonicalSnapshot) {
+            if (canonicalSnapshot?.status !== "ready") return [];
+            const byLabel = new Map<string, { correct: number; total: number; time: number; timed: number }>();
+            for (const stat of canonicalSnapshot.questionStats) {
+                const label = stat.label || "일반";
+                const current = byLabel.get(label) || { correct: 0, total: 0, time: 0, timed: 0 };
+                current.correct += stat.correctCount;
+                current.total += stat.totalCount;
+                if (typeof stat.averageTimeSec === "number") {
+                    current.time += stat.averageTimeSec * stat.totalCount;
+                    current.timed += stat.totalCount;
+                }
+                byLabel.set(label, current);
+            }
+            return [...byLabel].map(([label, value]) => ({
+                label,
+                correctRate: safeRatePercent(value.correct, value.total),
+                wrongRate: safeRatePercent(value.total - value.correct, value.total),
+                totalCount: value.total,
+                averageTimeSec: value.timed > 0 ? Math.round(value.time / value.timed) : 0,
+            }));
+        }
         const results = collectQuestionResults(selectedExam, examAttempts, {
             groupKey: analysisScope === "class" ? activeClassKey : undefined,
             studentKey: analysisScope === "student" ? activeStudentKey : undefined,
-        });
+        }, analyticsIndex);
         return buildQuestionResultTagStats(results, "label").map(stat => ({
             label: stat.title,
             correctRate: stat.correctRate,
@@ -848,30 +1220,56 @@ export default function ExamAnalyticsTab({
             totalCount: stat.totalCount,
             averageTimeSec: stat.averageTimeSec,
         }));
-    }, [activeClassKey, activeStudentKey, analysisScope, examAttempts, selectedExam]);
+    }, [activeClassKey, activeStudentKey, analysisScope, analyticsIndex, canonicalSnapshot, examAttempts, requiresCanonicalSnapshot, selectedExam]);
 
     const studentWeaknessByAttemptId = useMemo(() => {
         const map = new Map<string, LearningRecommendation>();
+        if (activeWorkspaceView !== "students" || !advancedAnalyticsEnabled) return map;
         if (!selectedExam || examAttempts.length === 0) return map;
+        if (requiresCanonicalSnapshot) {
+            for (const student of studentScores) {
+                if (student.topWeakness) map.set(student.attempt.id, student.topWeakness);
+            }
+            return map;
+        }
 
+        const attemptsByStudentKey = new Map<string, typeof examAttempts>();
         for (const attempt of examAttempts) {
+            if (!hasGradableAttemptScore(summarizeAttemptScore(selectedExam, attempt))) continue;
             const studentKey = studentScopeKeyForAttempt(attempt);
-            const topGroup = buildLearningRecommendations(selectedExam, examAttempts, {
+            const bucket = attemptsByStudentKey.get(studentKey) || [];
+            bucket.push(attempt);
+            attemptsByStudentKey.set(studentKey, bucket);
+        }
+
+        for (const [studentKey, studentAttempts] of attemptsByStudentKey) {
+            const topGroup = buildLearningRecommendations(selectedExam, studentAttempts, {
                 scope: "student",
                 studentKey,
                 kinds: ["concept"],
                 limit: 1,
-            })[0];
-            if (topGroup) map.set(attempt.id, topGroup);
+            }, analyticsIndex)[0];
+            if (!topGroup) continue;
+            for (const attempt of studentAttempts) map.set(attempt.id, topGroup);
         }
 
         return map;
-    }, [selectedExam, examAttempts]);
+    }, [activeWorkspaceView, advancedAnalyticsEnabled, analyticsIndex, examAttempts, requiresCanonicalSnapshot, selectedExam, studentScores]);
 
     const scopedWeaknessGroups = useMemo(() => {
         // Feeds the Pro-gated 분석 컷 전환 section only.
         if (!advancedAnalyticsEnabled) return [];
         if (!selectedExam || examAttempts.length === 0) return [];
+
+        if (requiresCanonicalSnapshot) {
+            if (canonicalSnapshot?.status !== "ready") return [];
+            if (analysisScope === "class") {
+                return canonicalSnapshot.classMatrix
+                    .find(row => row.groupKey === activeClassKey)?.recommendations || [];
+            }
+            if (analysisScope === "student") return [];
+            return canonicalSnapshot.recommendations.slice(0, 5);
+        }
 
         if (analysisScope === "class") {
             if (!activeClassKey) return [];
@@ -880,7 +1278,7 @@ export default function ExamAnalyticsTab({
                 groupKey: activeClassKey,
                 kinds: ["concept"],
                 limit: 5,
-            });
+            }, analyticsIndex);
         }
 
         if (analysisScope === "student") {
@@ -890,24 +1288,24 @@ export default function ExamAnalyticsTab({
                 studentKey: activeStudentKey,
                 kinds: ["concept", "mistakeType"],
                 limit: 6,
-            });
+            }, analyticsIndex);
         }
 
         return examTypeWeaknessGroups.slice(0, 5);
-    }, [activeClassKey, activeStudentKey, advancedAnalyticsEnabled, analysisScope, examAttempts, examTypeWeaknessGroups, selectedExam]);
+    }, [activeClassKey, activeStudentKey, advancedAnalyticsEnabled, analysisScope, analyticsIndex, canonicalSnapshot, examAttempts, examTypeWeaknessGroups, requiresCanonicalSnapshot, selectedExam]);
 
     const scopedSummary = useMemo(() => {
         if (analysisScope === "class") {
             const selected = classScopeOptions.find(group => group.key === activeClassKey);
             return selected
-                ? `${selected.label} · 제출 ${selected.attemptCount}건 · 평균 ${selected.averageScoreRate}% · 참여 ${formatParticipationRateLabel(selected.participationRate)}${selected.missingStudentCount > 0 ? ` · 미응시 ${selected.missingStudentCount}명` : ""}`
+                ? `${selected.label} · 제출 ${selected.attemptCount}건 · 평균 ${selected.averageScoreRate === null ? "미채점" : `${selected.averageScoreRate}%`} · 참여 ${formatParticipationRateLabel(selected.participationRate)}${selected.missingStudentCount > 0 ? ` · 미응시 ${selected.missingStudentCount}명` : ""}`
                 : "반 정보가 있는 제출이 없습니다.";
         }
 
         if (analysisScope === "student") {
             const selected = studentScopeOptions.find(student => student.key === activeStudentKey);
             return selected
-                ? `${selected.label} · 점수 ${selected.scorePercentage}%`
+                ? `${selected.label} · ${selected.hasPerformanceScore ? `점수 ${selected.scorePercentage}%` : "미채점"}`
                 : "학생 제출이 없습니다.";
         }
 
@@ -928,10 +1326,13 @@ export default function ExamAnalyticsTab({
         // Feeds Pro-gated UI only — skip when locked.
         if (!advancedAnalyticsEnabled) return [];
         if (!selectedExam || examAttempts.length === 0) return [];
-        return buildSimilarQuestionGroups(selectedExam, examAttempts)
+        if (requiresCanonicalSnapshot) return canonicalSnapshot?.status === "ready"
+            ? canonicalSnapshot.similarQuestionGroups.filter(group => group.wrongCount > 0).slice(0, 6)
+            : [];
+        return buildSimilarQuestionGroups(selectedExam, examAttempts, analyticsIndex)
             .filter(group => group.wrongCount > 0)
             .slice(0, 6);
-    }, [advancedAnalyticsEnabled, selectedExam, examAttempts]);
+    }, [advancedAnalyticsEnabled, analyticsIndex, canonicalSnapshot, examAttempts, requiresCanonicalSnapshot, selectedExam]);
 
     const behaviorRows = useMemo(() => {
         // Feeds the Pro-gated 풀이 행동 신호 section only.
@@ -962,8 +1363,15 @@ export default function ExamAnalyticsTab({
         setSelectedExamId(exam.id);
         setInputValue(exam.title);
         setIsSelectOpen(false);
+        setActiveOptionIndex(-1);
         setSelectedClassKey("");
         setSelectedStudentKey("");
+    };
+
+    const moveActiveOptionFromKeyboard = (nextIndex: number) => {
+        if (nextIndex === activeOptionIndex) return;
+        shouldScrollActiveOptionRef.current = true;
+        setActiveOptionIndex(nextIndex);
     };
 
     const handleSort = (field: 'name' | 'score') => {
@@ -977,28 +1385,7 @@ export default function ExamAnalyticsTab({
 
     const handleExportCSV = (student: typeof studentScores[0]) => {
         if (!selectedExam) return;
-
-        const resultsByQuestionId = new Map(getAttemptQuestionResults(selectedExam, student.attempt).map(result => [result.questionId, result]));
-        const rows: unknown[][] = [["문항 번호", "라벨(장르)", "배점", "학생 선택", "정답", "정오"]];
-
-        selectedExam.questions.forEach((q, i) => {
-            const result = resultsByQuestionId.get(q.id);
-            rows.push([
-                q.number || i + 1,
-                result?.label || q.label || '일반',
-                result?.score ?? 0,
-                result?.selectedAnswer ?? '-',
-                result?.correctAnswer ?? '-',
-                resultStatusLabel(result),
-            ]);
-        });
-
-        rows.push([]);
-        rows.push(["장르별 통계"]);
-        rows.push(["장르", "획득 점수", "만점"]);
-        Object.entries(student.labelScores).forEach(([label, data]) => {
-            rows.push([label, roundScoreValue(data.earned), roundScoreValue(data.total)]);
-        });
+        const rows = student.questionCsvRows || buildStudentQuestionAnalysisCsvRows(student);
 
         const csvContent = `${serializeCsvRows(rows)}\n`;
         const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1009,6 +1396,22 @@ export default function ExamAnalyticsTab({
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
+    const handleExportQuestionCohortCSV = () => {
+        if (!selectedExam || canonicalSnapshot?.status !== "ready") return;
+        const rows = teacherCanonicalQuestionCohortCsvRows(canonicalSnapshot);
+        if (rows.length <= 1) return;
+        const csvContent = `${serializeCsvRows(rows)}\n`;
+        const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${selectedExam.title}_제출정의_문항분석.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
         URL.revokeObjectURL(url);
     };
 
@@ -1052,7 +1455,30 @@ export default function ExamAnalyticsTab({
                         <MapPin size={14} aria-hidden="true" />
                         {activeRegionLabel} · 본시험 제출 기준
                     </div>
+                    {canonicalSnapshot?.status === "ready" && canonicalSnapshot.csvQuestionCohorts.length > 0 && (
+                        <button type="button" className="btn btn-secondary" onClick={handleExportQuestionCohortCSV}>
+                            <Download size={14} aria-hidden="true" /> 제출 정의 CSV
+                        </button>
+                    )}
                 </div>
+
+                {requiresCanonicalSnapshot && (!canonicalSnapshot || canonicalSnapshot.status !== "ready") && (
+                    <div role="alert" className={styles.scopeNote}>
+                        공식 문항 분석 근거를 확인하지 못했습니다. 총점 요약만 표시하며 문항 통계와 CSV는 사용할 수 없습니다.
+                    </div>
+                )}
+                {canonicalSnapshot?.status === "ready" && !canonicalSnapshot.advancedAggregatesComplete && (
+                    <div role="status" className={styles.scopeNote}>
+                        최대 제출 규모 안전 경계로 기본 문항 통계만 표시합니다. 반·학생별 고급 추천 분석은 사용할 수 없습니다.
+                    </div>
+                )}
+                {canonicalSnapshot?.status === "ready"
+                    && canonicalSnapshot.questionStats.length > 0
+                    && canonicalSnapshot.retakeEligibleCohortKeys.length === 0 && (
+                    <div role="status" className={styles.scopeNote}>
+                        제출 당시 문항 정의가 현재 시험과 달라 공식 재시험 링크를 만들 수 없습니다.
+                    </div>
+                )}
 
                 <div className={styles.controlRow}>
                     <div className={styles.field} ref={dropdownRef}>
@@ -1066,25 +1492,66 @@ export default function ExamAnalyticsTab({
                                 aria-autocomplete="list"
                                 aria-expanded={isSelectOpen}
                                 aria-controls="exam-analytics-options"
+                                aria-activedescendant={isSelectOpen && activeOptionIndex >= 0 && filteredExams[activeOptionIndex]
+                                    ? `exam-analytics-option-${activeOptionIndex}`
+                                    : undefined}
                                 value={inputValue}
                                 onChange={(event) => {
-                                    setInputValue(event.target.value);
+                                    const nextInputValue = event.target.value;
+                                    const hasMatchingExam = exams.some(exam => (
+                                        exam.title.toLowerCase().includes(nextInputValue.toLowerCase())
+                                    ));
+                                    setInputValue(nextInputValue);
                                     setIsSelectOpen(true);
+                                    setActiveOptionIndex(hasMatchingExam ? 0 : -1);
                                 }}
                                 onFocus={() => {
                                     setIsSelectOpen(true);
+                                    setActiveOptionIndex(exams.length > 0 ? 0 : -1);
                                     const currentExam = exams.find(exam => exam.id === selectedExamId);
                                     if (currentExam && inputValue === currentExam.title) setInputValue("");
                                 }}
                                 onKeyDown={(event) => {
+                                    const lastOptionIndex = filteredExams.length - 1;
+                                    if (event.key === "ArrowDown" && lastOptionIndex >= 0) {
+                                        event.preventDefault();
+                                        setIsSelectOpen(true);
+                                        moveActiveOptionFromKeyboard(activeOptionIndex < 0
+                                            ? 0
+                                            : Math.min(activeOptionIndex + 1, lastOptionIndex));
+                                        return;
+                                    }
+                                    if (event.key === "ArrowUp" && lastOptionIndex >= 0) {
+                                        event.preventDefault();
+                                        setIsSelectOpen(true);
+                                        moveActiveOptionFromKeyboard(activeOptionIndex < 0
+                                            ? lastOptionIndex
+                                            : Math.max(activeOptionIndex - 1, 0));
+                                        return;
+                                    }
+                                    if (event.key === "Home" && lastOptionIndex >= 0) {
+                                        event.preventDefault();
+                                        setIsSelectOpen(true);
+                                        moveActiveOptionFromKeyboard(0);
+                                        return;
+                                    }
+                                    if (event.key === "End" && lastOptionIndex >= 0) {
+                                        event.preventDefault();
+                                        setIsSelectOpen(true);
+                                        moveActiveOptionFromKeyboard(lastOptionIndex);
+                                        return;
+                                    }
                                     if (event.key === "Escape") {
+                                        event.preventDefault();
                                         setIsSelectOpen(false);
+                                        setActiveOptionIndex(-1);
                                         const currentExam = exams.find(exam => exam.id === selectedExamId);
                                         if (currentExam) setInputValue(currentExam.title);
+                                        return;
                                     }
-                                    if (event.key === "Enter" && isSelectOpen && filteredExams[0]) {
+                                    if (event.key === "Enter" && isSelectOpen && filteredExams[activeOptionIndex]) {
                                         event.preventDefault();
-                                        handleSelectExam(filteredExams[0]);
+                                        handleSelectExam(filteredExams[activeOptionIndex]);
                                     }
                                 }}
                                 placeholder="시험을 검색하거나 선택하세요"
@@ -1098,13 +1565,16 @@ export default function ExamAnalyticsTab({
 
                         {isSelectOpen && (
                             <div id="exam-analytics-options" role="listbox" className={styles.dropdown}>
-                                {filteredExams.length > 0 ? filteredExams.map(exam => (
+                                {filteredExams.length > 0 ? filteredExams.map((exam, index) => (
                                     <button
                                         key={exam.id}
+                                        id={`exam-analytics-option-${index}`}
                                         type="button"
                                         role="option"
-                                        aria-selected={exam.id === selectedExamId}
-                                        className={`${styles.dropdownOption} ${exam.id === selectedExamId ? styles.dropdownOptionSelected : ""}`}
+                                        tabIndex={-1}
+                                        aria-selected={index === activeOptionIndex}
+                                        className={`${styles.dropdownOption} ${index === activeOptionIndex ? styles.dropdownOptionSelected : ""}`}
+                                        onMouseEnter={() => setActiveOptionIndex(index)}
                                         onMouseDown={(event) => {
                                             event.preventDefault();
                                             handleSelectExam(exam);
@@ -1158,6 +1628,34 @@ export default function ExamAnalyticsTab({
                         </div>
                     </div>
                 </div>
+
+                {sampleStatusCopy ? (
+                    <p
+                        id={EXAM_ANALYTICS_SAMPLE_QUALIFIER_ID}
+                        className={styles.reportSampleNote}
+                        role="status"
+                    >
+                        {sampleStatusCopy}
+                    </p>
+                ) : null}
+
+                {(excludedGradingEvidence.legacy > 0 || excludedGradingEvidence.incomplete > 0) && (
+                    <p
+                        role="status"
+                        style={{
+                            margin: 0,
+                            padding: '0.65rem 0.8rem',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid color-mix(in srgb, var(--warning) 45%, var(--border))',
+                            background: 'color-mix(in srgb, var(--warning) 10%, var(--surface))',
+                            color: 'var(--text-warning)',
+                            fontSize: '0.78rem',
+                            fontWeight: 800,
+                        }}
+                    >
+                        과거 기록 기반 참고 분석 {excludedGradingEvidence.legacy}건과 근거 불완전 기록 {excludedGradingEvidence.incomplete}건은 공식 문항·유형 집계에서 제외했습니다.
+                    </p>
+                )}
 
                 <div className={styles.tabs} role="tablist" aria-label="시험 통계 보기 전환">
                     {[
@@ -1222,8 +1720,7 @@ export default function ExamAnalyticsTab({
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: '0.8rem' }}>
                         {visibleRegionalActionPlans.map(plan => {
                             const recommendation = plan.recommendations[0];
-                            const href = recommendation && buildRetakeHref(
-                                selectedExam.id,
+                            const href = recommendation && buildAnalyticsRetakeHref(
                                 recommendation.sourceAttemptId,
                                 recommendation.retakeQuestionIds,
                                 recommendation.retakeMode,
@@ -1247,7 +1744,7 @@ export default function ExamAnalyticsTab({
                                                 {plan.regionName}
                                             </div>
                                             <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 800 }}>
-                                                제출 {plan.attemptCount}건 · 평균 {plan.averageScore}점 · 오답 {plan.wrongQuestionCount}문항
+                                                제출 {plan.attemptCount}건 · 평균 {plan.averageScore === null ? "미채점" : `${plan.averageScore}점`} · 오답 {plan.wrongQuestionCount}문항
                                             </div>
                                         </div>
                                         <span style={{
@@ -1270,7 +1767,7 @@ export default function ExamAnalyticsTab({
 
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
                                         <div style={{ fontSize: '0.74rem', color: 'var(--muted)', fontWeight: 800 }}>
-                                            주의 학생 {plan.studentsNeedingAttention.length}명
+                                            {plan.averageScore === null ? "주의 학생 근거 없음" : `주의 학생 ${plan.studentsNeedingAttention.length}명`}
                                             {recommendation ? ` · ${recommendation.wrongRate}% 취약` : ""}
                                         </div>
                                         {href && (
@@ -1665,7 +2162,17 @@ export default function ExamAnalyticsTab({
                         </div>
                     )}
 
-                    <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                    <p id="exam-question-db-scroll-hint" className={styles.scrollHint}>
+                        표가 화면보다 넓으면 좌우로 스크롤해 확인하세요.
+                    </p>
+                    <div
+                        role="region"
+                        tabIndex={0}
+                        aria-label="문항 DB 준비 상태 표"
+                        aria-describedby="exam-question-db-scroll-hint"
+                        className={styles.horizontalTableRegion}
+                        style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}
+                    >
                         <table style={{ width: '100%', minWidth: '720px', borderCollapse: 'collapse', textAlign: 'left' }}>
                             <thead style={{ background: 'var(--background)', color: 'var(--muted)', fontSize: '0.78rem' }}>
                                 <tr>
@@ -1730,265 +2237,26 @@ export default function ExamAnalyticsTab({
                             id="exam-analytics-panel-overview"
                             role="tabpanel"
                             aria-label="시험 통계 요약"
-                            className={styles.legacyStack}
+                            className={styles.reportOverviewPanel}
                         >
-                            <section className={styles.summaryPanel} aria-label="시험 핵심 지표">
-                                <div className={styles.scoreFocus}>
-                                    <div className={styles.gauge}>
-                                        <svg viewBox="0 0 180 112" aria-hidden="true">
-                                            <path
-                                                className={styles.gaugeTrack}
-                                                pathLength="100"
-                                                d="M 18 94 A 72 72 0 0 1 162 94"
-                                            />
-                                            <path
-                                                className={styles.gaugeValue}
-                                                pathLength="100"
-                                                strokeDasharray={`${gaugeReady ? Math.max(0, Math.min(100, examStats.avgScore)) : 0} 100`}
-                                                d="M 18 94 A 72 72 0 0 1 162 94"
-                                            />
-                                        </svg>
-                                        <div className={styles.scoreValue}>
-                                            <CountUp value={examStats.avgScore} suffix="점" delayMs={150} />
-                                        </div>
-                                        <div className={styles.scoreLabel}>전체 평균 점수</div>
-                                    </div>
-                                </div>
-
-                                <div className={styles.kpiRail}>
-                                    {[
-                                        { label: "응시", value: examStats.count, unit: "명" },
-                                        { label: "중앙값", value: examStats.medianScore, unit: "점" },
-                                        { label: "최고", value: examStats.maxScore, unit: "점" },
-                                        { label: "최저", value: examStats.minScore, unit: "점" },
-                                        { label: "평균 시간", value: formatSeconds(examStats.avgElapsedTimeSec), unit: "" },
-                                    ].map(item => (
-                                        <div key={item.label} className={styles.kpi}>
-                                            <span className={styles.kpiLabel}>{item.label}</span>
-                                            <strong>
-                                                {typeof item.value === "number" ? (
-                                                    <CountUp value={item.value} suffix={item.unit} delayMs={150} />
-                                                ) : (
-                                                    <>{item.value}<span>{item.unit}</span></>
-                                                )}
-                                            </strong>
-                                        </div>
-                                    ))}
-                                </div>
-                            </section>
-
-                            <div className={styles.overviewGrid}>
-                                <section className={styles.panel} aria-labelledby="score-distribution-title">
-                                    <div className={styles.panelHeading}>
-                                        <div>
-                                            <h3 id="score-distribution-title">
-                                                <BarChart2 size={17} aria-hidden="true" />
-                                                점수 분포
-                                            </h3>
-                                            <p>10점 구간별 응시 인원 · 표준편차 {examStats.standardDeviation}</p>
-                                        </div>
-                                        <span className={styles.legend}>평균 {examStats.avgScore}점</span>
-                                    </div>
-                                    <div className={styles.chart}>
-                                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={270} initialDimension={{ width: 760, height: 270 }}>
-                                            <BarChart data={examStats.distributionBuckets} margin={{ top: 22, right: 10, left: -14, bottom: 0 }}>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
-                                                <XAxis
-                                                    dataKey="label"
-                                                    axisLine={false}
-                                                    tickLine={false}
-                                                    tick={{ fill: 'var(--muted)', fontSize: 11, fontWeight: 650 }}
-                                                />
-                                                <YAxis
-                                                    allowDecimals={false}
-                                                    axisLine={false}
-                                                    tickLine={false}
-                                                    tick={{ fill: 'var(--muted)', fontSize: 11 }}
-                                                />
-                                                <RechartsTooltip
-                                                    cursor={{ fill: 'color-mix(in srgb, var(--primary) 6%, transparent)' }}
-                                                    contentStyle={{
-                                                        borderRadius: 10,
-                                                        border: '1px solid var(--border)',
-                                                        boxShadow: 'var(--shadow-md)',
-                                                        background: 'var(--surface)',
-                                                        color: 'var(--foreground)',
-                                                        fontSize: 12,
-                                                    }}
-                                                    formatter={(value: number | string | undefined) => [`${value}명`, '응시 인원']}
-                                                    labelFormatter={(label) => `${label}점`}
-                                                />
-                                                {averageDistributionLabel && (
-                                                    <ReferenceLine
-                                                        x={averageDistributionLabel}
-                                                        stroke="var(--primary)"
-                                                        strokeDasharray="4 4"
-                                                        strokeWidth={1.5}
-                                                        label={{ value: `평균 ${examStats.avgScore}`, position: 'top', fill: 'var(--primary)', fontSize: 11, fontWeight: 800 }}
-                                                    />
-                                                )}
-                                                <Bar
-                                                    dataKey="count"
-                                                    fill="var(--primary-light)"
-                                                    maxBarSize={52}
-                                                    isAnimationActive={false}
-                                                    shape={<WaveBar radius={5} />}
-                                                />
-                                            </BarChart>
-                                        </ResponsiveContainer>
-                                    </div>
-                                </section>
-
-                                {teachingInsights && (
-                                    <section className={`${styles.panel} ${styles.actionPanel}`} aria-labelledby="teaching-actions-title">
-                                        <div className={styles.panelHeading}>
-                                            <div>
-                                                <h3 id="teaching-actions-title">
-                                                    <Lightbulb size={17} aria-hidden="true" />
-                                                    오늘의 수업 액션
-                                                </h3>
-                                                <p>우선순위가 높은 진단만 모았습니다.</p>
-                                            </div>
-                                        </div>
-
-                                        <div className={styles.actionList}>
-                                            <button type="button" className={styles.actionRow} onClick={() => setActiveWorkspaceView("questions")}>
-                                                <span className={`${styles.actionIcon} ${styles.actionIconDanger}`}>
-                                                    <Target size={18} aria-hidden="true" />
-                                                </span>
-                                                <span className={styles.actionCopy}>
-                                                    <strong>취약 개념 보강 · {teachingInsights.weakConcept?.concept || "데이터 확인"}</strong>
-                                                    <small>{teachingInsights.actionCopy}</small>
-                                                </span>
-                                                <span className={styles.actionSeverity}>높음</span>
-                                            </button>
-                                            <button type="button" className={styles.actionRow} onClick={() => setActiveWorkspaceView("questions")}>
-                                                <span className={`${styles.actionIcon} ${styles.actionIconWarning}`}>
-                                                    <AlertTriangle size={18} aria-hidden="true" />
-                                                </span>
-                                                <span className={styles.actionCopy}>
-                                                    <strong>문항 품질 {teachingInsights.riskyQuestions.length + teachingInsights.tooEasyCount}개 점검</strong>
-                                                    <small>변별 약함 {teachingInsights.weakDiscriminationCount}개 · 지나치게 쉬움 {teachingInsights.tooEasyCount}개</small>
-                                                </span>
-                                                <span className={`${styles.actionSeverity} ${styles.actionSeverityWarning}`}>점검</span>
-                                            </button>
-                                            <button type="button" className={styles.actionRow} onClick={() => setActiveWorkspaceView("students")}>
-                                                <span className={`${styles.actionIcon} ${styles.actionIconSuccess}`}>
-                                                    <Users size={18} aria-hidden="true" />
-                                                </span>
-                                                <span className={styles.actionCopy}>
-                                                    <strong>지원이 필요한 학생 {teachingInsights.lowStudents.length}명</strong>
-                                                    <small>60~79점 경계 구간 {teachingInsights.borderlineStudents.length}명 · 심화 {teachingInsights.advancedStudents.length}명</small>
-                                                </span>
-                                                <span className={`${styles.actionSeverity} ${styles.actionSeveritySuccess}`}>학생</span>
-                                            </button>
-                                        </div>
-
-                                        {overviewRetakeHref ? (
-                                            <PremiumActionLink
-                                                enabled={retakeAssignmentsEnabled}
-                                                href={overviewRetakeHref}
-                                                className={styles.primaryAction}
-                                                lockedTitle="Pro 이상에서 취약 문항 보강 세트를 만들 수 있습니다."
-                                            >
-                                                보강 세트 만들기
-                                                <ArrowRight size={15} aria-hidden="true" />
-                                            </PremiumActionLink>
-                                        ) : (
-                                            <button type="button" className={styles.primaryAction} onClick={() => setActiveWorkspaceView("questions")}>
-                                                취약 문항 보기
-                                                <ArrowRight size={15} aria-hidden="true" />
-                                            </button>
-                                        )}
-                                    </section>
-                                )}
-                            </div>
-
-                            <div className={styles.detailGrid}>
-                                <section className={styles.panel} aria-labelledby="weak-questions-title">
-                                    <div className={styles.panelHeading}>
-                                        <div>
-                                            <h3 id="weak-questions-title">
-                                                <AlertTriangle size={17} aria-hidden="true" />
-                                                취약 문항 TOP 5
-                                            </h3>
-                                            <p>정답률이 낮은 순서로 바로 확인합니다.</p>
-                                        </div>
-                                    </div>
-                                    <div className={styles.tableWrap}>
-                                        <table className={styles.weakTable}>
-                                            <thead>
-                                                <tr>
-                                                    <th>문항</th>
-                                                    <th>개념</th>
-                                                    <th>정답률</th>
-                                                    <th>가장 많이 선택한 오답</th>
-                                                    <th>액션</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {questionAnalytics.slice(0, 5).map(question => (
-                                                    <tr key={question.id}>
-                                                        <td>{question.index}번</td>
-                                                        <td>{question.concept}</td>
-                                                        <td>
-                                                            <span className={question.correctRate < 40 ? styles.rateDanger : styles.rateWarning}>
-                                                                {question.correctRate}%
-                                                            </span>
-                                                        </td>
-                                                        <td>
-                                                            {question.topWrongOption
-                                                                ? `${question.topWrongOption.option}번 · ${question.topWrongOption.rate}%`
-                                                                : "오답 없음"}
-                                                        </td>
-                                                        <td>
-                                                            <button type="button" className={styles.rowAction} onClick={() => setActiveWorkspaceView("questions")}>
-                                                                문항 분석
-                                                                <ChevronRight size={14} aria-hidden="true" />
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </section>
-
-                                <section className={`${styles.panel} ${styles.bandPanel}`} aria-labelledby="achievement-bands-title">
-                                    <div className={styles.panelHeading}>
-                                        <div>
-                                            <h3 id="achievement-bands-title">
-                                                <Users size={17} aria-hidden="true" />
-                                                학생 성취도 분포
-                                            </h3>
-                                            <p>지원 대상을 점수 구간으로 빠르게 나눕니다.</p>
-                                        </div>
-                                    </div>
-                                    <div className={styles.bandChart} aria-label="학생 점수 구간 분포">
-                                        {studentAchievementBands.map(band => band.count > 0 && (
-                                            <div
-                                                key={band.key}
-                                                className={styles.bandSegment}
-                                                style={{ flexBasis: `${Math.max(8, band.rate)}%`, background: band.color }}
-                                                title={`${band.label}: ${band.count}명 (${band.rate}%)`}
-                                            >
-                                                {band.rate}%
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className={styles.bandLegend}>
-                                        {studentAchievementBands.map(band => (
-                                            <div key={band.key} className={styles.bandLegendItem}>
-                                                <strong>{band.count}명</strong>
-                                                <span>{band.label}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className={styles.bandSummary}>
-                                        <strong>평균 {examStats.avgScore}점</strong> · 80점 미만 학생은 학생·반 탭에서 개별 약점과 재시험 이력을 확인할 수 있습니다.
-                                    </div>
-                                </section>
-                            </div>
+                            <ExamAnalyticsReportOverview
+                                metrics={overviewMetrics}
+                                headline={overviewHeadline}
+                                distribution={examStats.distributionBuckets}
+                                weakQuestions={overviewWeakQuestions}
+                                achievementBands={studentAchievementBands.map(band => ({
+                                    key: band.key,
+                                    label: band.label,
+                                    count: band.count,
+                                    percent: band.rate,
+                                    tone: band.tone,
+                                }))}
+                                actions={overviewActions}
+                                hasPerformanceEvidence={examStats.performanceCount > 0}
+                                sampleStatusDescriptionId={sampleStatusCopy
+                                    ? EXAM_ANALYTICS_SAMPLE_QUALIFIER_ID
+                                    : undefined}
+                            />
                         </div>
                     )}
 
@@ -2077,7 +2345,7 @@ export default function ExamAnalyticsTab({
                                     {studentScopeOptions.length > 0 ? (
                                         studentScopeOptions.map(student => (
                                             <option key={student.key} value={student.key}>
-                                                {student.label} ({student.scorePercentage}%)
+                                                {student.label} ({student.hasPerformanceScore ? `${student.scorePercentage}%` : "미채점"})
                                             </option>
                                         ))
                                     ) : (
@@ -2123,10 +2391,11 @@ export default function ExamAnalyticsTab({
                                             </div>
                                             <PremiumActionLink
                                                 enabled={retakeAssignmentsEnabled}
-                                                href={buildRetakeHref(selectedExamId, group.sourceAttemptId, retakeIds, group.retakeMode, {
+                                                href={buildAnalyticsRetakeHref(group.sourceAttemptId, retakeIds, group.retakeMode, {
                                                     labels: group.retakeLabels,
                                                     concepts: group.retakeConcepts,
-                                                })}
+                                                }) || "#"}
+                                                unavailableReason={!buildAnalyticsRetakeHref(group.sourceAttemptId, retakeIds, group.retakeMode) ? "제출 정의 변경 · 재시험 불가" : undefined}
                                                 className="btn btn-secondary"
                                                 style={{ fontSize: '0.76rem', padding: '0.38rem 0.7rem', justifySelf: 'start' }}
                                                 lockedTitle="Pro 이상에서 분석 컷 기준 재시험을 만들 수 있습니다."
@@ -2250,7 +2519,17 @@ export default function ExamAnalyticsTab({
                                 <StatusPill tone="success" size="sm" label="Class cut" />
                             </div>
 
-                            <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                            <p id="exam-class-matrix-scroll-hint" className={styles.scrollHint}>
+                                표가 화면보다 넓으면 좌우로 스크롤해 확인하세요.
+                            </p>
+                            <div
+                                role="region"
+                                tabIndex={0}
+                                aria-label="반별 시험 분석 매트릭스 표"
+                                aria-describedby="exam-class-matrix-scroll-hint"
+                                className={styles.horizontalTableRegion}
+                                style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}
+                            >
                                 <table style={{ width: '100%', minWidth: '860px', borderCollapse: 'collapse', textAlign: 'left', fontVariantNumeric: 'tabular-nums' }}>
                                     <thead style={{ background: 'var(--background)', color: 'var(--muted)', fontSize: '0.78rem' }}>
                                         <tr>
@@ -2295,19 +2574,38 @@ export default function ExamAnalyticsTab({
                                                     <td style={{ padding: '0.85rem 0.9rem' }}>
                                                         <span style={{
                                                             fontWeight: 900,
-                                                            color: row.averageScorePercent < 60 ? 'var(--error)' : row.averageScorePercent < 80 ? 'var(--warning)' : 'var(--success)',
+                                                            color: row.averageScorePercent === null
+                                                                ? 'var(--muted)'
+                                                                : row.averageScorePercent < 60
+                                                                    ? 'var(--error)'
+                                                                    : row.averageScorePercent < 80
+                                                                        ? 'var(--warning)'
+                                                                        : 'var(--success)',
                                                         }}>
-                                                            {row.averageScorePercent}%
+                                                            {row.averageScorePercent === null ? '미채점' : `${row.averageScorePercent}%`}
                                                         </span>
-                                                    </td>
-                                                    <td style={{ padding: '0.85rem 0.9rem' }}>
-                                                        <div style={{ fontWeight: 900, color: pressureColor }}>{row.wrongRate}%</div>
-                                                        <div style={{ fontSize: '0.74rem', color: 'var(--muted)', marginTop: '0.15rem' }}>
-                                                            {row.wrongCount}/{row.totalCount}
+                                                        <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: '0.16rem' }}>
+                                                            채점 {row.performanceCount}명
                                                         </div>
                                                     </td>
+                                                    <td style={{ padding: '0.85rem 0.9rem' }}>
+                                                        {row.totalCount > 0 ? (
+                                                            <>
+                                                                <div style={{ fontWeight: 900, color: pressureColor }}>{row.wrongRate}%</div>
+                                                                <div style={{ fontSize: '0.74rem', color: 'var(--muted)', marginTop: '0.15rem' }}>
+                                                                    {row.wrongCount}/{row.totalCount}
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <span style={{ color: 'var(--muted)', fontWeight: 800 }}>근거 없음</span>
+                                                        )}
+                                                    </td>
                                                     <td style={{ padding: '0.85rem 0.9rem', color: 'var(--muted)', fontWeight: 800 }}>
-                                                        {row.focusQuestionNumbers.length > 0 ? `${row.focusQuestionNumbers.join(', ')}번` : '안정'}
+                                                        {row.totalCount === 0
+                                                            ? '미채점'
+                                                            : row.focusQuestionNumbers.length > 0
+                                                                ? `${row.focusQuestionNumbers.join(', ')}번`
+                                                                : '안정'}
                                                     </td>
                                                     <td style={{ padding: '0.85rem 0.9rem' }}>
                                                         {topRecommendation ? (
@@ -2317,6 +2615,8 @@ export default function ExamAnalyticsTab({
                                                                     {topRecommendation.basis} · {topRecommendation.wrongRate}%
                                                                 </div>
                                                             </div>
+                                                        ) : row.totalCount === 0 ? (
+                                                            <span style={{ color: 'var(--muted)', fontSize: '0.8rem', fontWeight: 900 }}>근거 없음</span>
                                                         ) : (
                                                             <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 900 }}>추가 보강 없음</span>
                                                         )}
@@ -2325,16 +2625,19 @@ export default function ExamAnalyticsTab({
                                                         {topRecommendation && retakeIds.length > 0 ? (
                                                             <PremiumActionLink
                                                                 enabled={retakeAssignmentsEnabled}
-                                                                href={buildRetakeHref(selectedExamId, topRecommendation.sourceAttemptId, retakeIds, topRecommendation.retakeMode, {
+                                                                href={buildAnalyticsRetakeHref(topRecommendation.sourceAttemptId, retakeIds, topRecommendation.retakeMode, {
                                                                     labels: topRecommendation.retakeLabels,
                                                                     concepts: topRecommendation.retakeConcepts,
-                                                                })}
+                                                                }) || "#"}
+                                                                unavailableReason={!buildAnalyticsRetakeHref(topRecommendation.sourceAttemptId, retakeIds, topRecommendation.retakeMode) ? "제출 정의 변경 · 재시험 불가" : undefined}
                                                                 className="btn btn-secondary"
                                                                 style={{ fontSize: '0.74rem', padding: '0.34rem 0.65rem', whiteSpace: 'nowrap' }}
                                                                 lockedTitle="Pro 이상에서 반별 재시험 세트를 만들 수 있습니다."
                                                             >
                                                                 반별 세트
                                                             </PremiumActionLink>
+                                                        ) : row.totalCount === 0 ? (
+                                                            <span style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 800 }}>미채점</span>
                                                         ) : (
                                                             <span style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 800 }}>유지</span>
                                                         )}
@@ -2369,7 +2672,7 @@ export default function ExamAnalyticsTab({
                                         {examTypeWeaknessGroups.map(group => {
                                             const retakeIds = group.retakeQuestionIds;
                                             return (
-                                                <div key={group.key} style={{
+                                                <div key={group.key} className="exam-type-recommendation-row" style={{
                                                     display: 'flex',
                                                     alignItems: 'center',
                                                     justifyContent: 'space-between',
@@ -2395,11 +2698,12 @@ export default function ExamAnalyticsTab({
                                                     </div>
                                                     <PremiumActionLink
                                                         enabled={retakeAssignmentsEnabled}
-                                                        href={buildRetakeHref(selectedExamId, group.sourceAttemptId, retakeIds, group.retakeMode, {
+                                                        href={buildAnalyticsRetakeHref(group.sourceAttemptId, retakeIds, group.retakeMode, {
                                                             labels: group.retakeLabels,
                                                             concepts: group.retakeConcepts,
-                                                        })}
-                                                        className="btn btn-secondary"
+                                                        }) || "#"}
+                                                        unavailableReason={!buildAnalyticsRetakeHref(group.sourceAttemptId, retakeIds, group.retakeMode) ? "제출 정의 변경 · 재시험 불가" : undefined}
+                                                        className="btn btn-secondary exam-type-recommendation-action"
                                                         style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem', whiteSpace: 'nowrap' }}
                                                         lockedTitle="Pro 이상에서 유형 재추천 링크를 만들 수 있습니다."
                                                     >
@@ -2450,10 +2754,11 @@ export default function ExamAnalyticsTab({
                                                     </div>
                                                     <PremiumActionLink
                                                         enabled={retakeAssignmentsEnabled}
-                                                        href={buildRetakeHref(selectedExamId, row.topGroup.sourceAttemptId, retakeIds, row.topGroup.retakeMode, {
+                                                        href={buildAnalyticsRetakeHref(row.topGroup.sourceAttemptId, retakeIds, row.topGroup.retakeMode, {
                                                             labels: row.topGroup.retakeLabels,
                                                             concepts: row.topGroup.retakeConcepts,
-                                                        })}
+                                                        }) || "#"}
+                                                        unavailableReason={!buildAnalyticsRetakeHref(row.topGroup.sourceAttemptId, retakeIds, row.topGroup.retakeMode) ? "제출 정의 변경 · 재시험 불가" : undefined}
                                                         className="btn btn-secondary"
                                                         style={{ fontSize: '0.74rem', padding: '0.32rem 0.6rem' }}
                                                         lockedTitle="Pro 이상에서 반 보강 재시험 세트를 만들 수 있습니다."
@@ -2515,10 +2820,11 @@ export default function ExamAnalyticsTab({
                                                 </div>
                                                 <PremiumActionLink
                                                     enabled={retakeAssignmentsEnabled}
-                                                    href={buildRetakeHref(selectedExamId, `exam:${selectedExamId}`, group.questionIds, "similar", {
+                                                    href={buildAnalyticsRetakeHref(`exam:${selectedExamId}`, group.questionIds, "similar", {
                                                         labels: group.labels,
                                                         concepts: group.concepts,
-                                                    })}
+                                                    }) || "#"}
+                                                    unavailableReason={!buildAnalyticsRetakeHref(`exam:${selectedExamId}`, group.questionIds, "similar") ? "제출 정의 변경 · 재시험 불가" : undefined}
                                                     className="btn btn-secondary"
                                                     style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem', whiteSpace: 'nowrap' }}
                                                     lockedTitle="Pro 이상에서 유사 유형 세트 재시험을 만들 수 있습니다."
@@ -2687,7 +2993,10 @@ export default function ExamAnalyticsTab({
                                                     }}
                                                     itemStyle={{ color: 'var(--primary)', fontWeight: 800, padding: 0 }}
                                                     labelStyle={{ color: 'var(--foreground)', marginBottom: '4px', fontSize: '0.82rem', fontWeight: 700 }}
-                                                    formatter={(value: number | string | undefined) => [`${value}%`, '정답률']}
+                                                    formatter={(value: ValueType | undefined) => [
+                                                        `${Array.isArray(value) ? value.join("–") : value}%`,
+                                                        '정답률',
+                                                    ]}
                                                 />
                                             </RadarChart>
                                         </ResponsiveContainer>
@@ -2747,22 +3056,33 @@ export default function ExamAnalyticsTab({
                                 오답률이 가장 높은 문항 Top 3
                             </h3>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                {topWrongQuestions.map((q, i) => {
+                                {topWrongQuestions.map((q) => {
                                     // Point-biserial r, same index as the 문항별 상세 table ("-" below n ≥ 5).
                                     const discriminationText = q.pointBiserial !== null ? q.pointBiserial.toFixed(2) : '-';
                                     return (
-                                    <div key={i} style={{
-                                        padding: '1rem',
-                                        borderRadius: 'var(--radius-md)',
-                                        background: 'var(--grade-red-soft)',
-                                        borderLeft: '4px solid var(--grade-red)',
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                        alignItems: 'center'
-                                    }}>
+                                    <div
+                                        key={q.cohortKey}
+                                        onClick={() => {
+                                            const el = document.getElementById(`question-row-${q.index}`);
+                                            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                        }}
+                                        className="card-hover"
+                                        style={{
+                                            padding: '1rem',
+                                            borderRadius: 'var(--radius-md)',
+                                            background: 'var(--grade-red-soft)',
+                                            borderLeft: '4px solid var(--grade-red)',
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.16s ease',
+                                        }}
+                                        title={`${q.index}번 문항 상세 분석으로 이동`}
+                                    >
                                         <div>
                                             <div style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--error)', marginBottom: '0.2rem' }}>
-                                                {q.index}번 문항 ({q.label})
+                                                {q.index}번 문항 ({q.label}){q.cohortLabel ? ` · ${q.cohortLabel}` : ""}
                                             </div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>
                                                 {q.topWrongOption && q.topWrongOption.rate > 0
@@ -2789,11 +3109,32 @@ export default function ExamAnalyticsTab({
 
                     {/* Detailed Question correct rate bar chart */}
                     <div className="card chart-card-enter" style={{ ...CARD_SURFACE_STYLE, padding: '1.5rem' }}>
-                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <CheckCircle size={18} color="var(--success)" />
-                            문항별 상세 정답률
-                        </h3>
-                        <div style={{ height: '300px', width: '100%', minWidth: 0, marginBottom: '2rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <CheckCircle size={18} color="var(--success)" />
+                                문항별 상세 정답률
+                            </h3>
+                            <div style={{ display: 'flex', gap: '0.85rem', flexWrap: 'wrap', alignItems: 'center', fontSize: '0.82rem' }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--grade-red)', fontWeight: 600 }}>
+                                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--grade-red)' }} />
+                                    킬러(&lt;40%): {questionCorrectRateChartData.filter(q => q.correctRate !== null && q.correctRate < 40).length}문항
+                                </span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--warning)', fontWeight: 600 }}>
+                                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--warning)' }} />
+                                    보통(40~69%): {questionCorrectRateChartData.filter(q => q.correctRate !== null && q.correctRate >= 40 && q.correctRate < 70).length}문항
+                                </span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--primary)', fontWeight: 600 }}>
+                                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--primary)' }} />
+                                    수월(≥70%): {questionCorrectRateChartData.filter(q => q.correctRate !== null && q.correctRate >= 70).length}문항
+                                </span>
+                            </div>
+                        </div>
+                        <div
+                            role="img"
+                            aria-label="문항별 상세 정답률"
+                            aria-describedby="exam-question-correct-rate-summary"
+                            style={{ height: '300px', width: '100%', minWidth: 0, marginBottom: '2rem' }}
+                        >
                             <ResponsiveContainer
                                 width="100%"
                                 height="100%"
@@ -2801,27 +3142,137 @@ export default function ExamAnalyticsTab({
                                 minHeight={300}
                                 initialDimension={{ width: 900, height: 300 }}
                             >
-                                <BarChart data={[...questionAnalytics].sort((a: { index: number }, b: { index: number }) => a.index - b.index)}>
+                                <BarChart data={questionCorrectRateChartData}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                                     <XAxis dataKey="index" tickFormatter={(v) => `${v}번`} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
                                     <YAxis domain={[0, 100]} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
                                     <RechartsTooltip
+                                        filterNull={false}
                                         cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }}
-                                        contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', background: 'var(--background)' }}
-                                        formatter={(value: number | string | undefined) => [`${value}%`, '정답률']}
-                                        labelFormatter={(label) => `${label}번 문항`}
+                                        content={<QuestionCorrectRateTooltip />}
                                     />
-                                    <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} shape={<WaveBar />} />
+                                    {avgQuestionCorrectRate !== null && (
+                                        <ReferenceLine
+                                            y={avgQuestionCorrectRate}
+                                            stroke="var(--primary)"
+                                            strokeDasharray="4 4"
+                                            strokeOpacity={0.7}
+                                            label={{
+                                                value: `전체 평균 ${avgQuestionCorrectRate}%`,
+                                                position: 'insideTopRight',
+                                                fill: 'var(--primary)',
+                                                fontSize: 11,
+                                                fontWeight: 600
+                                            }}
+                                        />
+                                    )}
+                                    <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} shape={<WaveBar />}>
+                                        {questionCorrectRateChartData.map((entry, idx) => {
+                                            const rate = entry.correctRate;
+                                            const cellColor = rate === null
+                                                ? "var(--muted)"
+                                                : rate < 40
+                                                ? "var(--grade-red)"
+                                                : rate < 70
+                                                ? "var(--warning)"
+                                                : "var(--primary)";
+                                            return <Cell key={`rate-cell-${entry.index}-${idx}`} fill={cellColor} />;
+                                        })}
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
+                        <p id="exam-question-correct-rate-summary" className="sr-only">
+                            {questionCorrectRateChartSummary}
+                        </p>
 
                         {/* Option Selection Rates Table */}
-                        <h4 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 700, marginTop: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <List size={16} color="var(--primary)" />
-                            세부사항: 문항별 선택률
-                        </h4>
-                        <div style={{ overflowX: 'auto' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.25rem', marginBottom: '0.75rem' }}>
+                            <h4 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <List size={16} color="var(--primary)" />
+                                세부사항: 문항별 선택률
+                            </h4>
+                            <div role="group" aria-label="문항 난이도 필터" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', background: 'var(--surface)', padding: '0.2rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setQuestionDifficultyFilter("all")}
+                                    style={{
+                                        border: 'none',
+                                        background: questionDifficultyFilter === 'all' ? 'var(--primary)' : 'transparent',
+                                        color: questionDifficultyFilter === 'all' ? '#fff' : 'var(--muted)',
+                                        fontWeight: questionDifficultyFilter === 'all' ? 700 : 500,
+                                        fontSize: '0.78rem',
+                                        padding: '0.25rem 0.6rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                >
+                                    전체 ({questionAnalytics.length})
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setQuestionDifficultyFilter("killer")}
+                                    style={{
+                                        border: 'none',
+                                        background: questionDifficultyFilter === 'killer' ? 'var(--grade-red)' : 'transparent',
+                                        color: questionDifficultyFilter === 'killer' ? '#fff' : 'var(--grade-red)',
+                                        fontWeight: questionDifficultyFilter === 'killer' ? 700 : 500,
+                                        fontSize: '0.78rem',
+                                        padding: '0.25rem 0.6rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                >
+                                    킬러 &lt;40%
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setQuestionDifficultyFilter("medium")}
+                                    style={{
+                                        border: 'none',
+                                        background: questionDifficultyFilter === 'medium' ? 'var(--warning)' : 'transparent',
+                                        color: questionDifficultyFilter === 'medium' ? '#fff' : 'var(--warning)',
+                                        fontWeight: questionDifficultyFilter === 'medium' ? 700 : 500,
+                                        fontSize: '0.78rem',
+                                        padding: '0.25rem 0.6rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                >
+                                    보통 40~69%
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setQuestionDifficultyFilter("easy")}
+                                    style={{
+                                        border: 'none',
+                                        background: questionDifficultyFilter === 'easy' ? 'var(--success)' : 'transparent',
+                                        color: questionDifficultyFilter === 'easy' ? '#fff' : 'var(--success)',
+                                        fontWeight: questionDifficultyFilter === 'easy' ? 700 : 500,
+                                        fontSize: '0.78rem',
+                                        padding: '0.25rem 0.6rem',
+                                        borderRadius: 'var(--radius-sm)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                >
+                                    수월 ≥70%
+                                </button>
+                            </div>
+                        </div>
+                        <p id="exam-question-detail-scroll-hint" className={styles.scrollHint}>
+                            표가 화면보다 넓으면 좌우로 스크롤해 확인하세요.
+                        </p>
+                        <div
+                            role="region"
+                            tabIndex={0}
+                            aria-label="문항별 상세 분석 표"
+                            aria-describedby="exam-question-detail-scroll-hint"
+                            className={styles.horizontalTableRegion}
+                        >
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '820px', fontVariantNumeric: 'tabular-nums' }}>
                                 <thead>
                                     <tr style={{ background: 'var(--surface)', color: 'var(--muted)', fontSize: '0.85rem' }}>
@@ -2847,30 +3298,48 @@ export default function ExamAnalyticsTab({
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {[...questionAnalytics].sort((a: { index: number }, b: { index: number }) => a.index - b.index).map((q, i) => {
+                                    {filteredQuestionAnalytics.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={7 + maxChoiceCount} style={{ textAlign: 'center', padding: '2.5rem 1rem', color: 'var(--muted)', fontSize: '0.9rem' }}>
+                                                선택한 난이도 조건에 해당하는 문항이 없습니다.
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredQuestionAnalytics.map((q) => {
+                                        const hasQuestionEvidence = q.totalCount > 0;
                                         const optMap = q.optionRates.reduce((acc: Record<number, number>, curr: { option: number; rate: number }) => { acc[curr.option] = curr.rate; return acc; }, {});
                                         const weakPointBiserial = q.pointBiserial !== null && q.pointBiserial < WEAK_POINT_BISERIAL_THRESHOLD;
-                                        const qualityLabel = q.correctRate < 50
+                                        const qualityLabel = !hasQuestionEvidence
+                                            ? '미채점'
+                                            : q.correctRate < 50
                                             ? '보강'
                                             : weakPointBiserial
                                                 ? '변별 점검'
                                                 : q.correctRate >= 90
                                                     ? '쉬움'
                                                     : '정상';
-                                        // 보강/변별 점검 = a correctness/quality problem worth flagging (grade-red);
-                                        // 정상/쉬움 = no issue (success).
-                                        const qualityTone: "grade" | "success" = qualityLabel === '정상' || qualityLabel === '쉬움'
-                                            ? 'success'
-                                            : 'grade';
+                                        // 미채점 = no usable denominator (neutral). 보강/변별 점검 is a
+                                        // correctness/quality problem (grade-red); 정상/쉬움 is success.
+                                        const qualityTone: "grade" | "success" | "muted" = !hasQuestionEvidence
+                                            ? 'muted'
+                                            : qualityLabel === '정상' || qualityLabel === '쉬움'
+                                                ? 'success'
+                                                : 'grade';
                                         return (
                                             <tr
-                                                key={i}
+                                                key={q.cohortKey}
+                                                id={`question-row-${q.index}`}
                                                 style={{ borderBottom: '1px solid var(--border)' }}
                                                 onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.06)'; }}
                                                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                             >
                                                 <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>
                                                     {q.index}번
+                                                    {q.cohortLabel && (
+                                                        <span style={{ marginLeft: '0.35rem', fontSize: '0.7rem', color: 'var(--muted)', fontWeight: 700 }}>
+                                                            {q.cohortLabel}
+                                                        </span>
+                                                    )}
                                                     <span style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 400 }}> ({q.concept})</span>
                                                     {q.difficulty && (
                                                         <span style={{ marginLeft: '0.35rem', fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 800 }}>
@@ -2881,8 +3350,8 @@ export default function ExamAnalyticsTab({
                                                 <td style={{ padding: '0.75rem 1rem' }}>
                                                     <StatusPill tone={qualityTone} size="sm" label={qualityLabel} />
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: q.correctRate < 40 ? 'var(--grade-red)' : 'var(--text)' }}>
-                                                    {q.correctRate}%
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: !hasQuestionEvidence ? 'var(--muted)' : q.correctRate < 40 ? 'var(--grade-red)' : 'var(--text)' }}>
+                                                    {hasQuestionEvidence ? `${q.correctRate}%` : '-'}
                                                 </td>
                                                 <td
                                                     style={{ padding: '0.75rem 1rem', fontWeight: 700, color: weakPointBiserial ? 'var(--warning)' : 'var(--muted)' }}
@@ -2890,8 +3359,8 @@ export default function ExamAnalyticsTab({
                                                 >
                                                     {q.pointBiserial !== null ? q.pointBiserial.toFixed(2) : '-'}
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.unansweredRate >= 20 ? 'var(--grade-red)' : 'var(--muted)' }}>
-                                                    {q.unansweredRate}%
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: hasQuestionEvidence && q.unansweredRate >= 20 ? 'var(--grade-red)' : 'var(--muted)' }}>
+                                                    {hasQuestionEvidence ? `${q.unansweredRate}%` : '-'}
                                                 </td>
                                                 <td style={{ padding: '0.75rem 1rem', color: q.timeOverExpectedRate && q.timeOverExpectedRate >= 130 ? 'var(--warning)' : 'var(--muted)', fontWeight: 800 }}>
                                                     {q.averageTimeSec ? formatSeconds(q.averageTimeSec) : '-'}
@@ -2901,11 +3370,13 @@ export default function ExamAnalyticsTab({
                                                         </div>
                                                     ) : null}
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', color: q.revisitRate >= 40 ? 'var(--primary)' : 'var(--muted)', fontWeight: 800 }}>
-                                                    {q.revisitRate}%
-                                                    <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '0.12rem', fontWeight: 700 }}>
-                                                        변경 {q.answerChangeCount}회
-                                                    </div>
+                                                <td style={{ padding: '0.75rem 1rem', color: hasQuestionEvidence && q.revisitRate >= 40 ? 'var(--primary)' : 'var(--muted)', fontWeight: 800 }}>
+                                                    {hasQuestionEvidence ? `${q.revisitRate}%` : '-'}
+                                                    {hasQuestionEvidence ? (
+                                                        <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '0.12rem', fontWeight: 700 }}>
+                                                            변경 {q.answerChangeCount}회
+                                                        </div>
+                                                    ) : null}
                                                 </td>
                                                 {Array.from({ length: maxChoiceCount }, (_, optIdx) => {
                                                     const optNum = optIdx + 1;
@@ -2919,14 +3390,15 @@ export default function ExamAnalyticsTab({
                                                                 color: isCorrectAnswer ? 'var(--success)' : !isAvailableOption ? 'rgba(148,163,184,0.55)' : 'var(--muted)',
                                                                 fontWeight: isCorrectAnswer ? 700 : 400
                                                             }}>
-                                                                {isAvailableOption ? `${optMap[optNum] || 0}%` : '-'}
+                                                                {isAvailableOption && hasQuestionEvidence ? `${optMap[optNum] || 0}%` : '-'}
                                                             </span>
                                                         </td>
                                                     );
                                                 })}
                                             </tr>
                                         );
-                                    })}
+                                    })
+                                    )}
                                 </tbody>
                             </table>
                         </div>
@@ -2951,32 +3423,48 @@ export default function ExamAnalyticsTab({
                             </h3>
                         </div>
 
+                        <p id="exam-student-score-scroll-hint" className={styles.scrollHint}>
+                            표가 화면보다 넓으면 좌우로 스크롤해 확인하세요.
+                        </p>
                         <div
                             data-testid="exam-analytics-student-table-scroll"
-                            style={{ overflowX: 'auto', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}
+                            role="region"
+                            tabIndex={0}
+                            aria-label="학생별 점수 및 성취도 표"
+                            aria-describedby="exam-student-score-scroll-hint"
+                            className={styles.horizontalTableRegion}
+                            style={{ borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}
                         >
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '940px', fontVariantNumeric: 'tabular-nums' }}>
                                 <thead style={{ background: 'var(--surface)' }}>
                                     <tr>
                                         <th
-                                            onClick={() => handleSort('name')}
-                                            style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--muted)', cursor: 'pointer', transition: 'color 0.2s' }}
-                                            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--primary)'; }}
-                                            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--muted)'; }}
+                                            scope="col"
+                                            aria-sort={sortField === 'name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                                            style={{ padding: 0, fontSize: '0.85rem', color: 'var(--muted)' }}
                                         >
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                학생 이름 {sortField === 'name' ? (sortDir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : ''}
-                                            </div>
+                                            <button
+                                                type="button"
+                                                className={styles.sortButton}
+                                                onClick={() => handleSort('name')}
+                                                aria-label={`학생 이름 정렬 (${sortField === 'name' ? (sortDir === 'asc' ? '오름차순' : '내림차순') : '정렬 안 됨'})`}
+                                            >
+                                                학생 이름 {sortField === 'name' ? (sortDir === 'asc' ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />) : null}
+                                            </button>
                                         </th>
                                         <th
-                                            onClick={() => handleSort('score')}
-                                            style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--muted)', cursor: 'pointer', transition: 'color 0.2s' }}
-                                            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--primary)'; }}
-                                            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--muted)'; }}
+                                            scope="col"
+                                            aria-sort={sortField === 'score' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                                            style={{ padding: 0, fontSize: '0.85rem', color: 'var(--muted)' }}
                                         >
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                총점 {sortField === 'score' ? (sortDir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : ''}
-                                            </div>
+                                            <button
+                                                type="button"
+                                                className={styles.sortButton}
+                                                onClick={() => handleSort('score')}
+                                                aria-label={`총점 정렬 (${sortField === 'score' ? (sortDir === 'asc' ? '오름차순' : '내림차순') : '정렬 안 됨'})`}
+                                            >
+                                                총점 {sortField === 'score' ? (sortDir === 'asc' ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />) : null}
+                                            </button>
                                         </th>
                                         {/* Dynamic Label Columns */}
                                         {examLabels.map(label => (
@@ -2991,21 +3479,34 @@ export default function ExamAnalyticsTab({
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {sortedStudentScores.map((student, i) => {
-                                        const behavior = summarizeAttemptBehavior(student.attempt);
-                                        const retakeIds = selectedExam ? buildRetakeQuestionIds(selectedExam, student.attempt) : [];
-                                        const topWeakness = studentWeaknessByAttemptId.get(student.attempt.id);
+                                    {sortedStudentScores.map((student) => {
+                                        const behavior = student.behavior;
+                                        const retakeIds = student.hasPerformanceScore ? student.retakeQuestionIds : [];
+                                        const topWeakness = student.hasPerformanceScore
+                                            ? studentWeaknessByAttemptId.get(student.attempt.id)
+                                            : undefined;
                                         return (
                                             <tr
-                                                key={i}
+                                                key={student.attempt.id}
                                                 style={{ borderTop: '1px solid var(--border)' }}
                                                 onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.06)'; }}
                                                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                             >
                                                 <td style={{ padding: '1rem', fontWeight: 600 }}>{student.studentName}</td>
                                                 <td style={{ padding: '1rem' }}>
-                                                    <div style={{ fontWeight: 800, color: student.scorePercentage >= 80 ? 'var(--success)' : (student.scorePercentage < 50 ? 'var(--error)' : 'var(--text)') }}>
-                                                        {Number(student.totalScore.toFixed(2))}점 <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>({student.scorePercentage}%)</span>
+                                                    <div style={{
+                                                        fontWeight: 800,
+                                                        color: !student.hasPerformanceScore
+                                                            ? 'var(--muted)'
+                                                            : student.scorePercentage >= 80
+                                                                ? 'var(--success)'
+                                                                : student.scorePercentage < 50
+                                                                    ? 'var(--error)'
+                                                                    : 'var(--text)',
+                                                    }}>
+                                                        {student.hasPerformanceScore ? (
+                                                            <>{Number(student.totalScore.toFixed(2))}점 <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>({student.scorePercentage}%)</span></>
+                                                        ) : '미채점'}
                                                     </div>
                                                 </td>
                                                 {/* Dynamic Label Columns */}
@@ -3014,13 +3515,21 @@ export default function ExamAnalyticsTab({
                                                     const rate = safeRatePercent(ls.earned, ls.total);
                                                     return (
                                                         <td key={label} style={{ padding: '1rem' }}>
-                                                            <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{ls.earned} / {ls.total}</div>
-                                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>정답률 {rate}%</div>
+                                                            {ls.total > 0 ? (
+                                                                <>
+                                                                    <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{ls.earned} / {ls.total}</div>
+                                                                    <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>정답률 {rate}%</div>
+                                                                </>
+                                                            ) : (
+                                                                <span style={{ color: 'var(--muted)', fontWeight: 700 }}>미채점</span>
+                                                            )}
                                                         </td>
                                                     );
                                                 })}
                                                 <td style={{ padding: '1rem' }}>
-                                                    {topWeakness ? (
+                                                    {!student.hasPerformanceScore ? (
+                                                        <span style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 800 }}>근거 없음</span>
+                                                    ) : topWeakness ? (
                                                         <div style={{ minWidth: '120px' }}>
                                                             <div style={{ fontSize: '0.86rem', fontWeight: 900, color: 'var(--foreground)' }}>
                                                                 {topWeakness.title}
@@ -3051,10 +3560,13 @@ export default function ExamAnalyticsTab({
                                                     )}
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
-                                                    {retakeIds.length > 0 ? (
+                                                    {!student.hasPerformanceScore ? (
+                                                        <span style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 800 }}>미채점</span>
+                                                    ) : retakeIds.length > 0 ? (
                                                         <PremiumActionLink
                                                             enabled={retakeAssignmentsEnabled}
-                                                            href={buildRetakeHref(selectedExamId, student.attempt.id, retakeIds, "wrong")}
+                                                            href={buildAnalyticsRetakeHref(student.attempt.id, retakeIds, "wrong") || "#"}
+                                                            unavailableReason={!buildAnalyticsRetakeHref(student.attempt.id, retakeIds, "wrong") ? "제출 정의 변경 · 재시험 불가" : undefined}
                                                             className="btn btn-secondary"
                                                             style={{ padding: '0.35rem 0.7rem', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
                                                             lockedTitle="Pro 이상에서 학생별 오답 재시험을 만들 수 있습니다."

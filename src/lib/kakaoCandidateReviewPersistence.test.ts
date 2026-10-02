@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KakaoNotificationCandidate } from "@/lib/kakaoNotificationQueue";
+import { readKakaoCandidateReviews } from "@/lib/kakaoCandidateReview";
 import {
     KAKAO_DISPATCH_LOG_STORAGE_KEY,
     kakaoDispatchLogFromSupabaseRow,
@@ -11,6 +12,7 @@ import {
     saveKakaoCandidateReview,
     summarizeKakaoDispatchLogs,
     updateKakaoDispatchLogStatus,
+    writeKakaoDispatchLogs,
 } from "./kakaoCandidateReviewPersistence";
 
 function storage(initial: Record<string, string> = {}): Pick<Storage, "getItem" | "setItem"> & { data: Record<string, string> } {
@@ -52,6 +54,73 @@ afterEach(() => {
 });
 
 describe("kakao candidate review persistence", () => {
+    it("reloads exact review target pairs before queueing and preserves them through terminal updates", async () => {
+        vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
+        vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "");
+        const localStorage = storage();
+        const selected = candidate({
+            id: "kakao:missing:pair-reload",
+            targetCount: 3,
+            studentIds: ["student-z", "student-a", "student-m"],
+            studentNames: ["김학생", "김학생", "이학생"],
+        });
+        await saveKakaoCandidateReview(
+            localStorage,
+            selected,
+            "ready",
+            new Date("2026-08-10T00:00:00.000Z"),
+        );
+        const reloaded = readKakaoCandidateReviews(localStorage)[selected.id];
+        const queued = await queueKakaoDispatchSimulation(
+            localStorage,
+            reloaded,
+            selected,
+            new Date("2026-08-10T00:01:00.000Z"),
+        );
+        const terminal = updateKakaoDispatchLogStatus(localStorage, queued.log.id, "sent", {
+            now: new Date("2026-08-10T00:02:00.000Z"),
+        });
+
+        expect(terminal.log).toMatchObject({
+            status: "sent",
+            studentIds: selected.studentIds,
+            studentNames: selected.studentNames,
+        });
+        expect(readKakaoDispatchLogs(localStorage)[0]).toMatchObject({
+            studentIds: selected.studentIds,
+            studentNames: selected.studentNames,
+        });
+    });
+
+    it("round-trips stable ID and duplicate display-name pairs without independent dedupe or sort", () => {
+        const localStorage = storage();
+        const log = {
+            id: "kakao:dispatch:duplicate-names",
+            reviewId: "kakao:review:duplicate-names",
+            examId: "exam-1",
+            channel: "kakao" as const,
+            provider: "simulation",
+            status: "queued" as const,
+            targetCount: 3,
+            studentIds: ["student-z", "student-a", "student-m"],
+            studentNames: ["김학생", "김학생", "이학생"],
+            messagePreview: "정확한 대상 쌍",
+            providerMessageId: undefined,
+            errorMessage: undefined,
+            createdAt: "2026-08-10T00:00:00.000Z",
+            sentAt: undefined,
+        };
+
+        expect(writeKakaoDispatchLogs(localStorage, [log])).toBe(true);
+        expect(readKakaoDispatchLogs(localStorage)).toEqual([log]);
+        expect(readKakaoDispatchLogs(storage({
+            [KAKAO_DISPATCH_LOG_STORAGE_KEY]: JSON.stringify([{
+                ...log,
+                studentNames: ["김학생", "이학생"],
+            }]),
+        }))).toEqual([]);
+    });
+
     it("maps reviewed Kakao candidates to Supabase rows for DB sync", async () => {
         vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
         vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "");

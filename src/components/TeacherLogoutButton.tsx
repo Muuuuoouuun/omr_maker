@@ -6,15 +6,18 @@ import { clearTeacherSession } from "@/lib/teacherSession";
 
 interface TeacherLogoutButtonProps {
     size?: "small" | "normal";
+    role?: "menuitem";
 }
 
-export default function TeacherLogoutButton({ size = "normal" }: TeacherLogoutButtonProps) {
+export default function TeacherLogoutButton({ size = "normal", role }: TeacherLogoutButtonProps) {
     const dimension = 44;
     const iconSize = size === "small" ? 15 : 16;
 
     const handleLogout = () => {
         clearTeacherSession();
         void clearTeacherAuthSession().finally(() => {
+            // Drop the entire authenticated client/router state on logout.
+            // eslint-disable-next-line @next/next/no-location-assign-relative-destination
             window.location.href = "/?role=teacher";
         });
     };
@@ -22,6 +25,7 @@ export default function TeacherLogoutButton({ size = "normal" }: TeacherLogoutBu
     return (
         <button
             type="button"
+            role={role}
             onClick={handleLogout}
             aria-label="교사 로그아웃"
             title="교사 로그아웃"

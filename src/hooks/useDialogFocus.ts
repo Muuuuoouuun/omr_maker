@@ -71,6 +71,7 @@ function getFocusableElements(dialog: HTMLElement): HTMLElement[] {
 export function useDialogFocus(
     isOpen: boolean,
     onClose: () => void,
+    initialFocusSelector?: string,
 ) {
     const dialogRef = useRef<HTMLDivElement>(null);
     const onCloseRef = useRef(onClose);
@@ -88,7 +89,15 @@ export function useDialogFocus(
         const trigger = activeElement instanceof HTMLElement
             ? activeElement
             : null;
-        const initialFocus = getFocusableElements(dialog)[0] ?? dialog;
+        const focusable = getFocusableElements(dialog);
+        let preferred: HTMLElement | null = null;
+        if (initialFocusSelector) {
+            try { preferred = dialog.querySelector<HTMLElement>(initialFocusSelector); }
+            catch { /* A malformed preference still falls back to usable controls. */ }
+        }
+        const initialFocus = preferred && focusable.includes(preferred)
+            ? preferred
+            : focusable[0] ?? dialog;
         initialFocus.focus({ preventScroll: true });
 
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -137,7 +146,7 @@ export function useDialogFocus(
                 trigger.focus({ preventScroll: true });
             }
         };
-    }, [isOpen]);
+    }, [isOpen, initialFocusSelector]);
 
     return dialogRef;
 }

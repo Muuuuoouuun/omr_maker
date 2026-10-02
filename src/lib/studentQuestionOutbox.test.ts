@@ -9,6 +9,7 @@ import {
     STUDENT_QUESTION_OUTBOX_LIMIT,
     type StudentQuestionOutboxLock,
 } from "./studentQuestionOutbox";
+import type { StudentQuestionInput } from "./studentQuestions";
 
 function memoryStorage(): Storage {
     const data = new Map<string, string>();
@@ -48,6 +49,31 @@ function serializedLock(): {
 }
 
 describe("student question outbox", () => {
+    it("uses the stable queued timestamp as the client mutation id on every retry", async () => {
+        const storage = memoryStorage();
+        await queuePendingStudentQuestion({
+            attemptId: "attempt-student-a",
+            ownerStudentId: "student-a",
+            questionId: 1,
+            questionNumber: 1,
+            body: "재시도 질문",
+            queuedAt: "2026-08-07T12:00:00.000Z",
+        }, storage);
+        const seenMutationIds: unknown[] = [];
+        const submit = vi.fn(async (_attemptId: string, question: StudentQuestionInput) => {
+            seenMutationIds.push(question.clientMutationId);
+            return { status: "error" };
+        });
+
+        await flushPendingStudentQuestions("attempt-student-a", submit, storage);
+        await flushPendingStudentQuestions("attempt-student-a", submit, storage);
+
+        expect(seenMutationIds).toEqual([
+            "2026-08-07T12:00:00.000Z",
+            "2026-08-07T12:00:00.000Z",
+        ]);
+    });
+
     it("automatically flushes only the active student's scoped questions", async () => {
         const storage = memoryStorage();
         await queuePendingStudentQuestion({

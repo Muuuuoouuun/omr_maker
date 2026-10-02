@@ -28,6 +28,15 @@ function cssVariables(block: string): Record<string, string> {
     );
 }
 
+function cssRule(css: string, selector: string): string {
+    const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return css.match(new RegExp(`${escapedSelector}\\s*\\{([\\s\\S]*?)\\}`))?.[1] || "";
+}
+
+function hexDeclaration(block: string, property: string): string {
+    return block.match(new RegExp(`${property}:\\s*(#[0-9a-f]{6})\\s*;`, "i"))?.[1].toLowerCase() || "";
+}
+
 describe("semantic text color contrast", () => {
     const css = readFileSync(path.join(process.cwd(), "src/app/globals.css"), "utf8");
     const rootBlock = css.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] || "";
@@ -46,5 +55,33 @@ describe("semantic text color contrast", () => {
                 `${token} must be at least 4.5:1 against surface`,
             ).toBeGreaterThanOrEqual(4.5);
         }
+    });
+
+    it.each([
+        [".mockup-login-card-heading p", "#f8fbff"],
+        [".mockup-login-note", "#f8fbff"],
+        [".mockup-login-divider", "#ffffff"],
+    ] as const)("keeps %s login copy at 4.5:1 against its rendered background", (selector, background) => {
+        const foreground = hexDeclaration(cssRule(css, selector), "color");
+
+        expect(foreground, `${selector} must reuse the approved login copy color`).toBe("#52627a");
+        expect(
+            contrast(foreground, background),
+            `${selector} must be at least 4.5:1 against ${background}`,
+        ).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it("keeps the login note at the shared minimum caption size", () => {
+        expect(cssRule(css, ".mockup-login-note")).toContain("font-size: var(--type-caption-min)");
+    });
+
+    it("keeps the login divider readable on the dark glass panel", () => {
+        const darkDivider = cssRule(css, '[data-theme="dark"] .mockup-login-divider');
+
+        expect(darkDivider).toContain("color: var(--muted)");
+        expect(
+            contrast(dark.muted, dark.background),
+            "dark login divider must be at least 4.5:1 against the dark glass background",
+        ).toBeGreaterThanOrEqual(4.5);
     });
 });

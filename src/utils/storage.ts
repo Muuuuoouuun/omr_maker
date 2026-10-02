@@ -11,7 +11,9 @@ export const STORAGE_KEYS = {
     PENDING_GUEST_MERGE: "omr_pending_guest_merge",
 } as const;
 export const STUDENT_SESSION_GENERATION_KEY = "omr_student_session_generation";
+export const STUDENT_SHARED_IDENTITY_EPOCH_KEY = "omr_student_identity_epoch";
 export const STUDENT_SESSION_CHANGED_EVENT = "omr:student-session-changed";
+export const STUDENT_SESSION_KEY = STORAGE_KEYS.STUDENT_SESSION;
 
 const STUDENT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const CONSUMED_GUEST_MERGE_KEY = "omr_consumed_guest_merge";
@@ -117,8 +119,8 @@ export function loadAttempts(): Attempt[] {
     return Array.isArray(parsed) ? parsed.filter(isAttempt) : [];
 }
 
-export function getOrCreateGuestId(): string {
-    if (typeof window === 'undefined') return "";
+export function getOrCreateGuestId(runtime = process.env.NODE_ENV): string {
+    if (runtime === "production" || typeof window === 'undefined') return "";
     let id = localStorage.getItem(STORAGE_KEYS.GUEST_ID);
     if (!id) {
         id = generateId();
@@ -127,7 +129,49 @@ export function getOrCreateGuestId(): string {
     return id;
 }
 
-export function saveSession(session: StudentSession) {
+export interface SaveStudentSessionOptions {
+    rememberDevice?: boolean;
+}
+
+function resolveStudentIdentityLocalStorage(): Storage | null {
+    if (typeof window === "undefined") return null;
+    try {
+        return window.localStorage;
+    } catch {
+        return null;
+    }
+}
+
+function rotateStudentSharedIdentityEpoch(): string {
+    const storage = resolveStudentIdentityLocalStorage();
+    if (!storage) return "";
+    const next = generateId();
+    try {
+        // Removing first makes a failed replacement fail closed for every tab.
+        storage.removeItem(STUDENT_SHARED_IDENTITY_EPOCH_KEY);
+        storage.setItem(STUDENT_SHARED_IDENTITY_EPOCH_KEY, next);
+        return next;
+    } catch {
+        try {
+            storage.removeItem(STUDENT_SHARED_IDENTITY_EPOCH_KEY);
+        } catch {
+            // A blocked shared store cannot authorize identity-bound exports.
+        }
+        return "";
+    }
+}
+
+export function getStudentSharedIdentityEpoch(): string {
+    const storage = resolveStudentIdentityLocalStorage();
+    if (!storage) return "";
+    try {
+        return storage.getItem(STUDENT_SHARED_IDENTITY_EPOCH_KEY)?.trim() || "";
+    } catch {
+        return "";
+    }
+}
+
+export function saveSession(session: StudentSession, options: SaveStudentSessionOptions = {}) {
     if (typeof window === 'undefined') return;
     const stamped: StudentSession = session.createdAt ? session : { ...session, createdAt: new Date().toISOString() };
     const payload = JSON.stringify(stamped);
@@ -137,7 +181,11 @@ export function saveSession(session: StudentSession) {
         // Session storage can be blocked in some embedded/private modes.
     }
     try {
-        localStorage.setItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP, payload);
+        if (options.rememberDevice === true) {
+            localStorage.setItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP, payload);
+        } else if (options.rememberDevice === false) {
+            localStorage.removeItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP);
+        }
     } catch {
         // Keep the in-tab session even if persistent storage is unavailable.
     }
@@ -146,6 +194,7 @@ export function saveSession(session: StudentSession) {
     } catch {
         // Retry resumption can also happen on a later login/page load.
     }
+    rotateStudentSharedIdentityEpoch();
     try {
         window.dispatchEvent(new Event(STUDENT_SESSION_CHANGED_EVENT));
     } catch {
@@ -206,6 +255,15 @@ export function getSession(): StudentSession | null {
     }
 }
 
+export function getStudentSessionGeneration(): string {
+    if (typeof window === "undefined") return "";
+    try {
+        return sessionStorage.getItem(STUDENT_SESSION_GENERATION_KEY)?.trim() || "";
+    } catch {
+        return "";
+    }
+}
+
 export function clearSession() {
     if (typeof window === 'undefined') return;
     try {
@@ -216,6 +274,12 @@ export function clearSession() {
     }
     try {
         localStorage.removeItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP);
+    } catch {
+        // ignore
+    }
+    rotateStudentSharedIdentityEpoch();
+    try {
+        window.dispatchEvent(new Event(STUDENT_SESSION_CHANGED_EVENT));
     } catch {
         // ignore
     }

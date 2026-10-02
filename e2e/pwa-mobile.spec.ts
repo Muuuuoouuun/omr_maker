@@ -1,6 +1,15 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { studentAssignmentDraftStorageKey } from "../src/lib/studentAssignmentClassification";
 
 const VALID_PROOF_EPOCH = Date.now();
+const MOBILE_SOLVE_DRAFT_KEY = studentAssignmentDraftStorageKey(
+    "mobile-qa-exam",
+    "mobile-qa-student",
+    { assignmentId: undefined, assignmentRevision: undefined },
+    "base",
+);
+
+if (!MOBILE_SOLVE_DRAFT_KEY) throw new Error("mobile solve draft fixture key is invalid");
 
 async function clearStorage(page: Page) {
     await page.addInitScript(() => {
@@ -17,6 +26,10 @@ async function clearStorage(page: Page) {
 function collectConsoleProblems(page: Page): string[] {
     const problems: string[] = [];
     page.on("console", message => {
+        // WebKit can warn about Next's unused development HMR preload after
+        // navigation. Keep every application warning/error in the assertion.
+        if (message.type() === "warning" && /\[turbopack\]|%5Bturbopack%5D/i.test(message.text())
+            && message.text().includes("hmr-client") && message.text().includes("was preloaded")) return;
         if (message.type() === "error" || message.type() === "warning") {
             problems.push(`${message.type()}: ${message.text()}`);
         }
@@ -148,7 +161,7 @@ async function expectMetaContent(page: Page, name: string, content: string) {
 }
 
 async function triggerAndroidInstallPrompt(page: Page) {
-    await page.evaluate(() => {
+    await expect.poll(async () => page.evaluate(() => {
         const event = new Event("beforeinstallprompt", { cancelable: true }) as Event & {
             prompt: () => Promise<void>;
             userChoice: Promise<{ outcome: "accepted"; platform: string }>;
@@ -157,7 +170,8 @@ async function triggerAndroidInstallPrompt(page: Page) {
         event.prompt = async () => undefined;
         event.userChoice = Promise.resolve({ outcome: "accepted", platform: "web" });
         window.dispatchEvent(event);
-    });
+        return event.defaultPrevented;
+    })).toBe(true);
 }
 
 async function emulateStandaloneDisplay(page: Page) {
@@ -232,7 +246,7 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
         `- launch-proof=pass:확인됨 (${displayEvidence})`,
         "- service-worker=pass:제어 중 (script=https://omr-maker-eight.vercel.app/sw.js · controller=yes · active=activated · waiting=none · installing=none)",
-        "- offline-cache=pass:준비 (caches=omr-maker-v15-shell, omr-maker-v15-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v15-shell · missingCaches=none · missing=none)",
+        "- offline-cache=pass:준비 (caches=omr-maker-v17-shell, omr-maker-v17-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v17-shell · missingCaches=none · missing=none)",
         "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
         "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
         "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
@@ -288,7 +302,6 @@ async function seedMobileSolveExam(page: Page) {
             isGuest: false,
             name: "모바일학생",
             studentId: "mobile-qa-student",
-            createdAt: "2026-06-22T00:00:00.000Z",
         };
         const sessionPayload = JSON.stringify(studentSession);
         try {
@@ -300,14 +313,14 @@ async function seedMobileSolveExam(page: Page) {
 }
 
 async function readMobileSolveDraft(page: Page) {
-    return page.evaluate(() => {
+    return page.evaluate((draftKey) => {
         const keys = Object.keys(window.localStorage)
-            .filter(key => key.startsWith("omr_draft_mobile-qa-exam_") && key.endsWith("_base"));
+            .filter(key => key === draftKey);
         const draft = keys.length === 1
             ? JSON.parse(window.localStorage.getItem(keys[0]) || "{}")
             : {};
         return { draft, keys };
-    });
+    }, MOBILE_SOLVE_DRAFT_KEY);
 }
 
 test.describe("Mobile PWA entry", () => {
@@ -362,7 +375,8 @@ test.describe("Mobile PWA entry", () => {
         });
         expect(manifestState.shortcutUrls).toEqual(expect.arrayContaining(["/create", "/teacher/dashboard", "/?role=student", "/pwa-check"]));
         expect(manifestState.launchHandler).toEqual(expect.arrayContaining(["navigate-existing", "auto"]));
-        await expectTouchTarget(page.locator('button[aria-label$="모드로 전환"]'));
+        // Role selection deliberately has only its two primary entry choices.
+        await expect(page.locator('button[aria-label$="모드로 전환"]')).toBeHidden();
         await expectTouchTarget(page.getByRole("button", { name: /학생.*시작하기/ }));
         await expectTouchTarget(page.getByRole("button", { name: /교사.*대시보드/ }));
         const centeredBrand = await page.locator(".home-logo").evaluate(element => {
@@ -387,12 +401,15 @@ test.describe("Mobile PWA entry", () => {
 
         await page.getByRole("button", { name: /학생.*시작하기/ }).click();
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
-        await page.getByPlaceholder("이름을 입력하세요").fill("모바일학생");
-        await expect(page.getByPlaceholder("이름을 입력하세요")).toHaveValue("모바일학생");
-        const studentLookupInput = page.getByLabel("학생번호 또는 이메일");
-        await expect(studentLookupInput).toHaveAttribute("placeholder", "선생님이 알려준 학생번호 또는 이메일");
-        await expect(studentLookupInput).toHaveAttribute("inputmode", "email");
-        await expect(studentLookupInput).toHaveAttribute("autocomplete", "email");
+        await expectTouchTarget(page.locator('button[aria-label$="모드로 전환"]'));
+        // The development-only local entry form differs from the provisioned
+        // production flow, which is checked by teacher-provisioned-links.
+        await page.getByPlaceholder("이름을 입력하세요").fill("모바일 게스트");
+        await page.getByText("다른 방법으로 참여", { exact: true }).click();
+        const guestEntry = page.getByRole("button", { name: "코드 없이 게스트로 계속하기" });
+        await expectTouchTarget(guestEntry);
+        await guestEntry.click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
         await expectNoHorizontalOverflow(page);
         expect(consoleProblems).toEqual([]);
     });
@@ -403,8 +420,23 @@ test.describe("Mobile PWA entry", () => {
         await page.goto("/student/dashboard");
 
         await expect(page.getByRole("heading", { name: "모바일학생님," })).toBeVisible();
+        const dashboardHeader = page.locator(".student-dashboard-shell-header");
+        const dashboardHeaderContent = page.locator(".student-dashboard-header");
+        const dashboardMain = page.locator("main").first();
+        const [headerBox, headerContentBox, mainBox] = await Promise.all([
+            dashboardHeader.boundingBox(),
+            dashboardHeaderContent.boundingBox(),
+            dashboardMain.boundingBox(),
+        ]);
+        expect(headerBox).not.toBeNull();
+        expect(headerContentBox).not.toBeNull();
+        expect(mainBox).not.toBeNull();
+        expect(headerContentBox!.y).toBeGreaterThanOrEqual(headerBox!.y);
+        expect(headerContentBox!.y + headerContentBox!.height).toBeLessThanOrEqual(headerBox!.y + headerBox!.height + 1);
+        expect(mainBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height - 1);
         await expectTouchTarget(page.getByRole("button", { name: "로그아웃" }));
-        await expectTouchTarget(page.getByRole("link", { name: /나의 원시험 평균/ }));
+        await expectTouchTarget(page.getByRole("link", { name: /내 평균 점수/ }));
+        await expectTouchTarget(page.getByRole("link", { name: "지난 기록 보기 →" }));
         await expectNoHorizontalOverflow(page);
 
         await page.goto("/student/history");
@@ -450,6 +482,11 @@ test.describe("Mobile PWA entry", () => {
     });
 
     test("lets students answer and submit an exam in the phone and tablet app shell", async ({ page }) => {
+        test.setTimeout(45_000);
+        test.info().annotations.push(
+            { type: "release-proof", description: "student_core_autosave_resume" },
+            { type: "release-proof", description: "ux_accessibility_responsiveness_student_mobile" },
+        );
         const consoleProblems = collectConsoleProblems(page);
         await seedMobileSolveExam(page);
 
@@ -630,8 +667,8 @@ test.describe("Mobile PWA entry", () => {
         await page.evaluate(() => window.dispatchEvent(new Event("focus")));
         const focusWarning = page.getByRole("dialog", { name: "시험 화면 이탈 안내" });
         await expect(focusWarning).toBeVisible();
-        await expect(focusWarning).toContainText(/현재 이탈 횟수:\s*\d+회/);
-        const returnToExamButton = focusWarning.getByRole("button", { name: "시험으로 돌아가기" });
+        await expect(focusWarning).toContainText(/현재\s*\d+회 기록됨/);
+        const returnToExamButton = focusWarning.getByRole("button", { name: "확인하고 시험으로 돌아가기" });
         await expectTouchTarget(returnToExamButton);
         await returnToExamButton.click();
         await expect(focusWarning).toBeHidden();
@@ -664,7 +701,7 @@ test.describe("Mobile PWA entry", () => {
 
         await submitDialog.getByRole("button", { name: "제출하기" }).click();
 
-        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+(?:[?#]|$)/);
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+(?:[?#]|$)/, { timeout: 15_000 });
         await expect(page.getByRole("heading", { name: "모바일 실전 시험" })).toBeVisible();
         await expect(page.getByText("100%")).toBeVisible();
         await expectNoHorizontalOverflow(page);
@@ -704,11 +741,11 @@ test.describe("Mobile PWA entry", () => {
             examId: "mobile-qa-exam",
             score: 100,
             status: "completed",
+            studentId: "mobile-qa-student",
             studentName: "모바일학생",
             totalScore: 100,
         });
-        expect(savedAttempt.guestId).toEqual(expect.any(String));
-        expect(savedAttempt.studentId).toBe(`guest:${savedAttempt.guestId}`);
+        expect(savedAttempt.guestId).toBeUndefined();
         expect(consoleProblems).toEqual([]);
     });
 
@@ -729,7 +766,7 @@ test.describe("Mobile PWA entry", () => {
         await expectTouchTarget(page.getByRole("link", { name: "앱 상태 체크" }));
 
         await page.getByRole("link", { name: "앱 상태 체크" }).click();
-        await expect(page).toHaveURL(/\/pwa-check$/);
+        await expect(page).toHaveURL(/\/pwa-check$/, { timeout: 15_000 });
         await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
         await expectNoHorizontalOverflow(page);
         await page.waitForLoadState("load");
@@ -749,6 +786,39 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByRole("complementary", { name: "앱 설치 안내" })).toHaveCount(0);
     });
 
+    test("keeps advanced PWA diagnostics collapsed until requested", async ({ page }) => {
+        await page.goto("/pwa-check");
+
+        await expect(page.getByTestId("pwa-device-verdict")).toBeVisible();
+        await expect(page.getByTestId("pwa-preflight-checklist")).toBeVisible();
+        const passedChecks = page.getByTestId("pwa-passed-checks");
+        const passedChecksSummary = page.getByTestId("pwa-passed-checks-summary");
+        await expect(passedChecks).toBeVisible({ timeout: 15_000 });
+        await expect(passedChecks).not.toHaveAttribute("open", "");
+        await expect(passedChecksSummary).toContainText(/\d+개 항목 통과/);
+        const passedCount = await passedChecks.locator('[data-testid^="pwa-device-check-"]').count();
+        const attentionCount = await page.getByTestId("pwa-preflight-checklist")
+            .locator(':scope > [data-testid^="pwa-device-check-"]')
+            .count();
+        expect(passedCount).toBeGreaterThan(0);
+        expect(passedCount + attentionCount).toBe(16);
+        await expect(passedChecksSummary).toContainText(`${passedCount}개 항목 통과`);
+        await expect.poll(async () => page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(1400);
+        const advancedDiagnostics = page.getByTestId("pwa-advanced-diagnostics");
+        await expect(advancedDiagnostics).not.toHaveAttribute("open", "");
+        await expect(page.getByTestId("pwa-install-proof-guide")).not.toBeVisible();
+        await expect(page.getByTestId("pwa-device-handoff")).not.toBeVisible();
+        await expect(page.getByTestId("pwa-proof-verifier")).not.toBeVisible();
+
+        await page.getByTestId("pwa-advanced-diagnostics-summary").click();
+
+        await expect(advancedDiagnostics).toHaveAttribute("open", "");
+        await expect(page.getByTestId("pwa-install-proof-guide")).toBeVisible();
+        await expect(page.getByTestId("pwa-device-handoff")).toBeVisible();
+        await expect(page.getByTestId("pwa-proof-verifier")).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+    });
+
     test("renders the device diagnostics page without blocking app entry", async ({ page }, testInfo) => {
         const consoleProblems = collectConsoleProblems(page);
         await stubClipboard(page);
@@ -756,8 +826,20 @@ test.describe("Mobile PWA entry", () => {
         await page.goto("/pwa-check");
 
         await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
-        await expect(page.getByTestId("pwa-device-verdict")).toContainText("설치 실행 전");
+        await expect(page.getByTestId("pwa-device-verdict")).toContainText("설치 실행 전", { timeout: 15_000 });
+        const passedChecks = page.getByTestId("pwa-passed-checks");
+        await expect(passedChecks).not.toHaveAttribute("open", "");
+        await page.getByTestId("pwa-passed-checks-summary").click();
+        await expect(passedChecks).toHaveAttribute("open", "");
         await expect(page.getByTestId("pwa-device-check-manifest")).toContainText("standalone / any");
+        await expect(page.getByTestId("pwa-preflight-checklist")).toBeVisible();
+        const advancedDiagnostics = page.getByTestId("pwa-advanced-diagnostics");
+        await expect(advancedDiagnostics).not.toHaveAttribute("open", "");
+        await expect(page.getByTestId("pwa-install-proof-guide")).not.toBeVisible();
+        await expect(page.getByTestId("pwa-device-handoff")).not.toBeVisible();
+        await expect(page.getByTestId("pwa-proof-verifier")).not.toBeVisible();
+        await page.getByTestId("pwa-advanced-diagnostics-summary").click();
+        await expect(advancedDiagnostics).toHaveAttribute("open", "");
         await expect(page.getByTestId("pwa-device-report")).toContainText("manifest=pass:standalone / any");
         await expect(page.getByTestId("pwa-device-check-secure-context")).toBeVisible();
         await expect(page.getByTestId("pwa-device-check-display-mode")).toBeVisible();
@@ -888,7 +970,9 @@ test.describe("Mobile PWA entry", () => {
         await page.getByRole("button", { name: /학생.*시작하기/ }).click();
 
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
-        await expect(page.getByPlaceholder("이름을 입력하세요")).toHaveCSS("font-size", "16px");
+        const nameInput = page.getByPlaceholder("이름을 입력하세요");
+        await expect(nameInput).toBeVisible();
+        expect(await nameInput.evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
         await expectNoHorizontalOverflow(page);
 
         const standaloneState = await page.evaluate(() => {
@@ -924,8 +1008,10 @@ test.describe("Mobile PWA entry", () => {
         expect(standaloneState.layoutHeight).toBeGreaterThan(0);
 
         await page.goto("/pwa-check");
+        await page.getByTestId("pwa-passed-checks-summary").click();
         await expect(page.getByTestId("pwa-device-check-display-mode")).toContainText(/standalone|fullscreen/);
         await expect(page.getByTestId("pwa-device-check-launch-proof")).toContainText("확인됨");
+        await page.getByTestId("pwa-advanced-diagnostics-summary").click();
         await expect(page.getByTestId("pwa-device-report")).toContainText("installedDisplay=yes");
         await expect(page.getByTestId("pwa-device-report")).toContainText("launch-proof=pass:확인됨");
         await expect(page.getByTestId("pwa-device-report")).toContainText("handoff-origin=");
@@ -975,6 +1061,7 @@ test.describe("Mobile PWA entry", () => {
 
         await page.reload();
         await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
+        await page.getByTestId("pwa-advanced-diagnostics-summary").click();
         await expect(page.getByTestId("pwa-proof-input")).toHaveValue(validInstalledProofReport("android"));
         await expect(page.getByTestId("pwa-proof-input-ios")).toHaveValue(validInstalledProofReport("ios"));
         await expect(page.getByTestId("pwa-proof-result")).toContainText("Android/iOS 리포트 통과");

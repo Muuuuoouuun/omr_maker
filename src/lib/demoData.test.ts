@@ -25,6 +25,9 @@ describe("demo data gating", () => {
             groupId: "class-2-1",
             groupName: "2학년 1반",
             identityType: "registered",
+            questionResults: expect.arrayContaining([
+                expect.objectContaining({ attemptId: attempts[0].id, examId: exams[0].id }),
+            ]),
         });
 
         const matrixRows = buildClassExamWeaknessMatrix(
@@ -38,8 +41,56 @@ describe("demo data gating", () => {
         expect(matrixRows.some(row => row.recommendations.length > 0)).toBe(true);
     });
 
+    // Full-suite measurement is ~2.9s because this constructs and deeply compares
+    // two complete 572-attempt evidence graphs. Keep that proof bounded without
+    // making unrelated tests inherit a larger timeout under shared-worker contention.
     it("keeps the generated showcase deterministic for a fixed clock", () => {
         const now = Date.UTC(2026, 6, 15, 9, 0, 0);
         expect(buildDemoDashboardData(now)).toEqual(buildDemoDashboardData(now));
+    }, 10_000);
+
+    it("accepts only bounded ASCII demo attempt identifiers", async () => {
+        const demoModule = await import("./demoData");
+        expect(demoModule).toHaveProperty("isBoundedDemoAttemptId");
+        const isBoundedDemoAttemptId = (demoModule as typeof demoModule & {
+            isBoundedDemoAttemptId: (value: string) => boolean;
+        }).isBoundedDemoAttemptId;
+
+        expect(isBoundedDemoAttemptId("mock-attempt-mock-final-comprehensive-class-2-1--student-1")).toBe(true);
+        for (const malformed of [
+            "missing",
+            "mock-attempt-",
+            `mock-attempt-${"a".repeat(188)}`,
+            "mock-attempt-한글",
+            "mock-attempt-valid/id",
+        ]) {
+            expect(isBoundedDemoAttemptId(malformed)).toBe(false);
+        }
+    });
+
+    it("resolves a coherent showcase attempt detail only for the signed demo identity", async () => {
+        const demoModule = await import("./demoData");
+        expect(demoModule).toHaveProperty("resolveDemoAttemptDetail");
+        const resolveDemoAttemptDetail = (demoModule as typeof demoModule & {
+            resolveDemoAttemptDetail: (
+                identity: { teacherId: string } | null,
+                attemptId: string,
+                now?: number,
+            ) => null | {
+                attempt: { id: string; examId: string };
+                exam: { id: string };
+                peerAttempts: Array<{ examId: string }>;
+            };
+        }).resolveDemoAttemptDetail;
+        const now = Date.parse("2026-08-05T00:00:00.000Z");
+        const targetAttemptId = "mock-attempt-mock-final-comprehensive-class-2-1--student-1";
+
+        const detail = resolveDemoAttemptDetail({ teacherId: "omr-showcase" }, targetAttemptId, now);
+        expect(detail?.attempt.id).toBe(targetAttemptId);
+        expect(detail?.exam.id).toBe("mock-final-comprehensive");
+        expect(detail?.peerAttempts.length).toBe(84);
+        expect(detail?.peerAttempts.every(attempt => attempt.examId === detail.exam.id)).toBe(true);
+        expect(resolveDemoAttemptDetail({ teacherId: "admin" }, targetAttemptId, now)).toBeNull();
+        expect(resolveDemoAttemptDetail({ teacherId: "omr-showcase" }, "missing", now)).toBeNull();
     });
 });

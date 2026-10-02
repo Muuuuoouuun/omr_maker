@@ -1,19 +1,27 @@
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
-import { baseAttemptsOnly, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
+import {
+    baseAttemptsOnly,
+    completedAttemptsOnly,
+    retakeAttemptsOnly,
+} from "@/lib/attemptScores";
 import { resolveAwayCount } from "@/lib/examAwayTracker";
 import {
     attemptElapsedTimeSec,
+    buildCanonicalAttemptAnalyticsIndex,
     buildMostMissedQuestionStats,
     buildLearningRecommendations,
     buildQuestionResultTagStats,
-    getAttemptQuestionResults,
+    hasGradableAttemptScore,
+    summarizeAttemptScore,
     summarizeAttemptBehavior,
     type LearningRecommendationSeverity,
     type QuestionResultTagStat,
     type QuestionResultGroupKind,
 } from "@/lib/premiumAnalytics";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
+
+import { buildStudentConceptMastery, type StudentConceptMasterySummary } from "@/lib/studentConceptMastery";
 
 const DEFAULT_WEAKNESS_KINDS: QuestionResultGroupKind[] = ["concept", "mistakeType", "unit"];
 
@@ -22,7 +30,7 @@ export interface StudentProfileAttemptInsight {
     examId: string;
     examTitle: string;
     finishedAt: string;
-    scorePercent: number;
+    scorePercent: number | null;
     elapsedTimeSec: number;
     totalTrackedTimeSec: number;
     averageQuestionTimeSec: number;
@@ -62,6 +70,15 @@ export interface StudentProfileWeaknessInsight {
     recommendedAction: string;
 }
 
+export interface StudentProfileHeadlineWeaknessEvidence {
+    kind: QuestionResultGroupKind;
+    title: string;
+    examIds: string[];
+    wrongCount: number;
+    maxWrongRate: number;
+    recommendedAction: string;
+}
+
 export interface StudentProfileMissedQuestionInsight {
     key: string;
     examId: string;
@@ -80,10 +97,10 @@ export type StudentProfileTagInsight = QuestionResultTagStat;
 
 export interface StudentProfileInsight {
     attempts: StudentProfileAttemptInsight[];
-    averageScore: number;
-    bestScore: number;
-    latestScore: number;
-    trendDelta: number;
+    averageScore: number | null;
+    bestScore: number | null;
+    latestScore: number | null;
+    trendDelta: number | null;
     averageElapsedTimeSec: number;
     averageQuestionTimeSec: number;
     totalTrackedTimeSec: number;
@@ -94,8 +111,11 @@ export interface StudentProfileInsight {
     baseAttemptCount: number;
     retakeAttemptCount: number;
     weaknessGroups: StudentProfileWeaknessInsight[];
+    /** Bounded title-level evidence for cumulative narrative; independent from the display top-N. */
+    headlineWeaknessGroups: StudentProfileHeadlineWeaknessEvidence[];
     mostMissedQuestions: StudentProfileMissedQuestionInsight[];
     tagStats: StudentProfileTagInsight[];
+    conceptMastery?: StudentConceptMasterySummary;
 }
 
 export interface StudentProfileInsightOptions {
@@ -109,7 +129,13 @@ function activityTime(attempt: Attempt): number {
 }
 
 function handwritingLabel(attempt: Attempt): string {
-    const questionCount = attempt.questionDrawings?.length || attempt.handwriting?.summary.questionCount || 0;
+    const summaryQuestionCount = "handwritingQuestionCount" in attempt
+        && typeof attempt.handwritingQuestionCount === "number"
+        ? attempt.handwritingQuestionCount
+        : 0;
+    const questionCount = attempt.questionDrawings?.length
+        || attempt.handwriting?.summary.questionCount
+        || summaryQuestionCount;
     if (questionCount > 0) return `${questionCount}문항`;
     const pageCount = attempt.drawingPageCount || attempt.handwriting?.summary.pageCount || 0;
     if (pageCount > 0) return `${pageCount}쪽`;
@@ -117,7 +143,11 @@ function handwritingLabel(attempt: Attempt): string {
 }
 
 function hasArchivedHandwriting(attempt: Attempt): boolean {
-    return !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || attempt.drawingsRef);
+    const summaryStrokesRef = "handwritingStrokesRef" in attempt
+        ? attempt.handwritingStrokesRef
+        : undefined;
+    return !!attempt.handwritingArchived
+        && !!(attempt.handwriting?.strokesRef || summaryStrokesRef || attempt.drawingsRef);
 }
 
 function sortedUniqueQuestionNumbers(values: number[]): number[] {
@@ -127,6 +157,78 @@ function sortedUniqueQuestionNumbers(values: number[]): number[] {
 function roundedAverage(values: number[]): number {
     if (values.length === 0) return 0;
     return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+const HEADLINE_WEAKNESS_EVIDENCE_LIMIT = 12;
+
+interface MutableHeadlineWeaknessEvidence {
+    kind: QuestionResultGroupKind;
+    title: string;
+    examIds: Set<string>;
+    wrongCount: number;
+    maxWrongRate: number;
+    recommendedAction: string;
+    actionWrongCount: number;
+    actionWrongRate: number;
+}
+
+function buildHeadlineWeaknessEvidence(
+    groups: readonly StudentProfileWeaknessInsight[],
+): StudentProfileHeadlineWeaknessEvidence[] {
+    const evidenceByTitle = new Map<string, MutableHeadlineWeaknessEvidence>();
+    for (const group of groups) {
+        const title = group.title.trim();
+        if (!title) continue;
+        const key = `${group.kind}\u0000${title.toLocaleLowerCase("ko-KR")}`;
+        const current = evidenceByTitle.get(key);
+        if (!current) {
+            evidenceByTitle.set(key, {
+                kind: group.kind,
+                title,
+                examIds: new Set([group.examId]),
+                wrongCount: Math.max(0, group.wrongCount),
+                maxWrongRate: group.wrongRate,
+                recommendedAction: group.recommendedAction.trim(),
+                actionWrongCount: group.wrongCount,
+                actionWrongRate: group.wrongRate,
+            });
+            continue;
+        }
+
+        current.examIds.add(group.examId);
+        current.wrongCount += Math.max(0, group.wrongCount);
+        current.maxWrongRate = Math.max(current.maxWrongRate, group.wrongRate);
+        const actionIsPreferred = group.wrongCount > current.actionWrongCount
+            || (group.wrongCount === current.actionWrongCount && group.wrongRate > current.actionWrongRate)
+            || (
+                group.wrongCount === current.actionWrongCount
+                && group.wrongRate === current.actionWrongRate
+                && group.recommendedAction.localeCompare(current.recommendedAction, "ko") < 0
+            );
+        if (actionIsPreferred) {
+            current.recommendedAction = group.recommendedAction.trim();
+            current.actionWrongCount = group.wrongCount;
+            current.actionWrongRate = group.wrongRate;
+        }
+    }
+
+    return Array.from(evidenceByTitle.values())
+        .sort((left, right) => (
+            right.examIds.size - left.examIds.size
+            || right.wrongCount - left.wrongCount
+            || right.maxWrongRate - left.maxWrongRate
+            || left.title.localeCompare(right.title, "ko")
+            || left.kind.localeCompare(right.kind)
+        ))
+        .slice(0, HEADLINE_WEAKNESS_EVIDENCE_LIMIT)
+        .map(group => ({
+            kind: group.kind,
+            title: group.title,
+            examIds: Array.from(group.examIds).sort((left, right) => left.localeCompare(right)),
+            wrongCount: group.wrongCount,
+            maxWrongRate: group.maxWrongRate,
+            recommendedAction: group.recommendedAction,
+        }));
 }
 
 export function buildStudentProfileInsight(
@@ -139,16 +241,27 @@ export function buildStudentProfileInsight(
     const weaknessLimit = Math.max(1, options.weaknessLimit ?? 6);
     const weaknessKinds = options.weaknessKinds?.length ? options.weaknessKinds : DEFAULT_WEAKNESS_KINDS;
 
-    const matchedAttempts = attempts
+    const matchedAttempts = completedAttemptsOnly(attempts)
         .filter(attempt => attemptMatchesStudentProfile(attempt, student))
         .sort((a, b) => activityTime(b) - activityTime(a));
     const baseMatchedAttempts = baseAttemptsOnly(matchedAttempts);
     const retakeMatchedAttempts = retakeAttemptsOnly(matchedAttempts);
     const baseAttemptIds = new Set(baseMatchedAttempts.map(attempt => attempt.id));
+    const analyticsIndexByExamId = new Map([...examById.entries()].map(([examId, exam]) => [
+        examId,
+        buildCanonicalAttemptAnalyticsIndex(exam, matchedAttempts.filter(attempt => attempt.examId === examId)),
+    ]));
+    const resolvedScoreByAttempt = new Map(matchedAttempts.map(attempt => {
+        const exam = examById.get(attempt.examId);
+        return [attempt, exam
+            ? summarizeAttemptScore(exam, attempt, analyticsIndexByExamId.get(exam.id))
+            : null] as const;
+    }));
 
     const attemptInsights = matchedAttempts.map(attempt => {
         const exam = examById.get(attempt.examId);
-        const results = exam ? getAttemptQuestionResults(exam, attempt) : [];
+        const resolvedScore = resolvedScoreByAttempt.get(attempt);
+        const results = exam ? analyticsIndexByExamId.get(exam.id)?.resolutionFor(attempt).questionResults || [] : [];
         const behavior = summarizeAttemptBehavior(attempt);
         const wrongQuestionNumbers = sortedUniqueQuestionNumbers(
             results
@@ -166,7 +279,7 @@ export function buildStudentProfileInsight(
             examId: attempt.examId,
             examTitle: attempt.examTitle || exam?.title || "시험",
             finishedAt: attempt.finishedAt,
-            scorePercent: resolveAttemptScore(attempt, exam).scorePercent,
+            scorePercent: resolvedScore && hasGradableAttemptScore(resolvedScore) ? resolvedScore.scorePercent : null,
             elapsedTimeSec: behavior.elapsedTimeSec,
             totalTrackedTimeSec: behavior.totalTrackedTimeSec,
             averageQuestionTimeSec: behavior.averageTimeSec,
@@ -184,17 +297,16 @@ export function buildStudentProfileInsight(
         };
     });
 
-    const scoredAttempts = attemptInsights.filter(attempt => (
-        baseAttemptIds.has(attempt.id) && Number.isFinite(attempt.scorePercent)
-    ));
-    const averageScore = scoredAttempts.length > 0
-        ? Math.round(scoredAttempts.reduce((sum, attempt) => sum + attempt.scorePercent, 0) / scoredAttempts.length)
-        : student.avgScore;
-    const bestScore = scoredAttempts.length > 0
-        ? Math.max(...scoredAttempts.map(attempt => attempt.scorePercent))
-        : student.avgScore;
-    const latestScore = scoredAttempts[0]?.scorePercent ?? student.avgScore;
-    const previousScore = scoredAttempts[1]?.scorePercent ?? latestScore;
+    const scoreValues = attemptInsights
+        .filter(attempt => baseAttemptIds.has(attempt.id))
+        .map(attempt => attempt.scorePercent)
+        .filter((score): score is number => score !== null && Number.isFinite(score));
+    const averageScore = scoreValues.length > 0
+        ? Math.round(scoreValues.reduce((sum, score) => sum + score, 0) / scoreValues.length)
+        : null;
+    const bestScore = scoreValues.length > 0 ? Math.max(...scoreValues) : null;
+    const latestScore = scoreValues[0] ?? null;
+    const previousScore = scoreValues[1] ?? latestScore;
 
     const attemptsByExam = new Map<string, Attempt[]>();
     for (const attempt of baseMatchedAttempts) {
@@ -211,11 +323,12 @@ export function buildStudentProfileInsight(
     for (const [examId, examAttempts] of attemptsByExam.entries()) {
         const exam = examById.get(examId);
         if (!exam) continue;
-        const results = examAttempts.flatMap(attempt => getAttemptQuestionResults(exam, attempt));
+        const analyticsIndex = analyticsIndexByExamId.get(examId)!;
+        const results = examAttempts.flatMap(attempt => analyticsIndex.resolutionFor(attempt).questionResults);
         baseQuestionResults.push(...results);
         wrongQuestionCount += results.filter(result => result.status === "wrong" || result.isWrong).length;
         unansweredQuestionCount += results.filter(result => result.status === "unanswered" || result.isUnanswered).length;
-        mostMissedQuestions.push(...buildMostMissedQuestionStats(exam, examAttempts, weaknessLimit).map(stat => ({
+        mostMissedQuestions.push(...buildMostMissedQuestionStats(exam, examAttempts, weaknessLimit, analyticsIndex).map(stat => ({
             key: `${exam.id}:${stat.questionId}`,
             examId: exam.id,
             examTitle: exam.title,
@@ -234,8 +347,7 @@ export function buildStudentProfileInsight(
             scope: "student",
             attempt: sourceAttempt,
             kinds: weaknessKinds,
-            limit: weaknessLimit * 2,
-        })) {
+        }, analyticsIndex)) {
             weaknessGroups.push({
                 key: `${exam.id}:${recommendation.key}`,
                 examId: exam.id,
@@ -271,7 +383,8 @@ export function buildStudentProfileInsight(
         label: 6,
     };
 
-    const rankedWeaknessGroups = weaknessGroups
+    const headlineWeaknessGroups = buildHeadlineWeaknessEvidence(weaknessGroups);
+    const rankedWeaknessGroups = [...weaknessGroups]
         .sort((a, b) => {
             if (b.wrongRate !== a.wrongRate) return b.wrongRate - a.wrongRate;
             if (b.wrongCount !== a.wrongCount) return b.wrongCount - a.wrongCount;
@@ -289,13 +402,13 @@ export function buildStudentProfileInsight(
         })
         .slice(0, weaknessLimit);
     const tagStats = buildQuestionResultTagStats(baseQuestionResults, "label").slice(0, weaknessLimit);
-    const elapsedTimes = baseMatchedAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
-    const questionTimes = baseMatchedAttempts
+    const elapsedTimes = matchedAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
+    const questionTimes = matchedAttempts
         .flatMap(attempt => attempt.questionTimings || [])
         .map(timing => Math.max(0, timing.totalTimeSec))
         .filter(value => value > 0);
     const totalTrackedTimeSec = questionTimes.reduce((sum, value) => sum + value, 0);
-    const focusLossCount = baseMatchedAttempts.reduce((sum, attempt) => (
+    const focusLossCount = matchedAttempts.reduce((sum, attempt) => (
         sum + resolveAwayCount(attempt)
     ), 0);
 
@@ -304,7 +417,7 @@ export function buildStudentProfileInsight(
         averageScore,
         bestScore,
         latestScore,
-        trendDelta: latestScore - previousScore,
+        trendDelta: latestScore === null || previousScore === null ? null : latestScore - previousScore,
         averageElapsedTimeSec: roundedAverage(elapsedTimes),
         averageQuestionTimeSec: roundedAverage(questionTimes),
         totalTrackedTimeSec,
@@ -315,7 +428,9 @@ export function buildStudentProfileInsight(
         baseAttemptCount: baseMatchedAttempts.length,
         retakeAttemptCount: retakeMatchedAttempts.length,
         weaknessGroups: rankedWeaknessGroups,
+        headlineWeaknessGroups,
         mostMissedQuestions: sortedMostMissedQuestions,
         tagStats,
+        conceptMastery: buildStudentConceptMastery(baseQuestionResults, examById, new Map(baseMatchedAttempts.map(attempt => [attempt.id, attempt.finishedAt]))),
     };
 }

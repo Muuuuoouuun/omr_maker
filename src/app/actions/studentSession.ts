@@ -2,9 +2,11 @@
 
 import { cookies, headers } from "next/headers";
 import { randomUUID } from "node:crypto";
+import { DEFAULT_GUEST_NAME } from "@/lib/guestIdentity";
 import {
     createSignedStudentSessionCookie,
-    parseSignedStudentSessionCookie,
+    resolveAuthorizedStudentSessionCookie,
+    validateStudentServerSession,
     STUDENT_SERVER_SESSION_COOKIE,
     STUDENT_SERVER_SESSION_MAX_AGE_SECONDS,
     type StudentIdentityInput,
@@ -17,6 +19,7 @@ import {
 } from "@/lib/supabaseServerAdmin";
 import {
     verifyStudentCredentials,
+    validateVerifiedStudentCredentialSession,
     type StudentCredentialClient,
 } from "@/lib/studentCredentialVerifier";
 import {
@@ -25,7 +28,11 @@ import {
     recordStudentLoginFailure,
     recordStudentLoginSuccess,
     STUDENT_LOGIN_RATE_LIMIT_ERROR,
+    STUDENT_LOGIN_LOCKOUT_MS,
+    STUDENT_LOGIN_MAX_FAILURES,
+    STUDENT_LOGIN_WINDOW_MS,
 } from "@/lib/studentLoginRateLimit";
+import { applyDurableRateLimitToSubjects } from "@/lib/durableRateLimit";
 import {
     resolveServerStudentLogin,
     studentRegionFromProfile,
@@ -45,14 +52,33 @@ import {
     guestClaimOwnerMatchesStudent,
     parseSignedGuestClaimOwnerProof,
 } from "@/lib/studentGuestClaimOwner";
+import {
+    INITIAL_CAPACITY_EXCEEDED_ERROR,
+    INITIAL_OPERATIONS_LIMITS,
+} from "@/lib/initialOperationsPolicy";
+import {
+    resolveExamEntryInviteWithGateway,
+    type ExamEntryInviteRpcClient,
+} from "@/lib/examEntryInviteGateway";
+import {
+    createExamEntryInviteE2eSimulationClient,
+    getExamEntryInviteE2eFixtureGroups,
+} from "@/lib/examEntryInviteE2eSimulation";
 
-const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
+const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16}|pilot_org_[a-f0-9]{24})$/;
 type QueryError = { message?: string } | null;
+const STUDENT_LOGIN_DURABLE_POLICY = {
+    limit: STUDENT_LOGIN_MAX_FAILURES,
+    windowMs: STUDENT_LOGIN_WINDOW_MS,
+    lockoutMs: STUDENT_LOGIN_LOCKOUT_MS,
+};
 
 interface StudentAuthFilter {
     eq(column: string, value: string): StudentAuthFilter;
+    in(column: string, values: string[]): StudentAuthFilter;
     maybeSingle(): PromiseLike<{ data: unknown; error: QueryError }>;
-    order(column: string, options?: { ascending?: boolean }): PromiseLike<{ data: unknown[] | null; error: QueryError }>;
+    order(column: string, options?: { ascending?: boolean }): StudentAuthFilter;
+    limit(value: number): PromiseLike<{ data: unknown[] | null; error: QueryError }>;
 }
 
 interface StudentAuthClient extends GuestClaimRpcClient {
@@ -67,6 +93,11 @@ export interface StudentLoginGroup {
     region?: string;
 }
 
+export interface StudentExamInviteContext {
+    examId: string;
+    inviteToken: string;
+}
+
 export interface IssuedStudentIdentity {
     studentId: string;
     name: string;
@@ -74,6 +105,29 @@ export interface IssuedStudentIdentity {
     groupName: string;
     regionId?: string;
     regionName?: string;
+    /**
+     * The identity type the server signed into the HttpOnly cookie. Returned
+     * so the browser view model matches the signed session; the server never
+     * reads this back from the client (it re-derives it from the cookie).
+     */
+    identityType: "temporary" | "registered";
+}
+
+/**
+ * Client-safe identity restored from the signed HttpOnly cookie. Organization
+ * scope deliberately stays server-only; callers only receive the fields needed
+ * to rebuild their local view model.
+ */
+export interface RestoredStudentSession {
+    studentId: string;
+    name: string;
+    groupId?: string;
+    groupName?: string;
+    regionId?: string;
+    regionName?: string;
+    isGuest: boolean;
+    identityType: "guest" | "temporary" | "registered";
+    guestId?: string;
 }
 
 export type StudentSessionIssueStatus =
@@ -90,6 +144,8 @@ export interface StudentSessionIssueResult {
     ok: boolean;
     status: StudentSessionIssueStatus;
     identity?: IssuedStudentIdentity;
+    session?: RestoredStudentSession;
+    canLoginWithCurrentScope?: boolean;
     guestClaim?: GuestClaimResult;
     error?: string;
 }
@@ -109,11 +165,44 @@ function normalizeWorkspaceId(value: unknown): string | null {
     return WORKSPACE_ID_PATTERN.test(workspaceId) ? workspaceId : null;
 }
 
+function restoredSessionFromSignedIdentity(identity: StudentServerIdentity): RestoredStudentSession {
+    const isGuest = identity.kind === "guest";
+    return {
+        studentId: isGuest ? `guest:${identity.guestId}` : clean(identity.studentId),
+        name: identity.name,
+        groupId: identity.groupId,
+        groupName: identity.groupName,
+        regionId: identity.regionId,
+        regionName: identity.regionName,
+        isGuest,
+        identityType: identity.identityType,
+        ...(isGuest && identity.guestId ? { guestId: identity.guestId } : {}),
+    };
+}
+
+function issuedStudentIdentityType(identity: StudentServerIdentity): IssuedStudentIdentity["identityType"] {
+    return identity.identityType === "registered" ? "registered" : "temporary";
+}
+
 function clientFingerprintFromHeaders(headerStore: Headers): string {
     return headerStore.get("x-forwarded-for")?.split(",")[0]?.trim()
         || headerStore.get("x-real-ip")?.trim()
         || headerStore.get("user-agent")?.trim()
         || "unknown-client";
+}
+
+function recordDurableStudentLoginFailure(keys: string[]): void {
+    recordStudentLoginFailure(keys);
+}
+
+async function recordDurableStudentLoginSuccess(keys: string[]): Promise<void> {
+    recordStudentLoginSuccess(keys);
+    await applyDurableRateLimitToSubjects({
+        namespace: "student-login",
+        subjects: keys,
+        operation: "success",
+        policy: STUDENT_LOGIN_DURABLE_POLICY,
+    });
 }
 
 function adminClient(): StudentAuthClient | null {
@@ -164,32 +253,84 @@ async function setGuestClaimOwnerCookie(
     }
 }
 
-/** Minimal public directory used by an academy-specific student invite link. */
-export async function loadStudentLoginDirectory(workspaceValue: string): Promise<{
+async function resolveStudentLoginScope(
+    client: ExamEntryInviteRpcClient,
+    input: string | StudentExamInviteContext,
+): Promise<
+    | { status: "resolved"; organizationId: string; groupIds?: string[] }
+    | { status: "invalid" }
+    | { status: "service_unavailable" }
+> {
+    if (typeof input !== "string") {
+        const resolved = await resolveExamEntryInviteWithGateway(client, input.examId, input.inviteToken);
+        if (resolved.status !== "resolved") return resolved;
+        return {
+            status: "resolved",
+            organizationId: resolved.scope.organizationId,
+            groupIds: resolved.scope.groupIds,
+        };
+    }
+    // Backward compatibility is intentionally limited to non-production test
+    // and local data. Production browser identity must come from an opaque,
+    // server-resolved exam invite rather than a stable organization id.
+    if (process.env.NODE_ENV === "production") return { status: "invalid" };
+    const organizationId = normalizeWorkspaceId(input);
+    return organizationId ? { status: "resolved", organizationId } : { status: "invalid" };
+}
+
+/** Minimal public directory scoped by an opaque, exam-specific invite. */
+export async function loadStudentLoginDirectory(input: string | StudentExamInviteContext): Promise<{
     status: "ok" | "degraded_local" | "invalid_workspace" | "error";
     groups?: StudentLoginGroup[];
+    error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
 }> {
-    const workspaceId = normalizeWorkspaceId(workspaceValue);
-    if (!workspaceId) return { status: "invalid_workspace" };
     const client = adminClient();
-    if (!client) return { status: "degraded_local" };
+    const inviteSimulationClient = !client && typeof input !== "string"
+        ? createExamEntryInviteE2eSimulationClient(process.env)
+        : null;
+    if (inviteSimulationClient && typeof input !== "string") {
+        try {
+            const scope = await resolveStudentLoginScope(inviteSimulationClient, input);
+            if (scope.status === "invalid") return { status: "invalid_workspace" };
+            if (scope.status === "service_unavailable") return { status: "error" };
+            const groups = getExamEntryInviteE2eFixtureGroups(
+                process.env,
+                scope.organizationId,
+                input.examId,
+                scope.groupIds || [],
+            );
+            return groups.length > 0 ? { status: "ok", groups } : { status: "invalid_workspace" };
+        } catch {
+            return { status: "error" };
+        }
+    }
+    if (!client) {
+        return { status: process.env.NODE_ENV === "production" ? "error" : "degraded_local" };
+    }
 
     try {
-        const result = await client.from("omr_classes")
+        const scope = await resolveStudentLoginScope(client, input);
+        if (scope.status === "invalid") return { status: "invalid_workspace" };
+        if (scope.status === "service_unavailable") return { status: "error" };
+        let query = client.from("omr_classes")
             .select("id,name,campus,status")
-            .eq("organization_id", workspaceId)
-            .order("name", { ascending: true });
+            .eq("organization_id", scope.organizationId)
+            .eq("status", "active");
+        if (scope.groupIds) query = query.in("id", scope.groupIds);
+        const result = await query.order("name", { ascending: true })
+            .limit(INITIAL_OPERATIONS_LIMITS.classes + 1);
         if (result.error) throw new Error(result.error.message || "Failed to load student login groups");
+        if ((result.data?.length || 0) > INITIAL_OPERATIONS_LIMITS.classes) {
+            return { status: "error", error: INITIAL_CAPACITY_EXCEEDED_ERROR };
+        }
         const groups = (result.data || [])
             .map(asRecord)
-            .filter(row => (clean(row.status) || "active") === "active")
             .map(row => ({
                 id: clean(row.id),
                 name: clean(row.name),
                 region: clean(row.campus) || undefined,
             }))
-            .filter(group => group.id && group.name)
-            .slice(0, 200);
+            .filter(group => group.id && group.name);
         return { status: "ok", groups };
     } catch (error) {
         console.error("loadStudentLoginDirectory failed", error);
@@ -205,6 +346,8 @@ export async function loadStudentLoginDirectory(workspaceValue: string): Promise
  */
 export async function issueStudentSession(input: {
     workspaceId?: string;
+    examId?: string;
+    inviteToken?: string;
     name: string;
     groupId?: string;
     studentLookup?: string;
@@ -220,12 +363,11 @@ export async function issueStudentSession(input: {
         return { ok: false, status: "unauthenticated" };
     }
     const cookieStore = await cookies();
-    const existingIdentity = parseSignedStudentSessionCookie(
-        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
-    );
-    const existingGuestSession = existingIdentity?.kind === "guest" ? existingIdentity : null;
     const client = adminClient();
     if (!client) {
+        if (process.env.NODE_ENV === "production") {
+            return { ok: false, status: "error" };
+        }
         const studentId = clean(input.studentId);
         const name = clean(input.name);
         if (!studentId || !name) return { ok: false, status: "degraded_local" };
@@ -236,21 +378,48 @@ export async function issueStudentSession(input: {
             groupName: clean(input.groupName) || "Unknown",
             regionId: clean(input.regionId) || undefined,
             regionName: clean(input.regionName) || undefined,
+            identityType: "temporary",
         };
         const result = await setSessionCookie({
             kind: "student",
             ...identity,
             organizationId: normalizeWorkspaceId(input.workspaceId) || undefined,
-            identityType: "temporary",
         });
         return { ok: result.ok, status: "degraded_local", identity: result.ok ? identity : undefined };
     }
+    const existingValidation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (existingValidation.status === "service_unavailable") return { ok: false, status: "error" };
+    const existingIdentity = existingValidation.status === "active" ? existingValidation.identity : null;
+    const existingGuestSession = existingIdentity?.kind === "guest" ? existingIdentity : null;
 
-    const workspaceId = normalizeWorkspaceId(input.workspaceId);
     const name = clean(input.name);
     const groupId = clean(input.groupId);
     const studentLookup = clean(input.studentLookup);
-    if (!workspaceId) return { ok: false, status: "invalid_workspace" };
+    const inviteInput = clean(input.examId) && clean(input.inviteToken)
+        ? { examId: clean(input.examId), inviteToken: clean(input.inviteToken) }
+        : null;
+    // A guest-to-student connection may reuse scope only when it came from the
+    // signed HttpOnly cookie. Never recover organization scope from a URL or
+    // browser storage. The guest's signed class is also the only allowed class.
+    const signedGuestScope = existingGuestSession?.organizationId && existingGuestSession?.groupId
+        ? {
+            status: "resolved" as const,
+            organizationId: existingGuestSession.organizationId,
+            groupIds: [existingGuestSession.groupId],
+        }
+        : null;
+    const scope = inviteInput
+        ? await resolveStudentLoginScope(client, inviteInput)
+        : signedGuestScope || await resolveStudentLoginScope(client, input.workspaceId || "");
+    if (scope.status === "invalid") return { ok: false, status: "invalid_workspace" };
+    if (scope.status === "service_unavailable") return { ok: false, status: "error" };
+    const workspaceId = scope.organizationId;
+    if (scope.groupIds && !scope.groupIds.includes(groupId)) {
+        return { ok: false, status: "invalid_credentials" };
+    }
 
     const rateLimitKeys = buildStudentLoginRateLimitKeys({
         workspaceId,
@@ -260,8 +429,16 @@ export async function issueStudentSession(input: {
     if (!checkStudentLoginRateLimit(rateLimitKeys).allowed) {
         return { ok: false, status: "rate_limited", error: STUDENT_LOGIN_RATE_LIMIT_ERROR };
     }
+    if (!(await applyDurableRateLimitToSubjects({
+        namespace: "student-login",
+        subjects: rateLimitKeys,
+        operation: "consume",
+        policy: STUDENT_LOGIN_DURABLE_POLICY,
+    })).allowed) {
+        return { ok: false, status: "rate_limited", error: STUDENT_LOGIN_RATE_LIMIT_ERROR };
+    }
     if (!name || !groupId || !studentLookup) {
-        recordStudentLoginFailure(rateLimitKeys);
+        await recordDurableStudentLoginFailure(rateLimitKeys);
         return { ok: false, status: "invalid_credentials" };
     }
 
@@ -271,12 +448,16 @@ export async function issueStudentSession(input: {
                 .select("id,organization_id,display_name,external_id,email,status,metadata")
                 .eq("organization_id", workspaceId)
                 .eq("display_name", name)
-                .order("id", { ascending: true }),
+                .eq("status", "active")
+                .order("id", { ascending: true })
+                .limit(INITIAL_OPERATIONS_LIMITS.activeStudents + 1),
             client.from("omr_class_students")
                 .select("class_id,organization_id,student_profile_id,enrollment_status")
                 .eq("organization_id", workspaceId)
                 .eq("class_id", groupId)
-                .order("student_profile_id", { ascending: true }),
+                .eq("enrollment_status", "active")
+                .order("student_profile_id", { ascending: true })
+                .limit(INITIAL_OPERATIONS_LIMITS.activeStudents + 1),
             client.from("omr_classes")
                 .select("id,organization_id,name,campus,status")
                 .eq("organization_id", workspaceId)
@@ -286,9 +467,15 @@ export async function issueStudentSession(input: {
         if (profilesResult.error || enrollmentsResult.error || classResult.error) {
             throw new Error(profilesResult.error?.message || enrollmentsResult.error?.message || classResult.error?.message || "Student login query failed");
         }
+        if (
+            (profilesResult.data?.length || 0) > INITIAL_OPERATIONS_LIMITS.activeStudents
+            || (enrollmentsResult.data?.length || 0) > INITIAL_OPERATIONS_LIMITS.activeStudents
+        ) {
+            return { ok: false, status: "error", error: INITIAL_CAPACITY_EXCEEDED_ERROR };
+        }
         const classRow = asRecord(classResult.data);
         if (!clean(classRow.id) || (clean(classRow.status) || "active") !== "active") {
-            recordStudentLoginFailure(rateLimitKeys);
+            await recordDurableStudentLoginFailure(rateLimitKeys);
             return { ok: false, status: "invalid_credentials" };
         }
 
@@ -301,7 +488,7 @@ export async function issueStudentSession(input: {
             studentLookup,
         });
         if (!profile) {
-            recordStudentLoginFailure(rateLimitKeys);
+            await recordDurableStudentLoginFailure(rateLimitKeys);
             return { ok: false, status: "invalid_credentials" };
         }
 
@@ -314,14 +501,25 @@ export async function issueStudentSession(input: {
             },
         );
         if (credential.status === "credential_not_configured") {
-            recordStudentLoginFailure(rateLimitKeys);
+            await recordDurableStudentLoginFailure(rateLimitKeys);
             return { ok: false, status: "code_not_issued" };
         }
         if (credential.status === "service_unavailable") {
             throw new Error(credential.error || "Student credential lookup failed");
         }
         if (credential.status !== "verified") {
-            recordStudentLoginFailure(rateLimitKeys);
+            await recordDurableStudentLoginFailure(rateLimitKeys);
+            return { ok: false, status: "invalid_credentials" };
+        }
+        const currentCredential = await validateVerifiedStudentCredentialSession(
+            client,
+            credential.identity,
+        );
+        if (currentCredential === "service_unavailable") {
+            throw new Error("Student credential validation unavailable");
+        }
+        if (currentCredential !== "active") {
+            await recordDurableStudentLoginFailure(rateLimitKeys);
             return { ok: false, status: "invalid_credentials" };
         }
 
@@ -333,13 +531,17 @@ export async function issueStudentSession(input: {
             groupName: clean(classRow.name),
             regionId: regionName,
             regionName,
+            identityType: "registered",
         };
         const now = Date.now();
         const verifiedStudent: StudentServerIdentity = {
+            version: 2,
             kind: "student",
             ...identity,
             organizationId: workspaceId,
-            identityType: "temporary",
+            identityType: "registered",
+            accountId: credential.identity.accountId,
+            credentialGeneration: credential.identity.credentialGeneration,
             issuedAt: now,
             expiresAt: now + STUDENT_SERVER_SESSION_MAX_AGE_SECONDS * 1000,
         };
@@ -359,10 +561,12 @@ export async function issueStudentSession(input: {
             kind: "student",
             ...identity,
             organizationId: workspaceId,
-            identityType: "temporary",
+            identityType: "registered",
+            accountId: credential.identity.accountId,
+            credentialGeneration: credential.identity.credentialGeneration,
         });
         if (!cookieResult.ok) return { ok: false, status: "error" };
-        recordStudentLoginSuccess(rateLimitKeys);
+        await recordDurableStudentLoginSuccess(rateLimitKeys);
         return { ok: true, status: "ok", identity, guestClaim };
     } catch (error) {
         console.error("issueStudentSession failed", error);
@@ -385,16 +589,24 @@ export async function retryGuestServerClaims(attemptIds: string[]): Promise<Gues
         return { status: "retryable_error", acknowledgedAttemptIds: [], error: "Server storage unavailable" };
     }
     const cookieStore = await cookies();
-    const student = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
+    const studentValidation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (studentValidation.status === "service_unavailable") {
+        return { status: "retryable_error", acknowledgedAttemptIds: [], error: "Server storage unavailable" };
+    }
+    const student = studentValidation.status === "active" ? studentValidation.identity : null;
     const proof = parseSignedGuestClaimOwnerProof(cookieStore.get(GUEST_CLAIM_OWNER_COOKIE)?.value);
     if (!student || student.kind !== "student" || !proof || !guestClaimOwnerMatchesStudent(proof, student)) {
         return { status: "retryable_error", acknowledgedAttemptIds: [], error: "Guest claim proof unavailable" };
     }
     const guest: StudentServerIdentity = {
+        version: 2,
         kind: "guest",
         guestId: proof.guestId,
         studentId: `guest:${proof.guestId}`,
-        name: "Guest Student",
+        name: DEFAULT_GUEST_NAME,
         identityType: "guest",
         issuedAt: proof.issuedAt,
         expiresAt: proof.expiresAt,
@@ -405,9 +617,22 @@ export async function retryGuestServerClaims(attemptIds: string[]): Promise<Gues
 
 /** Refresh an already authenticated student/guest cookie without trusting localStorage identity. */
 export async function refreshStudentSession(): Promise<StudentSessionIssueResult> {
+    const headerStore = await headers();
+    if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) {
+        return { ok: false, status: "unauthenticated" };
+    }
     const cookieStore = await cookies();
-    const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
-    if (!identity) return { ok: false, status: "unauthenticated" };
+    const client = adminClient() || {
+        rpc: async () => ({ data: null, error: { message: "Student session storage unavailable" } }),
+        from: () => ({ select: () => ({}) }),
+    } as unknown as StudentAuthClient;
+    const validation = await validateStudentServerSession(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (validation.status === "service_unavailable") return { ok: false, status: "error" };
+    if (validation.status !== "active") return { ok: false, status: "unauthenticated" };
+    const identity = validation.identity;
     const result = await setSessionCookie({
         kind: identity.kind,
         guestId: identity.guestId,
@@ -419,30 +644,46 @@ export async function refreshStudentSession(): Promise<StudentSessionIssueResult
         regionId: identity.regionId,
         regionName: identity.regionName,
         identityType: identity.identityType,
+        accountId: identity.accountId,
+        credentialGeneration: identity.credentialGeneration,
     });
     if (!result.ok) return { ok: false, status: "error" };
-    if (identity.kind === "guest") {
-        return { ok: true, status: "ok" };
-    }
+    const session = restoredSessionFromSignedIdentity(identity);
     return {
         ok: true,
         status: "ok",
-        identity: {
-            studentId: identity.studentId || "",
-            name: identity.name,
-            groupId: identity.groupId || "",
-            groupName: identity.groupName || "Unknown",
-            regionId: identity.regionId,
-            regionName: identity.regionName,
-        },
+        session,
+        canLoginWithCurrentScope: identity.kind === "guest"
+            && !!identity.organizationId
+            && !!identity.groupId,
+        ...(identity.kind === "student" ? {
+            identity: {
+                studentId: identity.studentId || "",
+                name: identity.name,
+                groupId: identity.groupId || "",
+                groupName: identity.groupName || "Unknown",
+                regionId: identity.regionId,
+                regionName: identity.regionName,
+                identityType: issuedStudentIdentityType(identity),
+            },
+        } : {}),
     };
 }
 
 /** Confirm that the browser still has a valid signed student/guest cookie. */
 export async function validateStudentSession(): Promise<StudentSessionIssueResult> {
     const cookieStore = await cookies();
-    const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
-    if (!identity) return { ok: false, status: "unauthenticated" };
+    const client = adminClient() || {
+        rpc: async () => ({ data: null, error: { message: "Student session storage unavailable" } }),
+        from: () => ({ select: () => ({}) }),
+    } as unknown as StudentAuthClient;
+    const validation = await validateStudentServerSession(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (validation.status === "service_unavailable") return { ok: false, status: "error" };
+    if (validation.status !== "active") return { ok: false, status: "unauthenticated" };
+    const identity = validation.identity;
     if (identity.kind === "guest") return { ok: true, status: "ok" };
     return {
         ok: true,
@@ -454,6 +695,7 @@ export async function validateStudentSession(): Promise<StudentSessionIssueResul
             groupName: identity.groupName || "Unknown",
             regionId: identity.regionId,
             regionName: identity.regionName,
+            identityType: issuedStudentIdentityType(identity),
         },
     };
 }
@@ -463,27 +705,53 @@ export async function validateStudentSession(): Promise<StudentSessionIssueResul
  * guest identity survives repeated logins; only the display name is refreshed.
  */
 export async function issueGuestSession(name?: string): Promise<{ ok: boolean; guestId?: string }> {
+    const headerStore = await headers();
+    if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) {
+        return { ok: false };
+    }
     const trimmedName = name?.trim();
     const cookieStore = await cookies();
-    const existing = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
+    const client = adminClient() || {
+        rpc: async () => ({ data: null, error: { message: "Student session storage unavailable" } }),
+        from: () => ({ select: () => ({}) }),
+    } as unknown as StudentAuthClient;
+    const existingValidation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (existingValidation.status === "service_unavailable") return { ok: false };
+    const existing = existingValidation.status === "active" ? existingValidation.identity : null;
+    if (existing && existing.kind !== "guest") return { ok: false };
     if (existing?.kind === "guest" && existing.guestId) {
         if (!trimmedName || trimmedName === existing.name) {
             return { ok: true, guestId: existing.guestId };
         }
         const refreshed = await setSessionCookie({
-            kind: "guest", guestId: existing.guestId, name: trimmedName, identityType: "guest",
+            kind: "guest",
+            guestId: existing.guestId,
+            organizationId: existing.organizationId,
+            name: trimmedName,
+            groupId: existing.groupId,
+            groupName: existing.groupName,
+            regionId: existing.regionId,
+            regionName: existing.regionName,
+            identityType: "guest",
         });
         return { ok: refreshed.ok, guestId: refreshed.ok ? existing.guestId : undefined };
     }
     const guestId = randomUUID();
     const result = await setSessionCookie({
-        kind: "guest", guestId, name: trimmedName || "Guest Student", identityType: "guest",
+        kind: "guest", guestId, name: trimmedName || DEFAULT_GUEST_NAME, identityType: "guest",
     });
     return { ok: result.ok, guestId: result.ok ? guestId : undefined };
 }
 
 /** Logout clears the HttpOnly cookie so shared devices cannot inherit identity. */
 export async function clearStudentServerSession(): Promise<{ ok: boolean }> {
+    const headerStore = await headers();
+    if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) {
+        return { ok: false };
+    }
     const cookieStore = await cookies();
     cookieStore.delete(STUDENT_SERVER_SESSION_COOKIE);
     cookieStore.delete(GUEST_CLAIM_OWNER_COOKIE);

@@ -74,13 +74,14 @@ export function buildDashboardStatsCsvRows(input: DashboardStatsExportInput): un
     );
 
     input.examRows.forEach(row => {
+        const targetCountVerified = row.targetCountVerified !== false;
         rows.push([
             examStatusLabel(row),
             row.title,
             formatKoreanDate(row.createdAt),
             row.completedCount,
-            row.total,
-            safeRatePercent(row.completedCount, row.total),
+            targetCountVerified ? row.total : "확인 필요",
+            targetCountVerified ? safeRatePercent(row.completedCount, row.total) : "확인 필요",
             row.retakeCount,
             row.archived ? "Y" : "N",
         ]);

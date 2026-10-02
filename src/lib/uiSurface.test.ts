@@ -1,11 +1,38 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { growthClassKeyForAttempt } from "@/lib/studentGrowthReport";
+import { rosterGroupMatchesStudent, type RosterGroup, type RosterStudent } from "@/lib/rosterStorage";
+import { matchRosterStudentForAttempt } from "@/lib/studentResultHub";
+import type { Attempt } from "@/types/omr";
 
 const rootDir = process.cwd();
 
 function readProjectFile(filePath: string): string {
     return readFileSync(path.join(rootDir, filePath), "utf8");
+}
+
+function loadGrowthAttemptContextHelper(): (
+    source: Attempt,
+    student: RosterStudent | null,
+    groups: readonly RosterGroup[],
+) => Attempt | null {
+    const pageSource = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+    const helperStart = pageSource.indexOf("function enrichGrowthAttemptContext(");
+    const helperEndMarker = "\n}\n\nasync function loadTeacherPdfFile";
+    const helperEnd = pageSource.indexOf(helperEndMarker, helperStart);
+    if (helperStart < 0 || helperEnd < 0) throw new Error("growth attempt context helper not found");
+    const helperSource = pageSource.slice(helperStart, helperEnd + 2);
+    const compiled = ts.transpileModule(helperSource, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    return runInNewContext(`${compiled}\nenrichGrowthAttemptContext`, { rosterGroupMatchesStudent }) as (
+        source: Attempt,
+        student: RosterStudent | null,
+        groups: readonly RosterGroup[],
+    ) => Attempt | null;
 }
 
 function stripCssComments(cssSource: string): string {
@@ -346,7 +373,7 @@ describe("service UI surface", () => {
         expect(distributeModal).toContain("const wasOpenRef = useRef(false)");
         expect(distributeModal).toContain("if (wasOpenRef.current)");
         expect(distributeModal).toContain("wasOpenRef.current = true");
-        expect(distributeModal).toContain("const initialType = initialAccessConfig?.type === 'group' ? 'group' : 'public'");
+        expect(distributeModal).toContain("initialAccessConfig?.type === 'targeted' ? 'student'");
         expect(distributeModal).toContain("setAccessType(initialType)");
         expect(distributeModal).toContain("setSelectedGroups(initialType === 'group' ? [...(initialAccessConfig?.groupIds || [])] : [])");
         expect(distributeModal).toContain('setPin(initialType === \'public\' ? normalizeExamPin(initialAccessConfig?.pin || "") : "")');
@@ -358,8 +385,9 @@ describe("service UI surface", () => {
         expect(distributeModal).toContain('role="dialog"');
         expect(distributeModal).toContain('aria-modal="true"');
         expect(distributeModal).toContain("aria-labelledby={dialogTitleId}");
-        expect(distributeModal).toContain("event.key === 'Escape'");
-        expect(distributeModal).toContain("previouslyFocusedRef.current?.focus()");
+        expect(distributeModal).toContain("useDialogFocus(isOpen, onClose)");
+        expect(createPage).toContain("distributeTriggerRef.current = event.currentTarget");
+        expect(createPage).toContain("trigger.focus({ preventScroll: true })");
     });
 
     it("keeps teacher result sorting keyboard accessible and exposes sort state", () => {
@@ -404,7 +432,8 @@ describe("service UI surface", () => {
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
 
         expect(solvePage).toContain("SubmissionProgressOverlay");
-        expect(solvePage).toContain('role="status"');
+        expect(solvePage).toContain('role={allowsRetry ? "dialog" : "status"}');
+        expect(solvePage).toContain("aria-modal={allowsRetry || undefined}");
         expect(solvePage).toContain('aria-live="polite"');
         expect(solvePage).toContain("SUBMISSION_DELAY_NOTICE_MS");
         expect(solvePage).toContain('setSubmissionProgress("saving_handwriting")');
@@ -424,7 +453,7 @@ describe("service UI surface", () => {
         expect(omrCardView).toContain('role="progressbar"');
         expect(omrCardView).toContain("aria-valuenow={answeredCount}");
         expect(omrCardView).toContain("q-card-select-button");
-        expect(homePage).toContain('aria-label="교사 로그인"');
+        expect(homePage).toContain('aria-label={teacherAccountFormLabel}');
         expect(homePage).toContain('htmlFor="teacher-identifier"');
         expect(homePage).toContain('htmlFor="teacher-password"');
         expect(homePage).toContain('id="teacher-login-feedback"');
@@ -605,8 +634,47 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("설치 실행 전");
         expect(pwaCheck).toContain('minHeight: "2.75rem"');
         expect(pwaCheck).toContain('minWidth: "2.75rem"');
-        expect(themeToggle).toContain('size === "small" ? "40px" : "44px"');
-        expect(themeToggle).toContain("const btnSize = size === \"small\" ? 40 : 44");
+        expect(themeToggle).toContain('width: "44px"');
+        expect(themeToggle).toContain("const btnSize = 44");
+    });
+
+    it("keeps the PWA verdict and preflight visible while progressively disclosing advanced diagnostics", () => {
+        const pwaCheck = readProjectFile("src/app/pwa-check/page.tsx");
+        const verdictIndex = pwaCheck.indexOf('data-testid="pwa-device-verdict"');
+        const preflightIndex = pwaCheck.indexOf('data-testid="pwa-preflight-checklist"');
+        const diagnosticsIndex = pwaCheck.indexOf('data-testid="pwa-advanced-diagnostics"');
+        const installIndex = pwaCheck.indexOf('data-testid="pwa-install-proof-guide"');
+        const handoffIndex = pwaCheck.indexOf('data-testid="pwa-device-handoff"');
+        const proofIndex = pwaCheck.indexOf('data-testid="pwa-proof-verifier"');
+
+        expect(pwaCheck).toContain("<details");
+        expect(pwaCheck).toContain("<summary");
+        expect(pwaCheck).toContain('data-testid="pwa-advanced-diagnostics-summary"');
+        expect(pwaCheck).toContain("설치·전달·증빙 진단");
+        expect(verdictIndex).toBeGreaterThan(-1);
+        expect(preflightIndex).toBeGreaterThan(verdictIndex);
+        expect(diagnosticsIndex).toBeGreaterThan(preflightIndex);
+        expect(installIndex).toBeGreaterThan(diagnosticsIndex);
+        expect(handoffIndex).toBeGreaterThan(installIndex);
+        expect(proofIndex).toBeGreaterThan(handoffIndex);
+        expect(pwaCheck.slice(diagnosticsIndex, installIndex)).not.toContain(" open=");
+    });
+
+    it("promotes only PWA checks needing attention and collapses passed checks behind an honest count", () => {
+        const pwaCheck = readProjectFile("src/app/pwa-check/page.tsx");
+
+        expect(pwaCheck).toContain('snapshot.checks.filter(check => check.tone !== "pass")');
+        expect(pwaCheck).toContain('snapshot.checks.filter(check => check.tone === "pass")');
+        expect(pwaCheck).toContain('data-testid="pwa-passed-checks"');
+        expect(pwaCheck).toContain('data-testid="pwa-passed-checks-summary"');
+        expect(pwaCheck).toContain("{passedChecks.length}개 항목 통과");
+        expect(pwaCheck).toContain("passedChecks.map(check => <CheckRow key={check.id} check={check} />)");
+
+        const passedDisclosureIndex = pwaCheck.indexOf('data-testid="pwa-passed-checks"');
+        const advancedDiagnosticsIndex = pwaCheck.indexOf('data-testid="pwa-advanced-diagnostics"');
+        expect(passedDisclosureIndex).toBeGreaterThan(-1);
+        expect(advancedDiagnosticsIndex).toBeGreaterThan(passedDisclosureIndex);
+        expect(pwaCheck.slice(passedDisclosureIndex, advancedDiagnosticsIndex)).not.toContain(" open=");
     });
 
     it("keeps student app chrome controls comfortable on touch devices", () => {
@@ -631,6 +699,24 @@ describe("service UI surface", () => {
         expect(css).toContain(".home-role-home-link");
     });
 
+    it("stacks the student dashboard mobile header without truncating identity actions", () => {
+        const studentDashboard = readProjectFile("src/app/student/dashboard/page.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(studentDashboard).toContain('student-dashboard-group-label${user.isGuest ? " is-redundant" : ""}');
+        expect(studentDashboard).toContain('className="student-dashboard-login-id"');
+        expect(studentDashboard).toContain('className="student-dashboard-controls"');
+        expect(css).toContain(".student-dashboard-brand");
+        expect(css).toContain(".student-dashboard-identity");
+        expect(css).toContain("grid-template-columns: minmax(0, 1fr) auto");
+        expect(css).toContain(".student-dashboard-group-label.is-redundant");
+        expect(css).toContain("display: none");
+        expect(css).toContain(".student-dashboard-login-id");
+        expect(css).toContain("overflow-wrap: anywhere");
+        expect(css).toContain(".student-dashboard-controls");
+        expect(css).toContain("flex-shrink: 0");
+    });
+
     it("keeps teacher app chrome controls comfortable on touch devices", () => {
         const css = readProjectFile("src/app/globals.css");
         const notificationBell = readProjectFile("src/components/NotificationBell.tsx");
@@ -644,14 +730,14 @@ describe("service UI surface", () => {
         expect(notificationBell).toContain("width: 44, height: 44");
         expect(notificationBell).toContain("minHeight: 44");
         expect(teacherHeader).toContain('className="header teacher-header"');
-        expect(teacherHeader).toContain("minHeight: '2.75rem'");
-        expect(teacherHeader).toContain('className="nav-link-live"');
+        expect(teacherHeader).toContain("minHeight: 44");
+        expect(teacherHeader).toContain('className="teacher-header-live-action"');
+        expect(teacherHeader).toContain('aria-label="교사 계정 메뉴"');
         // The dashboard used to carry its own copy of this header; it now gets
         // the chrome (and these touch targets) through the shared TeacherHeader.
         expect(teacherDashboard).toContain("<TeacherHeader");
         expect(css).toContain(".teacher-header-actions");
-        expect(css).toContain(".teacher-header .nav-link");
-        expect(css).toContain(".nav-link-live");
+        expect(teacherHeader).toContain(".teacher-header-live-action { display: none !important; }");
         expect(css).toContain(".create-editor-actions .btn");
         expect(css).toContain("min-height: 2.75rem");
         expect(css).toContain("min-width: 2.75rem");
@@ -710,6 +796,7 @@ describe("service UI surface", () => {
         expect(layout).toContain("<ViewportHeightSync />");
         expect(viewportHeightSync).toContain('"interactive-widget=resizes-content"');
         expect(viewportHeightSync).toContain("isIOSLikeDevice");
+        expect(viewportHeightSync).toContain('"virtualKeyboard" in window.navigator');
         expect(viewportHeightSync).toContain('"--app-viewport-height"');
         expect(viewportHeightSync).toContain('"--app-viewport-width"');
         expect(viewportHeightSync).toContain('"--app-visual-viewport-offset-top"');
@@ -750,7 +837,7 @@ describe("service UI surface", () => {
         expect(css).toContain("min-height: calc(4.5rem + var(--app-safe-area-top))");
         expect(css).toContain("padding-top: var(--app-safe-area-top)");
         expect(css).toContain("height: var(--app-viewport-height, 100dvh) !important");
-        expect(createPage).toContain("height: 'var(--app-viewport-height, 100dvh)'");
+        expect(createPage).toContain("height: 'min(var(--app-viewport-height, 100dvh), 100dvh)'");
         expect(createPage).toContain("calc(var(--app-viewport-height, 100dvh) - 4rem)");
         expect(solvePage).toContain("height: 'var(--app-viewport-height, 100dvh)'");
         expect(solvePage).toContain("minHeight: 'var(--app-viewport-height, 100dvh)'");
@@ -773,8 +860,8 @@ describe("service UI surface", () => {
         const homePage = readProjectFile("src/app/page.tsx");
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
 
-        expect(homePage).toContain('autoComplete="username"');
-        expect(homePage).toContain('autoComplete="current-password"');
+        expect(homePage).toContain('autoComplete={visibleTeacherAccountMode === "login" ? "username" : "email"}');
+        expect(homePage).toContain('autoComplete={visibleTeacherAccountMode === "login" ? "current-password" : "new-password"}');
         expect(homePage).toContain('autoComplete="name"');
         expect(homePage).toContain('autoComplete="email"');
         expect(homePage).toContain('inputMode="email"');
@@ -822,7 +909,8 @@ describe("service UI surface", () => {
         expect(solvePage).toContain("SolveLoadErrorCard");
         expect(solvePage).toContain("시험을 찾을 수 없습니다");
         expect(solvePage).toContain("시험 데이터를 읽지 못했습니다");
-        expect(solvePage).toContain('Link href="/?role=student"');
+        expect(solvePage).toContain('Link href={error.loginHref || "/?role=student"}');
+        expect(solvePage).toContain('loginHref: buildStudentReturnLoginHref(currentPath, { reason: "expired" })');
     });
 
     it("keeps guest recovery visible and merges only server-acknowledged rows", () => {
@@ -845,6 +933,25 @@ describe("service UI surface", () => {
         expect(recoveryPanel).toContain("미검증 로컬 기록 복구");
         expect(recoveryPanel).toContain("acknowledgedAttemptIds");
         expect(recoveryPanel).not.toContain("handleMergeGuestIntoCurrentStudent");
+    });
+
+    it("guides first-use teachers to the account path allowed by their identity mode", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+
+        expect(homePage).toMatch(/visibleTeacherAccountMode === "login"\s*\? teacherSelfServiceEnabled\s*\? "교사 계정으로 로그인하세요\. 계정이 없으면 아래 ‘교사 계정 만들기’를 선택하세요\."\s*:\s*"운영자가 발급한 교사 계정으로 로그인하세요\. 처음 이용하면 운영자에게 계정 발급을 요청해주세요\."/);
+    });
+
+    it("preserves the identity type signed by the server after student login", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+        const serverLoginStart = homePage.indexOf("const result = await issueStudentSession({");
+        const serverLoginEnd = homePage.indexOf("await finishStudentLogin(session, next, undefined, result.guestClaim);", serverLoginStart);
+        const serverLogin = homePage.slice(serverLoginStart, serverLoginEnd);
+
+        expect(serverLoginStart).toBeGreaterThan(-1);
+        expect(serverLoginEnd).toBeGreaterThan(serverLoginStart);
+        expect(serverLogin).toContain("identityType: identity.identityType");
+        expect(serverLogin).not.toContain('identityType: "registered"');
+        expect(serverLogin).not.toContain('identityType: "temporary"');
     });
 
     it("keeps teacher session health visible in operational headers", () => {
@@ -870,14 +977,24 @@ describe("service UI surface", () => {
         expect(homePage).toContain('type="button"');
         expect(homePage).toContain("teacherIdentifier");
         expect(homePage).toContain("saveTeacherSessionWithIdentity");
-        expect(homePage).toContain("shouldShowTeacherDeploymentHelp(error)");
-        expect(authMessages).toContain("Supabase가 아니라");
+        expect(homePage).toContain("teacherLoginHelpFor(error, { production: process.env.NODE_ENV === \"production\" })");
+        expect(homePage).toContain("teacherLoginHelp.operatorHelp");
+        expect(homePage).toContain("teacherLoginHelp.recoveryHelp");
+        expect(homePage).not.toContain("shouldShowTeacherDeploymentHelp");
+        expect(homePage).not.toContain("TEACHER_AUTH_DEPLOYMENT_HELP");
+        expect(authMessages).toContain("OMR_TEACHER_IDENTITY_MODE=self_service");
         expect(authMessages).toContain("TEACHER_ACCOUNTS");
+        expect(authMessages).toContain("계정 발급을 담당하는 운영자에게 문의");
+        expect(authMessages).not.toContain("Supabase가 아니라");
         expect(homePage).toContain("학생번호 또는 이메일");
         expect(homePage).toContain("계정 ID처럼 사용합니다.");
-        expect(homePage).toContain("명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
+        expect(homePage).toContain("이 반 명단에 있는 학생이에요. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
         expect(homePage).toContain("명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다.");
-        expect(homePage).toContain("학생 계정 비밀번호처럼 쓰이는 6자리 코드입니다.");
+        expect(homePage).toContain("처음 로그인한다면 비워두세요. 로그인하면 새 코드를 알려드려요.");
+        expect(homePage).toContain("선생님이 알려준 6자리 코드예요. 영문 대문자와 숫자로 되어 있고 O·I·0·1은 쓰지 않아요.");
+        expect(homePage).toContain('<StatusPill tone="warning" size="sm" label="필수"');
+        expect(homePage).toContain("resolveLocalRosterNameGuard");
+        expect(homePage).toContain("명단에 없는 새 학생으로 시작");
         expect(homePage).toContain('aria-label="이름"');
         expect(homePage).toContain('aria-label="학생번호 또는 이메일"');
         expect(homePage).toContain('aria-label="반 선택"');
@@ -888,7 +1005,7 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("buildTeacherSessionDisplay");
         expect(settingsPage).toContain("getTeacherDeploymentReadiness");
         expect(settingsPage).toContain("DeploymentReadinessSummary");
-        expect(settingsPage).toContain("TEACHER_ACCOUNTS");
+        expect(settingsPage).toContain("학원 관리자에게 요청하세요");
         expect(settingsPage).toContain("clearTeacherAuthSession");
         expect(settingsPage).toContain("SECURITY_POSTURE_ITEMS");
         expect(settingsPage).toContain("SECURITY_INTEGRATION_ITEMS");
@@ -983,7 +1100,6 @@ describe("service UI surface", () => {
         expect(billingPage).toContain("잠긴 프리미엄 기능");
         expect(billingPage).toContain("lockedEntitlementSummary");
         expect(billingPage).toContain("Pro 이상에서 제출 후 원본 보관");
-        expect(billingPage).toContain("getPlanEntitlementViews");
         expect(billingPage).toContain("getPaymentProviderReadiness");
         expect(billingPage).toContain("getPaymentProviderRolloutReadiness");
         expect(billingPage).toContain("결제 provider 상태");
@@ -1015,6 +1131,31 @@ describe("service UI surface", () => {
         expect(billingPage).toContain("토스페이먼츠");
         expect(billingPage).toContain("네이버페이");
         expect(billingPage).toContain("카카오페이");
+    });
+
+    it("subtracts secondary billing detail on phones without hiding the current and Pro comparison", () => {
+        const billingPage = readProjectFile("src/app/teacher/billing/page.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(billingPage).toContain('className="bento-card billing-current-plan-card"');
+        expect(billingPage).toContain('className="billing-current-plan-main"');
+        expect(billingPage).toContain('className="plans-grid"');
+        expect(billingPage).toContain('className="billing-academy-disclosure"');
+        expect(billingPage).toContain("billing-academy-disclosure-content");
+        expect(billingPage).toContain('className="bento-card billing-invoices-card billing-history-disclosure"');
+        expect(billingPage).toContain('className="billing-history-disclosure-content"');
+        expect(billingPage).toContain('className="billing-mobile-disclosure-action"');
+        expect(billingPage).not.toContain('<details open className="billing-academy-disclosure"');
+        expect(billingPage).not.toContain('<details open className="bento-card billing-invoices-card billing-history-disclosure"');
+
+        expect(css).toContain("@media (max-width: 640px)");
+        expect(css).toContain(".billing-current-plan-card");
+        expect(css).toContain(".billing-academy-disclosure > summary");
+        expect(css).toContain(".billing-history-disclosure > summary");
+        expect(css).toContain(".billing-academy-disclosure:not([open]) > .billing-academy-disclosure-content");
+        expect(css).toContain(".billing-history-disclosure:not([open]) > .billing-history-disclosure-content");
+        expect(css).toContain("[open] > summary .billing-mobile-disclosure-action::after");
+        expect(css).toContain("overflow-x: hidden");
     });
 
     it("keeps dashboard statistics exportable as CSV", () => {
@@ -1095,8 +1236,8 @@ describe("service UI surface", () => {
         expect(examAnalyticsTab).toContain("고급 분석 잠금");
         expect(examAnalyticsTab).toContain("PremiumActionLink");
         expect(studentAnalyticsTab).toContain("학생 분석 지역 필터");
-        expect(studentAnalyticsTab).toContain("filterAttemptsByRegion");
-        expect(studentAnalyticsTab).toContain("regionNameForAttempt");
+        expect(studentAnalyticsTab).toContain("filterStudentAnalyticsAttemptsByRegion");
+        expect(studentAnalyticsTab).toContain("studentAnalyticsRegionName");
         expect(studentAnalyticsTab).toContain("resolveScopedSelection");
         expect(studentAnalyticsTab).toContain("setSelectedStudentKey(\"\")");
         expect(studentAnalyticsTab).toContain("학생별 액션 잠금");
@@ -1129,28 +1270,32 @@ describe("service UI surface", () => {
     it("renders dedicated answer and analytics panels only for their active result views", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 
-        expect(teacherAttemptPage).toContain('import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";');
+        expect(teacherAttemptPage).toContain('const AnswersPanel = dynamic(() => import("@/components/teacher/student-results/AnswersPanel"));');
         expect(teacherAttemptPage).toContain('import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";');
         expect(teacherAttemptPage).toMatch(/activeView === ["']answers["'][\s\S]*?<AnswersPanel/);
         expect(teacherAttemptPage).toMatch(/activeView === ["']analytics["'][\s\S]*?<AnalyticsPanel/);
+        expect(teacherAttemptPage).toMatch(/activeView === ["']handwriting["'][\s\S]*?<HandwritingPanel/);
+        expect(teacherAttemptPage).toMatch(/activeView === ["']report["'][\s\S]*?<ReportPanel/);
     });
 
     it("renders the report view through a dedicated report panel", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 
-        expect(teacherAttemptPage).toContain('import ReportPanel from "@/components/teacher/student-results/ReportPanel";');
+        expect(teacherAttemptPage).toContain('() => import("@/components/teacher/student-results/ReportPanel")');
         expect(teacherAttemptPage).toMatch(/activeView === ["']report["'][\s\S]*?<ReportPanel/);
+        expect(teacherAttemptPage).toContain("growthReportModel && !growthReportModel.selectedAttemptIncluded");
     });
 
-    it("keeps the student report sections in the fixed summary-to-growth order", () => {
+    it("keeps the dense student report in the editorial context-to-history order", () => {
         const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
         const orderedMarkers = [
             "report-summary-title",
             "report-score-title",
+            "report-headline-title",
+            "<StudentGrowthReport",
             "report-weakness-title",
-            "report-retake-title",
             "report-feedback-title",
-            "<CumulativeGrowthPanel",
+            "report-history-title",
         ];
 
         let previousIndex = -1;
@@ -1164,7 +1309,8 @@ describe("service UI surface", () => {
     it("loads cumulative result sources lazily with stable roster matching and route guards", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 
-        expect(teacherAttemptPage).toContain('activeView !== "report" && activeView !== "analytics"');
+        expect(teacherAttemptPage).toContain('if (activeView !== "report") return;');
+        expect(teacherAttemptPage).not.toContain('activeView !== "report" && activeView !== "analytics"');
         expect(teacherAttemptPage).toContain("cumulativeLoadingAttemptRef.current === targetAttemptId");
         expect(teacherAttemptPage).toContain("cumulativeSettledAttemptIdRef.current === targetAttemptId");
         expect(teacherAttemptPage).toContain("Promise.all([");
@@ -1172,23 +1318,38 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("loadTeacherExams()");
         expect(teacherAttemptPage).toContain("loadTeacherRosterSnapshot(window.localStorage)");
         expect(teacherAttemptPage).toContain("matchRosterStudentForAttempt(attempt, rosterResult.students)");
+        expect(teacherAttemptPage).toContain("setCumulativeAttempts(attemptResult.items)");
+        expect(teacherAttemptPage).toContain("groups: rosterResult.groups");
         expect(teacherAttemptPage).toContain("activeAttemptIdRef.current !== targetAttemptId");
         expect(teacherAttemptPage).not.toContain("student.name === attempt.studentName");
     });
 
-    it("keeps current-exam analytics first and appends plan-scoped cumulative growth", () => {
+    it("uses the complete demo dashboard cohort for growth comparisons", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const demoDetailIndex = teacherAttemptPage.indexOf("resolveDemoAttemptDetail(readTeacherSession(), targetAttemptId");
+        const demoCohortIndex = teacherAttemptPage.indexOf("buildDemoDashboardData", demoDetailIndex);
+        const remoteLoadIndex = teacherAttemptPage.indexOf("const [attemptResult, examResult, rosterResult]", demoCohortIndex);
+        const demoBranch = teacherAttemptPage.slice(demoCohortIndex, remoteLoadIndex);
+
+        expect(demoDetailIndex).toBeGreaterThan(-1);
+        expect(demoCohortIndex).toBeGreaterThan(demoDetailIndex);
+        expect(remoteLoadIndex).toBeGreaterThan(demoCohortIndex);
+        expect(demoBranch).toContain("setCumulativeAttempts(demoCohort.attempts)");
+        expect(demoBranch).toContain("setCumulativeExams(demoCohort.exams)");
+        expect(demoBranch).toContain("students: demoCohort.rosterStudents");
+        expect(demoBranch).toContain("groups: demoCohort.rosterGroups");
+        expect(demoBranch).not.toContain("...demoDetail.cumulativeAttempts");
+        expect(demoBranch).not.toContain("...demoDetail.peerAttempts");
+    });
+
+    it("keeps analytics focused on current-exam diagnostics without duplicated growth", () => {
         const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
         const currentExamIndex = analyticsPanel.indexOf("오답·미응답·유형 분석");
-        const cumulativeIndex = analyticsPanel.lastIndexOf("<CumulativeGrowthPanel");
-        const cumulativePanel = readProjectFile("src/components/teacher/student-results/CumulativeGrowthPanel.tsx");
 
         expect(currentExamIndex).toBeGreaterThan(-1);
-        expect(cumulativeIndex).toBeGreaterThan(currentExamIndex);
-        expect(analyticsPanel).toContain("studentGrowthReportsEnabled");
-        expect(cumulativePanel).toContain("LockedFeaturePanel");
-        expect(cumulativePanel).toContain("누적 이력을 학생 명단과 안정적으로 연결할 수 없습니다.");
-        expect(analyticsPanel).toContain("cumulativeStatus");
-        expect(analyticsPanel).toContain("cumulativeError");
+        expect(analyticsPanel).not.toContain("CumulativeGrowthPanel");
+        expect(analyticsPanel).not.toContain("cumulativeStatus");
+        expect(analyticsPanel).not.toContain("studentGrowthReportsEnabled");
     });
 
     it("scopes printing to the dedicated report and removes the legacy detail branch", () => {
@@ -1210,36 +1371,277 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).not.toContain("function AllQuestionRow");
     });
 
-    it("shares retryable cumulative growth states and skips locked-plan loads", () => {
+    it("maps cumulative source health into growth report states and skips locked-plan loads", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
         const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
         const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
-        const cumulativePanelPath = path.join(rootDir, "src/components/teacher/student-results/CumulativeGrowthPanel.tsx");
-        expect(existsSync(cumulativePanelPath)).toBe(true);
-        if (!existsSync(cumulativePanelPath)) return;
-        const cumulativePanel = readProjectFile("src/components/teacher/student-results/CumulativeGrowthPanel.tsx");
 
         expect(teacherAttemptPage).toContain("if (!studentGrowthReportsEnabled) return;");
         expect(teacherAttemptPage).toContain("attemptResult.remoteError");
         expect(teacherAttemptPage).toContain("examResult.remoteError");
         expect(teacherAttemptPage).toContain("rosterResult.remoteError");
-        expect(teacherAttemptPage).toContain('setCumulativeStatus("stale")');
+        expect(teacherAttemptPage).toContain("resolveTeacherCollectionGroupCompleteness");
+        expect(teacherAttemptPage).toContain("setCumulativeStatus(attemptCompleteness)");
         expect(teacherAttemptPage).toContain("const retryCumulativeLoad = useCallback");
-        expect(reportPanel).toContain("<CumulativeGrowthPanel");
-        expect(analyticsPanel).toContain("<CumulativeGrowthPanel");
-        expect(cumulativePanel).toContain("onRetry");
-        expect(cumulativePanel).toContain("다시 시도");
-        expect(cumulativePanel).toContain('status === "stale"');
+        expect(reportPanel).toContain("<StudentGrowthReport");
+        expect(reportPanel).toContain("onRetry={onRetryCumulative}");
+        expect(analyticsPanel).not.toContain("CumulativeGrowthPanel");
     });
 
-    it("uses the strict roster matcher and selected-attempt filtering for cumulative insight", () => {
+    it("uses the shared completeness policy for cumulative growth data", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const loaderStart = teacherAttemptPage.indexOf("const [attemptResult, examResult, rosterResult]");
+        const loaderEnd = teacherAttemptPage.indexOf("} catch", loaderStart);
+        const loaderBlock = teacherAttemptPage.slice(loaderStart, loaderEnd);
+
+        expect(loaderBlock).toContain("resolveTeacherCollectionGroupCompleteness([");
+        expect(loaderBlock).toContain("...attemptResult");
+        expect(loaderBlock).toContain("...examResult");
+        expect(loaderBlock).toContain("...rosterResult");
+        expect(loaderBlock).toContain("items: [...rosterResult.students, ...rosterResult.groups]");
+        expect(loaderBlock).toContain("setCumulativeStatus(attemptCompleteness)");
+        expect(loaderBlock).toContain("일부 자료는 서버 동기화 전 로컬 저장본 기준입니다.");
+        expect(loaderBlock).not.toContain("서버 동기화 전 로컬 제출 기준입니다.");
+        expect(loaderBlock).not.toContain("if (attemptResult.remotePartial)");
+    });
+
+    it("keeps mixed exam or roster failures retryable ahead of partial pagination", () => {
+        const collectionClient = readProjectFile("src/lib/teacherAttemptClient.ts");
+        const resolverStart = collectionClient.indexOf("export function resolveTeacherAttemptCollectionCompleteness");
+        const resolverEnd = collectionClient.indexOf("export async function loadTeacherActiveAttemptSessions", resolverStart);
+        const resolverBlock = collectionClient.slice(resolverStart, resolverEnd);
+
+        expect(resolverBlock.indexOf("input.remoteError")).toBeLessThan(resolverBlock.indexOf("input.remotePartial"));
+        expect(resolverBlock).toContain('hasUsableItems ? "stale" : "error"');
+        expect(resolverBlock).toContain('hasUsableItems ? "partial" : "error"');
+    });
+
+    it("retains cohort attempts for growth while filtering only the personal insight", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 
         expect(teacherAttemptPage).toContain("matchRosterStudentForAttempt(attempt, rosterResult.students)");
+        expect(teacherAttemptPage).toContain("setCumulativeAttempts(attemptResult.items)");
         expect(teacherAttemptPage).toContain("filterCumulativeAttemptsForStudent(");
-        expect(teacherAttemptPage).toContain("rosterResult.students,");
-        expect(teacherAttemptPage).toContain("matchedStudent,");
+        expect(teacherAttemptPage).toContain("cumulativeRoster.students,");
+        expect(teacherAttemptPage).toContain("rosterStudent,");
+        expect(teacherAttemptPage).toContain("buildStudentProfileInsight(");
         expect(teacherAttemptPage).not.toContain("rosterResult.students.find(student => attemptMatchesStudentProfile");
+    });
+
+    it("scopes personal cumulative attempts and exam metadata to the active organization", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const insightIndex = teacherAttemptPage.indexOf("const cumulativeInsight = useMemo");
+        const growthIndex = teacherAttemptPage.indexOf("const growthAttempts = useMemo", insightIndex);
+        const insightBlock = teacherAttemptPage.slice(insightIndex, growthIndex);
+
+        expect(insightBlock).toContain("activeOrganizationId || attempt.organizationId");
+        expect(insightBlock).toContain("buildCumulativeExamMap(");
+        expect(insightBlock).not.toContain("new Map(cumulativeExams.map");
+    });
+
+    it("preserves unresolved growth candidates for explicit omission accounting", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const growthReport = readProjectFile("src/components/teacher/student-results/StudentGrowthReport.tsx");
+        const growthAttemptsIndex = teacherAttemptPage.indexOf("const growthAttempts = useMemo");
+        const selectedGrowthIndex = teacherAttemptPage.indexOf("const selectedGrowthAttempt = useMemo", growthAttemptsIndex);
+        const growthBlock = teacherAttemptPage.slice(growthAttemptsIndex, selectedGrowthIndex);
+
+        expect(growthBlock).toContain("markUnresolvedGrowthAttempt(candidate)");
+        expect(growthBlock).not.toContain("candidate is Attempt => candidate !== null");
+        expect(growthReport).toContain("<GrowthOmissionNotice count={model.omittedCount}");
+    });
+
+    it("builds one class-scoped growth model from the complete cohort", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const modelCalls = teacherAttemptPage.match(/buildStudentGrowthReport\(/g) ?? [];
+
+        expect(modelCalls).toHaveLength(1);
+        expect(teacherAttemptPage).toContain("growthClassKeyForAttempt(selectedGrowthAttempt)");
+        expect(teacherAttemptPage).toContain("selectedOrganizationId: activeOrganizationId || attempt.organizationId");
+        expect(teacherAttemptPage).toContain("attempts: growthAttempts");
+        expect(teacherAttemptPage).toContain("exams: cumulativeExams");
+        expect(teacherAttemptPage).toContain("growthReportState={growthReportState}");
+    });
+
+    it("keeps an empty growth model when omitted records need disclosure", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const stateIndex = teacherAttemptPage.indexOf("const growthReportState = useMemo");
+        const labelIndex = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo");
+        const stateBlock = teacherAttemptPage.slice(stateIndex, labelIndex);
+
+        expect(stateBlock).toContain("growthReportModel.omittedCount === 0");
+        expect(stateBlock).toContain("model: growthReportModel");
+    });
+
+    it("does not treat unrelated omissions as evidence that a partial collection includes the selected attempt", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const stateIndex = teacherAttemptPage.indexOf("const growthReportState = useMemo");
+        const labelIndex = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo");
+        const stateBlock = teacherAttemptPage.slice(stateIndex, labelIndex);
+        const partialIndex = stateBlock.indexOf('cumulativeStatus === "partial"');
+        const selectedGuardIndex = stateBlock.indexOf("growthReportModel && !growthReportModel.selectedAttemptIncluded");
+        const unlinkedIndex = stateBlock.indexOf("if (!selectedGrowthAttempt)", partialIndex);
+        const partialBlock = stateBlock.slice(partialIndex, unlinkedIndex);
+
+        expect(selectedGuardIndex).toBeGreaterThanOrEqual(0);
+        expect(selectedGuardIndex).toBeLessThan(partialIndex);
+        expect(partialBlock).not.toContain("growthReportModel.rows.length === 0 && growthReportModel.omittedCount === 0");
+    });
+
+    it("prefers the active workspace organization over a legacy attempt fallback", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const modelIndex = teacherAttemptPage.indexOf("buildStudentGrowthReport({");
+        const modelBlock = teacherAttemptPage.slice(modelIndex, modelIndex + 700);
+
+        expect(teacherAttemptPage).toContain("setActiveOrganizationId(workspaceOrganizationId || null)");
+        expect(modelBlock).toContain("selectedOrganizationId: activeOrganizationId || attempt.organizationId");
+        expect(modelBlock).not.toContain("cumulativeExams.find");
+        expect(modelBlock).not.toContain("growthAttempts.find");
+    });
+
+    it("enriches legacy cohort rows with matched roster classes before growth modeling", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const growthAttemptsIndex = teacherAttemptPage.indexOf("const growthAttempts = useMemo");
+        const growthModelIndex = teacherAttemptPage.indexOf("const growthReportModel = useMemo");
+        const modelIndex = teacherAttemptPage.indexOf("buildStudentGrowthReport({");
+        const identityBlock = teacherAttemptPage.slice(growthModelIndex, modelIndex + 900);
+
+        expect(growthAttemptsIndex).toBeGreaterThan(-1);
+        expect(growthModelIndex).toBeGreaterThan(growthAttemptsIndex);
+        expect(modelIndex).toBeGreaterThan(growthAttemptsIndex);
+        expect(teacherAttemptPage).toContain("rosterGroupMatchesStudent");
+        expect(teacherAttemptPage).toContain("studentProfileId: student.id.trim()");
+        expect(identityBlock.indexOf("rosterStudent?.id")).toBeGreaterThan(-1);
+        expect(identityBlock.indexOf("rosterStudent?.id")).toBeLessThan(identityBlock.indexOf("attempt.studentName"));
+        expect(identityBlock).toContain("selectedClassKey: analyticsBuilders.growthClassKeyForAttempt(selectedGrowthAttempt)");
+        expect(identityBlock).toContain("attempts: growthAttempts");
+        expect(identityBlock).not.toContain("attempts: cumulativeAttempts");
+    });
+
+    it("isolates identical legacy group names by roster region without overwriting snapshots", () => {
+        const enrichGrowthAttemptContext = loadGrowthAttemptContextHelper();
+        const rosterStudent = (id: string, region: string): RosterStudent => ({
+            id,
+            name: id,
+            email: `${id}@example.com`,
+            group: "심화반",
+            region,
+            avatar: "#fff",
+            avgScore: 0,
+            examsTaken: 0,
+            lastActive: "",
+            trend: "flat",
+            status: "active",
+        });
+        const rosterGroup = (id: string, region: string): RosterGroup => ({
+            id,
+            name: "심화반",
+            region,
+            count: 1,
+            avgScore: 0,
+            color: "#fff",
+        });
+        const seoulStudent = rosterStudent("student-seoul", "서울");
+        const busanStudent = rosterStudent("student-busan", "부산");
+        const groups = [rosterGroup("group-seoul", "서울"), rosterGroup("group-busan", "부산")];
+        const legacySource = (id: string, studentName: string): Attempt => ({
+            id,
+            studentName,
+            groupName: "심화반",
+        } as Attempt);
+
+        const seoul = enrichGrowthAttemptContext(legacySource("a-seoul", "서울 학생"), seoulStudent, groups);
+        const busan = enrichGrowthAttemptContext(legacySource("a-busan", "부산 학생"), busanStudent, groups);
+        if (!seoul || !busan) throw new Error("matched legacy attempts must be enriched");
+
+        expect(seoul.groupName).toBe("심화반");
+        expect(busan.groupName).toBe("심화반");
+        expect(seoul.groupId).toBe("group-seoul");
+        expect(busan.groupId).toBe("group-busan");
+        expect(seoul.regionName).toBe("서울");
+        expect(busan.regionName).toBe("부산");
+        expect(growthClassKeyForAttempt(seoul)).not.toBe(growthClassKeyForAttempt(busan));
+
+        const snapshotted = legacySource("snapshot", "기존 학생");
+        Object.assign(snapshotted, {
+            classId: "class-original",
+            groupId: "group-original",
+            regionId: "region-original",
+            regionName: "기존 지역",
+        });
+        const preserved = enrichGrowthAttemptContext(snapshotted, seoulStudent, groups);
+        if (!preserved) throw new Error("authoritative snapshots must be preserved");
+        expect(preserved).toMatchObject({
+            classId: "class-original",
+            groupId: "group-original",
+            groupName: "심화반",
+            regionId: "region-original",
+            regionName: "기존 지역",
+        });
+    });
+
+    it("drops ambiguous unscoped legacy rows instead of merging two regional students", () => {
+        const enrichGrowthAttemptContext = loadGrowthAttemptContextHelper();
+        const rosterStudent = (id: string, region: string): RosterStudent => ({
+            id,
+            name: "동명이인",
+            email: `${id}@example.com`,
+            group: "심화반",
+            region,
+            avatar: "#fff",
+            avgScore: 0,
+            examsTaken: 0,
+            lastActive: "",
+            trend: "flat",
+            status: "active",
+        });
+        const students = [rosterStudent("student-seoul", "서울"), rosterStudent("student-busan", "부산")];
+        const groups: RosterGroup[] = [
+            { id: "group-seoul", name: "심화반", region: "서울", count: 1, avgScore: 0, color: "#fff" },
+            { id: "group-busan", name: "심화반", region: "부산", count: 1, avgScore: 0, color: "#fff" },
+        ];
+        const ambiguousRows = ["ambiguous-a", "ambiguous-b"].map(id => ({
+            id,
+            studentName: "동명이인",
+            groupName: "심화반",
+        } as Attempt));
+
+        const resolvedRows = ambiguousRows
+            .map(row => enrichGrowthAttemptContext(
+                row,
+                matchRosterStudentForAttempt(row, students),
+                groups,
+            ))
+            .filter((row): row is Attempt => row !== null);
+
+        expect(ambiguousRows.map(row => matchRosterStudentForAttempt(row, students))).toEqual([null, null]);
+        expect(resolvedRows).toEqual([]);
+
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        expect(teacherAttemptPage).toContain("markUnresolvedGrowthAttempt(candidate)");
+        expect(teacherAttemptPage).not.toContain(".filter((candidate): candidate is Attempt => candidate !== null)");
+        expect(teacherAttemptPage).toContain("학생·반 연결 정보가 부족해 성장 데이터를 비교할 수 없습니다.");
+    });
+
+    it("keeps stale source failures retryable ahead of clean unlinked empty state", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const stateStart = teacherAttemptPage.indexOf("const growthReportState = useMemo<StudentGrowthReportState>");
+        const stateEnd = teacherAttemptPage.indexOf("const selectedAttemptLabel = useMemo", stateStart);
+        const stateBlock = teacherAttemptPage.slice(stateStart, stateEnd);
+        const staleFailureIndex = stateBlock.indexOf('cumulativeStatus === "stale" && cumulativeError && (!selectedGrowthAttempt || !growthReportModel)');
+        const partialFailureIndex = stateBlock.indexOf('cumulativeStatus === "partial"');
+        const unlinkedEmptyIndex = stateBlock.indexOf("if (!selectedGrowthAttempt)");
+
+        expect(stateStart).toBeGreaterThan(-1);
+        expect(stateEnd).toBeGreaterThan(stateStart);
+        expect(staleFailureIndex).toBeGreaterThan(-1);
+        expect(partialFailureIndex).toBeGreaterThan(staleFailureIndex);
+        expect(unlinkedEmptyIndex).toBeGreaterThan(partialFailureIndex);
+        expect(stateBlock.slice(staleFailureIndex, unlinkedEmptyIndex)).toContain('status: "error", message: cumulativeError');
+        expect(stateBlock.slice(partialFailureIndex, unlinkedEmptyIndex)).toContain('message: cumulativeError || "일부 데이터만 불러와 선택한 응시의 성장 이력을 확인할 수 없습니다."');
+
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
+        expect(reportPanel).toMatch(/growthReportState\.status === "error"[\s\S]*role="alert"[\s\S]*onClick=\{onRetryCumulative\}/);
     });
 
     it("keeps cumulative data and the rendered attempt keyed to the current route", () => {
@@ -1249,6 +1651,24 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("cumulativeAttemptId === attempt.id");
         expect(teacherAttemptPage).toContain("setCumulativeAttemptId(targetAttemptId)");
         expect(teacherAttemptPage).toContain("setCumulativeAttemptId(null)");
+    });
+
+    it("guards A-to-B-to-A cumulative requests with a monotonic generation", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const generationStartIndex = teacherAttemptPage.indexOf("const requestGeneration = ++cumulativeLoadGenerationRef.current");
+        const requestGuardIndex = teacherAttemptPage.indexOf("const isCurrentCumulativeRequest = () =>");
+        const demoCommitIndex = teacherAttemptPage.indexOf("setCumulativeAttempts(", requestGuardIndex);
+        const remoteCommitIndex = teacherAttemptPage.indexOf("setCumulativeAttempts(attemptResult.items)");
+        const finalizerIndex = teacherAttemptPage.indexOf("if (isCurrentCumulativeRequest() && cumulativeLoadingAttemptRef.current === targetAttemptId)");
+
+        expect(teacherAttemptPage).toContain("const cumulativeLoadGenerationRef = useRef(0)");
+        expect(generationStartIndex).toBeGreaterThan(-1);
+        expect(requestGuardIndex).toBeGreaterThan(generationStartIndex);
+        expect(demoCommitIndex).toBeGreaterThan(requestGuardIndex);
+        expect(remoteCommitIndex).toBeGreaterThan(demoCommitIndex);
+        expect(finalizerIndex).toBeGreaterThan(remoteCommitIndex);
+        expect(teacherAttemptPage.match(/if \(!isCurrentCumulativeRequest\(\)\) return;/g) ?? []).toHaveLength(3);
+        expect(teacherAttemptPage).toMatch(/cumulativeLoadGenerationRef\.current \+= 1;[\s\S]*setCumulativeAttempts\(\[\]\)/);
     });
 
     it("defines the actual global print cascade and a forced light report palette", () => {
@@ -1268,15 +1688,42 @@ describe("service UI surface", () => {
         expect(studentResultCss).not.toMatch(/\.reportPrintRoot\s*\{[^}]*position:\s*absolute;/);
     });
 
+    it("does not present locked, loading, failed, or incomplete history as empty", () => {
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
+        const historyIndex = reportPanel.indexOf('id="report-history-title"');
+        const historyBlock = reportPanel.slice(historyIndex, historyIndex + 5_000);
+
+        expect(historyIndex).toBeGreaterThan(-1);
+        expect(historyBlock).toContain("!studentGrowthReportsEnabled");
+        expect(historyBlock).toContain('growthReportState.status === "idle" || growthReportState.status === "loading"');
+        expect(historyBlock).toContain('growthReportState.status === "error"');
+        expect(historyBlock).toContain('growthReportState.status === "stale"');
+        expect(historyBlock).toContain('growthReportState.status === "partial"');
+        expect(historyBlock).toContain('growthReportState.status === "empty"');
+        expect(historyBlock.match(/onClick=\{onRetryCumulative\}/g) ?? []).toHaveLength(2);
+        expect(historyBlock).toContain("상세 이력을 학생 명단과 연결할 수 없습니다.");
+        expect(historyBlock).toContain("reportCumulativeInsight?.attempts.length");
+    });
+
     it("distinguishes unavailable report calculations from a calculated empty result", () => {
         const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
 
         expect(reportPanel).toContain("시험 정보를 불러오지 못해 오답과 약점을 계산할 수 없습니다.");
         expect(reportPanel).toContain("analytics ? (");
+        const unavailableHeadlineIndex = reportPanel.indexOf("const headline = !hasGradableScore");
+        const retakeHeadlineIndex = reportPanel.indexOf("retakeScoreDelta", unavailableHeadlineIndex);
+        expect(unavailableHeadlineIndex).toBeGreaterThan(-1);
+        expect(retakeHeadlineIndex).toBeGreaterThan(unavailableHeadlineIndex);
+        expect(reportPanel).toContain("채점 가능한 문항이 없어 점수와 비교 지표를 표시하지 않습니다.");
+        expect(reportPanel).toContain('hasGradableScore ? `${scorePercent}%` : "미채점"');
+        expect(reportPanel).toContain("제출 당시 저장된 점수");
+        expect(reportPanel).toContain("문항 분석은 시험 정보를 불러온 뒤 확인할 수 있습니다.");
     });
 
     it("keeps student result panel inputs and small status text readable in both themes", () => {
         const answersPanel = readProjectFile("src/components/teacher/student-results/AnswersPanel.tsx");
+        const gradingEvidenceNote = readProjectFile("src/components/dashboard/StatusPill.tsx");
+        const globals = readProjectFile("src/app/globals.css");
         const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
         const studentResultCss = readProjectFile("src/components/teacher/student-results/StudentResultHub.module.css");
 
@@ -1285,8 +1732,9 @@ describe("service UI surface", () => {
         expect(studentResultCss).toMatch(/\.replyTextarea::placeholder\s*\{[^}]*color:\s*#64748b;/);
         expect(answersPanel).toContain('correct: { label: "정답", color: "var(--text-success)" }');
         expect(answersPanel).toContain('wrong: { label: "오답", color: "var(--text-error)" }');
-        expect(answersPanel).toContain('tone="warning"');
-        expect(answersPanel).toContain('"var(--text-warning)"');
+        expect(gradingEvidenceNote).toContain('className="grading-evidence-note"');
+        expect(globals).toMatch(/\.grading-evidence-note\s*\{[^}]*font-size:\s*var\(--type-caption-min\)/);
+        expect(globals).toMatch(/\.grading-evidence-note strong\s*\{[^}]*color:\s*var\(--text-warning\)/);
         expect(answersPanel).toContain('textColor="var(--text-success)"');
         expect(answersPanel).toContain('textColor="var(--text-error)"');
         expect(answersPanel).toContain('fontSize: "0.72rem", color: "var(--foreground)"');
@@ -1327,16 +1775,16 @@ describe("service UI surface", () => {
         expect(handwritingLink).toContain("minHeight: 44");
         expect(modalReportLink).toContain("minHeight: 44");
 
-        const selectedActionStart = usersPage.indexOf("<div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>");
+        const selectedActionStart = usersPage.indexOf("!rosterMutationsDisabled && latestStableAttempt ? (");
         const selectedActions = usersPage.slice(
             selectedActionStart,
-            usersPage.indexOf("{tab === \"groups\"", usersPage.indexOf("{latestStableAttempt ? (")),
+            usersPage.indexOf('{tab === "groups" && (', selectedActionStart),
         );
         expect(selectedActions).toContain('buildStudentResultHref(latestStableAttempt.id, "report")');
         expect(selectedActions).toContain("studentGrowthReportsEnabled &&");
         expect(selectedActions).toContain("onClick={handleOpenDetail}");
         expect(selectedActions).toContain("성장 분석");
-        expect(selectedActions).toContain("flexWrap: 'wrap'");
+        expect(usersPage).toContain("flexWrap: 'wrap'");
     });
 
     it("resets route-scoped student result state while preserving peer attempts on load failure", () => {
@@ -1346,7 +1794,7 @@ describe("service UI surface", () => {
         const resetBlock = teacherAttemptPage.slice(loaderStart, authCheck);
 
         for (const reset of [
-            "setLoaded(false);",
+            'setDetailLoadStatus("loading");',
             "setAccessDenied(false);",
             "setAttempt(null);",
             "setExam(null);",
@@ -1373,7 +1821,8 @@ describe("service UI surface", () => {
             expect(resetBlock).toContain(reset);
         }
         expect(resetBlock).not.toContain("setPeerAttempts");
-        expect(teacherAttemptPage).toContain("if (cancelled) return;\n                if (!found) {");
+        expect(teacherAttemptPage).toContain('if (detailResult.status === "not_found") {');
+        expect(teacherAttemptPage).toContain('if (detailResult.status === "service_unavailable") {');
         expect(teacherAttemptPage).toContain("if (cancelled) return;\n\n                const parsedExam");
         expect(teacherAttemptPage).toContain(".catch(() => undefined);");
         expect(teacherAttemptPage).not.toContain("setPeerAttempts([])");
@@ -1405,8 +1854,9 @@ describe("service UI surface", () => {
             expect(mutation).toContain("activeAttemptIdRef.current !== targetAttemptId");
             expect(mutation).toMatch(/finally\s*\{[^}]*activeAttemptIdRef\.current === targetAttemptId/);
         }
+        expect(teacherAttemptPage).toContain("mergeSelectedAttemptIntoPeers(attempt, peerAttempts)");
         expect(teacherAttemptPage).toContain("const series = buildStudentAttemptSeries(");
-        expect(teacherAttemptPage).toContain("return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt]);");
+        expect(teacherAttemptPage).toContain("return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt], examById);");
     });
 
     it("keeps the dashboard overview bento grid usable on mobile", () => {
@@ -1454,9 +1904,11 @@ describe("service UI surface", () => {
             + readProjectFile("src/components/teacher/users/GroupsTab.tsx")
             + readProjectFile("src/components/teacher/users/InvitesTab.tsx");
 
-        expect(studentDashboard).toContain("나의 원시험 평균");
-        expect(studentDashboard).toContain("완료한 원시험");
-        expect(studentDashboard).toContain("retakeAttemptsOnly(myAttempts)");
+        expect(studentDashboard).toContain("내 평균 점수");
+        expect(studentDashboard).toContain("재시험 제외 · 기록 보기 →");
+        expect(studentDashboard).toContain("완료한 시험");
+        expect(studentDashboard).toContain("attempt => !attempt.retakeSourceAttemptId");
+        expect(studentDashboard).toContain("attempt => !!attempt.retakeSourceAttemptId");
         expect(studentHistory).toContain("원시험 응시");
         expect(studentHistory).toContain("재시험 회복");
         expect(studentHistory).toContain("재시험 {attempt.retake.questionIds.length}문항");
@@ -1614,6 +2066,84 @@ describe("service UI surface", () => {
         expect(pwaMobileE2e).toContain("reviewStatSizing.cardHeight + 2");
     });
 
+    it("surfaces grading provenance without silently regrading historical submissions", () => {
+        const studentReview = readProjectFile("src/app/student/review/[attemptId]/page.tsx");
+        const teacherAttempt = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const answersPanel = readProjectFile("src/components/teacher/student-results/AnswersPanel.tsx");
+        const gradingEvidenceNote = readProjectFile("src/components/dashboard/StatusPill.tsx");
+        const globals = readProjectFile("src/app/globals.css");
+        const examAnalytics = readProjectFile("src/components/dashboard/tabs/ExamAnalyticsTab.tsx");
+        const teacherExam = readProjectFile("src/app/teacher/exam/[id]/page.tsx");
+        const studentAnalytics = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
+        const affectedSurfaces = `${studentReview}\n${teacherAttempt}\n${answersPanel}\n${examAnalytics}\n${teacherExam}\n${studentAnalytics}`;
+
+        expect(studentReview).toContain("resolveAttemptGrading(reviewExam, attempt)");
+        expect(studentReview).toContain('gradingResolution.source === "legacy_derived_current_exam"');
+        expect(studentReview).toContain("summarizeCanonicalQuestionSubset(exam, sourceAttempt, allReviewQuestionIds)");
+        expect(teacherAttempt).toContain("const gradingResolution = analyticsBuilders.premium.resolveAttemptGrading(exam, attempt)");
+        expect(teacherAttempt).toContain("gradingSource={answerGradingSource}");
+        expect(teacherAttempt).toContain("const answerQuestionResults = analytics?.questionResults ?? []");
+        expect(teacherAttempt).not.toContain("analytics?.questionResults ?? attempt.questionResults");
+        expect(examAnalytics).toContain("resolveAttemptGrading(selectedExam, attempt)");
+        expect(examAnalytics).not.toContain("resolveAttemptGrading(selectedExam, student.attempt)");
+        expect(examAnalytics).toContain("[...input.questionResults]");
+        expect(examAnalytics).toContain("left.questionNumber - right.questionNumber");
+        expect(examAnalytics).not.toContain("new Map(student.questionResults.map");
+        expect(teacherExam).toContain("const gradingResolution = resolveAttemptGrading(exam, attempt)");
+        expect(teacherExam).toContain("const counts = gradingResolution.questionResults.reduce");
+        expect(studentAnalytics).toContain("const gradingResolution = !requiresCanonicalSnapshot && exam && localRuntime");
+        expect(studentAnalytics).toContain("localRuntime.resolveAttemptGrading(exam, attempt)");
+        expect(studentAnalytics).toContain("canonicalStudentRowsByAttemptId.get(attempt.id)");
+        expect(studentAnalytics).toContain("gradingResolution.questionResults.forEach");
+        expect(affectedSurfaces).not.toContain("getAttemptQuestionResults");
+        expect(gradingEvidenceNote).toContain("과거 기록 · 현재 시험지 기준 참고 채점");
+        expect(examAnalytics).toContain("과거 기록 · 현재 시험지 기준 참고 채점");
+        expect(examAnalytics).toContain("과거 기록 기반 참고 분석");
+        expect(studentAnalytics).toContain("과거 기록 기반 참고 분석");
+        expect(studentReview).toContain("<GradingEvidenceNote source={gradingResolution.source}");
+        expect(answersPanel).toContain("<GradingEvidenceNote source={gradingSource}");
+        expect(gradingEvidenceNote).toContain('role="note"');
+        expect(gradingEvidenceNote).toContain('aria-label="채점 근거 안내"');
+        expect(gradingEvidenceNote).toContain("문항별 결과 없이 제출 당시 저장된 총점만 표시합니다.");
+        expect(gradingEvidenceNote).toContain("불완전한 문항 결과는 현재 시험지와 섞지 않고 미채점으로 표시합니다.");
+        expect(gradingEvidenceNote).toContain('className="grading-evidence-note"');
+        expect(globals).toContain(".grading-evidence-note strong");
+        expect(globals).toContain("font-size: var(--type-caption-min)");
+        expect(globals).toContain(".status-pill.is-warning");
+        expect(globals).toContain("--status-pill-color: var(--text-warning)");
+        expect(affectedSurfaces).not.toContain("현재 정답 기준 재채점됨");
+    });
+
+    it("keeps the roster recent-attempt percentage on immutable submitted totals", () => {
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+
+        expect(usersPage).toContain("safeScorePercent(a.score, a.totalScore)");
+        expect(usersPage).not.toContain("resolveAttemptScore(a, examById.get(a.examId))");
+    });
+
+    it("uses a scoped ARIA tabs pattern for student review question navigation", () => {
+        const studentReview = readProjectFile("src/app/student/review/[attemptId]/page.tsx");
+
+        expect(studentReview).toContain('role="tablist"');
+        expect(studentReview).toContain('role="tab"');
+        expect(studentReview).toContain('role="tabpanel"');
+        expect(studentReview).toContain("aria-selected={isActive}");
+        expect(studentReview).toContain("aria-pressed={!filterWrong}");
+        expect(studentReview).toContain("aria-pressed={filterWrong}");
+        expect(studentReview).not.toContain('window.addEventListener("keydown"');
+    });
+
+    it("keeps student review reading order aligned without CSS reordering on phones", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const pwaMobileE2e = readProjectFile("e2e/pwa-mobile.spec.ts");
+
+        expect(css).toContain('"summary content"');
+        expect(css).toContain('"secondary content"');
+        expect(css).not.toContain("display: contents");
+        expect(css).not.toMatch(/\.student-review-(?:content|side-card|next-action)\s*{\s*order\s*:/);
+        expect(pwaMobileE2e).toContain("expect(reviewFlow.contentTop).toBeLessThan(reviewFlow.secondaryTop)");
+    });
+
     it("keeps Kakao notifications planned without implying live sending", () => {
         const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
@@ -1629,7 +2159,8 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("NOTIFICATION_STATUS_ITEMS");
         expect(settingsPage).toContain("앱 내 카카오 발송 후보");
         expect(settingsPage).toContain("카카오 실제 발송");
-        expect(settingsPage).toContain("실제 전송 설정을 활성화할 수 없습니다");
+        expect(settingsPage).toContain('href="/teacher/reminders"');
+        expect(settingsPage).toContain("서버의 솔라피 연결과 발송 모드 설정에 따릅니다");
         expect(settingsPage).not.toContain('<Toggle checked={value.email}');
         expect(settingsPage).not.toContain('<Toggle checked={value.push}');
         expect(overviewTab).toContain("카카오 알림 연동 전");
@@ -1640,12 +2171,17 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("시작 코드");
         expect(usersPage).toContain("학생 계정 안내");
         expect(usersPage).toContain("로그인 ID");
-        expect(usersPage).toContain("학생에게 이름, 반, 로그인 ID, 시작 코드를 함께 전달하세요.");
-        expect(usersPage).toContain("handleCopyStudentLoginInfo");
+        expect(usersPage).toContain("일회용 CSV로만 내려받습니다");
         expect(usersPage).toContain("student-login-id-value");
-        expect(usersPage).toContain("student-login-start-code-value");
-        expect(usersPage).toContain("handleIssueStudentStartCode");
-        expect(usersPage).toContain("generateStartCode");
+        expect(usersPage).toContain("StudentCredentialBatchDialog");
+        expect(usersPage).toContain("issueStudentCredentialBatch");
+        expect(usersPage).toContain("선택 학생 코드 발급");
+        expect(usersPage).not.toContain("handleCopyStudentLoginInfo");
+        expect(usersPage).not.toContain("student-login-start-code-value");
+        expect(usersPage).not.toContain("handleIssueStudentStartCode");
+        expect(usersPage).not.toContain("serverResult.startCode");
+        expect(usersPage).not.toContain("studentCredentialRequestKeysRef");
+        expect(usersPage).not.toContain("generateStartCode");
         expect(usersPage).toContain("disambiguateRosterStudentId");
         expect(usersPage).toContain("uniqueStudentIdForRoster");
         expect(usersPage).toContain('"id", "name", "email"');
@@ -1709,7 +2245,7 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("DataDbSection");
         expect(settingsPage).toContain("buildDataDbReadiness");
         expect(settingsPage).toContain("loadTeacherExams()");
-        expect(settingsPage).toContain("loadTeacherAttempts()");
+        expect(settingsPage).toContain("loadTeacherAttemptSummaries()");
         expect(settingsPage).toContain("loadTeacherRosterSnapshot(window.localStorage)");
         expect(settingsPage).toContain("readRosterTombstones(window.localStorage)");
         expect(settingsPage).toContain('aria-label="데이터 DB 상태 새로고침"');
@@ -1761,19 +2297,18 @@ describe("service UI surface", () => {
             + readProjectFile("src/components/teacher/users/InvitesTab.tsx");
 
         expect(usersPage).toContain('type RosterDataMode = "real" | "demo"');
-        expect(usersPage).toContain("hasStoredRosterData(localStorage)");
-        expect(usersPage).toContain("function isLegacyDemoRosterSnapshot");
-        expect(usersPage).toContain("localStorage.removeItem(key)");
-        expect(usersPage).toContain("const storedStudents = readRosterStudents(localStorage)");
+        expect(usersPage).toContain("readTeacherRosterDegradedCache(localStorage");
+        expect(usersPage).toContain("localStorage.removeItem(STUDENT_CODES_STORAGE_KEY)");
+        expect(usersPage).toContain("sanitizeTeacherRosterCandidate(rosterResult.candidate)");
         expect(usersPage).toContain("loadTeacherRosterSnapshot(localStorage)");
-        expect(usersPage).toContain("const nextStudents = useDemoRoster ? [] : rosterResult.students");
-        expect(usersPage).toContain("saveTeacherRosterSnapshot(localStorage");
+        expect(usersPage).toContain("students: useDemoRoster ? [] : freshSnapshot.students");
+        expect(usersPage).toContain("persistTeacherRosterCompletionIfCurrent(");
         expect(usersPage).toContain("데모 명단 모드");
         expect(usersPage).toContain('aria-label="데모 명단 안내"');
         expect(usersPage).toContain("const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students");
         expect(usersPage).toContain("const rosterInvites = isDemoRoster ? MOCK_INVITES : invites");
         expect(usersPage).toContain("buildRegionalLearningScopes");
-        expect(usersPage).toContain("지역별 현황");
+        expect(usersPage).toContain("전체 지역");
         expect(usersPage).toContain("학생 지역 필터");
         expect(usersPage).toContain('"name", "email", "group", "region"');
         expect(usersPage).toContain("WeaknessRetakeLink");
@@ -1806,5 +2341,54 @@ describe("service UI surface", () => {
         expect(livePage).not.toContain("학생들의 시험 진행 상황을 실시간으로 모니터링하세요.");
         expect(livePage).not.toContain("Math.random");
         expect(livePage).toContain("shouldUseDemoData(readTeacherSession())");
+    });
+
+    it("keeps the live force-finish confirmation inside the shared dialog focus lifecycle", () => {
+        const livePage = readProjectFile("src/app/teacher/live/page.tsx");
+
+        expect(livePage).toContain('import { useDialogFocus } from "@/hooks/useDialogFocus"');
+        expect(livePage).toContain("const dialogRef = useDialogFocus(true, onCancel)");
+        expect(livePage).toContain("ref={dialogRef}");
+        expect(livePage).toContain('tabIndex={-1}');
+    });
+
+    it("keeps warning, print, and view-switching affordances accessible", () => {
+        const createPage = readProjectFile("src/app/create/page.tsx");
+        const dashboardPage = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+        const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
+        const livePage = readProjectFile("src/app/teacher/live/page.tsx");
+        const studentDashboardPage = readProjectFile("src/app/student/dashboard/page.tsx");
+        const historyPage = readProjectFile("src/app/student/history/page.tsx");
+        const groupsTab = readProjectFile("src/components/teacher/users/GroupsTab.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(createPage).toContain("const hasValidationIssues = validationSummary.errors.length > 0 || validationSummary.warnings.length > 0");
+        expect(createPage).toContain("{hasValidationIssues && <div className=\"create-design-check-compact\"");
+        expect(createPage).toContain("validationSummary.warnings.length > 0 ? '경고 확인'");
+        expect(dashboardPage).toContain('role="group" aria-label="대시보드 보기"');
+        expect(dashboardPage).toContain("aria-pressed={activeTab === 'overview'}");
+        expect(dashboardPage).not.toContain('role="tab"');
+        expect(usersPage).toContain('role="group" aria-label="명단 보기"');
+        expect(usersPage).toContain("aria-pressed={tab === t.key}");
+        expect(usersPage).not.toContain('role="tab"');
+        expect(css).toContain(".student-review-page details:not([open]) > :not(summary)");
+        expect(css).toContain(".student-review-page details > summary::marker");
+        expect(css).not.toContain(".student-review-page details > summary {\n    display: none !important;");
+        expect(settingsPage).toContain('className="bento-card settings-section-nav"');
+        expect(livePage).toContain("classifyTeacherLiveExamPhase");
+        expect(livePage).toContain("teacherLiveExamPresentation");
+        expect(livePage).toContain('aria-label={isScreenRefreshPaused ? "화면 갱신 재개" : "화면 갱신 일시정지"}');
+        expect(livePage).toContain('aria-pressed={isScreenRefreshPaused}');
+        expect(livePage).toContain("교사 화면의 자동 갱신만 멈춥니다. 학생 응시와 시험 시간은 계속됩니다.");
+        expect(livePage).toContain("var(--warning)");
+        expect(livePage).toContain("var(--grade-red)");
+        expect(livePage).toContain("var(--error)");
+        expect(livePage.match(/<PlusCircle size=\{18\} \/> 시험 만들기/g)).toHaveLength(1);
+        expect(studentDashboardPage).toContain('className="student-guest-merge-disclosure"');
+        expect(historyPage).toContain('className="student-history-empty-state"');
+        expect(groupsTab).toContain("teacher-groups-empty-state");
+        expect(settingsPage).toContain(".settings-section-nav");
+        expect(css).toContain(".student-dashboard-header");
     });
 });

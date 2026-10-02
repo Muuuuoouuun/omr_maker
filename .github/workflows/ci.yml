@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, "premier0.1"]
+    branches: ["**"]
   pull_request:
-    branches: [main, "premier0.1"]
+    branches: ["**"]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -23,7 +24,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.13.0"
           cache: "npm"
       - name: Production dependency audit
         run: npm audit --package-lock-only --omit=dev --audit-level=high
@@ -49,7 +50,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.13.0"
       - name: Verify live PostgreSQL contract
         run: node scripts/verify-supabase-live.mjs
 
@@ -64,7 +65,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.13.0"
           cache: "npm"
       - name: Install
         run: npm ci
@@ -83,7 +84,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.13.0"
           cache: "npm"
       - name: Install dependencies
         run: npm ci
@@ -91,6 +92,10 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run E2E
         run: npm run test:e2e -- --project=chromium
+        env:
+          CI: "true"
+      - name: Run one-time student credential boundary
+        run: npm run test:e2e -- --project=student-credential-chromium --workers=1 --retries=0
         env:
           CI: "true"
       - name: Upload Playwright artifacts on failure
@@ -104,33 +109,104 @@ jobs:
           retention-days: 7
 
   ios-webkit-pwa:
-    name: iOS WebKit PWA tests
-    runs-on: ubuntu-latest
+    name: iOS WebKit PWA tests (${{ matrix.shard }}/3)
+    # Native WebKit is closest to Safari; Linux WPE repeatedly stalls during
+    # dev-mode dashboard rendering despite fast successful chunk responses.
+    runs-on: macos-15
     needs: lint-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.13.0"
           cache: "npm"
       - name: Install dependencies
         run: npm ci
       - name: Install Playwright WebKit
         run: npx playwright install --with-deps webkit
-      - name: Run iOS WebKit PWA E2E
-        run: npm run test:e2e:ios-webkit
+      - name: Verify desktop keyboard context overrides without retries
+        if: ${{ !cancelled() && matrix.shard == 3 }}
+        run: npx playwright test e2e/teacher-mobile.spec.ts --project=mobile-ios-webkit-teacher --project=tablet-ios-webkit-teacher --project=tablet-ios-webkit-landscape-teacher --grep="moves focus across result tabs before keyboard activation" --retries=0 --trace=off --output=keyboard-context-results
         env:
           CI: "true"
-      - name: Upload Playwright artifacts on failure
-        if: failure()
+          PLAYWRIGHT_ENABLE_WEBKIT: "1"
+      - name: Run iOS WebKit PWA E2E
+        run: npm run test:e2e:ios-webkit -- --shard=${{ matrix.shard }}/3
+        env:
+          CI: "true"
+          OMR_SHOWCASE_ENTRY_DIAGNOSTICS: "1"
+          OMR_SHOWCASE_ENTRY_PHASE: "suite"
+      - name: Repeat previous showcase readiness failures without retries
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          case "${{ matrix.shard }}" in
+            1)
+              spec=e2e/ios-mobile-layout.spec.ts
+              project=ios-se-webkit
+              pattern='teacher live pause stops data refresh without freezing or resuming a stale countdown'
+              ;;
+            2)
+              spec=e2e/teacher-mobile.spec.ts
+              project=tablet-ios-webkit-teacher
+              pattern='connects dashboard metrics to the next analysis action|progressively reveals showcase exam results on a 390px phone'
+              ;;
+            3)
+              spec=e2e/teacher-mobile.spec.ts
+              project=tablet-ios-webkit-landscape-teacher
+              pattern='keeps mobile roster search and detail actions clear of data-source toasts'
+              ;;
+          esac
+          npx playwright test "$spec" --project="$project" --grep="$pattern" --repeat-each=5 --retries=0 --trace=off --output=showcase-readiness-results
+        env:
+          CI: "true"
+          PLAYWRIGHT_ENABLE_WEBKIT: "1"
+          OMR_SHOWCASE_ENTRY_DIAGNOSTICS: "1"
+          OMR_SHOWCASE_ENTRY_PHASE: "repeat"
+      - name: Verify all five attempts of each prior failure were measured
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          node - "${{ matrix.shard }}" <<'NODE'
+          const assert = require('node:assert/strict');
+          const { readFileSync, readdirSync } = require('node:fs');
+          const { join } = require('node:path');
+          const expected = {
+            1: { project: 'ios-se-webkit', scenarios: ['live-pause'] },
+            2: { project: 'tablet-ios-webkit-teacher', scenarios: ['metrics-next-action', 'progressive-results'] },
+            3: { project: 'tablet-ios-webkit-landscape-teacher', scenarios: ['roster-toast'] },
+          }[process.argv[2]];
+          const directory = 'showcase-entry-diagnostics';
+          const records = readdirSync(directory).filter(file => file.endsWith('.json'))
+            .map(file => JSON.parse(readFileSync(join(directory, file), 'utf8')))
+            .filter(record => record.phase === 'repeat');
+          assert.equal(records.length, 5 * expected.scenarios.length, 'Missing or duplicate measured attempt');
+          for (const scenario of expected.scenarios) {
+            for (let repeat = 0; repeat < 5; repeat++) {
+              const attempts = records.filter(record => record.project === expected.project
+                && record.scenario === scenario && record.repeatEachIndex === repeat && record.retry === 0);
+              assert.equal(attempts.length, 1, 'Each original scenario must have exactly five unretried measurements');
+              const report = attempts[0].report;
+              assert.equal(report.version, 1);
+              assert.ok(report.outcome === 'passed' || report.outcome === 'failed');
+              assert.ok(Array.isArray(report.events) && report.events.length <= 500);
+            }
+          }
+          console.log(JSON.stringify({ measuredAttempts: records.length, retries: 0 }));
+          NODE
+      - name: Upload sanitized showcase entry diagnostics
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-ios-webkit
-          path: |
-            playwright-report/
-            test-results/
+          name: showcase-entry-diagnostics-${{ matrix.shard }}
+          path: showcase-entry-diagnostics/*.json
+          if-no-files-found: warn
           retention-days: 7
 
   build:
@@ -144,13 +220,24 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.13.0"
           cache: "npm"
       - name: Install
         run: npm ci
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
       - name: Build
         run: npm run build
       - name: PWA smoke
         run: npm run pwa:smoke
+      - name: Production security E2E
+        run: npx playwright test --config=playwright.production.ci.config.ts
+      - name: Upload production Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-production
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

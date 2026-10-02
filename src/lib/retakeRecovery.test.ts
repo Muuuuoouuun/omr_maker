@@ -6,6 +6,8 @@ import {
     buildSourceAttemptRecovery,
     summarizeRetakeRecoveries,
 } from "./retakeRecovery";
+import { buildQuestionResults, summarizeQuestionResults } from "./premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
 
 const EXAM: Exam = {
     id: "e1",
@@ -20,7 +22,7 @@ const EXAM: Exam = {
 };
 
 function attempt(partial: Partial<Attempt>): Attempt {
-    return {
+    const candidate: Attempt = {
         id: "a1",
         examId: "e1",
         examTitle: "중간고사",
@@ -34,6 +36,15 @@ function attempt(partial: Partial<Attempt>): Attempt {
         status: "completed",
         ...partial,
     };
+    const questionResults = buildQuestionResults(EXAM, candidate);
+    const scoreSummary = summarizeQuestionResults(questionResults);
+    const canonical = {
+        ...candidate,
+        score: scoreSummary.earnedScore,
+        totalScore: scoreSummary.totalScore,
+        questionResults,
+    };
+    return { ...canonical, ...buildCanonicalQuestionResultEvidence(canonical, questionResults) };
 }
 
 // Source: q1 correct, q2 wrong, q3 unanswered, q4 wrong.
@@ -97,6 +108,49 @@ describe("retake recovery", () => {
         });
         expect(buildAttemptRetakeRecovery(EXAM, retake, SOURCE)).toBeNull();
         expect(buildAttemptRetakeRecovery(EXAM, attempt({ id: "no-retake" }), SOURCE)).toBeNull();
+    });
+
+    it("fails closed when either recovery side lacks canonical submission grading", () => {
+        const retake = attempt({
+            id: "rt-legacy",
+            answers: { 2: 2 },
+            retake: { sourceAttemptId: "src-1", questionIds: [2], mode: "wrong", createdAt: "x" },
+        });
+        const legacySource = { ...SOURCE, questionResults: undefined };
+
+        expect(buildAttemptRetakeRecovery(EXAM, retake, legacySource)).toBeNull();
+        expect(buildSourceAttemptRecovery(EXAM, legacySource, [retake])).toBeNull();
+        expect(buildSourceAttemptRecovery(EXAM, SOURCE, [{ ...retake, questionResults: undefined }])).toEqual({
+            retakeCount: 0,
+            recoveredQuestionIds: [],
+            unrecoveredQuestionIds: [2, 3, 4],
+        });
+    });
+
+    it("uses immutable submitted question scopes after the current exam removes a retake target", () => {
+        const retake = attempt({
+            id: "rt-edited-exam",
+            answers: { 2: 2 },
+            retake: { sourceAttemptId: "src-1", questionIds: [2], mode: "wrong", createdAt: "x" },
+        });
+        const editedExam: Exam = {
+            ...EXAM,
+            questions: [
+                { ...EXAM.questions[0], answer: 5 },
+                { id: 99, number: 99, answer: 1, choices: 5, score: 10 },
+            ],
+        };
+
+        expect(buildAttemptRetakeRecovery(editedExam, retake, SOURCE)).toMatchObject({
+            questionCount: 1,
+            targetCount: 1,
+            recoveredCount: 1,
+        });
+        expect(buildSourceAttemptRecovery(editedExam, SOURCE, [retake])).toEqual({
+            retakeCount: 1,
+            recoveredQuestionIds: [2],
+            unrecoveredQuestionIds: [3, 4],
+        });
     });
 
     it("refuses to compare a retake against a different student's source attempt", () => {

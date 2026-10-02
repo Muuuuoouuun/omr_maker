@@ -1,6 +1,7 @@
 import {
     buildQuestionResults,
 } from "@/lib/premiumAnalytics";
+import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 import type { StudentAttemptTicketClaims } from "@/lib/studentAttemptTicket";
 import type {
     ServerGradedAttemptReceipt,
@@ -20,6 +21,7 @@ export const SERVER_ATTEMPT_SUBMISSION_GRACE_MS = 30 * 1000;
 export type ServerAttemptGradeError =
     | "ticket_exam_mismatch"
     | "ticket_organization_mismatch"
+    | "ticket_assignment_generation_invalid"
     | "exam_archived"
     | "exam_not_started"
     | "exam_ended"
@@ -60,6 +62,10 @@ export function serverGradedAttemptReceiptFromAttempt(
     return {
         attemptId: attempt.id,
         examId: attempt.examId,
+        ...(attempt.assignmentId ? { assignmentId: attempt.assignmentId } : {}),
+        ...(attempt.assignmentId && Number.isSafeInteger(attempt.assignmentRevision) && Number(attempt.assignmentRevision) > 0
+            ? { assignmentRevision: attempt.assignmentRevision }
+            : {}),
         score: attempt.score,
         totalScore: attempt.totalScore,
         correctCount: questionResults.filter(row => row.status === "correct").length,
@@ -123,6 +129,13 @@ export function gradeStudentAttemptOnServer(
     if (!clean(exam.organizationId) || clean(exam.organizationId) !== clean(ticket.organizationId)) {
         return { ok: false, error: "ticket_organization_mismatch" };
     }
+    const assignmentId = clean(ticket.assignmentId);
+    const assignmentRevision = Number.isSafeInteger(ticket.assignmentRevision) && Number(ticket.assignmentRevision) > 0
+        ? Number(ticket.assignmentRevision)
+        : undefined;
+    if (Boolean(assignmentId) !== Boolean(assignmentRevision)) {
+        return { ok: false, error: "ticket_assignment_generation_invalid" };
+    }
     if (exam.archived) return { ok: false, error: "exam_archived" };
 
     const startsAt = validDateMs(exam.startAt);
@@ -160,13 +173,19 @@ export function gradeStudentAttemptOnServer(
 
     const graded = gradeAttempt(activeQuestions, sanitizedAnswers);
     const finishedAt = new Date(now).toISOString();
+    const retakeSourceAttemptId = clean(ticket.retakeSourceAttemptId);
+    const retakeMode = ticket.retakeMode === "wrong"
+        || ticket.retakeMode === "similar"
+        || ticket.retakeMode === "custom"
+        ? ticket.retakeMode
+        : undefined;
     const attempt: Attempt = {
         id: `attempt_${ticket.ticketId}`,
         examId: exam.id,
         examTitle: exam.title,
         organizationId: ticket.organizationId,
         classId: ticket.groupId,
-        assignmentId: ticket.assignmentId,
+        ...(assignmentId && assignmentRevision ? { assignmentId, assignmentRevision } : {}),
         studentProfileId: ticket.identityType === "registered" ? ticket.studentId : undefined,
         studentName: ticket.studentName,
         studentId: ticket.studentId,
@@ -186,11 +205,22 @@ export function gradeStudentAttemptOnServer(
             : undefined,
         questionTimings: sanitizeQuestionTimings(submission.questionTimings, allowedQuestionIds),
         focusLossEvents: sanitizeFocusLossEvents(submission.focusLossEvents),
+        ...(retakeSourceAttemptId && retakeMode
+            ? {
+                retake: {
+                    sourceAttemptId: retakeSourceAttemptId,
+                    questionIds: activeQuestions.map(question => question.id),
+                    mode: retakeMode,
+                    createdAt: finishedAt,
+                },
+            }
+            : {}),
     };
     attempt.questionResults = buildQuestionResults(
         { ...exam, questions: activeQuestions },
         attempt,
     );
+    Object.assign(attempt, buildCanonicalQuestionResultEvidence(attempt, attempt.questionResults));
 
     return {
         ok: true,
@@ -281,5 +311,6 @@ export function gradeTeacherForcedAttemptOnServer(
         totalScore: graded.totalScore,
     };
     completed.questionResults = buildQuestionResults(exam, completed);
+    Object.assign(completed, buildCanonicalQuestionResultEvidence(completed, completed.questionResults));
     return { ok: true, attempt: completed };
 }

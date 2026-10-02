@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
@@ -11,30 +11,37 @@ import { TrendChartSkeleton } from "@/components/dashboard/DashboardLoadingSkele
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
 import { toast } from "@/components/Toast";
-import { Users, BarChart3, PlusCircle, Activity, Bell, Download, MessageSquare, ArrowRight, CheckCircle2, CircleAlert } from "lucide-react";
-import { copyStoredData } from "@/utils/blobStore";
-import { secureRandomId } from "@/utils/ids";
-import { deleteTeacherExamMutation, saveTeacherExamMutation } from "@/lib/teacherExamClient";
+import { Users, BarChart3, PlusCircle, Activity, Bell, Download, MessageSquare, ArrowRight, CheckCircle2, CircleAlert, Copy, Check } from "lucide-react";
+import {
+    deleteTeacherExamMutation,
+    setTeacherExamArchivedFromSummary,
+} from "@/lib/teacherExamClient";
 import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
 import { formatKoreanDate, formatKoreanDateTime } from "@/lib/pure";
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
 import { buildDashboardStatsCsv, type DashboardExportQuestionStat } from "@/lib/dashboardStatsExport";
-import { buildAttemptScoreLookup } from "@/lib/attemptScores";
-import { buildExamQuestionResultStats, buildExamQuestionPointBiserial } from "@/lib/premiumAnalytics";
-import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
+import { groupBaseAttemptsByExam } from "@/lib/attemptScores";
 import {
-    authorizeAdvancedQuestionDesign,
-    authorizeExamCreation,
-    releaseExamCreationAuthorization,
-} from "@/app/actions/premiumAccess";
+    buildCanonicalAttemptAnalyticsIndex,
+    buildExamQuestionResultStats,
+    buildExamQuestionPointBiserial,
+} from "@/lib/premiumAnalytics";
+import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
+import { loadTeacherAttemptExportDataset } from "@/lib/teacherAttemptReportingClient";
+import { buildTeacherAttemptReportingProjection } from "@/lib/teacherAttemptReportingProjection";
+import { INITIAL_OPERATIONS_LIMITS } from "@/lib/initialOperationsPolicy";
+import type { TeacherDashboardDegradedData } from "@/lib/teacherDashboardCanonicalCache";
 
 const TrendChart = dynamic(
     () => import("@/components/dashboard/TrendChart"),
     { loading: () => <TrendChartSkeleton height={160} /> },
 );
 
-interface OverviewTabProps {
+export type TeacherDataCapability = "fresh_mutable" | "degraded_read_only" | "unavailable";
+
+interface FreshOverviewTabProps {
+    capability: "fresh_mutable";
     exams: Exam[];
     attempts: Attempt[];
     stats: {
@@ -46,9 +53,23 @@ interface OverviewTabProps {
     trendLabels?: string[];
     rosterStudents?: RosterStudent[];
     rosterGroups?: RosterGroup[];
+    individualAssignmentTargetCounts?: ReadonlyMap<string, number>;
+    individualAssignmentModes?: ReadonlyMap<string, "base" | "retake">;
     onNavigateToExamAnalytics?: (examId: string) => void;
     onNavigateToStudentAnalytics?: () => void;
+    onLoadDetailedAttempts: () => Promise<Attempt[]>;
 }
+
+interface DegradedOverviewTabProps {
+    capability: "degraded_read_only";
+    snapshot: TeacherDashboardDegradedData;
+}
+
+interface UnavailableOverviewTabProps {
+    capability: "unavailable";
+}
+
+type OverviewTabProps = FreshOverviewTabProps | DegradedOverviewTabProps | UnavailableOverviewTabProps;
 
 function DeleteExamConfirmDialog({
     exam,
@@ -118,21 +139,103 @@ function DeleteExamConfirmDialog({
     );
 }
 
-export default function OverviewTab({ exams: examsProp, attempts, stats, trendData, trendLabels, rosterStudents = [], rosterGroups = [], onNavigateToExamAnalytics, onNavigateToStudentAnalytics }: OverviewTabProps) {
+export default function OverviewTab(props: OverviewTabProps) {
+    if (props.capability === "unavailable") return null;
+    if (props.capability === "degraded_read_only") {
+        return (
+            <section
+                className="bento-card"
+                role="region"
+                aria-label="저장된 시험 식별 정보"
+                style={{ padding: "1rem" }}
+            >
+                <h2 style={{ fontSize: "1rem", fontWeight: 900, marginBottom: "0.75rem" }}>
+                    저장된 시험 식별 정보
+                </h2>
+                <div style={{ display: "grid", gap: "0.5rem" }}>
+                    {props.snapshot.exams.map(exam => (
+                        <div
+                            key={exam.id}
+                            data-exam-id={exam.id}
+                            style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}
+                        >
+                            <span>{exam.title}</span>
+                            <span style={{ color: "var(--muted)" }}>
+                                {exam.status === "archived" ? "보관됨" : `진행 중 · ${exam.attemptCount}건`}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            </section>
+        );
+    }
+    return <FreshOverviewTab {...props} />;
+}
+
+function FreshOverviewTab({ capability, exams: examsProp, attempts, stats, trendData, trendLabels, rosterStudents = [], rosterGroups = [], individualAssignmentTargetCounts = new Map(), individualAssignmentModes = new Map(), onNavigateToExamAnalytics, onNavigateToStudentAnalytics, onLoadDetailedAttempts }: FreshOverviewTabProps) {
     const router = useRouter();
+    const isMountedRef = useRef(true);
+    const operationEpochRef = useRef(0);
+    const exportOperationRef = useRef(0);
     const [activeTab, setActiveTab] = useState<'ongoing' | 'completed'>('ongoing');
-    // Local copy so action handlers (archive/delete/duplicate) can update the table
+    // Local copy so action handlers (archive/delete) can update the table
     // without requiring the parent page to reload from localStorage.
     const [exams, setExams] = useState<Exam[]>(examsProp);
     const [deleteTarget, setDeleteTarget] = useState<Exam | null>(null);
+    const mutationExamIdsRef = useRef(new Set<string>());
+    const [mutationExamIds, setMutationExamIds] = useState<Set<string>>(() => new Set());
     // Guards the "통계 CSV" button while the per-exam × per-question pass runs, and drives its
     // disabled/label state so a large workspace doesn't look unresponsive on click.
     const [isExportingStats, setIsExportingStats] = useState(false);
+    const [exportStatsError, setExportStatsError] = useState<string | null>(null);
+    const [copiedExamId, setCopiedExamId] = useState<string | null>(null);
+
+    const handleCopyExamLink = async (examId: string, examTitle: string) => {
+        try {
+            const origin = typeof window !== "undefined" ? window.location.origin : "";
+            const shareUrl = `${origin}/solve/${examId}`;
+            if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(shareUrl);
+            }
+            setCopiedExamId(examId);
+            toast.success("응시 링크 복사됨", `'${examTitle}' 학생 접속 링크를 복사했습니다.`);
+            window.setTimeout(() => {
+                if (isMountedRef.current) {
+                    setCopiedExamId(prev => (prev === examId ? null : prev));
+                }
+            }, 2000);
+        } catch {
+            toast.error("복사 실패", "클립보드 권한을 확인해주세요.");
+        }
+    };
+
+    const trendDelta = useMemo(() => {
+        if (!trendData || trendData.length < 2) return null;
+        return Math.round((trendData[trendData.length - 1] - trendData[0]) * 10) / 10;
+    }, [trendData]);
 
     // Sync when parent reloads data (initial mount / navigation).
-    useEffect(() => { setExams(examsProp); }, [examsProp]);
+    useEffect(() => {
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (!cancelled) setExams(examsProp);
+        });
+        return () => { cancelled = true; };
+    }, [examsProp]);
+    useLayoutEffect(() => {
+        const mountedMutationIds = mutationExamIdsRef.current;
+        isMountedRef.current = true;
+        operationEpochRef.current += 1;
+        return () => {
+            isMountedRef.current = false;
+            operationEpochRef.current += 1;
+            exportOperationRef.current += 1;
+            mountedMutationIds.clear();
+        };
+    }, []);
 
     const handleExamAction = async (kind: ExamActionKind, examId: string) => {
+        if (capability !== "fresh_mutable") return;
         const target = exams.find(e => e.id === examId);
         if (!target) return;
 
@@ -141,54 +244,32 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             return;
         }
 
-        if (kind === 'duplicate') {
-            const newId = secureRandomId();
-            let reserved = false;
-            try {
-                if (target.questions.some(question => (question.subQuestions?.length || 0) > 0)) {
-                    const entitlement = await authorizeAdvancedQuestionDesign();
-                    if (!entitlement.ok) throw new Error(entitlement.error || "하위 질문 복제는 Pro 기능입니다.");
-                }
-                const authorization = await authorizeExamCreation(newId);
-                if (!authorization.ok) throw new Error(authorization.error || "월 시험 생성 한도에 도달했습니다.");
-                reserved = true;
-                const pdfDataRef = await copyStoredData(target.pdfDataRef, `exam:${newId}:problemPdf`) || target.pdfDataRef;
-                const answerKeyPdfRef = await copyStoredData(target.answerKeyPdfRef, `exam:${newId}:answerKeyPdf`) || target.answerKeyPdfRef;
-                const copy: Exam = {
-                    ...target,
-                    id: newId,
-                    pdfDataRef,
-                    answerKeyPdfRef,
-                    title: target.title + ' (복사본)',
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                    archived: false,
-                };
-                const result = await saveTeacherExamMutation(copy);
-                if (!result.ok) throw new Error(result.error || "시험 서버에 저장하지 못했습니다.");
-                reserved = false;
-                setExams(prev => [copy, ...prev]);
-                toast.success('시험 복제됨', `"${target.title}"의 복사본을 만들었습니다.`);
-                if (result.localOnly) {
-                    toast.info('개발 모드 로컬 저장', '복사본을 이 기기에 저장했습니다.');
-                }
-            } catch (error) {
-                if (reserved) await releaseExamCreationAuthorization(newId);
-                toast.error('복제 실패', error instanceof Error ? error.message : '저장 공간 또는 서버 플랜을 확인해주세요.');
-            }
-            return;
-        }
-
         if (kind === 'archive') {
-            const nextArchived = !target.archived;
-            const updated: Exam = { ...target, archived: nextArchived, updatedAt: new Date().toISOString() };
+            if (mutationExamIdsRef.current.has(examId)) return;
+            const mutationEpoch = operationEpochRef.current;
+            const mutationIsCurrent = () => isMountedRef.current
+                && operationEpochRef.current === mutationEpoch;
+            const desiredArchived = !target.archived;
+            mutationExamIdsRef.current.add(examId);
+            setMutationExamIds(new Set(mutationExamIdsRef.current));
             try {
-                const result = await saveTeacherExamMutation(updated);
+                const result = await setTeacherExamArchivedFromSummary(target, desiredArchived);
+                if (!mutationIsCurrent()) return;
                 if (!result.ok) throw new Error(result.error);
+                const updated = result.exam;
+                if (!updated) throw new Error("변경된 시험 정보를 확인하지 못했습니다.");
+                if (!mutationIsCurrent()) return;
                 setExams(prev => prev.map(e => e.id === examId ? updated : e));
-                toast.success(nextArchived ? '시험 보관됨' : '보관 해제됨', target.title);
+                if (!mutationIsCurrent()) return;
+                toast.success(updated.archived ? '시험 보관됨' : '보관 해제됨', target.title);
             } catch (error) {
+                if (!mutationIsCurrent()) return;
                 toast.error('보관 처리 실패', error instanceof Error ? error.message : '시험 서버에 저장하지 못했습니다.');
+            } finally {
+                mutationExamIdsRef.current.delete(examId);
+                if (mutationIsCurrent()) {
+                    setMutationExamIds(new Set(mutationExamIdsRef.current));
+                }
             }
             return;
         }
@@ -200,22 +281,43 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     };
 
     const confirmDeleteExam = async () => {
+        if (capability !== "fresh_mutable") return;
         if (!deleteTarget) return;
         const target = deleteTarget;
+        if (mutationExamIdsRef.current.has(target.id)) return;
+        const mutationEpoch = operationEpochRef.current;
+        const mutationIsCurrent = () => isMountedRef.current
+            && operationEpochRef.current === mutationEpoch;
+        mutationExamIdsRef.current.add(target.id);
+        setMutationExamIds(new Set(mutationExamIdsRef.current));
         setDeleteTarget(null);
         try {
             const result = await deleteTeacherExamMutation(target.id);
+            if (!mutationIsCurrent()) return;
             if (!result.ok) throw new Error(result.error);
+            if (!mutationIsCurrent()) return;
             setExams(prev => prev.filter(e => e.id !== target.id));
+            if (!mutationIsCurrent()) return;
             toast.success('시험 삭제됨', target.title);
         } catch (error) {
+            if (!mutationIsCurrent()) return;
             toast.error('삭제 실패', error instanceof Error ? error.message : '시험 서버에서 삭제하지 못했습니다.');
+        } finally {
+            mutationExamIdsRef.current.delete(target.id);
+            if (mutationIsCurrent()) {
+                setMutationExamIds(new Set(mutationExamIdsRef.current));
+            }
         }
     };
 
     const examSummaryRows = useMemo(
-        () => buildExamSummaryRows(exams, attempts, stats.totalStudents, { rosterStudents, rosterGroups }),
-        [exams, attempts, stats.totalStudents, rosterStudents, rosterGroups]
+        () => buildExamSummaryRows(exams, attempts, stats.totalStudents, {
+            rosterStudents,
+            rosterGroups,
+            individualAssignmentTargetCounts,
+            individualAssignmentModes,
+        }),
+        [exams, attempts, stats.totalStudents, rosterStudents, rosterGroups, individualAssignmentTargetCounts, individualAssignmentModes]
     );
     const examSummaryGroups = useMemo(() => splitExamSummaryRows(examSummaryRows), [examSummaryRows]);
 
@@ -226,7 +328,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 missingCount: Math.max(0, exam.total - exam.completedCount),
                 participationRate: Math.min(100, safeRatePercent(exam.completedCount, exam.total)),
             }))
-            .filter(exam => exam.missingCount > 0)
+            .filter(exam => exam.targetCountVerified !== false && exam.missingCount > 0)
             .sort((a, b) => b.missingCount - a.missingCount || a.participationRate - b.participationRate)[0];
 
         if (priorityExam) {
@@ -296,6 +398,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     const displayExams = activeTab === 'ongoing' ? examSummaryGroups.ongoing : examSummaryGroups.completed;
 
     const handleSendAlarm = (examTitle: string) => {
+        if (capability !== "fresh_mutable") return;
         toast.info(
             '카카오 알림 연동 전',
             `${examTitle} 미응시 학생 확인만 지원합니다. 실제 카카오 발송 채널이 연결되면 이 버튼에서 발송합니다.`
@@ -303,6 +406,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     };
 
     const handleSendAllAlarms = () => {
+        if (capability !== "fresh_mutable") return;
         toast.info(
             '카카오 알림 연동 전',
             '진행 중인 시험의 미응시 학생 확인만 지원합니다. 실제 카카오 발송 채널이 연결되면 일괄 발송합니다.'
@@ -310,36 +414,89 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     };
 
     const handleExportStatsCsv = async () => {
+        if (capability !== "fresh_mutable") return;
         if (isExportingStats) return;
+        const operation = exportOperationRef.current + 1;
+        exportOperationRef.current = operation;
+        const operationEpoch = operationEpochRef.current;
+        const operationIsCurrent = () => isMountedRef.current
+            && operationEpochRef.current === operationEpoch
+            && exportOperationRef.current === operation;
         setIsExportingStats(true);
+        setExportStatsError(null);
         try {
-        // Computed lazily on click so the richer distribution/per-question math never
-        // runs on every dashboard render.
-        const examById = new Map(exams.map(exam => [exam.id, exam]));
-        const scoreLookup = buildAttemptScoreLookup(attempts, examById);
-        const scores = attempts
-            .filter(attempt => !attempt.retake && attempt.status === "completed")
-            .map(attempt => scoreLookup.get(attempt.id)?.scorePercent ?? 0);
+            const reportingDataset = await loadTeacherAttemptExportDataset();
+            if (!operationIsCurrent()) return;
+            if (reportingDataset.status !== "loaded" && reportingDataset.status !== "local_only") {
+                throw new Error(reportingDataset.status === "capacity_exceeded"
+                    ? "초기 운영 내보내기 한도(5,000건)를 초과했습니다. 시험별로 나눠 내보내주세요."
+                    : "정확한 전체 제출 집계를 불러오지 못했습니다.");
+            }
+            // Development/local-only workspaces have no canonical reporting RPC.
+            // Their in-memory snapshot is the authoritative dataset, so retain a
+            // useful offline export without weakening production's fail-closed path.
+            const reportingProjection = reportingDataset.status === "loaded"
+                ? buildTeacherAttemptReportingProjection({
+                    exams,
+                    aggregate: reportingDataset.aggregate,
+                    rows: reportingDataset.rows,
+                    rosterStudents,
+                    rosterGroups,
+                    individualAssignmentTargetCounts,
+                    individualAssignmentModes,
+                })
+                : null;
+            const exportMetrics = reportingProjection?.stats || {
+                ...stats,
+                trendData,
+                trendLabels: trendLabels || [],
+            };
+            const exportExamRows = reportingProjection?.examRows || examSummaryRows;
+            const scores = reportingProjection?.scores || attempts
+                .filter(attempt => attempt.status === "completed" && !attempt.retake)
+                .map(attempt => attempt.totalScore > 0
+                    ? Math.round((attempt.score / attempt.totalScore) * 100)
+                    : 0);
+            const completedAttemptCount = reportingDataset.status === "loaded"
+                ? reportingDataset.aggregate.completedAttemptCount
+                : attempts.filter(attempt => attempt.status === "completed").length;
+
+        // Rich per-question bodies remain on the recent screen boundary. Include
+        // that optional CSV section only when the exact aggregate proves the rich
+        // list is complete; otherwise omit it rather than labeling partial math as
+        // organization-wide statistics.
+        let detailedAttempts: Attempt[] = [];
+        if (completedAttemptCount <= INITIAL_OPERATIONS_LIMITS.teacherAttempts) {
+            if (!operationIsCurrent()) return;
+            detailedAttempts = await onLoadDetailedAttempts();
+        }
+        if (!operationIsCurrent()) return;
+        const hasCompleteRichCoverage = detailedAttempts.filter(attempt => attempt.status === "completed").length
+            === completedAttemptCount;
+        const baseAttemptsByExam = hasCompleteRichCoverage
+            ? groupBaseAttemptsByExam(detailedAttempts)
+            : new Map<string, Attempt[]>();
 
         // Large workspaces (many exams and/or many attempts) make the per-exam ×
         // per-question pass below expensive enough to freeze the tab if run in one
         // synchronous block, so we yield to the main thread every few exams.
-        const shouldChunk = exams.length > 50 || attempts.length > 2000;
+        const shouldChunk = exams.length > 50 || detailedAttempts.length > INITIAL_OPERATIONS_LIMITS.teacherAttempts;
         const EXAMS_PER_CHUNK = 5;
 
         const questionStats: DashboardExportQuestionStat[] = [];
         for (let i = 0; i < exams.length; i++) {
             const exam = exams[i];
-            const examAttempts = attempts.filter(attempt => attempt.examId === exam.id && !attempt.retake);
+            const examAttempts = baseAttemptsByExam.get(exam.id) ?? [];
             if (examAttempts.length > 0) {
-                const pointBiserials = buildExamQuestionPointBiserial(exam, examAttempts);
-                for (const stat of buildExamQuestionResultStats(exam, examAttempts)) {
+                const analyticsIndex = buildCanonicalAttemptAnalyticsIndex(exam, examAttempts);
+                const pointBiserials = buildExamQuestionPointBiserial(exam, examAttempts, analyticsIndex);
+                for (const stat of buildExamQuestionResultStats(exam, examAttempts, analyticsIndex)) {
                     if (stat.totalCount === 0) continue;
                     questionStats.push({
                         examTitle: exam.title,
                         questionNumber: stat.questionNumber,
                         correctRate: stat.correctRate,
-                        pointBiserial: pointBiserials.get(stat.questionId) ?? null,
+                        pointBiserial: pointBiserials.get(stat.cohortKey) ?? null,
                     });
                 }
             }
@@ -347,22 +504,41 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             if (shouldChunk && (i + 1) % EXAMS_PER_CHUNK === 0 && i + 1 < exams.length) {
                 // Intentional yield to the main thread so "생성 중…" paints and the tab stays responsive.
                 await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+                if (!operationIsCurrent()) return;
             }
         }
 
-        const csv = buildDashboardStatsCsv({ stats, trendData, examRows: examSummaryRows, scores, questionStats });
+        if (!operationIsCurrent()) return;
+        const csv = buildDashboardStatsCsv({
+            stats: exportMetrics,
+            trendData: exportMetrics.trendData,
+            examRows: exportExamRows,
+            scores,
+            questionStats,
+        });
         const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
         link.download = `dashboard-stats-${new Date().toISOString().slice(0, 10)}.csv`;
         document.body.appendChild(link);
+        if (!operationIsCurrent()) {
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            return;
+        }
         link.click();
         document.body.removeChild(link);
         window.setTimeout(() => URL.revokeObjectURL(url), 0);
+        if (!operationIsCurrent()) return;
         toast.success("통계 CSV 생성됨", "대시보드 요약과 시험별 통계를 내보냈습니다.");
+        } catch (error) {
+            if (!operationIsCurrent()) return;
+            const message = error instanceof Error ? error.message : "상세 제출 데이터를 불러오지 못했습니다.";
+            setExportStatsError(message);
+            toast.error("통계 CSV 생성 실패", `${message} 네트워크를 확인한 뒤 다시 시도해주세요.`);
         } finally {
-            setIsExportingStats(false);
+            if (operationIsCurrent()) setIsExportingStats(false);
         }
     };
 
@@ -385,8 +561,31 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 </div>
             </section>
 
+            <section className="overview-metric-rail" aria-label="운영 핵심 지표">
+                <div>
+                    <span>진행 중 시험</span>
+                    <strong>{stats.activeExams}<small>개</small></strong>
+                    <p>현재 배포·응시 중</p>
+                </div>
+                <button type="button" onClick={onNavigateToStudentAnalytics} aria-label={`${stats.totalStudents}명 학생별 성취 분석 보기`}>
+                    <span>전체 학생</span>
+                    <strong>{stats.totalStudents}<small>명</small></strong>
+                    <p>{rosterGroups.length}개 그룹 기준</p>
+                </button>
+                <button
+                    type="button"
+                    onClick={latestExamRow && onNavigateToExamAnalytics ? () => onNavigateToExamAnalytics(latestExamRow.id) : undefined}
+                    disabled={!latestExamRow || !onNavigateToExamAnalytics}
+                    aria-label={`${stats.avgScore}점 평균 점수 원인 분석 보기`}
+                >
+                    <span>평균 점수</span>
+                    <strong>{stats.avgScore}<small>점</small></strong>
+                    <p>{scoreDelta === undefined ? "완료 응시 기준" : `직전 대비 ${scoreDelta >= 0 ? "+" : ""}${scoreDelta.toFixed(1)}점`}</p>
+                </button>
+            </section>
+
             {/* 1. 자주 쓰는 빠른 작업 */}
-            <div className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+            <div className="bento-card col-span-2 overview-quick-actions-card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ fontSize: 'var(--type-heading-md)', fontWeight: 700, color: 'var(--foreground)' }}>
                         빠른 작업 <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '0.9rem' }}>자주 쓰는 기능 바로가기</span>
@@ -475,7 +674,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                         textOverflow: 'ellipsis',
                                         whiteSpace: 'nowrap',
                                     }}>
-                                        {entry.note.body}
+                                        {entry.note.body || "질문 내용은 응시 상세에서 확인하세요."}
                                     </span>
                                     <span style={{ color: 'var(--muted)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>
                                         {formatKoreanDateTime(entry.note.createdAt)}
@@ -493,23 +692,37 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             )}
 
             {/* 2. Score Trend — 시안 B dark-glass surface (dot-grid + glow) */}
-            <div className="bento-card col-span-2 comet-chart-dark" style={{
-                background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))',
-                color: 'white', border: 'none',
-                position: 'relative', overflow: 'hidden'
-            }}>
-                <div className="chart-texture is-dark" aria-hidden="true" />
-                <div style={{ marginBottom: '1.5rem', position: 'relative', zIndex: 1 }}>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>평균 점수 추이</h3>
-                    <p style={{ opacity: 0.8, fontSize: '0.95rem' }}>최근 7개 시험의 평균 점수 흐름</p>
+            {trendData.length > 0 && <div className="bento-card col-span-2 overview-trend-card" style={{ position: 'relative', overflow: 'hidden' }}>
+                <div style={{ marginBottom: '1.5rem', position: 'relative', zIndex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <div>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>평균 점수 추이</h3>
+                        <p style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>최근 {trendData.length}개 시험 · 상세 분석 전 빠른 흐름 확인</p>
+                    </div>
+                    {trendDelta !== null && (
+                        <span
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.3rem 0.65rem',
+                                borderRadius: 'var(--radius-full)',
+                                background: trendDelta >= 0 ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                                color: trendDelta >= 0 ? 'var(--success)' : 'var(--grade-red)',
+                                fontSize: '0.8rem',
+                                fontWeight: 800,
+                            }}
+                            title={`첫 시험 대비 ${trendDelta >= 0 ? "+" : ""}${trendDelta}점 변동`}
+                        >
+                            {trendDelta >= 0 ? `▲ +${trendDelta}점` : `▼ ${trendDelta}점`}
+                            <small style={{ color: 'var(--muted)', fontSize: '0.7rem', fontWeight: 700 }}>추이</small>
+                        </span>
+                    )}
                 </div>
-
-                <div style={{ position: 'absolute', top: '-20%', right: '-10%', width: '220px', height: '220px', background: 'radial-gradient(circle, rgba(255,255,255,0.28) 0%, transparent 70%)' }}></div>
 
                 <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%', position: 'relative', zIndex: 1 }}>
-                    <TrendChart data={trendData} labels={trendLabels} color="white" height={160} />
+                    <TrendChart data={trendData} labels={trendLabels} color="var(--primary)" height={160} />
                 </div>
-            </div>
+            </div>}
 
             {/* 3. Project Summary (Currently Ongoing / Completed Exams) */}
             <div className="bento-card overview-exam-summary-card" style={{ gridColumn: 'span 4', overflow: 'hidden' }}>
@@ -555,6 +768,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                             type="button"
                             onClick={handleExportStatsCsv}
                             disabled={isExportingStats}
+                            aria-label={exportStatsError ? `통계 CSV 다시 시도: ${exportStatsError}` : "통계 CSV"}
                             style={{
                                 background: 'var(--surface)', color: 'var(--foreground)', padding: '0.6rem 1rem',
                                 borderRadius: 'var(--radius-lg)', fontSize: '0.85rem', fontWeight: 700,
@@ -574,7 +788,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                             }}
                         >
                             <Download size={15} />
-                            {isExportingStats ? '생성 중…' : '통계 CSV'}
+                            {isExportingStats ? '생성 중…' : exportStatsError ? 'CSV 다시 시도' : '통계 CSV'}
                         </button>
 
                         {/* Send All Alarms Button */}
@@ -603,12 +817,12 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         <colgroup>
                             <col style={{ width: '220px' }} />
                             <col style={{ width: '115px' }} />
-                            <col style={{ width: '190px' }} />
-                            <col style={{ width: '135px' }} />
+                            <col style={{ width: '175px' }} />
+                            <col style={{ width: '130px' }} />
                             <col style={{ width: '85px' }} />
-                            <col style={{ width: '120px' }} />
+                            <col style={{ width: '130px' }} />
                             {activeTab === 'ongoing' && <col style={{ width: '130px' }} />}
-                            <col style={{ width: '60px' }} />
+                            <col style={{ width: '85px' }} />
                         </colgroup>
                         <thead>
                             <tr style={{ color: 'var(--muted)', fontSize: '0.85rem', borderBottom: '1px solid var(--border)' }}>
@@ -624,11 +838,14 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         </thead>
                         <tbody>
                             {displayExams.map((exam) => {
-                                const participationRate = Math.min(100, safeRatePercent(exam.completedCount, exam.total));
+                                const targetCountVerified = exam.targetCountVerified !== false;
+                                const participationRate = targetCountVerified
+                                    ? Math.min(100, safeRatePercent(exam.completedCount, exam.total))
+                                    : 0;
 
                                 const targetColor = participationRate > 70 ? 'var(--success)' : (participationRate > 30 ? 'var(--warning)' : 'var(--error)');
                                 const isArchived = exam.archived;
-                                const statusText = isArchived ? '보관됨' : participationRate === 100 ? '완료' : '진행 중';
+                                const statusText = isArchived ? '보관됨' : !targetCountVerified ? '집계 확인 필요' : participationRate === 100 ? '완료' : '진행 중';
 
                                 return (
                                     <tr
@@ -663,11 +880,13 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                                 <div style={{ flex: 1, height: '6px', background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
                                                     <div style={{ width: `${participationRate}%`, height: '100%', background: targetColor, borderRadius: 'var(--radius-full)', transition: 'width 1s ease-out' }}></div>
                                                 </div>
-                                                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: targetColor, minWidth: '40px' }}>{participationRate}%</span>
+                                                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: targetColor, minWidth: '40px' }}>
+                                                    {targetCountVerified ? `${participationRate}%` : '확인 필요'}
+                                                </span>
                                             </div>
                                         </td>
                                         <td style={{ fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 500 }}>
-                                            <span style={{ color: 'var(--foreground)', fontWeight: 600 }}>{exam.completedCount}</span> / {exam.total}
+                                            <span style={{ color: 'var(--foreground)', fontWeight: 600 }}>{exam.completedCount}</span> / {targetCountVerified ? exam.total : '확인 필요'}
                                         </td>
                                         <td>
                                             <StatusPill
@@ -684,14 +903,19 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                             />
                                         </td>
                                         <td>
-                                            <StatusPill
-                                                tone={isArchived ? "muted" : participationRate === 100 ? "success" : "primary"}
-                                                size="sm"
-                                                label={statusText}
-                                                style={!isArchived && participationRate !== 100
-                                                    ? { textTransform: 'uppercase', background: 'rgba(139, 92, 246, 0.1)', color: 'var(--accent)' }
-                                                    : { textTransform: 'uppercase' }}
-                                            />
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+                                                {!isArchived && targetCountVerified && participationRate !== 100 && (
+                                                    <span className="live-pulse-dot" aria-hidden="true" title="응시 진행 중" />
+                                                )}
+                                                <StatusPill
+                                                    tone={isArchived || !targetCountVerified ? "muted" : participationRate === 100 ? "success" : "primary"}
+                                                    size="sm"
+                                                    label={statusText}
+                                                    style={!isArchived && participationRate !== 100
+                                                        ? { textTransform: 'uppercase', background: 'rgba(139, 92, 246, 0.1)', color: 'var(--accent)' }
+                                                        : { textTransform: 'uppercase' }}
+                                                />
+                                            </div>
                                         </td>
                                         {activeTab === 'ongoing' && (
                                             <td style={{ textAlign: 'right' }}>
@@ -718,10 +942,34 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                             </td>
                                         )}
                                         <td style={{ textAlign: 'right' }}>
-                                            <ExamActionsMenu
-                                                exam={{ id: exam.id, title: exam.title, archived: isArchived }}
-                                                onAction={handleExamAction}
-                                            />
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem' }}>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleCopyExamLink(exam.id, exam.title)}
+                                                    aria-label={`${exam.title} 링크 복사`}
+                                                    title="학생 응시 링크 복사"
+                                                    className="card-hover"
+                                                    style={{
+                                                        width: '32px',
+                                                        height: '32px',
+                                                        display: 'inline-grid',
+                                                        placeItems: 'center',
+                                                        border: '1px solid var(--border)',
+                                                        borderRadius: 'var(--radius-md)',
+                                                        background: copiedExamId === exam.id ? 'rgba(34, 197, 94, 0.12)' : 'var(--surface)',
+                                                        color: copiedExamId === exam.id ? 'var(--success)' : 'var(--muted)',
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.16s ease',
+                                                    }}
+                                                >
+                                                    {copiedExamId === exam.id ? <Check size={14} /> : <Copy size={14} />}
+                                                </button>
+                                                <ExamActionsMenu
+                                                    exam={{ id: exam.id, title: exam.title, archived: isArchived }}
+                                                    onAction={handleExamAction}
+                                                    disabled={mutationExamIds.has(exam.id)}
+                                                />
+                                            </div>
                                         </td>
                                     </tr>
                                 );

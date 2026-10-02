@@ -1,7 +1,10 @@
 import type { Attempt, Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
+import { studentAttemptSummaryFromAttempt, type StudentAssignmentPreview, type StudentAttemptSummary } from "@/lib/studentExamContract";
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 import type { SubmissionReceiptStatus } from "@/lib/studentAttemptReceipt";
+import { INITIAL_CAPACITY_EXCEEDED_ERROR } from "@/lib/initialOperationsPolicy";
+import { resolveAssignmentLifecycle } from "@/lib/assignmentLifecycle";
 
 /**
  * Client-side wrapper over the student exam server actions.
@@ -49,9 +52,19 @@ export interface SubmitClientResult {
 
 export interface ListAttemptsClientResult {
     status: "ok" | "unauthenticated" | "error";
-    attempts: Attempt[];
-    exams?: SolvableExam[];
+    attempts: StudentAttemptSummary[];
+    exams?: StudentAssignmentPreview[];
+    /** Exact authoritative clock used by the gateway to classify these rows. */
+    serverNow?: string;
+    serverClock?: {
+        serverNow: string;
+        requestStartedMonotonicMs: number;
+        receivedMonotonicMs: number;
+    };
     source: ExamSource;
+    /** True only when local rows replace a failed remote read, not intentional local-only mode. */
+    remoteFailed?: boolean;
+    error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
 }
 
 export interface LoadAttemptClientResult {
@@ -143,7 +156,8 @@ export async function submitAttemptClient(
                 return { status: asLoadStatus(res.status), source: "server" };
             }
         }
-    } catch {
+    } catch (error) {
+        if (!deps.allowLocalFallback) throw error;
         serverStatus = "error";
         retryableFailure = true;
     }
@@ -163,22 +177,64 @@ export async function submitAttemptClient(
 }
 
 export async function listMyAssignmentsClient(deps: {
-    server: () => Promise<{ status: string; attempts?: Attempt[]; exams?: SolvableExam[] }>;
+    server: () => Promise<{
+        status: string;
+        attempts?: StudentAttemptSummary[];
+        exams?: StudentAssignmentPreview[];
+        serverNow?: string;
+        error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
+    }>;
     localFallback: () => Promise<Attempt[]>;
+    monotonicNow?: () => number;
 }): Promise<ListAttemptsClientResult> {
+    let remoteFailed = false;
+    const monotonicNow = deps.monotonicNow || (() => typeof performance !== "undefined" ? performance.now() : 0);
+    const requestStartedMonotonicMs = monotonicNow();
     try {
         const res = await deps.server();
-        if (res.status === "ok" && res.attempts) {
-            return { status: "ok", attempts: res.attempts, exams: res.exams || [], source: "server" };
+        const receivedMonotonicMs = monotonicNow();
+        if (
+            res.status === "ok"
+            && res.attempts
+            && resolveAssignmentLifecycle({ state: "open", now: res.serverNow }) !== "invalid"
+        ) {
+            return {
+                status: "ok",
+                attempts: res.attempts,
+                exams: res.exams || [],
+                source: "server",
+                serverNow: res.serverNow,
+                serverClock: {
+                    serverNow: res.serverNow!,
+                    requestStartedMonotonicMs,
+                    receivedMonotonicMs,
+                },
+            };
         }
         if (res.status === "unauthenticated") {
             return { status: "unauthenticated", attempts: [], exams: [], source: "server" };
         }
+        if (res.status === "error" && res.error === INITIAL_CAPACITY_EXCEEDED_ERROR) {
+            return {
+                status: "error",
+                attempts: [],
+                exams: [],
+                source: "server",
+                error: INITIAL_CAPACITY_EXCEEDED_ERROR,
+            };
+        }
+        remoteFailed = res.status !== "degraded_local";
     } catch {
+        remoteFailed = true;
         // fall through to local
     }
     try {
-        return { status: "ok", attempts: await deps.localFallback(), source: "local" };
+        return {
+            status: "ok",
+            attempts: (await deps.localFallback()).map(studentAttemptSummaryFromAttempt),
+            source: "local",
+            remoteFailed,
+        };
     } catch {
         return { status: "error", attempts: [], source: "local" };
     }
@@ -193,7 +249,8 @@ export interface LoadReviewExamClientResult {
 /**
  * Post-submit review exam: server-first (PIN/answer-key PDF withheld
  * server-side), falling back to the existing client exam load for degraded,
- * unsynced, or offline setups.
+ * unsynced, or offline setups. An explicit server rejection never permits
+ * reading the answer-bearing local copy.
  */
 export async function loadReviewExamClient(
     attemptId: string,
@@ -206,6 +263,9 @@ export async function loadReviewExamClient(
         const res = await deps.server(attemptId);
         if (res.status === "ok" && res.exam) {
             return { status: "ok", exam: res.exam as Exam, source: "server" };
+        }
+        if (res.status === "denied" || res.status === "unauthenticated") {
+            return { status: "error", source: "server" };
         }
     } catch {
         // fall through to local
@@ -227,13 +287,14 @@ export async function loadMyAttemptClient(
         localFallback: (attemptId: string) => Promise<Attempt | null>;
     },
 ): Promise<LoadAttemptClientResult> {
-    let serverDenied = false;
     try {
         const res = await deps.server(attemptId);
         if (res.status === "ok" && res.attempt) {
             return { status: "ok", attempt: res.attempt, source: "server" };
         }
-        serverDenied = res.status === "denied";
+        if (res.status === "denied" || res.status === "unauthenticated") {
+            return { status: "denied", source: "server" };
+        }
     } catch {
         // fall through to local
     }
@@ -243,5 +304,5 @@ export async function loadMyAttemptClient(
     } catch {
         // fall through
     }
-    return { status: serverDenied ? "denied" : "error", source: "local" };
+    return { status: "error", source: "local" };
 }

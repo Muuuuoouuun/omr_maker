@@ -1,7 +1,11 @@
 import {
     answerTeacherCanonicalAttemptQuestion,
+    forceFinishTeacherCanonicalAttemptSessions,
     forceFinishTeacherCanonicalAttempts,
+    listTeacherCanonicalActiveAttemptSessions,
+    listTeacherCanonicalAttemptSummaries,
     listTeacherCanonicalAttempts,
+    loadTeacherCanonicalAnalyticsSnapshots,
     loadTeacherCanonicalAttempt,
     setTeacherCanonicalSubquestionReview,
 } from "@/app/actions/teacherAttempts";
@@ -10,35 +14,158 @@ import {
     loadAttempts,
     readLocalAttempts,
     saveLocalAttempt,
-    saveLocalAttempts,
 } from "@/lib/omrPersistence";
 import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { withBrowserStorageLock } from "@/lib/browserStorageLock";
 import type { Attempt } from "@/types/omr";
+import type { TeacherActiveAttemptSession } from "@/lib/teacherAttemptGateway";
+import type { CanonicalCollectionMeta } from "@/lib/canonicalCollectionContract";
+import type { TeacherCanonicalAnalyticsSnapshotMap } from "@/lib/teacherCanonicalAnalyticsSnapshotContract";
 
-export async function loadTeacherAttempt(attemptId: string): Promise<Attempt | null> {
+export type TeacherAttemptDetailLoadResult =
+    | { status: "loaded"; attempt: Attempt; source: "server" | "local" }
+    | { status: "not_found" }
+    | { status: "unauthorized"; error: string }
+    | { status: "service_unavailable"; error: string };
+
+export interface TeacherAttemptCollectionLoadResult {
+    items: Attempt[];
+    remoteLoaded: boolean;
+    remoteSynced?: boolean;
+    pendingSyncCount?: number;
+    remoteError?: string;
+    remotePartial?: boolean;
+    remoteHasMore?: boolean;
+    remoteItemCount?: number;
+    remoteNextCursor?: {
+        finishedAt: string;
+        id: string;
+    };
+    meta?: CanonicalCollectionMeta;
+    analyticsSnapshots?: TeacherCanonicalAnalyticsSnapshotMap;
+}
+
+export type TeacherCanonicalAnalyticsLoadResult =
+    | { status: "loaded"; analyticsSnapshots: TeacherCanonicalAnalyticsSnapshotMap; meta: CanonicalCollectionMeta }
+    | { status: "service_unavailable"; error: string };
+
+export async function loadTeacherAnalyticsSnapshots(examId?: string): Promise<TeacherCanonicalAnalyticsLoadResult> {
+    const result = await loadTeacherCanonicalAnalyticsSnapshots(examId);
+    if (result.status === "loaded") return result;
+    return {
+        status: "service_unavailable",
+        error: result.status === "unauthorized"
+            ? "Teacher server session is missing"
+            : result.error || "Canonical analytics snapshot gateway unavailable",
+    };
+}
+
+export type TeacherAttemptCollectionCompleteness = "ready" | "partial" | "stale" | "error";
+
+export interface TeacherCollectionCompletenessInput {
+    items: readonly unknown[];
+    remoteLoaded: boolean;
+    remoteSynced?: boolean;
+    remotePartial?: boolean;
+    remoteError?: string;
+}
+
+export function resolveTeacherAttemptCollectionCompleteness(
+    input: TeacherCollectionCompletenessInput,
+): TeacherAttemptCollectionCompleteness {
+    const hasUsableItems = input.items.length > 0;
+    // A source error means the available rows are cached evidence, even when the
+    // remote response also carries pagination metadata.
+    if (input.remoteError) return hasUsableItems ? "stale" : "error";
+    if (input.remotePartial) return hasUsableItems ? "partial" : "error";
+    if (!input.remoteLoaded || input.remoteSynced === false) {
+        return hasUsableItems ? "stale" : "error";
+    }
+    return "ready";
+}
+
+export function resolveTeacherCollectionGroupCompleteness(
+    inputs: readonly TeacherCollectionCompletenessInput[],
+): TeacherAttemptCollectionCompleteness {
+    if (inputs.length === 0) return "error";
+    const priorities: Record<TeacherAttemptCollectionCompleteness, number> = {
+        ready: 0,
+        partial: 1,
+        stale: 2,
+        error: 3,
+    };
+    return inputs.reduce<TeacherAttemptCollectionCompleteness>((combined, input) => {
+        const current = resolveTeacherAttemptCollectionCompleteness(input);
+        return priorities[current] > priorities[combined] ? current : combined;
+    }, "ready");
+}
+
+export async function loadTeacherActiveAttemptSessions(examId: string): Promise<{
+    items: TeacherActiveAttemptSession[];
+    remoteLoaded: boolean;
+    remoteError?: string;
+}> {
+    const result = await listTeacherCanonicalActiveAttemptSessions(examId);
+    if (result.status === "loaded") {
+        return { items: result.sessions, remoteLoaded: true };
+    }
+    if (result.status === "local_only") return { items: [], remoteLoaded: false };
+    return {
+        items: [],
+        remoteLoaded: false,
+        remoteError: result.status === "unauthorized"
+            ? "Teacher server session is missing"
+            : result.error || "Canonical active attempt session gateway unavailable",
+    };
+}
+
+export async function loadTeacherAttemptDetail(attemptId: string): Promise<TeacherAttemptDetailLoadResult> {
     const result = await loadTeacherCanonicalAttempt(attemptId);
     if (result.status === "loaded") {
         await saveLocalAttempt(result.attempt);
-        return result.attempt;
+        return { status: "loaded", attempt: result.attempt, source: "server" };
     }
-    if (result.status === "local_only") return loadAttempt(attemptId);
-    return null;
+    if (result.status === "local_only") {
+        const attempt = await loadAttempt(attemptId);
+        return attempt
+            ? { status: "loaded", attempt, source: "local" }
+            : { status: "not_found" };
+    }
+    if (result.status === "not_found") return { status: "not_found" };
+    if (result.status === "unauthorized" || result.status === "forbidden") {
+        return {
+            status: "unauthorized",
+            error: result.status === "unauthorized"
+                ? "Teacher server session is missing"
+                : "Teacher role cannot read attempts",
+        };
+    }
+    return {
+        status: "service_unavailable",
+        error: result.error || "Canonical attempt gateway unavailable",
+    };
 }
 
-export async function loadTeacherAttempts(examId?: string) {
+export async function loadTeacherAttempt(attemptId: string): Promise<Attempt | null> {
+    const result = await loadTeacherAttemptDetail(attemptId);
+    return result.status === "loaded" ? result.attempt : null;
+}
+
+export async function loadTeacherAttempts(examId?: string): Promise<TeacherAttemptCollectionLoadResult> {
     const result = await listTeacherCanonicalAttempts(examId);
     if (result.status === "loaded") {
-        if (examId?.trim()) {
-            await Promise.all(result.attempts.map(attempt => saveLocalAttempt(attempt)));
-        } else {
-            await saveLocalAttempts(result.attempts);
-        }
+        const meta = result.meta as unknown;
+        if (!validAttemptCollection(result.attempts, result.page, meta)) return invalidAttemptCollection();
         return {
             items: result.attempts,
             remoteLoaded: true,
-            remoteSynced: true,
+            remoteSynced: result.page?.partial !== true,
             pendingSyncCount: 0,
+            remotePartial: result.page?.partial === true,
+            remoteHasMore: result.page?.hasMore === true,
+            remoteItemCount: result.page?.itemCount ?? result.attempts.length,
+            remoteNextCursor: result.page?.nextCursor,
+            meta,
         };
     }
     if (result.status === "local_only") {
@@ -46,14 +173,77 @@ export async function loadTeacherAttempts(examId?: string) {
         if (!examId?.trim()) return local;
         return { ...local, items: local.items.filter(attempt => attempt.examId === examId.trim()) };
     }
-    const cached = readLocalAttempts();
     return {
-        items: examId?.trim() ? cached.filter(attempt => attempt.examId === examId.trim()) : cached,
+        items: [],
         remoteLoaded: false,
         remoteSynced: false,
         remoteError: result.status === "unauthorized"
             ? "Teacher server session is missing"
             : result.error || "Canonical attempt gateway unavailable",
+    };
+}
+
+export async function loadTeacherAttemptSummaries(examId?: string): Promise<TeacherAttemptCollectionLoadResult> {
+    const result = await listTeacherCanonicalAttemptSummaries(examId);
+    if (result.status === "loaded") {
+        const meta = result.meta as unknown;
+        if (!validAttemptCollection(result.attempts, result.page, meta)) return invalidAttemptCollection();
+        return {
+            items: result.attempts,
+            remoteLoaded: true,
+            remoteSynced: result.page?.partial !== true,
+            pendingSyncCount: 0,
+            remotePartial: result.page?.partial === true,
+            remoteHasMore: result.page?.hasMore === true,
+            remoteItemCount: result.page?.itemCount ?? result.attempts.length,
+            remoteNextCursor: result.page?.nextCursor,
+            meta,
+        };
+    }
+    if (result.status === "local_only") {
+        const local = await loadAttempts();
+        if (!examId?.trim()) return local;
+        return { ...local, items: local.items.filter(attempt => attempt.examId === examId.trim()) };
+    }
+    return {
+        items: [],
+        remoteLoaded: false,
+        remoteSynced: false,
+        remoteError: result.status === "unauthorized"
+            ? "Teacher server session is missing"
+            : result.error || "Canonical attempt summary gateway unavailable",
+    };
+}
+
+function validAttemptCollection(
+    attempts: readonly Pick<Attempt, "organizationId">[],
+    page: { partial: boolean; hasMore: boolean; itemCount: number } | undefined,
+    value: unknown,
+): value is CanonicalCollectionMeta {
+    if (!page || page.partial || page.hasMore || page.itemCount !== attempts.length) return false;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const meta = value as Record<string, unknown>;
+    if (Object.keys(meta).sort().join(",") !== "loadedAt,organizationId,parsedCount,rawCount") return false;
+    const organizationId = typeof meta.organizationId === "string" ? meta.organizationId.trim() : "";
+    const loadedAt = typeof meta.loadedAt === "string" ? meta.loadedAt : "";
+    const timestamp = Date.parse(loadedAt);
+    return !!organizationId
+        && organizationId === meta.organizationId
+        && Number.isFinite(timestamp)
+        && new Date(timestamp).toISOString() === loadedAt
+        && Number.isSafeInteger(meta.rawCount)
+        && Number(meta.rawCount) >= 0
+        && meta.rawCount === meta.parsedCount
+        && meta.parsedCount === attempts.length
+        && attempts.every(attempt => attempt.organizationId === organizationId);
+}
+
+function invalidAttemptCollection(): TeacherAttemptCollectionLoadResult {
+    return {
+        items: [],
+        remoteLoaded: false,
+        remoteSynced: false,
+        remoteError: "Invalid canonical attempt collection",
     };
 }
 
@@ -271,4 +461,29 @@ export async function forceFinishTeacherAttempts(
             remoteError: mutationLockError(error),
         };
     }
+}
+
+export async function forceFinishTeacherAttemptSessions(
+    sessions: TeacherActiveAttemptSession[],
+    finishedAt: string,
+) {
+    const result = await forceFinishTeacherCanonicalAttemptSessions(
+        sessions.map(session => session.sessionId),
+        finishedAt,
+    );
+    if (result.status === "saved") {
+        const cache = await cacheCanonicalAttempts(result.attempts);
+        return {
+            localSaved: cache.localCacheSaved,
+            ...cache,
+            remoteSaved: true,
+            attempts: result.attempts,
+        };
+    }
+    return {
+        localSaved: false,
+        remoteSaved: false,
+        attempts: [] as Attempt[],
+        remoteError: remoteMutationError(result),
+    };
 }

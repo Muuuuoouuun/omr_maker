@@ -124,4 +124,40 @@ describe("workspace context", () => {
         expect(rows.member).toBeUndefined();
         expect(rows.teacherProfile).toBeUndefined();
     });
+
+    it("uses the exact provisioned account and pilot organization without legacy hashing", () => {
+        expect(workspaceContextFromIdentity({
+            teacherId: "teacher_0123456789abcdef",
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "파일럿 학원",
+            memberRole: "owner",
+        }, "account")).toMatchObject({
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "파일럿 학원",
+            actorUserId: "teacher_0123456789abcdef",
+            memberRole: "owner",
+        });
+        const invalid = workspaceContextFromIdentity({
+            teacherId: "teacher_0123456789abcdef",
+            organizationId: "teacher_sharedqa",
+        }, "account");
+        expect(invalid.organizationId).toBe("default");
+        expect(invalid).not.toHaveProperty("actorUserId");
+    });
+
+    it("keeps an academy teacher member in the owner's organization with its own role", () => {
+        const identity = {
+            teacherId: "teacher_fedcba9876543210",
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "파일럿 학원",
+        };
+        expect(workspaceContextFromIdentity({ ...identity, memberRole: "teacher" }, "account")).toMatchObject({
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            actorUserId: "teacher_fedcba9876543210",
+            memberRole: "teacher",
+        });
+        for (const memberRole of ["admin", "assistant", "viewer"] as const) {
+            expect(workspaceContextFromIdentity({ ...identity, memberRole }, "account").organizationId).toBe("default");
+        }
+    });
 });

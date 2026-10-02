@@ -5,17 +5,21 @@ import {
 import {
     attemptFromStudentAttemptRecord,
     examFromStudentAttemptReviewExam,
+    studentTrustedOfficialReviewFromUnknown,
+    type StudentTrustedOfficialReview,
 } from "@/lib/studentAttemptHistoryContract";
 import {
     readLocalAttempts,
     readLocalExams,
     saveLocalAttempt,
-    saveLocalAttempts,
     withLocalServerConfirmation,
     saveLocalExam,
 } from "@/lib/omrPersistence";
 import { attemptBelongsToSession, type StudentSession } from "@/utils/storage";
 import type { Attempt, Exam } from "@/types/omr";
+import { INITIAL_CAPACITY_EXCEEDED_ERROR } from "@/lib/initialOperationsPolicy";
+
+type StudentAttemptDetailSource = "server" | "local";
 
 export interface StudentAttemptClientListResult {
     items: Attempt[];
@@ -27,6 +31,9 @@ export interface StudentAttemptClientListResult {
 export interface StudentAttemptClientDetail {
     attempt: Attempt;
     exam: Exam;
+    source: StudentAttemptDetailSource;
+    retakeEligibleQuestionIds?: number[];
+    trustedReview?: StudentTrustedOfficialReview;
 }
 
 export function safeExamStubFromStudentAttempt(attempt: Attempt): Exam {
@@ -49,7 +56,7 @@ function localAttemptDetail(attemptId: string, session: StudentSession): Student
     const attempt = localAttemptsForSession(session).find(candidate => candidate.id === attemptId);
     if (!attempt) return null;
     const exam = readLocalExams().find(candidate => candidate.id === attempt.examId);
-    return exam ? { attempt, exam } : null;
+    return exam ? { attempt, exam, source: "local" } : null;
 }
 
 function withLocalStudentArtifacts(attempt: Attempt, session: StudentSession): Attempt {
@@ -80,7 +87,6 @@ export async function loadStudentOfficialAttempts(
         const attempts = result.attempts.map(record => withLocalServerConfirmation(
             withLocalStudentArtifacts(attemptFromStudentAttemptRecord(record), session),
         ));
-        await saveLocalAttempts(attempts);
         return { items: attempts, remoteLoaded: true };
     }
     if (result.status === "local_only") {
@@ -92,7 +98,9 @@ export async function loadStudentOfficialAttempts(
         remoteStatus: result.status,
         remoteError: result.status === "unauthorized"
             ? "Student server session is missing"
-            : result.error || "Official student attempts unavailable",
+            : result.error === INITIAL_CAPACITY_EXCEEDED_ERROR
+                ? INITIAL_CAPACITY_EXCEEDED_ERROR
+                : result.error || "Official student attempts unavailable",
     };
 }
 
@@ -104,14 +112,30 @@ export async function loadStudentOfficialAttempt(
 
     const result = await loadStudentCanonicalAttempt(attemptId);
     if (result.status === "loaded") {
+        const trustedReview = studentTrustedOfficialReviewFromUnknown(result.detail.trustedReview);
         const attempt = withLocalServerConfirmation(withLocalStudentArtifacts(
             attemptFromStudentAttemptRecord(result.detail.attempt),
             session,
         ));
         const exam = examFromStudentAttemptReviewExam(result.detail.exam);
-        await saveLocalAttempt(attempt);
-        saveLocalExam(exam);
-        return { attempt, exam };
+        try {
+            await saveLocalAttempt(attempt);
+            saveLocalExam(exam);
+        } catch {
+            // The signed owner detail remains authoritative even when the
+            // optional device cache is unavailable.
+        }
+        return {
+            attempt,
+            exam,
+            source: "server",
+            ...(result.detail.retakeEligibleQuestionIds
+                ? { retakeEligibleQuestionIds: [...result.detail.retakeEligibleQuestionIds] }
+                : {}),
+            ...(trustedReview
+                ? { trustedReview }
+                : {}),
+        };
     }
     if (result.status === "local_only") return localAttemptDetail(attemptId, session);
     return null;

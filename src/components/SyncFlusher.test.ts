@@ -8,6 +8,12 @@ const state = vi.hoisted(() => ({
     legacySubmissionReceiptCleanupDelayMs: vi.fn(),
     flushPendingSubmissionReceipts: vi.fn(),
     flushPendingStudentQuestionsForStudent: vi.fn(),
+    maintainSecureSubmissionOutbox: vi.fn(),
+    replaySecureSubmissionsForOwner: vi.fn(),
+    secureSubmissionOwnerFingerprint: vi.fn(),
+    readSecureSubmissionRecoveryNotices: vi.fn(),
+    acknowledgeSecureSubmissionRecoveryNotice: vi.fn(),
+    toastAction: vi.fn(),
 }));
 
 vi.mock("react", () => ({
@@ -19,6 +25,12 @@ vi.mock("react", () => ({
 vi.mock("@/app/actions/studentExam", () => ({
     askAttemptQuestion: vi.fn(),
     submitAttempt: vi.fn(),
+}));
+
+vi.mock("@/app/actions/studentAttemptSession", () => ({
+    checkpointDurableStudentAttemptSession: vi.fn(),
+    resolveLegacyDurableStudentAttemptSessionScope: vi.fn(),
+    submitDurableStudentAttemptSession: vi.fn(),
 }));
 
 vi.mock("@/lib/studentAttemptReceipt", () => ({
@@ -34,6 +46,18 @@ vi.mock("@/lib/studentQuestionOutbox", () => ({
     isStudentQuestionOutboxStorageKey: () => false,
 }));
 
+vi.mock("@/lib/studentSecureSubmissionOutbox", () => ({
+    acknowledgeSecureSubmissionRecoveryNotice: state.acknowledgeSecureSubmissionRecoveryNotice,
+    maintainSecureSubmissionOutbox: state.maintainSecureSubmissionOutbox,
+    readSecureSubmissionRecoveryNotices: state.readSecureSubmissionRecoveryNotices,
+    replaySecureSubmissionsForOwner: state.replaySecureSubmissionsForOwner,
+    secureSubmissionOwnerFingerprint: state.secureSubmissionOwnerFingerprint,
+}));
+
+vi.mock("@/components/Toast", () => ({
+    toast: { action: state.toastAction },
+}));
+
 vi.mock("@/utils/storage", () => ({
     getSession: () => state.currentStudentId ? { studentId: state.currentStudentId } : null,
     STUDENT_SESSION_CHANGED_EVENT: "omr:student-session-changed",
@@ -42,7 +66,7 @@ vi.mock("@/utils/storage", () => ({
 import SyncFlusher from "./SyncFlusher";
 
 async function flushMicrotasks(): Promise<void> {
-    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+    for (let index = 0; index < 16; index += 1) await Promise.resolve();
 }
 
 describe("SyncFlusher boot cleanup scheduling", () => {
@@ -58,6 +82,15 @@ describe("SyncFlusher boot cleanup scheduling", () => {
         state.flushPendingSubmissionReceipts.mockReset().mockResolvedValue(0);
         state.flushPendingStudentQuestionsForStudent.mockReset()
             .mockResolvedValue({ status: "empty", sentCount: 0 });
+        state.maintainSecureSubmissionOutbox.mockReset()
+            .mockResolvedValue({ expiredCount: 0, invalidCount: 0 });
+        state.replaySecureSubmissionsForOwner.mockReset()
+            .mockResolvedValue({ status: "empty", submitted: [] });
+        state.secureSubmissionOwnerFingerprint.mockReset()
+            .mockResolvedValue("a".repeat(64));
+        state.readSecureSubmissionRecoveryNotices.mockReset().mockResolvedValue([]);
+        state.acknowledgeSecureSubmissionRecoveryNotice.mockReset().mockResolvedValue(true);
+        state.toastAction.mockReset();
         setTimeoutSpy = vi.fn((handler: TimerHandler, delay?: number) => (
             globalThis.setTimeout(handler, delay) as unknown as number
         ));
@@ -147,5 +180,65 @@ describe("SyncFlusher boot cleanup scheduling", () => {
             "student-b",
             expect.any(Function),
         );
+    });
+
+    it("maintains and replays the secure IndexedDB submission outbox on boot and online recovery", async () => {
+        SyncFlusher();
+        await flushMicrotasks();
+
+        expect(state.maintainSecureSubmissionOutbox).toHaveBeenCalledOnce();
+        expect(state.secureSubmissionOwnerFingerprint).toHaveBeenCalledWith("student-a");
+        expect(state.replaySecureSubmissionsForOwner).toHaveBeenCalledWith(
+            "a".repeat(64),
+            expect.objectContaining({ resolveLegacyScope: expect.any(Function), checkpoint: expect.any(Function), submit: expect.any(Function) }),
+        );
+
+        const onlineListener = vi.mocked(window.addEventListener).mock.calls
+            .find(([event]) => event === "online")?.[1] as EventListener;
+        onlineListener(new Event("online"));
+        await flushMicrotasks();
+        expect(state.replaySecureSubmissionsForOwner).toHaveBeenCalledTimes(2);
+    });
+
+    it("shows and acknowledges persisted non-sensitive recovery notices", async () => {
+        state.readSecureSubmissionRecoveryNotices.mockResolvedValueOnce([{
+            id: "notice-1",
+            kind: "expired",
+            sessionId: "session-1",
+            createdAt: "2026-08-07T12:00:00.000Z",
+        }]);
+
+        SyncFlusher();
+        await flushMicrotasks();
+
+        expect(state.toastAction).toHaveBeenCalledWith(
+            "error",
+            "제출 재시도 기한 만료",
+            expect.stringContaining("선생님에게 문의"),
+            expect.objectContaining({ actionLabel: "확인", onAction: expect.any(Function) }),
+        );
+        expect(state.acknowledgeSecureSubmissionRecoveryNotice).not.toHaveBeenCalled();
+        const options = state.toastAction.mock.calls[0][3] as { onAction: () => void };
+        options.onAction();
+        await flushMicrotasks();
+        expect(state.acknowledgeSecureSubmissionRecoveryNotice).toHaveBeenCalledWith("notice-1");
+    });
+
+    it("describes quarantined legacy answers honestly without claiming deletion", async () => {
+        state.readSecureSubmissionRecoveryNotices.mockResolvedValueOnce([{
+            id: "notice-legacy",
+            kind: "legacy_recovery_required",
+            sessionId: "session-legacy",
+            createdAt: "2026-08-07T12:00:00.000Z",
+        }]);
+        SyncFlusher();
+        await flushMicrotasks();
+        expect(state.toastAction).toHaveBeenCalledWith(
+            "error",
+            "이전 제출 복구 필요",
+            expect.stringContaining("답안은 보관 중"),
+            expect.any(Object),
+        );
+        expect(state.toastAction.mock.calls.at(-1)?.[2]).not.toContain("정리했습니다");
     });
 });

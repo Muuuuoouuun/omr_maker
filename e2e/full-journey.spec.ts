@@ -1,8 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { test, expect, type Page } from "@playwright/test";
 import { continueSolveEntryIfPresent, loginAsTeacher, resetBrowserState } from "./helpers";
+import { registerCanonicalRemoteFixture } from "./fixtures/canonical-remote-fixture";
 import { parseCsvRows } from "../src/lib/csv";
 import { formatKoreanDate } from "../src/lib/pure";
+import { studentAssignmentDraftStorageKey } from "../src/lib/studentAssignmentClassification";
+import { scopedExamDraftStorageKey } from "../src/app/create/createPageHelpers";
+import { stableWorkspaceHash } from "../src/lib/workspaceContext";
+import { mayRunMutatingE2E } from "./mutationSafety";
+import { createSignedStudentSessionCookie, STUDENT_SERVER_SESSION_COOKIE } from "../src/lib/studentServerSession";
+import type { Exam } from "../src/types/omr";
 
 const TEST_EXAM_ID = "e2e-korean-integrated-exam";
 const TEST_EXAM_TITLE = "E2E 국어 통합 시험";
@@ -11,8 +18,8 @@ const TEST_GROUP_NAME = "A반";
 const TEST_STUDENT_ID = `${TEST_GROUP_ID}::김학생`;
 const TEST_STUDENT_NAME = "김학생";
 const TEST_STUDENT_START_CODE = "E2E777";
-const CREATED_EXAM_TITLE = "E2E 생성 UI 국어 시험";
-const CREATED_ANSWER_KEY = "12345123451234512345";
+const CREATED_EXAM_TITLE = TEST_EXAM_TITLE;
+const CREATED_ANSWER_KEY = "234";
 const SAME_NAME_GROUP_ID = "same-name-class-a";
 const SAME_NAME_GROUP_NAME = "동명이인 A반";
 const SAME_NAME_STUDENT_NAME = "김학생";
@@ -29,6 +36,21 @@ const submissionRequestEntryKey = (attemptId: string) => (
 const submissionAliasEntryKey = (attemptId: string) => (
     `omr_student_submission_alias_v2:${encodeURIComponent(attemptId)}`
 );
+
+async function expectDurableConfirmedReceipt(page: Page, attemptId: string) {
+    await expect.poll(async () => page.evaluate((key) => {
+        const raw = window.localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+    }, submissionReceiptEntryKey(attemptId)), { timeout: 8_000 }).toMatchObject({
+        version: 2,
+        revision: expect.any(Number),
+        receipt: {
+            attemptId,
+            status: "confirmed",
+            updatedAt: expect.any(String),
+        },
+    });
+}
 
 async function seedStudentRoster(page: Page) {
     await page.evaluate((seed) => {
@@ -145,7 +167,7 @@ async function seedSameNameRosterWithProtectedHistory(page: Page) {
 
 async function loginAsStudent(page: Page) {
     await page.goto("/?role=student");
-    await expect(page.getByText("학생 포털")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
     await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
     await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
     await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
@@ -195,12 +217,17 @@ async function requireStartCodeForSeedStudent(page: Page) {
 async function ensureAnswerPaneVisible(page: Page) {
     await continueSolveEntryIfPresent(page);
     const expandButton = page.getByRole("button", { name: "답안지 펼치기", exact: true });
-    if (await expandButton.isVisible().catch(() => false)) {
+    const answerPaneTitle = page.locator(".solve-omr-pane:not(.is-collapsed) .solve-omr-pane-title", {
+        hasText: "OMR 답안",
+    });
+    await expect.poll(async () => (
+        await answerPaneTitle.isVisible().catch(() => false)
+        || await expandButton.isVisible().catch(() => false)
+    ), { timeout: 15_000 }).toBe(true);
+    if (!(await answerPaneTitle.isVisible().catch(() => false))) {
         await expandButton.click();
     }
-    await expect(page.locator(".solve-omr-pane:not(.is-collapsed) .solve-omr-pane-title", {
-        hasText: "OMR 답안",
-    })).toBeVisible();
+    await expect(answerPaneTitle).toBeVisible();
 }
 
 async function setAwayTestClock(page: Page, nowMs: number) {
@@ -252,6 +279,8 @@ async function seedExamAndStudent(page: Page) {
         const exam = {
             id: seed.examId,
             title: seed.examTitle,
+            organizationId: "default",
+            createdByUserId: "admin",
             createdAt: now,
             updatedAt: now,
             durationMin: 30,
@@ -314,6 +343,7 @@ async function seedExamAndStudent(page: Page) {
         const group = {
             id: seed.groupId,
             name: seed.groupName,
+            organizationId: "default",
             region: "서울",
             count: 1,
             avgScore: 0,
@@ -322,6 +352,7 @@ async function seedExamAndStudent(page: Page) {
         const student = {
             id: seed.studentId,
             name: seed.studentName,
+            organizationId: "default",
             email: "kim.student@example.com",
             group: seed.groupName,
             region: "서울",
@@ -358,6 +389,47 @@ async function seedExamAndStudent(page: Page) {
         studentId: TEST_STUDENT_ID,
         studentName: TEST_STUDENT_NAME,
     });
+}
+
+type CanonicalRemoteFixture = Awaited<ReturnType<typeof registerCanonicalRemoteFixture>>;
+
+async function submitSeedExamThroughCanonicalRemote(
+    page: Page,
+    remoteFixture: CanonicalRemoteFixture,
+) {
+    expect((await page.context().cookies()).some(cookie => cookie.name === "omr_student_server_session")).toBe(true);
+    const seed = await page.evaluate((examId) => ({
+        exam: JSON.parse(window.localStorage.getItem(`omr_exam_${examId}`) || "null"),
+        roster: {
+            students: JSON.parse(window.localStorage.getItem("omr_students") || "[]"),
+            groups: JSON.parse(window.localStorage.getItem("omr_groups") || "[]"),
+            invites: JSON.parse(window.localStorage.getItem("omr_invites") || "[]"),
+        },
+    }), TEST_EXAM_ID) as { exam: Exam; roster: Parameters<CanonicalRemoteFixture["setRoster"]>[0] };
+    remoteFixture.setRoster(seed.roster);
+
+    await page.goto(`/solve/${TEST_EXAM_ID}`);
+    remoteFixture.activateStudentSubmission(seed.exam);
+    await ensureAnswerPaneVisible(page);
+    await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
+    await page.getByRole("radio", { name: "문제 2번 보기 3" }).click();
+    await page.getByRole("radio", { name: "문제 3번 보기 1" }).click();
+    await page.locator(".solve-submit-button").click();
+    const confirmDialog = page.getByRole("dialog", { name: "답안 제출" });
+    await expect(confirmDialog).toBeVisible();
+    await confirmDialog.getByRole("button", { name: "제출하기" }).click();
+    await expect(page.getByText("결과 리포트", { exact: true })).toBeVisible();
+
+    const attempt = remoteFixture.confirmedAttempt();
+    expect(attempt).toMatchObject({
+        examId: TEST_EXAM_ID,
+        organizationId: "default",
+        score: 20,
+        totalScore: 30,
+        status: "completed",
+    });
+    await expectDurableConfirmedReceipt(page, attempt!.id);
+    return attempt!;
 }
 
 async function seedCompletedAttempt(page: Page) {
@@ -451,6 +523,8 @@ async function seedCompletedAttempt(page: Page) {
             id: "attempt-tablet-analytics",
             examId: seed.examId,
             examTitle: seed.examTitle,
+            organizationId: "default",
+            createdByUserId: "admin",
             studentProfileId: seed.studentId,
             studentName: seed.studentName,
             studentId: seed.studentId,
@@ -487,23 +561,28 @@ async function seedCompletedAttempt(page: Page) {
 test.describe("Teacher and student full journey", () => {
     test.describe.configure({ timeout: 45_000 });
 
-    test.beforeEach(async ({ page, context }, testInfo) => {
+    test.beforeEach(async ({ page, context, baseURL }, testInfo) => {
         test.skip(
-            testInfo.project.name.startsWith("prod-"),
-            "Production discards the suite's local plaintext-code fixture; remote credential journeys run with a connected test backend.",
+            testInfo.project.name.startsWith("prod-")
+                || !mayRunMutatingE2E(baseURL, process.env.PLAYWRIGHT_ALLOW_EXTERNAL_MUTATIONS),
+            "Mutating journeys run only on localhost unless PLAYWRIGHT_ALLOW_EXTERNAL_MUTATIONS=1 explicitly opts into a dedicated fixture environment.",
         );
         await resetBrowserState(page, context);
     });
 
     test("requires student ID or email before opening a roster-backed student account", async ({ page }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "student_core_identity_entry" },
+            { type: "release-proof", description: "browser_determinism_credential_boundary" },
+        );
         await seedStudentRoster(page);
         await page.goto("/?role=student");
-        await expect(page.getByText("학생 포털")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
 
         await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
         await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
         await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page.getByText("명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.")).toBeVisible();
+        await expect(page.getByText("이 반 명단에 있는 학생이에요. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.")).toBeVisible();
         await expect(page.getByText("명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다.")).toBeVisible();
 
         await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
@@ -530,10 +609,48 @@ test.describe("Teacher and student full journey", () => {
         expect(storedCodes[TEST_STUDENT_ID]).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
     });
 
+    test("student logout removes the server cookie before clearing the browser identity", async ({ page, context, baseURL }) => {
+        await seedStudentRoster(page);
+        await page.goto("/?role=student");
+        await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
+        await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
+        await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await page.getByRole("dialog", { name: "시작 코드가 발급되었습니다" })
+            .getByRole("button", { name: "저장했어요, 계속" }).click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
+        await expect(page.getByRole("button", { name: "로그아웃", exact: true })).toBeVisible();
+
+        const cookie = createSignedStudentSessionCookie({
+            kind: "student",
+            accountId: `student_credential_${"a".repeat(32)}`,
+            studentId: TEST_STUDENT_ID,
+            organizationId: "default",
+            name: TEST_STUDENT_NAME,
+            identityType: "registered",
+            credentialGeneration: 1,
+        }, { STUDENT_SESSION_SECRET: "omr-maker-e2e-student-session-secret-2026" });
+        expect(cookie !== null).toBe(true);
+        await context.addCookies([{
+            name: STUDENT_SERVER_SESSION_COOKIE,
+            value: cookie!,
+            url: baseURL || "http://localhost:3003",
+            httpOnly: true,
+            sameSite: "Lax",
+        }]);
+
+        await page.getByRole("button", { name: "로그아웃", exact: true }).click();
+        await expect(page).toHaveURL(new URL("/", baseURL || "http://localhost:3003").href);
+        expect((await context.cookies()).filter(value => value.name === STUDENT_SERVER_SESSION_COOKIE).length).toBe(0);
+        expect(await page.evaluate(() => sessionStorage.getItem("omr_student_session"))).toBeNull();
+        await page.goto("/student/dashboard");
+        await expect(page.getByRole("heading", { name: "학생 로그인이 필요합니다" })).toBeVisible();
+    });
+
     test("requires lookup and start code before opening a same-name student account with history", async ({ page }) => {
         await seedSameNameRosterWithProtectedHistory(page);
         await page.goto("/?role=student");
-        await expect(page.getByText("학생 포털")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
 
         await page.getByLabel("이름").fill(SAME_NAME_STUDENT_NAME);
         await page.getByLabel("반 선택").selectOption(SAME_NAME_GROUP_ID);
@@ -549,11 +666,11 @@ test.describe("Teacher and student full journey", () => {
         await page.getByLabel("학생번호 또는 이메일").fill(SAME_NAME_SECOND_EMAIL);
         await expect(page.getByLabel("시작 코드")).toBeVisible();
         await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page.getByText("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.")).toBeVisible();
+        await expect(page.getByText("이미 시작 코드가 있는 학생이에요. 처음 로그인할 때 받은 6자리 코드를 입력해주세요.")).toBeVisible();
 
         await page.getByLabel("시작 코드").fill("WRONG1");
         await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page.getByText("시작 코드가 일치하지 않습니다.")).toBeVisible();
+        await expect(page.getByText("시작 코드가 맞지 않아요. 6자리를 다시 확인해주세요(O·I·0·1은 쓰지 않아요). 잊었다면 선생님에게 재발급을 요청하세요.")).toBeVisible();
 
         await page.getByLabel("시작 코드").fill(SAME_NAME_START_CODE);
         await page.getByRole("button", { name: "시험 시작하기" }).click();
@@ -574,18 +691,29 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("lets a start-code student submit an exam and feed teacher analytics", async ({ page }) => {
+        test.setTimeout(90_000);
+        test.info().annotations.push({ type: "release-proof", description: "student_core_exact_submit" });
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
         await seedExamAndStudent(page);
+        const canonicalExam = await page.evaluate((examId) => (
+            JSON.parse(window.localStorage.getItem(`omr_exam_${examId}`) || "null")
+        ), TEST_EXAM_ID) as Exam;
+        remoteFixture.setRoster(await page.evaluate(() => ({
+            students: JSON.parse(window.localStorage.getItem("omr_students") || "[]"),
+            groups: JSON.parse(window.localStorage.getItem("omr_groups") || "[]"),
+            invites: JSON.parse(window.localStorage.getItem("omr_invites") || "[]"),
+        })));
         await requireStartCodeForSeedStudent(page);
 
         await page.goto("/?role=student");
-        await expect(page.getByText("학생 포털")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
         await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
         await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
         await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
         await expect(page.getByLabel("시작 코드")).toBeVisible();
 
         await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page.getByText("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.")).toBeVisible();
+        await expect(page.getByText("이미 시작 코드가 있는 학생이에요. 처음 로그인할 때 받은 6자리 코드를 입력해주세요.")).toBeVisible();
 
         await page.getByLabel("시작 코드").fill(TEST_STUDENT_START_CODE);
         await page.getByRole("button", { name: "시험 시작하기" }).click();
@@ -608,6 +736,7 @@ test.describe("Teacher and student full journey", () => {
 
         await page.getByRole("link", { name: "시작" }).click();
         await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`), { timeout: 15_000 });
+        remoteFixture.activateStudentSubmission(canonicalExam);
         await ensureAnswerPaneVisible(page);
 
         await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
@@ -637,12 +766,54 @@ test.describe("Teacher and student full journey", () => {
             status: "completed",
             identityType: "temporary",
         });
+        expect(remoteFixture.confirmedAttempt()).toMatchObject({
+            examId: TEST_EXAM_ID,
+            studentId: TEST_STUDENT_ID,
+            organizationId: "default",
+            score: 20,
+            totalScore: 30,
+            status: "completed",
+        });
+        await expectDurableConfirmedReceipt(page, remoteFixture.confirmedAttempt()!.id);
 
-        await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
-        await page.getByRole("tab", { name: "학생·반" }).click();
-        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
-        await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) })).toBeVisible();
+        await loginAsTeacher(page, "/teacher/dashboard");
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
+        const dashboardActions = remoteFixture.activateTeacherDashboard();
+        await expect(page.getByTestId("canonical-error-no-cache")).toBeVisible();
+        remoteFixture.observedActionIds.clear();
+        remoteFixture.rewrittenActionIds.clear();
+        await page.evaluate(() => {
+            const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+            if (!rawSession) throw new Error("teacher session missing");
+            const session = JSON.parse(rawSession) as Record<string, unknown>;
+            session.teacherId = "admin";
+            session.organizationId = "default";
+            session.accountSessionGeneration = 1;
+            session.sessionAuthority = "legacy_account";
+            window.sessionStorage.setItem("omr_teacher_session", JSON.stringify(session));
+            window.dispatchEvent(new Event("omr:teacher-session-identity-changed"));
+        });
+        for (const actionId of [dashboardActions.exams, dashboardActions.summaries, dashboardActions.roster]) {
+            await expect.poll(() => remoteFixture.observedActionIds.has(actionId), { timeout: 8_000 }).toBe(true);
+            await expect.poll(() => remoteFixture.rewrittenActionIds.has(actionId), { timeout: 8_000 }).toBe(true);
+        }
+        await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
+        const [dashboardDownload] = await Promise.all([
+            page.waitForEvent("download"),
+            page.getByRole("button", { name: "통계 CSV" }).click(),
+        ]);
+        expect(dashboardDownload.suggestedFilename()).toMatch(/^dashboard-stats-\d{4}-\d{2}-\d{2}\.csv$/);
+        await expect.poll(() => remoteFixture.observedActionIds.has(dashboardActions.attempts), { timeout: 8_000 }).toBe(true);
+        await expect.poll(() => remoteFixture.rewrittenActionIds.has(dashboardActions.attempts), { timeout: 8_000 }).toBe(true);
+        await page.getByRole("button", { name: "학생 성취도", exact: true }).click();
+        await expect.poll(() => remoteFixture.observedActionIds.has(dashboardActions.analytics), { timeout: 8_000 }).toBe(true);
+        await expect.poll(() => remoteFixture.rewrittenActionIds.has(dashboardActions.analytics), { timeout: 8_000 }).toBe(true);
+        await expect(page.getByRole("heading", { name: new RegExp(`${TEST_STUDENT_NAME}.*성취도 추이`) })).toBeVisible({ timeout: 30_000 });
+        const detailRow = page.getByRole("row").filter({ hasText: TEST_EXAM_TITLE });
+        await expect(detailRow).toContainText("20 / 30");
+        await page.getByRole("button", { name: "결과 분석", exact: true }).click();
+        await expect(page.getByRole("combobox", { name: "시험", exact: true })).toHaveValue(TEST_EXAM_TITLE, { timeout: 30_000 });
+        await expect(page.getByRole("region", { name: "시험 핵심 지표" })).toContainText("채점 응시", { timeout: 30_000 });
     });
 
     test("debounces and deduplicates one away session, including the submission flush", async ({ page }) => {
@@ -697,7 +868,12 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("skips the entry dialog and scopes questions when re-entering a retake from the student's own review", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_retake" });
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
         await seedExamAndStudent(page);
+        const canonicalExam = await page.evaluate((examId) => (
+            JSON.parse(window.localStorage.getItem(`omr_exam_${examId}`) || "null")
+        ), TEST_EXAM_ID) as Exam;
         await requireStartCodeForSeedStudent(page);
 
         // Log in as the roster student and submit with Q3 wrong (answer key is 4).
@@ -711,6 +887,7 @@ test.describe("Teacher and student full journey", () => {
 
         await page.getByRole("link", { name: "시작" }).click();
         await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`), { timeout: 15_000 });
+        remoteFixture.activateStudentSubmission(canonicalExam);
         await ensureAnswerPaneVisible(page);
         await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
         await page.getByRole("radio", { name: "문제 2번 보기 3" }).click();
@@ -720,6 +897,9 @@ test.describe("Teacher and student full journey", () => {
         await expect(confirmDialog).toBeVisible();
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
         await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
+        const sourceAttempt = remoteFixture.confirmedAttempt();
+        expect(sourceAttempt).toMatchObject({ score: 20, totalScore: 30, status: "completed" });
+        await expectDurableConfirmedReceipt(page, sourceAttempt!.id);
 
         // Re-enter the wrong-answer retake from the student's own review.
         await page.getByRole("link", { name: "오답만" }).click();
@@ -729,69 +909,137 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByRole("dialog", { name: "시험 입장 확인" })).toBeHidden();
 
         // The answer pane is reachable without dismissing any dialog, scoped to Q3 only.
-        const expandButton = page.getByRole("button", { name: "답안지 펼치기", exact: true });
-        if (await expandButton.isVisible().catch(() => false)) {
-            await expandButton.click();
-        }
+        await ensureAnswerPaneVisible(page);
         await expect(page.getByRole("radio", { name: "문제 3번 보기 4" })).toBeVisible();
         await expect(page.getByRole("radio", { name: "문제 1번 보기 1" })).toHaveCount(0);
+        await page.getByRole("radio", { name: "문제 3번 보기 4" }).click();
+        await page.locator(".solve-submit-button").click();
+        const retakeConfirmDialog = page.getByRole("dialog", { name: "답안 제출" });
+        await expect(retakeConfirmDialog).toBeVisible();
+        await retakeConfirmDialog.getByRole("button", { name: "제출하기" }).click();
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
+        const retakeAttempt = remoteFixture.confirmedAttempt();
+        expect(retakeAttempt).toMatchObject({
+            score: 10,
+            totalScore: 10,
+            status: "completed",
+            retake: {
+                sourceAttemptId: sourceAttempt!.id,
+                questionIds: [3],
+                mode: "wrong",
+            },
+        });
+        expect(remoteFixture.confirmedAttempts()).toHaveLength(2);
+        await expectDurableConfirmedReceipt(page, retakeAttempt!.id);
     });
 
     test("creates an exam through the teacher UI before student submission and analytics", async ({ page }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "teacher_core_teacher_login" },
+            { type: "release-proof", description: "teacher_core_draft_create" },
+            { type: "release-proof", description: "teacher_core_publish_distribution" },
+        );
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
         await loginAsTeacher(page, "/create");
-        await expect(page.getByText("스마트 에디터")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "새 시험 만들기" })).toBeVisible();
+        await seedStudentRoster(page);
+        const authoritativeRoster = await page.evaluate(() => ({
+            students: JSON.parse(window.localStorage.getItem("omr_students") || "[]"),
+            groups: JSON.parse(window.localStorage.getItem("omr_groups") || "[]"),
+            invites: JSON.parse(window.localStorage.getItem("omr_invites") || "[]"),
+        }));
+        const createActions = remoteFixture.activateCreate(authoritativeRoster);
+        remoteFixture.observedActionIds.clear();
+        remoteFixture.rewrittenActionIds.clear();
+        await page.evaluate(() => {
+            const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+            if (!rawSession) throw new Error("teacher session missing");
+            const session = JSON.parse(rawSession) as Record<string, unknown>;
+            session.teacherId = "admin";
+            session.organizationId = "default";
+            session.accountSessionGeneration = 1;
+            session.sessionAuthority = "legacy_account";
+            window.sessionStorage.setItem("omr_teacher_session", JSON.stringify(session));
+        });
+        await page.reload();
+        await expect(page.getByRole("heading", { name: "새 시험 만들기" })).toBeVisible();
+        await page.evaluate(() => {
+            const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+            if (!rawSession) throw new Error("teacher session missing");
+            const session = JSON.parse(rawSession) as Record<string, unknown>;
+            session.teacherId = "admin";
+            session.organizationId = "default";
+            session.accountSessionGeneration = 1;
+            session.sessionAuthority = "legacy_account";
+            window.sessionStorage.setItem("omr_teacher_session", JSON.stringify(session));
+            window.dispatchEvent(new Event("omr:teacher-session-identity-changed"));
+        });
 
         const examTitleInput = page.getByLabel("시험 제목");
         if (!(await examTitleInput.isVisible().catch(() => false))) {
             await page.getByRole("tab", { name: /^설정/ }).click();
         }
         await expect(examTitleInput).toBeVisible();
+        await page.getByLabel("문항 수 직접 입력").fill(String(CREATED_ANSWER_KEY.length));
+        await page.getByLabel("문항 수 직접 입력").press("Enter");
         await examTitleInput.fill(CREATED_EXAM_TITLE);
         await page.getByLabel("빠른 정답 입력").fill(CREATED_ANSWER_KEY);
         await expect(
-            page.locator("#create-settings-panel .create-design-check-pill", { hasText: "20/20 정답" })
+            page.locator("#create-settings-panel .create-design-check-pill", { hasText: "3/3 정답" })
         ).toBeVisible();
+        const publishTargetDraftKey = scopedExamDraftStorageKey(
+            null,
+            "default",
+            `teacher_${stableWorkspaceHash("admin")}`,
+        );
+        await page.evaluate(({ draftKey, examId }) => {
+            window.localStorage.setItem(`${draftKey}:publishTargetId`, examId);
+        }, { draftKey: publishTargetDraftKey, examId: TEST_EXAM_ID });
 
         await page.getByRole("button", { name: "배포하기" }).click();
         await expect(page.getByRole("heading", { name: "시험 배포하기" })).toBeVisible();
-        await expect(page.getByText("20/20 정답 · 총점 100점")).toBeVisible();
+        await expect.poll(() => remoteFixture.observedActionIds.has(createActions.loadRoster), { timeout: 8_000 }).toBe(true);
+        await expect.poll(() => remoteFixture.rewrittenActionIds.has(createActions.loadRoster), { timeout: 8_000 }).toBe(true);
+        await expect(page.getByText("3/3 정답 · 총점 15점")).toBeVisible();
         await expect(
             page.getByText("문제지 PDF가 없으면 학생 화면에서 별도 파일 업로드가 필요합니다.")
         ).toHaveCount(2);
 
         await page.getByRole("button", { name: "링크 생성하기" }).click();
-        await expect(page.getByRole("button", { name: "링크 복사" })).toBeVisible();
         await expect(page).toHaveURL(/\/create\?edit=/);
+        await expect.poll(() => remoteFixture.observedActionIds.has(createActions.saveExam), { timeout: 8_000 }).toBe(true);
+        await expect.poll(() => remoteFixture.rewrittenActionIds.has(createActions.saveExam), { timeout: 8_000 }).toBe(true);
+        expect(remoteFixture.observedActionIds.has(createActions.saveAssignment)).toBe(false);
+        expect(remoteFixture.rewrittenActionIds.has(createActions.saveAssignment)).toBe(false);
+        await expect(examTitleInput).toHaveValue(CREATED_EXAM_TITLE);
+        await expect(
+            page.locator("#create-settings-panel .create-design-check-pill", { hasText: "3/3 정답" })
+        ).toBeVisible();
+        await expect(page.getByRole("button", { name: "링크 복사" })).toBeVisible();
 
-        const createdExamHandle = await page.waitForFunction((title) => {
-            for (let index = 0; index < window.localStorage.length; index += 1) {
-                const key = window.localStorage.key(index);
-                if (!key?.startsWith("omr_exam_")) continue;
-                const exam = JSON.parse(window.localStorage.getItem(key) || "null");
-                if (exam?.title === title) return exam;
-            }
-            return null;
-        }, CREATED_EXAM_TITLE);
-        const createdExam = await createdExamHandle.jsonValue() as {
-            id: string;
-            title: string;
-            accessConfig?: { type?: string };
-            questions?: Array<{ answer?: number; score?: number }>;
-        };
+        const createdExamId = new URL(page.url()).searchParams.get("edit");
+        expect(createdExamId).toBeTruthy();
+        const createdExamHandle = await page.waitForFunction((examId) => {
+            if (!examId) return null;
+            return JSON.parse(window.localStorage.getItem(`omr_exam_${examId}`) || "null");
+        }, createdExamId);
+        const createdExam = await createdExamHandle.jsonValue() as Exam;
+        const savedExam = remoteFixture.confirmedExam();
         expect(createdExam).toMatchObject({
             title: CREATED_EXAM_TITLE,
             accessConfig: { type: "public" },
         });
-        expect(createdExam.questions).toHaveLength(20);
+        expect(savedExam).toEqual(createdExam);
+        expect(createdExam.questions).toHaveLength(3);
         expect(createdExam.questions?.map(question => question.answer).join("")).toBe(CREATED_ANSWER_KEY);
 
-        await seedStudentRoster(page);
         await loginAsStudent(page);
         await expect(page.getByRole("heading", { name: `${TEST_STUDENT_NAME}님,` })).toBeVisible();
         await expect(page.getByText(CREATED_EXAM_TITLE).first()).toBeVisible();
 
         await page.getByRole("link", { name: "시작" }).click();
         await expect(page).toHaveURL(new RegExp(`/solve/${createdExam.id}$`));
+        remoteFixture.activateStudentSubmission(savedExam!);
         await ensureAnswerPaneVisible(page);
 
         for (const [index, answer] of [...CREATED_ANSWER_KEY].entries()) {
@@ -804,34 +1052,69 @@ test.describe("Teacher and student full journey", () => {
         await expect(confirmDialog).toBeVisible();
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
 
-        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/);
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
         await expect(page.getByText("결과 리포트", { exact: true })).toBeVisible();
         await expect(page.getByText(CREATED_EXAM_TITLE).first()).toBeVisible();
-        await expect(page.getByText("100 / 100점")).toBeVisible();
+        await expect(page.getByText("15 / 15점")).toBeVisible();
+        expect(remoteFixture.confirmedAttempt()).toMatchObject({
+            examId: createdExam.id,
+            score: 15,
+            totalScore: 15,
+            status: "completed",
+        });
+        await expectDurableConfirmedReceipt(page, remoteFixture.confirmedAttempt()!.id);
 
         await loginAsTeacher(page, "/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
+        remoteFixture.activateTeacherDashboard();
+        await expect(page.getByTestId("canonical-error-no-cache")).toBeVisible();
+        await page.evaluate(() => {
+            const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+            if (!rawSession) throw new Error("teacher session missing");
+            const session = JSON.parse(rawSession) as Record<string, unknown>;
+            session.teacherId = "admin";
+            session.organizationId = "default";
+            session.accountSessionGeneration = 1;
+            session.sessionAuthority = "legacy_account";
+            window.sessionStorage.setItem("omr_teacher_session", JSON.stringify(session));
+            window.dispatchEvent(new Event("omr:teacher-session-identity-changed"));
+        });
+        await page.getByRole("tab", { name: "완료", exact: true }).click();
         await expect(page.getByText(CREATED_EXAM_TITLE).first()).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
 
-        await page.getByRole("button", { name: "시험 분석", exact: true }).click();
-        await page.getByRole("tab", { name: "학생·반" }).click();
-        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
-        await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*100점`) })).toBeVisible();
+        await page.getByRole("button", { name: "학생 성취도", exact: true }).click();
+        await expect(page.getByRole("heading", { name: new RegExp(`${TEST_STUDENT_NAME}.*성취도 추이`) })).toBeVisible({ timeout: 15_000 });
+        const detailRow = page.getByRole("row").filter({ hasText: CREATED_EXAM_TITLE });
+        await expect(detailRow).toContainText("15 / 15");
     });
 
     test("covers creation entry, student submission, teacher analytics, and statistics CSV", async ({ page }) => {
+        test.info().annotations.push(
+            { type: "release-proof", description: "teacher_core_statistics" },
+            { type: "release-proof", description: "teacher_core_csv_export" },
+        );
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
         await loginAsTeacher(page, "/create");
-        await expect(page.getByText("스마트 에디터")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "새 시험 만들기" })).toBeVisible();
         await expect(page.getByRole("button", { name: "배포하기" })).toBeVisible();
 
         await seedExamAndStudent(page);
-        await page.goto("/student/dashboard");
+        const canonicalExam = await page.evaluate((examId) => (
+            JSON.parse(window.localStorage.getItem(`omr_exam_${examId}`) || "null")
+        ), TEST_EXAM_ID) as Exam;
+        remoteFixture.setRoster(await page.evaluate(() => ({
+            students: JSON.parse(window.localStorage.getItem("omr_students") || "[]"),
+            groups: JSON.parse(window.localStorage.getItem("omr_groups") || "[]"),
+            invites: JSON.parse(window.localStorage.getItem("omr_invites") || "[]"),
+        })));
+        await loginAsStudent(page);
         await expect(page.getByRole("heading", { name: `${TEST_STUDENT_NAME}님,` })).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
 
         await page.getByRole("link", { name: "시작" }).click();
         await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`), { timeout: 15_000 });
+        remoteFixture.activateStudentSubmission(canonicalExam);
         await ensureAnswerPaneVisible(page);
 
         await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
@@ -866,9 +1149,35 @@ test.describe("Teacher and student full journey", () => {
             return exam?.createdAt || "";
         }, TEST_EXAM_ID);
 
+        expect(remoteFixture.confirmedAttempt()).toMatchObject({
+            examId: TEST_EXAM_ID,
+            organizationId: "default",
+            score: 20,
+            totalScore: 30,
+            status: "completed",
+        });
+        await expectDurableConfirmedReceipt(page, remoteFixture.confirmedAttempt()!.id);
         await loginAsTeacher(page, "/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
-        await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
+        // Compile the dashboard worker before resolving its exact action IDs.
+        // The first identity-less render is intentionally discarded. The event
+        // below exercises the canonical fixture after binding the exact teacher
+        // identity generation required by the remote collection boundary.
+        const dashboardActions = remoteFixture.activateTeacherDashboard();
+        await expect(page.getByTestId("canonical-error-no-cache")).toBeVisible();
+        await page.evaluate(() => {
+            const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+            if (!rawSession) throw new Error("teacher session missing");
+            const session = JSON.parse(rawSession) as Record<string, unknown>;
+            session.teacherId = "admin";
+            session.organizationId = "default";
+            session.accountSessionGeneration = 1;
+            session.sessionAuthority = "legacy_account";
+            window.sessionStorage.setItem("omr_teacher_session", JSON.stringify(session));
+            window.dispatchEvent(new Event("omr:teacher-session-identity-changed"));
+        });
+        await page.getByRole("tab", { name: "완료", exact: true }).click();
+        await expect(page.getByRole("button", { name: `${TEST_EXAM_TITLE} 분석 보기` })).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
         const dashboardRosterCount = await page.evaluate(() => (
             JSON.parse(localStorage.getItem("omr_students") || "[]").length
@@ -891,12 +1200,14 @@ test.describe("Teacher and student full journey", () => {
         expect(csvRows).toContainEqual(["시험별 통계"]);
         expect(csvRows).toContainEqual(["완료", TEST_EXAM_TITLE, formatKoreanDate(expectedExamDate), "1", "1", "100", "0", "N"]);
 
-        await page.getByRole("button", { name: "시험 분석", exact: true }).click();
-        await page.getByRole("tab", { name: "학생·반" }).click();
-        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
-        const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });
-        await expect(studentScoreRow).toBeVisible();
-        const correctionCsvButton = studentScoreRow.getByRole("button", { name: "정오표(CSV)" });
+        await page.getByRole("button", { name: "결과 분석", exact: true }).click();
+        await page.getByRole("tab", { name: "학생·반", exact: true }).click();
+        for (const actionId of [dashboardActions.attempts, dashboardActions.analytics]) {
+            await expect.poll(() => remoteFixture.observedActionIds.has(actionId), { timeout: 8_000 }).toBe(true);
+            await expect.poll(() => remoteFixture.rewrittenActionIds.has(actionId), { timeout: 8_000 }).toBe(true);
+        }
+        const examStudentRow = page.getByRole("row").filter({ hasText: TEST_STUDENT_NAME });
+        const correctionCsvButton = examStudentRow.getByRole("button", { name: "정오표(CSV)" });
         await expect(correctionCsvButton).toBeVisible();
 
         const [correctionDownload] = await Promise.all([
@@ -909,14 +1220,24 @@ test.describe("Teacher and student full journey", () => {
         const correctionCsvText = await readFile(correctionCsvPath!, "utf8");
         expect(correctionCsvText.charCodeAt(0)).toBe(0xfeff);
         const correctionRows = parseCsvRows(correctionCsvText);
-        expect(correctionRows[0]).toEqual(["문항 번호", "라벨(장르)", "배점", "학생 선택", "정답", "정오"]);
+        expect(correctionRows.slice(0, 2)).toEqual([
+            ["채점 근거", "제출 당시 저장 채점"],
+            ["문항 번호", "라벨(장르)", "배점", "학생 선택", "정답", "정오"],
+        ]);
         expect(correctionRows).toContainEqual(["1", "문법", "10", "2", "2", "O"]);
         expect(correctionRows).toContainEqual(["2", "독해", "10", "3", "3", "O"]);
         expect(correctionRows).toContainEqual(["3", "어휘", "10", "1", "4", "X"]);
         expect(correctionRows).toContainEqual(["장르별 통계"]);
+
+        await page.getByRole("button", { name: "학생 성취도", exact: true }).click();
+        await expect(page.getByRole("heading", { name: new RegExp(`${TEST_STUDENT_NAME}.*성취도 추이`) })).toBeVisible();
+        const detailRow = page.getByRole("row").filter({ hasText: TEST_EXAM_TITLE });
+        await expect(detailRow).toContainText("20 / 30");
+        await expect(detailRow.getByRole("link", { name: `${TEST_EXAM_TITLE} 결과 분석 열기` })).toBeVisible();
     });
 
     test("keeps the tablet solve rail usable for answer entry", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_tablet" });
         await seedExamAndStudent(page);
         await page.setViewportSize({ width: 820, height: 1180 });
         await page.goto(`/solve/${TEST_EXAM_ID}`);
@@ -934,6 +1255,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("keeps the desktop solve OMR as a blurred overlay without shrinking the PDF", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_desktop" });
         await seedExamAndStudent(page);
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`/solve/${TEST_EXAM_ID}`);
@@ -943,14 +1265,16 @@ test.describe("Teacher and student full journey", () => {
         await expect(openRail).toBeVisible();
         await openRail.click();
 
-        const layout = await page.evaluate(() => {
+        const readLayout = () => page.evaluate(() => {
             const body = document.querySelector<HTMLElement>(".solve-body")?.getBoundingClientRect();
             const pdf = document.querySelector<HTMLElement>(".solve-pdf-pane")?.getBoundingClientRect();
             const paneElement = document.querySelector<HTMLElement>("#solve-omr-pane");
             const pane = paneElement?.getBoundingClientRect();
             const paneStyle = paneElement ? getComputedStyle(paneElement) : null;
             return body && pdf && pane ? {
+                bodyLeft: body.left,
                 bodyWidth: body.width,
+                pdfLeft: pdf.left,
                 pdfWidth: pdf.width,
                 bodyRight: body.right,
                 paneRight: pane.right,
@@ -960,9 +1284,18 @@ test.describe("Teacher and student full journey", () => {
             } : null;
         });
 
+        // The sheet slides in with a transform transition; measure once settled.
+        // (This used to pass instantly only because the clipped body had been
+        // scrolled sideways by the off-screen sheet — plan A2.)
+        await expect.poll(async () => {
+            const current = await readLayout();
+            return current ? Math.abs(current.bodyRight - current.paneRight) : Number.POSITIVE_INFINITY;
+        }).toBeLessThanOrEqual(24);
+        const layout = await readLayout();
+
         expect(layout).not.toBeNull();
+        expect(Math.abs(layout!.bodyLeft - layout!.pdfLeft)).toBeLessThanOrEqual(1);
         expect(Math.abs(layout!.bodyWidth - layout!.pdfWidth)).toBeLessThanOrEqual(2);
-        expect(Math.abs(layout!.bodyRight - layout!.paneRight)).toBeLessThanOrEqual(24);
         expect(layout!.panePosition).toBe("absolute");
         expect(layout!.paneBackdrop).toContain("blur");
         expect(layout!.paneWidth).toBeGreaterThanOrEqual(300);
@@ -971,18 +1304,34 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("keeps tablet teacher analytics usable with real submission data", async ({ page }) => {
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
         await seedExamAndStudent(page);
-        await seedCompletedAttempt(page);
+        await loginAsStudent(page);
+        await submitSeedExamThroughCanonicalRemote(page, remoteFixture);
         await page.setViewportSize({ width: 820, height: 1180 });
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
-        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
-        await page.getByRole("tab", { name: "학생·반" }).click();
-        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
+        await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
+        remoteFixture.activateTeacherDashboard();
+        await expect(page.getByTestId("canonical-error-no-cache")).toBeVisible();
+        await page.evaluate(() => {
+            const rawSession = window.sessionStorage.getItem("omr_teacher_session");
+            if (!rawSession) throw new Error("teacher session missing");
+            const session = JSON.parse(rawSession) as Record<string, unknown>;
+            session.teacherId = "admin";
+            session.organizationId = "default";
+            session.accountSessionGeneration = 1;
+            session.sessionAuthority = "legacy_account";
+            window.sessionStorage.setItem("omr_teacher_session", JSON.stringify(session));
+            window.dispatchEvent(new Event("omr:teacher-session-identity-changed"));
+        });
+        await page.getByRole("button", { name: "학생 성취도", exact: true }).click();
+        await expect(page.getByRole("heading", { name: new RegExp(`${TEST_STUDENT_NAME}.*성취도 추이`) })).toBeVisible({ timeout: 15_000 });
 
-        const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });
-        await expect(studentScoreRow).toBeVisible();
-        const tableScroller = page.getByTestId("exam-analytics-student-table-scroll");
+        const studentScoreRow = page.getByRole("row").filter({ hasText: TEST_EXAM_TITLE });
+        await expect(studentScoreRow).toContainText("20 / 30");
+        const tableScroller = page.getByRole("heading", { name: "세부 시험 분석 내역" })
+            .locator("..").locator(":scope > div").last();
         await expect(tableScroller).toBeVisible();
         await expect(tableScroller).toHaveJSProperty("scrollLeft", 0);
 
@@ -995,23 +1344,27 @@ test.describe("Teacher and student full journey", () => {
         await tableScroller.evaluate(element => {
             element.scrollLeft = element.scrollWidth;
         });
-        await expect(studentScoreRow.getByRole("button", { name: "정오표(CSV)" })).toBeVisible();
+        await expect(studentScoreRow.getByRole("link", { name: `${TEST_EXAM_TITLE} 결과 분석 열기` })).toBeVisible();
 
         const hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
         expect(hasBodyOverflow).toBe(false);
     });
 
     test("keeps tablet student history and review usable with real submission data", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_history" });
+        const remoteFixture = await registerCanonicalRemoteFixture(page);
         await seedExamAndStudent(page);
-        await seedCompletedAttempt(page);
+        await loginAsStudent(page);
+        const confirmedAttempt = await submitSeedExamThroughCanonicalRemote(page, remoteFixture);
         await page.setViewportSize({ width: 820, height: 1180 });
 
         await page.goto("/student/history");
         await expect(page.getByRole("heading", { name: "내 시험 기록" })).toBeVisible();
-        await expect(page.getByText("원시험 응시")).toBeVisible();
-        await expect(page.getByText("1회")).toBeVisible();
+        const historySummary = page.getByRole("region", { name: "시험 기록 요약" });
+        await expect(historySummary.getByText("원시험 응시", { exact: true })).toBeVisible();
+        await expect(historySummary.getByText("1회", { exact: true })).toBeVisible();
 
-        const historyCard = page.locator('a[href="/student/review/attempt-tablet-analytics"]');
+        const historyCard = page.locator(`a[href="/student/review/${confirmedAttempt.id}"]`);
         await expect(historyCard).toBeVisible();
         await expect(historyCard).toContainText(TEST_EXAM_TITLE);
         await expect(historyCard).toContainText("67%");
@@ -1020,7 +1373,7 @@ test.describe("Teacher and student full journey", () => {
         expect(hasBodyOverflow).toBe(false);
 
         await historyCard.click();
-        await expect(page).toHaveURL(/\/student\/review\/attempt-tablet-analytics$/);
+        await expect(page).toHaveURL(new RegExp(`/student/review/${confirmedAttempt.id}$`));
         await expect(page.getByText("결과 리포트", { exact: true })).toBeVisible();
         await expect(page.getByRole("heading", { name: TEST_EXAM_TITLE })).toBeVisible();
         await expect(page.getByText("20 / 30점")).toBeVisible();
@@ -1072,8 +1425,10 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByText("제출 재시도 저장 실패")).toBeVisible();
         await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`));
         expect(submitActionAborted).toBe(true);
-        const durableState = await page.evaluate((draftKey) => {
-            const draft = JSON.parse(window.localStorage.getItem(draftKey) || "null");
+        const draftKey = studentAssignmentDraftStorageKey(TEST_EXAM_ID, TEST_STUDENT_ID, {}, "base");
+        expect(draftKey).not.toBeNull();
+        const durableState = await page.evaluate((canonicalDraftKey) => {
+            const draft = JSON.parse(window.localStorage.getItem(canonicalDraftKey) || "null");
             const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
             const requestKeys = [...Array(window.localStorage.length)]
                 .map((_, index) => window.localStorage.key(index))
@@ -1083,7 +1438,7 @@ test.describe("Teacher and student full journey", () => {
                 attemptCount: attempts.length,
                 requestKeys,
             };
-        }, `omr_draft_${TEST_EXAM_ID}_${TEST_STUDENT_ID}_base`);
+        }, draftKey!);
         expect(durableState.draft).toMatchObject({
             submissionId: expect.any(String),
             answers: { 1: 2, 2: 3, 3: 1 },
@@ -1093,6 +1448,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("automatically sends an offline queued question after connectivity recovers", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_question_feedback" });
         await seedStudentRoster(page);
         await loginAsStudent(page);
         await seedExamAndStudent(page);
@@ -1183,6 +1539,7 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("reconciles manual and automatic submission receipt retries through the real server action", async ({ page }) => {
+        test.info().annotations.push({ type: "release-proof", description: "student_core_cross_device" });
         await page.context().addInitScript(() => {
             Object.defineProperty(navigator, "locks", {
                 configurable: true,

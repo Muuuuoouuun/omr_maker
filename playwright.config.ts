@@ -3,13 +3,68 @@ import { loadEnvConfig } from "@next/env";
 
 loadEnvConfig(process.cwd());
 
+// Exercise a non-default public setting in both SSR and the browser bundle.
+process.env.NEXT_PUBLIC_PAYMENT_PROVIDER_MODE = "disabled";
+
 const e2eTeacherSessionSecret = "omr-maker-e2e-teacher-session-secret-2026";
 process.env.TEACHER_SESSION_SECRET = e2eTeacherSessionSecret;
+const e2eExamInviteFixtures = JSON.stringify([{
+    organizationId: "default",
+    examId: "e2e-invite-exam-a",
+    actorUserIds: ["teacher_0en845w"],
+    groups: [{ id: "e2e-group-a", name: "E2E A반", region: "서울" }],
+}, {
+    organizationId: "default",
+    examId: "e2e-invite-exam-b",
+    actorUserIds: ["teacher_0en845w"],
+    groups: [{ id: "e2e-group-b", name: "E2E B반", region: "부산" }],
+}]);
 
 const externalBaseURL = process.env.PLAYWRIGHT_BASE_URL;
-const baseURL = externalBaseURL || "http://localhost:3003";
+if (!externalBaseURL) process.env.OMR_ISOLATED_E2E = "1";
+const localPort = Number(process.env.PLAYWRIGHT_PORT || 3105);
+if (!Number.isSafeInteger(localPort) || localPort < 1024 || localPort > 65535) throw new Error("Invalid local E2E port");
+const baseURL = externalBaseURL || `http://localhost:${localPort}`;
 const enableWebKitPwa = process.env.PLAYWRIGHT_ENABLE_WEBKIT === "1";
-const webKitPwaProjects = enableWebKitPwa ? [
+// Linux WebKit can spend 40s entering the cold teacher dashboard, then 15s
+// loading the next route. Budget both navigations and the interaction checks;
+// this is an E2E execution limit, not the production performance budget.
+const conditionalWebKitProjects = enableWebKitPwa ? [
+    {
+        name: "ios-se-webkit",
+        timeout: 90_000,
+        testMatch: /ios-mobile-layout\.spec\.ts/,
+        use: {
+            ...devices["iPhone 13"],
+            browserName: "webkit" as const,
+            viewport: { width: 320, height: 568 },
+        },
+    },
+    {
+        name: "ios-standard-webkit",
+        timeout: 90_000,
+        testMatch: /ios-mobile-layout\.spec\.ts/,
+        use: {
+            ...devices["iPhone 13"],
+            browserName: "webkit" as const,
+            viewport: { width: 393, height: 852 },
+        },
+    },
+    {
+        name: "pdf-webkit",
+        testMatch: /pdf-drawing-toolbar\.spec\.ts/,
+        use: { ...devices["Desktop Safari"], browserName: "webkit" as const },
+    },
+    {
+        name: "ios-max-webkit",
+        timeout: 90_000,
+        testMatch: /ios-mobile-layout\.spec\.ts/,
+        use: {
+            ...devices["iPhone 13"],
+            browserName: "webkit" as const,
+            viewport: { width: 430, height: 932 },
+        },
+    },
     {
         name: "mobile-ios-webkit-pwa",
         testMatch: /pwa-mobile\.spec\.ts/,
@@ -27,16 +82,19 @@ const webKitPwaProjects = enableWebKitPwa ? [
     },
     {
         name: "mobile-ios-webkit-teacher",
+        timeout: 90_000,
         testMatch: /teacher-mobile\.spec\.ts/,
         use: { ...devices["iPhone 13"], browserName: "webkit" as const },
     },
     {
         name: "tablet-ios-webkit-teacher",
+        timeout: 90_000,
         testMatch: /teacher-mobile\.spec\.ts/,
         use: { ...devices["iPad Pro 11"], browserName: "webkit" as const },
     },
     {
         name: "tablet-ios-webkit-landscape-teacher",
+        timeout: 90_000,
         testMatch: /teacher-mobile\.spec\.ts/,
         use: { ...devices["iPad Pro 11 landscape"], browserName: "webkit" as const },
     },
@@ -58,23 +116,42 @@ export default defineConfig({
     projects: [
         {
             name: "chromium",
-            testIgnore: /(?:pwa-mobile|teacher-mobile)\.spec\.ts/,
+            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile|student-credential-batch)\.spec\.ts/,
             use: { ...devices["Desktop Chrome"] },
         },
         {
+            name: "student-credential-chromium",
+            testMatch: /student-credential-batch\.spec\.ts/,
+            use: {
+                ...devices["Desktop Chrome"],
+                trace: "off",
+                screenshot: "off",
+                video: "off",
+            },
+        },
+        {
             name: "webkit",
-            testIgnore: /(?:pwa-mobile|teacher-mobile)\.spec\.ts/,
+            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile|student-credential-batch)\.spec\.ts/,
             use: { ...devices["Desktop Safari"] },
         },
         {
             name: "webkit-ipad",
-            testIgnore: /(?:pwa-mobile|teacher-mobile)\.spec\.ts/,
+            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile|student-credential-batch)\.spec\.ts/,
             use: { ...devices["iPad Pro 11"] },
         },
         {
             name: "mobile-chrome-pwa",
             testMatch: /pwa-mobile\.spec\.ts/,
             use: { ...devices["Pixel 5"], browserName: "chromium" },
+        },
+        {
+            name: "mobile-375-chrome-pwa",
+            testMatch: /pwa-mobile\.spec\.ts/,
+            use: {
+                ...devices["Pixel 5"],
+                browserName: "chromium",
+                viewport: { width: 375, height: 812 },
+            },
         },
         {
             name: "mobile-ios-like-pwa",
@@ -101,7 +178,7 @@ export default defineConfig({
             testMatch: /pwa-mobile\.spec\.ts/,
             use: { ...devices["iPad Pro 11 landscape"], browserName: "chromium" },
         },
-        ...webKitPwaProjects,
+        ...conditionalWebKitProjects,
         {
             name: "teacher-mobile-chrome",
             testMatch: /teacher-mobile\.spec\.ts/,
@@ -114,7 +191,7 @@ export default defineConfig({
         },
     ],
     webServer: externalBaseURL ? undefined : {
-        command: "npm run dev",
+        command: `npx next dev -H 127.0.0.1 -p ${localPort}`,
         url: baseURL,
         reuseExistingServer: process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "1",
         timeout: 60_000,
@@ -122,6 +199,7 @@ export default defineConfig({
             ...process.env,
             OMR_PLAN_DEV_SIMULATION: "1",
             OMR_DEV_PLAN: "free",
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
             TEACHER_SESSION_SECRET: e2eTeacherSessionSecret,
             TEACHER_ACCOUNTS: JSON.stringify([{
                 id: "admin",
@@ -140,12 +218,15 @@ export default defineConfig({
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
             NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
             TEACHER_PLAN: "",
+            OMR_ISOLATED_E2E: "1",
             SUPABASE_URL: "",
             SUPABASE_SERVICE_ROLE_KEY: "",
             OMR_SUPABASE_SERVICE_ROLE_KEY: "",
             STUDENT_ATTEMPT_SECRET: "",
             OMR_STUDENT_ATTEMPT_SECRET: "",
             STUDENT_SESSION_SECRET: "omr-maker-e2e-student-session-secret-2026",
+            OMR_E2E_EXAM_INVITE_SIMULATION: "1",
+            OMR_E2E_EXAM_INVITE_FIXTURES: e2eExamInviteFixtures,
             OMR_E2E_STUDENT_SUBMISSION_SIMULATION: "1",
             OMR_E2E_STUDENT_SUBMISSION_EXAM_ID: "e2e-korean-integrated-exam",
             OMR_E2E_STUDENT_SUBMISSION_EXAM_TITLE: "E2E 국어 통합 시험",

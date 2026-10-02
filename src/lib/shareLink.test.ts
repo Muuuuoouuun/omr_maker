@@ -30,6 +30,15 @@ describe("buildSolveShareUrl", () => {
             "https://omr.example.com/solve/exam-1",
         );
     });
+
+    it("appends a validated opaque invite without leaking scope ids", () => {
+        const token = "a".repeat(43);
+        expect(buildSolveShareUrl("exam-1", {
+            envBaseUrl: "https://omr.example.com",
+            origin: null,
+            inviteToken: token,
+        })).toBe(`https://omr.example.com/solve/exam-1#invite=${token}`);
+    });
 });
 
 describe("isShareUrlReachableByStudents", () => {

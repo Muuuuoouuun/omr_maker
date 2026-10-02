@@ -1,7 +1,7 @@
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { rosterGroupMatchesStudent } from "@/lib/rosterStorage";
-import { baseAttemptsOnly, resolveAttemptScore } from "@/lib/attemptScores";
+import { baseAttemptsOnly, completedAttemptsOnly, resolveAttemptScore } from "@/lib/attemptScores";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
 
 export interface RosterStudentPerformance {
@@ -48,7 +48,7 @@ function performanceFromMatchedAttempts(
     examById: Map<string, Exam>,
     now: number,
 ): RosterStudentPerformance {
-    const matchedAttempts = [...matched].sort((a, b) => activityTime(b) - activityTime(a));
+    const matchedAttempts = completedAttemptsOnly(matched).sort((a, b) => activityTime(b) - activityTime(a));
     const baseAttempts = baseAttemptsOnly(matchedAttempts);
 
     if (matchedAttempts.length === 0) {
@@ -123,7 +123,7 @@ export function buildRosterPerformanceMap(
     const attemptsByStudentId = new Map<string, Attempt[]>();
     for (const id of studentsById.keys()) attemptsByStudentId.set(id, []);
 
-    for (const attempt of attempts) {
+    for (const attempt of completedAttemptsOnly(attempts)) {
         const stableId = normalizedIdentity(attempt.studentProfileId)
             || normalizedIdentity(attempt.studentId);
         if (stableId) {

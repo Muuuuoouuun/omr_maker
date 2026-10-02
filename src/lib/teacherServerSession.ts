@@ -1,5 +1,23 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { createTeacherSession, isTeacherSessionActive, type TeacherSession, type TeacherSessionIdentity } from "@/lib/teacherSession";
+import {
+    createTeacherSession,
+    isProvisionedTeacherMemberRole,
+    isTeacherSessionActive,
+    type TeacherSession,
+    type TeacherSessionIdentity,
+} from "@/lib/teacherSession";
+import { resolveServerSigningSecret } from "@/lib/serverSigningSecret";
+import { resolveTeacherIdentityModeForEnvironment } from "@/lib/teacherIdentityModePolicy";
+import { isExactMockupTeacherIdentity } from "@/lib/mockupAccount";
+import {
+    validateActiveTeacherAccountSession,
+    validateProvisionedTeacherSession,
+    type TeacherAccountGatewayClient,
+} from "@/lib/teacherAccountGateway";
+import {
+    createSupabaseAdminClient,
+    getSupabaseServerConfigFromEnv,
+} from "@/lib/supabaseServerAdmin";
 
 export const TEACHER_SERVER_SESSION_COOKIE = "omr_teacher_server_session";
 export const TEACHER_SERVER_SESSION_MAX_AGE_SECONDS = 12 * 60 * 60;
@@ -12,7 +30,7 @@ function clean(value: unknown): string {
 
 export function resolveTeacherSessionSecret(env: Env = process.env): string | null {
     const explicitSecret = clean(env.TEACHER_SESSION_SECRET) || clean(env.OMR_TEACHER_SESSION_SECRET);
-    if (explicitSecret) return explicitSecret;
+    if (explicitSecret) return resolveServerSigningSecret(explicitSecret, env.NODE_ENV);
 
     // In production a dedicated TEACHER_SESSION_SECRET is required: never sign
     // session cookies with a credential value (the teacher password/accounts
@@ -79,6 +97,7 @@ export function createSignedTeacherSessionCookie(
 ): string | null {
     const secret = resolveTeacherSessionSecret(env);
     if (!secret) return null;
+    if (identity?.sessionAuthority === "mockup" && !isExactMockupTeacherIdentity(identity)) return null;
 
     const session = createTeacherSession(token, now, identity);
     const payload = base64UrlEncode(JSON.stringify(session));
@@ -102,6 +121,89 @@ export function parseSignedTeacherSessionCookie(
     try {
         const parsed = JSON.parse(base64UrlDecode(payload)) as TeacherSession;
         return isTeacherSessionActive(parsed, now) ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+export interface ResolveAuthorizedTeacherSessionOptions {
+    env?: Env;
+    now?: number;
+    /** Public showcase rendering only. Mutating Server Actions must leave this false. */
+    allowMockup?: boolean;
+    /** Test/controlled injection. An explicit null means fail closed. */
+    accountClient?: TeacherAccountGatewayClient | null;
+}
+
+function configuredTeacherAccountClient(): TeacherAccountGatewayClient | null {
+    const config = getSupabaseServerConfigFromEnv();
+    return config
+        ? createSupabaseAdminClient(config) as unknown as TeacherAccountGatewayClient
+        : null;
+}
+
+/**
+ * Authoritative request-time teacher guard.
+ *
+ * HMAC verification is necessary but not sufficient for database accounts:
+ * reset/disable must revoke already issued cookies without PBKDF2 work. Legacy
+ * cookies without an explicit signed authority are rejected so a rollout does
+ * not leave an unversioned 12-hour bypass window.
+ */
+export async function resolveAuthorizedTeacherSessionCookie(
+    rawCookie: string | null | undefined,
+    options: ResolveAuthorizedTeacherSessionOptions = {},
+): Promise<TeacherSession | null> {
+    const session = parseSignedTeacherSessionCookie(
+        rawCookie,
+        options.env || process.env,
+        options.now ?? Date.now(),
+    );
+    if (!session) return null;
+    const identityMode = resolveTeacherIdentityModeForEnvironment(options.env || process.env);
+    if (identityMode === "provisioned_only"
+        && session.sessionAuthority !== "account"
+        && session.sessionAuthority !== "mockup") return null;
+    if (identityMode === "self_service" && session.sessionAuthority === "account") return null;
+    if (session.sessionAuthority === "mockup") {
+        return options.allowMockup === true && isExactMockupTeacherIdentity(session) ? session : null;
+    }
+    if (session.sessionAuthority === "bootstrap") return session;
+    if (
+        (session.sessionAuthority !== "account" && session.sessionAuthority !== "legacy_account")
+        || !session.teacherId
+        || !Number.isSafeInteger(session.accountSessionGeneration)
+        || (session.accountSessionGeneration || 0) < 1
+    ) return null;
+
+    const accountClient = Object.prototype.hasOwnProperty.call(options, "accountClient")
+        ? options.accountClient || null
+        : configuredTeacherAccountClient();
+    if (!accountClient) return null;
+
+    try {
+        if (session.sessionAuthority === "legacy_account") {
+            const active = await validateActiveTeacherAccountSession(
+                accountClient,
+                session.teacherId,
+                session.accountSessionGeneration!,
+            );
+            return active ? session : null;
+        }
+        if (!session.organizationId || !isProvisionedTeacherMemberRole(session.memberRole)) return null;
+        const current = await validateProvisionedTeacherSession(
+            accountClient,
+            session.teacherId,
+            session.accountSessionGeneration!,
+            session.organizationId,
+        );
+        return current ? {
+            ...session,
+            organizationId: current.organizationId,
+            organizationName: current.organizationName,
+            memberRole: current.memberRole,
+            plan: current.plan,
+        } : null;
     } catch {
         return null;
     }

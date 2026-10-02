@@ -277,6 +277,7 @@ export async function flushPendingStudentQuestions<TAttempt extends Pick<Attempt
                 questionId: entry.questionId,
                 questionNumber: entry.questionNumber,
                 body: entry.body,
+                clientMutationId: entry.queuedAt,
             });
             if (result.status !== "ok" || !result.attempt) {
                 return { status: "retryable_error", error: result.status };

@@ -1,14 +1,8 @@
 import type { PdfDrawings } from "@/types/omr";
+import { parseStoredDrawingPath } from "@/lib/drawingPath";
+import { loadPdfJs } from "@/lib/pdfjsRuntime";
 
 type DrawPoint = { x: number; y: number };
-type DrawingMode = "click" | "pen" | "highlighter" | "eraser";
-
-interface DrawingPathPayload {
-    mode?: DrawingMode;
-    color?: string;
-    width?: number;
-    points?: DrawPoint[];
-}
 
 interface RasterPdfPage {
     jpegBytes: Uint8Array;
@@ -22,35 +16,6 @@ interface AnnotatedPdfOptions {
     scale?: number;
     jpegQuality?: number;
     maxCanvasSide?: number;
-}
-
-function isFinitePoint(value: unknown): value is DrawPoint {
-    if (!value || typeof value !== "object") return false;
-    const point = value as { x?: unknown; y?: unknown };
-    return typeof point.x === "number"
-        && typeof point.y === "number"
-        && Number.isFinite(point.x)
-        && Number.isFinite(point.y);
-}
-
-function parseDrawingPath(path: string): DrawingPathPayload | null {
-    try {
-        const parsed = JSON.parse(path) as DrawingPathPayload;
-        if (!Array.isArray(parsed.points)) return null;
-        const points = parsed.points.filter(isFinitePoint).map(point => ({
-            x: Math.min(1, Math.max(0, point.x)),
-            y: Math.min(1, Math.max(0, point.y)),
-        }));
-        if (points.length === 0) return null;
-        return {
-            mode: parsed.mode === "highlighter" || parsed.mode === "eraser" || parsed.mode === "pen" ? parsed.mode : "pen",
-            color: typeof parsed.color === "string" && parsed.color.trim() ? parsed.color : undefined,
-            width: typeof parsed.width === "number" && Number.isFinite(parsed.width) ? Math.max(0.5, parsed.width) : undefined,
-            points,
-        };
-    } catch {
-        return null;
-    }
 }
 
 function drawSmoothPath(
@@ -95,7 +60,7 @@ export function drawPdfDrawingsToCanvas(
     ctx.lineJoin = "round";
 
     for (const path of paths) {
-        const parsed = parseDrawingPath(path);
+        const parsed = parseStoredDrawingPath(path);
         if (!parsed) continue;
         const mode = parsed.mode || "pen";
         ctx.globalCompositeOperation = mode === "eraser" ? "destination-out" : "source-over";
@@ -207,8 +172,7 @@ export async function buildAnnotatedPdfBlob(
         throw new Error("Annotated PDF export requires a browser environment");
     }
 
-    const pdfjs = await import("pdfjs-dist");
-    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+    const pdfjs = await loadPdfJs();
     const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
     const pages: RasterPdfPage[] = [];
     const baseScale = options.scale || 1.5;
@@ -252,6 +216,6 @@ export async function buildAnnotatedPdfBlob(
         });
     }
 
-    await pdf.destroy();
+    await pdf.loadingTask.destroy();
     return buildRasterPdfFromJpegPages(pages);
 }

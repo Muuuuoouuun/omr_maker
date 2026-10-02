@@ -68,6 +68,20 @@ function attempt(overrides: Partial<Attempt> = {}): Attempt {
 }
 
 describe("persistence health", () => {
+    it("labels a usable bounded remote page as partial instead of fully synced", () => {
+        expect(summarizePersistenceHealth([{
+            remoteLoaded: true,
+            remoteSynced: false,
+            remotePartial: true,
+            remoteItemCount: 2_000,
+        }])).toMatchObject({
+            kind: "pending",
+            label: "일부 기록 표시",
+            detail: "최근 2,000건 기준 · 전체 통계 아님",
+            remoteLoaded: true,
+        });
+    });
+
     it("reports checking mode before any persistence source has loaded", () => {
         expect(summarizePersistenceHealth([])).toMatchObject({
             kind: "checking",

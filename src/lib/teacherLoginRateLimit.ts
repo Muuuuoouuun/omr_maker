@@ -4,6 +4,7 @@ export const TEACHER_LOGIN_RATE_LIMIT_ERROR = "로그인 시도가 많습니다.
 export const TEACHER_LOGIN_MAX_FAILURES = 5;
 export const TEACHER_LOGIN_WINDOW_MS = 10 * 60 * 1000;
 export const TEACHER_LOGIN_LOCKOUT_MS = 10 * 60 * 1000;
+export const TEACHER_LOGIN_GLOBAL_MAX_ATTEMPTS = 500;
 
 export interface TeacherLoginRateLimitState {
     failedCount: number;
@@ -52,12 +53,18 @@ export function buildTeacherLoginRateLimitKeys(
     clientFingerprint: unknown,
 ): string[] {
     const normalizedIdentifier = normalizePart(identifier, "blank-identifier");
-    const normalizedClient = normalizePart(clientFingerprint, "unknown-client");
+    void clientFingerprint;
 
     return [
-        `teacher-login:identifier-client:${hashPart(`${normalizedIdentifier}:${normalizedClient}`)}`,
-        `teacher-login:client:${hashPart(normalizedClient)}`,
+        `teacher-login:identifier:${hashPart(normalizedIdentifier)}`,
     ];
+}
+
+export function buildTeacherLoginSafetyRateLimitKey(): string {
+    // Proxy provenance is deployment-specific and is not yet attested. Use one
+    // bounded, high-ceiling safety bucket instead of trusting attacker-supplied
+    // forwarding headers as a client identity.
+    return `teacher-login:global:${hashPart("global-pbkdf2-safety-ceiling-v1")}`;
 }
 
 export function checkTeacherLoginRateLimit(

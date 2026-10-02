@@ -3,8 +3,10 @@ import {
     findStudentStartCode,
     generateStartCode,
     hasStudentStartCode,
+    normalizeRosterNameForComparison,
     normalizeStartCodeInput,
     parseStudentCodes,
+    resolveLocalRosterNameGuard,
     resolveStudentIdentity,
     resolveStudentStartCodeLogin,
     STUDENT_CODES_STORAGE_KEY,
@@ -306,6 +308,79 @@ describe("student start codes", () => {
             },
             code: "ABC123",
             codesChanged: true,
+        });
+    });
+});
+
+describe("local roster name guard", () => {
+    const group = { id: "class-a", name: "A반", region: "서울" };
+    const roster = [
+        { id: "s-1", name: "김 학생", group: "A반", region: "서울" },
+        { id: "s-2", name: "이학생", group: "A반", region: "서울" },
+        { id: "s-3", name: "박학생", group: "B반", region: "서울" },
+    ];
+
+    it("normalizes NFC, removes every whitespace character and lowercases", () => {
+        const decomposed = "김학생".normalize("NFD");
+        expect(decomposed).not.toBe("김학생");
+        expect(normalizeRosterNameForComparison(` ${decomposed} `)).toBe("김학생");
+        expect(normalizeRosterNameForComparison("김\u3000학\u00a0생\t")).toBe("김학생");
+        expect(normalizeRosterNameForComparison("Kim Student")).toBe("kimstudent");
+    });
+
+    it("lets an exact roster name through", () => {
+        expect(resolveLocalRosterNameGuard({ name: " 김 학생 ", group, students: roster })).toEqual({ status: "matched" });
+        expect(resolveLocalRosterNameGuard({ name: "이학생", group, students: roster })).toEqual({ status: "matched" });
+    });
+
+    it("stops an unmatched name and suggests the roster spelling", () => {
+        expect(resolveLocalRosterNameGuard({ name: "김학생", group, students: roster })).toEqual({
+            status: "unmatched_in_roster",
+            suggestion: "김 학생",
+        });
+        expect(resolveLocalRosterNameGuard({ name: "KIM student", group, students: [{ id: "k", name: "Kim Student", group: "A반" }] }))
+            .toEqual({ status: "unmatched_in_roster", suggestion: "Kim Student" });
+    });
+
+    it("stops an unmatched name without a suggestion when nothing normalizes the same", () => {
+        // 박학생 is on another class's roster, so it is not suggested here.
+        expect(resolveLocalRosterNameGuard({ name: "박학생", group, students: roster })).toEqual({ status: "unmatched_in_roster" });
+        expect(resolveLocalRosterNameGuard({ name: "최학생", group, students: roster })).toEqual({ status: "unmatched_in_roster" });
+    });
+
+    it("keeps the old path when the selected class has no roster", () => {
+        expect(resolveLocalRosterNameGuard({ name: "김학생", group: { id: "class-c", name: "C반" }, students: roster }))
+            .toEqual({ status: "no_roster_for_group" });
+        expect(resolveLocalRosterNameGuard({ name: "김학생", group: undefined, students: roster }))
+            .toEqual({ status: "no_roster_for_group" });
+        expect(resolveLocalRosterNameGuard({ name: "김학생", group, students: [] }))
+            .toEqual({ status: "no_roster_for_group" });
+    });
+
+    it("does not suggest when different roster names normalize the same", () => {
+        const ambiguous = [
+            { id: "a-1", name: "김 학생", group: "A반" },
+            { id: "a-2", name: "김학 생", group: "A반" },
+        ];
+        expect(resolveLocalRosterNameGuard({ name: "김학생", group, students: ambiguous })).toEqual({ status: "unmatched_in_roster" });
+    });
+
+    it("still suggests a single spelling shared by same-name roster students", () => {
+        const sameName = [
+            { id: "a-1", name: "김 학생", group: "A반" },
+            { id: "a-2", name: "김 학생", group: "A반" },
+        ];
+        expect(resolveLocalRosterNameGuard({ name: "김학생", group, students: sameName })).toEqual({
+            status: "unmatched_in_roster",
+            suggestion: "김 학생",
+        });
+    });
+
+    it("matches roster students scoped by group id", () => {
+        const scoped = [{ id: "class-a::김 학생", name: "김 학생" }];
+        expect(resolveLocalRosterNameGuard({ name: "김학생", group, students: scoped })).toEqual({
+            status: "unmatched_in_roster",
+            suggestion: "김 학생",
         });
     });
 });

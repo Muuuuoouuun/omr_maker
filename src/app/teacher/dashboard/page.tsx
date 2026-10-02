@@ -1,14 +1,30 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import TeacherHeader from "@/components/TeacherHeader";
+import BrandLogo from "@/components/BrandLogo";
+import NotificationBell from "@/components/NotificationBell";
+import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import { Exam, Attempt } from "@/types/omr";
-import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
+import type { TeacherDataCapability } from "@/components/dashboard/tabs/OverviewTab";
 import StatusPill from "@/components/dashboard/StatusPill";
-import { AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw } from "lucide-react";
+import {
+    AlertTriangle,
+    BarChart2,
+    CheckCircle2,
+    CloudOff,
+    Database,
+    FilePlus2,
+    GraduationCap,
+    LayoutDashboard,
+    RadioTower,
+    RefreshCw,
+    Settings,
+    Users,
+} from "lucide-react";
 import { AnalyticsTabSkeleton, DashboardPageSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
 
 // Analytics tabs statically import recharts + thousands of lines of analytics code
@@ -22,7 +38,11 @@ const StudentAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/St
     ssr: false,
     loading: () => <AnalyticsTabSkeleton />,
 });
-// Only ever rendered for the ?showcase=1 demo account, but a static import made
+const OverviewTab = dynamic(() => import("@/components/dashboard/tabs/OverviewTab"), {
+    ssr: false,
+    loading: () => <AnalyticsTabSkeleton />,
+});
+// Only ever rendered for the signed mockup account, but a static import made
 // it the one thing that still pulled recharts into every teacher's initial
 // dashboard bundle — cancelling out the two dynamic() calls above.
 const MockupOverview = dynamic(() => import("@/components/dashboard/MockupOverview"), {
@@ -33,17 +53,61 @@ import { toast } from "@/components/Toast";
 import { createDashboardRevalidationGate, isTeacherDashboardStorageKey } from "@/components/dashboard/dashboardRevalidation";
 import { buildDemoDashboardData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
-import { readLocalAttempts, readLocalExams, saveLocalAttempt } from "@/lib/omrPersistence";
-import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { readLocalAttempts, readLocalExams, saveLocalAttemptIfCurrent } from "@/lib/omrPersistence";
+import {
+    loadTeacherAnalyticsSnapshots,
+    loadTeacherAttemptSummaries,
+    loadTeacherAttempts,
+    resolveTeacherAttemptCollectionCompleteness,
+} from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
 import { readLocalRosterSnapshot } from "@/lib/rosterPersistence";
 import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
+import type { TeacherCanonicalAnalyticsSnapshotMap } from "@/lib/teacherCanonicalAnalyticsSnapshotContract";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
+import {
+    preferLocalDashboardItems,
+    resolveDashboardDetailRetryFailure,
+    type DashboardDetailSnapshot,
+} from "@/lib/teacherDashboardLoad";
 import { useServerPlan } from "@/lib/useServerPlan";
-import { readTeacherSession } from "@/lib/teacherSession";
+import {
+    parseTeacherSession,
+    readTeacherSession,
+    TEACHER_SESSION_IDENTITY_CHANGED_EVENT,
+    TEACHER_SESSION_KEY,
+} from "@/lib/teacherSession";
 import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
+import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient";
+import type { TeacherAttemptAggregate } from "@/lib/teacherAttemptReportingGateway";
+import { loadTeacherIndividualAssignmentTargetCounts } from "@/app/actions/teacherAssignment";
+import type { ExamAnalyticsSampleStatus } from "@/lib/examAnalyticsReport";
+import { resolveCanonicalLoad, type CanonicalLoadState } from "@/lib/canonicalLoadState";
+import {
+    buildTeacherDashboardDetailReset,
+    beginTeacherDashboardRepairOperation,
+    cacheFreshTeacherDashboardOptional,
+    canContinueTeacherDashboardDetail,
+    canContinueTeacherDashboardRepair,
+    canContinueTeacherDashboardRepairOperation,
+    canReleaseTeacherDashboardRepair,
+    canReleaseTeacherDashboardRepairOperation,
+    invalidateTeacherDashboardRepairCapability,
+    isTeacherDashboardRemoteCollectionReady,
+    publishTeacherDashboardCompletionIfCurrent,
+    readTeacherDashboardDegradedCache,
+    resolveTeacherDashboardSessionChange,
+    sameTeacherLoadIdentity,
+    sameTeacherSessionIdentity,
+    type TeacherDashboardDegradedData,
+    type TeacherDashboardDetailReset,
+    type TeacherDashboardLiveOperationState,
+    type TeacherDashboardRepairOperationState,
+    type TeacherLoadIdentity,
+    type TeacherSessionIdentity,
+} from "@/lib/teacherDashboardCanonicalCache";
 
 type TabType = 'overview' | 'exam' | 'student';
 type DashboardDataMode = "real" | "demo";
@@ -64,8 +128,90 @@ type DashboardSnapshot = {
     attempts: Attempt[];
     rosterStudents: RosterStudent[];
     rosterGroups: RosterGroup[];
+    aggregate?: TeacherAttemptAggregate;
+    individualAssignmentTargetCounts?: Record<string, number>;
+    individualAssignmentModes?: Record<string, "base" | "retake">;
     forceDemoData?: boolean;
 };
+type DashboardLoadData = DashboardSnapshot | TeacherDashboardDegradedData;
+type DetailedAttemptLoad = {
+    generation: number;
+    identity: TeacherLoadIdentity;
+    promise: ReturnType<typeof loadTeacherAttempts>;
+};
+
+function isDashboardSnapshotEmpty(snapshot: DashboardSnapshot): boolean {
+    return snapshot.forceDemoData !== true
+        && snapshot.exams.length === 0
+        && snapshot.attempts.length === 0
+        && snapshot.rosterStudents.length === 0
+        && snapshot.rosterGroups.length === 0;
+}
+
+function isTeacherDashboardDegradedData(data: DashboardLoadData): data is TeacherDashboardDegradedData {
+    return "kind" in data && data.kind === "teacher_dashboard_degraded";
+}
+
+function isDashboardLoadDataEmpty(data: DashboardLoadData): boolean {
+    return isTeacherDashboardDegradedData(data)
+        ? data.exams.length === 0 && data.attempts.length === 0
+        : isDashboardSnapshotEmpty(data);
+}
+
+function readDashboardTeacherSession() {
+    let session;
+    try {
+        session = parseTeacherSession(window.sessionStorage.getItem(TEACHER_SESSION_KEY));
+    } catch {
+        return null;
+    }
+    return session;
+}
+
+function teacherSessionLoadScope(): TeacherSessionIdentity | null {
+    const session = readDashboardTeacherSession();
+    if (!session?.organizationId
+        || !session.teacherId
+        || !Number.isSafeInteger(session.accountSessionGeneration)
+        || (session.accountSessionGeneration || 0) < 1) return null;
+    return {
+        organizationId: session.organizationId,
+        accountId: session.teacherId,
+        sessionGeneration: session.accountSessionGeneration as number,
+    };
+}
+
+function matchesTeacherSessionScope(identity: TeacherLoadIdentity): boolean {
+    const scope = teacherSessionLoadScope();
+    return !!scope
+        && identity.organizationId === scope.organizationId
+        && identity.accountId === scope.accountId
+        && identity.sessionGeneration === scope.sessionGeneration;
+}
+
+function buildAttemptSummarySignal(attempts: Attempt[]): string {
+    return attempts
+        .map(attempt => {
+            // Keep the optional field in the signal so a future canonical payload
+            // can strengthen invalidation without another detail-cache rewrite.
+            const updatedAt = (attempt as Attempt & { updatedAt?: unknown }).updatedAt;
+            return [
+                attempt.id,
+                typeof updatedAt === "string" ? updatedAt : "",
+                attempt.status,
+                attempt.finishedAt,
+                attempt.score,
+                attempt.totalScore,
+                attempt.mergedAt || "",
+                attempt.drawingPageCount ?? "",
+                attempt.drawingStrokeCount ?? "",
+                JSON.stringify(attempt.retake || null),
+                JSON.stringify(attempt.studentQuestions || []),
+            ].join("\u001f");
+        })
+        .sort()
+        .join("\u001e");
+}
 
 function normalizeDashboardTab(value: string | null): TabType {
     return value === "exam" || value === "student" || value === "overview" ? value : "overview";
@@ -87,18 +233,48 @@ function TeacherDashboard() {
     const initialTab = normalizeDashboardTab(searchParams.get('tab'));
     const initialExamId = searchParams.get('examId') || undefined;
     const [activeTab, setActiveTab] = useState<TabType>(initialTab);
-    const showcaseRequested = searchParams.get("showcase") === "1";
-    const [isMockupAccount, setIsMockupAccount] = useState(showcaseRequested);
-    const [isAccountModeResolved, setIsAccountModeResolved] = useState(showcaseRequested);
+    const [isMockupAccount, setIsMockupAccount] = useState(false);
+    const [isAccountModeResolved, setIsAccountModeResolved] = useState(false);
     useEffect(() => {
-        setIsMockupAccount(previous => previous || isMockupTeacherIdentity(readTeacherSession()));
-        setIsAccountModeResolved(true);
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setIsMockupAccount(isMockupTeacherIdentity(readTeacherSession()));
+            setIsAccountModeResolved(true);
+        });
+        return () => { cancelled = true; };
     }, []);
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(initialExamId);
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
+    const [, setDetailedAttempts] = useState<Attempt[] | null>(null);
+    const [detailedAnalyticsSnapshots, setDetailedAnalyticsSnapshots] = useState<TeacherCanonicalAnalyticsSnapshotMap>({});
+    const [, setDetailedAttemptStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+    const [analyticsSnapshotStatus, setAnalyticsSnapshotStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+    const [detailedAttemptGeneration, setDetailedAttemptGeneration] = useState(0);
+    const detailedAttemptGenerationRef = useRef(0);
+    const detailedAttemptCacheRef = useRef<DashboardDetailSnapshot<Attempt> | null>(null);
+    const detailedAttemptLoadRef = useRef<DetailedAttemptLoad | null>(null);
+    const attemptSummarySignalRef = useRef<string | null>(null);
+    const teacherLoadIdentityRef = useRef<TeacherLoadIdentity | null>(null);
+    const dashboardLiveOperationRef = useRef<TeacherDashboardLiveOperationState>({
+        loadState: "loading",
+        identity: null,
+    });
+    const teacherDashboardRepairOperationRef = useRef<TeacherDashboardRepairOperationState>({
+        capabilityEpoch: 0,
+        nextToken: 0,
+        activeToken: null,
+    });
+    const dashboardRequestGenerationRef = useRef(0);
     const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
     const [rosterGroups, setRosterGroups] = useState<RosterGroup[]>([]);
+    const [individualAssignmentTargetCounts, setIndividualAssignmentTargetCounts] = useState<ReadonlyMap<string, number>>(
+        () => new Map(),
+    );
+    const [individualAssignmentModes, setIndividualAssignmentModes] = useState<ReadonlyMap<string, "base" | "retake">>(
+        () => new Map(),
+    );
     const [stats, setStats] = useState({
         totalStudents: 0,
         avgScore: 0,
@@ -109,22 +285,245 @@ function TeacherDashboard() {
     const [dataMode, setDataMode] = useState<DashboardDataMode>("real");
     const { plan: currentPlan } = useServerPlan();
     const [syncStatus, setSyncStatus] = useState<PersistenceHealth>(() => summarizePersistenceHealth([]));
+    const [dashboardLoadState, commitDashboardLoadState] = useState<CanonicalLoadState<DashboardLoadData>>({ state: "loading" });
+    const setDashboardLoadState = useCallback((next: CanonicalLoadState<DashboardLoadData>) => {
+        if (dashboardLiveOperationRef.current.loadState === "loaded_data"
+            && next.state !== "loaded_data") {
+            teacherDashboardRepairOperationRef.current = invalidateTeacherDashboardRepairCapability(
+                teacherDashboardRepairOperationRef.current,
+            );
+        }
+        dashboardLiveOperationRef.current = {
+            loadState: next.state,
+            identity: teacherLoadIdentityRef.current,
+        };
+        commitDashboardLoadState(next);
+    }, []);
+    const [degradedDashboardData, setDegradedDashboardData] = useState<TeacherDashboardDegradedData | null>(null);
     const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
     const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);
+    const [detailedAttemptSampleStatus, setDetailedAttemptSampleStatus] = useState<ExamAnalyticsSampleStatus>("ready");
+    const [, setDetailedAttemptWarning] = useState("");
+    const analyticsAttempts = attempts;
     const analyticsDataHealth = useMemo(
         () => dataMode === "demo"
             ? summarizeAnalyticsDataHealth([], [])
-            : summarizeAnalyticsDataHealth(exams, attempts),
-        [attempts, dataMode, exams],
+            : summarizeAnalyticsDataHealth(exams, analyticsAttempts),
+        [analyticsAttempts, dataMode, exams],
     );
     const questionResultRepairPlan = useMemo(
         () => dataMode === "demo"
             ? buildQuestionResultRepairPlan([], [])
-            : buildQuestionResultRepairPlan(exams, attempts),
-        [attempts, dataMode, exams],
+            : buildQuestionResultRepairPlan(exams, analyticsAttempts),
+        [analyticsAttempts, dataMode, exams],
     );
 
+    const invalidateDetailedAttempts = useCallback(() => {
+        const nextGeneration = detailedAttemptGenerationRef.current + 1;
+        detailedAttemptGenerationRef.current = nextGeneration;
+        detailedAttemptCacheRef.current = null;
+        detailedAttemptLoadRef.current = null;
+        setDetailedAttempts(null);
+        setDetailedAnalyticsSnapshots({});
+        setAnalyticsSnapshotStatus("idle");
+        setDetailedAttemptStatus("idle");
+        setDetailedAttemptSampleStatus("ready");
+        setDetailedAttemptWarning("");
+        setDetailedAttemptGeneration(nextGeneration);
+    }, []);
+
+    const resetDetailedAttemptsForDashboardRequest = useCallback((reset: TeacherDashboardDetailReset) => {
+        detailedAttemptGenerationRef.current = reset.generation;
+        detailedAttemptCacheRef.current = null;
+        detailedAttemptLoadRef.current = null;
+        setDetailedAttempts(reset.items);
+        setDetailedAnalyticsSnapshots({});
+        setDetailedAttemptStatus(reset.loadStatus);
+        setDetailedAttemptSampleStatus(reset.sampleStatus);
+        setDetailedAttemptWarning("");
+        setDetailedAttemptGeneration(reset.generation);
+    }, []);
+
+    const clearDashboardVisibleState = useCallback(() => {
+        setExams([]);
+        setAttempts([]);
+        setRosterStudents([]);
+        setRosterGroups([]);
+        setIndividualAssignmentTargetCounts(new Map());
+        setIndividualAssignmentModes(new Map());
+        setStats({ totalStudents: 0, avgScore: 0, activeExams: 0 });
+        setTrendData([]);
+        setTrendLabels([]);
+        setDegradedDashboardData(null);
+        setDataMode("real");
+        setIsRefreshingDashboardData(false);
+        setIsRepairingAnalyticsData(false);
+        attemptSummarySignalRef.current = null;
+    }, []);
+
+    const beginTeacherDashboardIdentityLoad = useCallback((): TeacherLoadIdentity | null => {
+        const scope = teacherSessionLoadScope();
+        if (!scope) return null;
+        const previous = teacherLoadIdentityRef.current;
+        const requestGeneration = dashboardRequestGenerationRef.current + 1;
+        dashboardRequestGenerationRef.current = requestGeneration;
+        const next: TeacherLoadIdentity = { ...scope, requestGeneration };
+        const identityChanged = !previous
+            || previous.organizationId !== next.organizationId
+            || previous.accountId !== next.accountId
+            || previous.sessionGeneration !== next.sessionGeneration;
+        teacherLoadIdentityRef.current = next;
+        dashboardLiveOperationRef.current = {
+            ...dashboardLiveOperationRef.current,
+            identity: next,
+        };
+        const detailReset = buildTeacherDashboardDetailReset(detailedAttemptGenerationRef.current);
+        if (detailReset) resetDetailedAttemptsForDashboardRequest(detailReset);
+        if (identityChanged) {
+            clearDashboardVisibleState();
+            setDashboardLoadState({ state: "loading" });
+        }
+        return next;
+    }, [clearDashboardVisibleState, resetDetailedAttemptsForDashboardRequest, setDashboardLoadState]);
+
+    const isCurrentTeacherLoadIdentity = useCallback((captured: TeacherLoadIdentity): boolean => {
+        const current = teacherLoadIdentityRef.current;
+        const sessionScope = teacherSessionLoadScope();
+        return !!current
+            && !!sessionScope
+            && sameTeacherLoadIdentity(captured, current)
+            && captured.organizationId === sessionScope.organizationId
+            && captured.accountId === sessionScope.accountId
+            && captured.sessionGeneration === sessionScope.sessionGeneration;
+    }, []);
+
+    const isCurrentTeacherSessionIdentity = useCallback((captured: TeacherSessionIdentity): boolean => {
+        const current = teacherLoadIdentityRef.current;
+        const sessionScope = teacherSessionLoadScope();
+        return !!current
+            && !!sessionScope
+            && sameTeacherSessionIdentity(captured, current)
+            && sameTeacherSessionIdentity(captured, sessionScope);
+    }, []);
+
+    const loadDetailedAttempts = useCallback(async (): Promise<Attempt[]> => {
+        if (dashboardLiveOperationRef.current.loadState !== "loaded_data") return [];
+        if (dataMode === "demo") return attempts;
+        const requestedLoadIdentity = teacherLoadIdentityRef.current;
+        if (!requestedLoadIdentity || !isCurrentTeacherLoadIdentity(requestedLoadIdentity)) return [];
+        const detailIsCurrent = () => canContinueTeacherDashboardDetail(
+            requestedLoadIdentity,
+            dashboardLiveOperationRef.current,
+        ) && isCurrentTeacherLoadIdentity(requestedLoadIdentity);
+        if (!detailIsCurrent()) return [];
+
+        // A summary refresh can finish while a rich request is in flight. Loop onto
+        // the newest generation instead of publishing or exporting the stale rows.
+        while (true) {
+            const requestedGeneration = detailedAttemptGenerationRef.current;
+            const cached = detailedAttemptCacheRef.current;
+            if (cached?.generation === requestedGeneration) {
+                if (!detailIsCurrent()) return [];
+                setDetailedAttemptSampleStatus(cached.sampleStatus);
+                return cached.items;
+            }
+
+            let activeLoad = detailedAttemptLoadRef.current;
+            if (!activeLoad
+                || activeLoad.generation !== requestedGeneration
+                || !sameTeacherLoadIdentity(activeLoad.identity, requestedLoadIdentity)) {
+                if (!detailIsCurrent()) return [];
+                if (!detailedAttemptCacheRef.current) {
+                    setDetailedAttemptStatus("loading");
+                }
+                activeLoad = {
+                    generation: requestedGeneration,
+                    identity: requestedLoadIdentity,
+                    promise: loadTeacherAttempts(),
+                };
+                detailedAttemptLoadRef.current = activeLoad;
+            }
+
+            try {
+                const result = await activeLoad.promise;
+                if (!detailIsCurrent()) return [];
+                if (requestedGeneration !== detailedAttemptGenerationRef.current) continue;
+                const completeness = resolveTeacherAttemptCollectionCompleteness(result);
+                if (completeness === "error") {
+                    throw new Error(result.remoteError || "상세 제출 데이터를 확인하지 못했습니다.");
+                }
+                const sampleStatus: ExamAnalyticsSampleStatus = completeness === "partial"
+                    ? "partial"
+                    : completeness === "stale"
+                        ? "stale"
+                        : "ready";
+                detailedAttemptCacheRef.current = {
+                    generation: requestedGeneration,
+                    items: result.items,
+                    sampleStatus,
+                };
+                setDetailedAttempts(result.items);
+                setDetailedAttemptSampleStatus(sampleStatus);
+                setDetailedAttemptWarning(sampleStatus === "stale" ? result.remoteError || "최신 서버 데이터를 확인하지 못했습니다." : "");
+                setDetailedAttemptStatus("ready");
+                return result.items;
+            } catch (error) {
+                if (!detailIsCurrent()) return [];
+                const message = error instanceof Error ? error.message : "상세 제출 데이터를 확인하지 못했습니다.";
+                const failure = resolveDashboardDetailRetryFailure({
+                    requestedGeneration,
+                    currentGeneration: detailedAttemptGenerationRef.current,
+                    snapshot: detailedAttemptCacheRef.current,
+                    message,
+                });
+                if (failure.kind === "obsolete") continue;
+                setDetailedAttemptWarning(failure.warning);
+                if (failure.kind === "cached") {
+                    detailedAttemptCacheRef.current = {
+                        generation: requestedGeneration,
+                        items: failure.items,
+                        sampleStatus: failure.sampleStatus,
+                    };
+                    setDetailedAttempts(failure.items);
+                    setDetailedAttemptSampleStatus(failure.sampleStatus);
+                    setDetailedAttemptStatus(failure.loadStatus);
+                    return failure.items;
+                }
+                setDetailedAttemptStatus(failure.loadStatus);
+                throw error;
+            } finally {
+                if (detailedAttemptLoadRef.current === activeLoad) {
+                    detailedAttemptLoadRef.current = null;
+                }
+            }
+        }
+    }, [attempts, dataMode, isCurrentTeacherLoadIdentity]);
+
+    useEffect(() => {
+        if (activeTab === "overview" || isMockupAccount || dashboardLoadState.state !== "loaded_data") return;
+        const requestedIdentity = teacherLoadIdentityRef.current;
+        if (!requestedIdentity || !isCurrentTeacherLoadIdentity(requestedIdentity)) return;
+        let cancelled = false;
+        setAnalyticsSnapshotStatus("loading");
+        void loadTeacherAnalyticsSnapshots().then(result => {
+            if (cancelled || !isCurrentTeacherLoadIdentity(requestedIdentity)) return;
+            if (result.status !== "loaded" || result.meta.organizationId !== requestedIdentity.organizationId) {
+                setDetailedAnalyticsSnapshots({});
+                setAnalyticsSnapshotStatus("error");
+                return;
+            }
+            setDetailedAnalyticsSnapshots(result.analyticsSnapshots);
+            setAnalyticsSnapshotStatus("ready");
+        }).catch(() => {
+            if (cancelled || !isCurrentTeacherLoadIdentity(requestedIdentity)) return;
+            setDetailedAnalyticsSnapshots({});
+            setAnalyticsSnapshotStatus("error");
+        });
+        return () => { cancelled = true; };
+    }, [activeTab, dashboardLoadState.state, detailedAttemptGeneration, isCurrentTeacherLoadIdentity, isMockupAccount]);
+
     const applyDashboardSnapshot = useCallback((snapshot: DashboardSnapshot) => {
+        setDegradedDashboardData(null);
         const loadedExams = [...snapshot.exams];
         const loadedAttempts = [...snapshot.attempts];
         const loadedRosterStudents = [...snapshot.rosterStudents];
@@ -142,100 +541,349 @@ function TeacherDashboard() {
         }
         setDataMode(shouldSeedDemo ? "demo" : "real");
 
+        if (!shouldSeedDemo) {
+            const nextSummarySignal = buildAttemptSummarySignal(loadedAttempts);
+            const previousSummarySignal = attemptSummarySignalRef.current;
+            attemptSummarySignalRef.current = nextSummarySignal;
+            if (previousSummarySignal !== null && previousSummarySignal !== nextSummarySignal) {
+                invalidateDetailedAttempts();
+            }
+        }
+
         loadedExams.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         setExams(loadedExams);
         setAttempts(loadedAttempts);
         setRosterStudents(loadedRosterStudents);
         setRosterGroups(loadedRosterGroups);
+        setIndividualAssignmentTargetCounts(new Map(
+            Object.entries(snapshot.individualAssignmentTargetCounts || {}),
+        ));
+        setIndividualAssignmentModes(new Map(
+            Object.entries(snapshot.individualAssignmentModes || {}),
+        ));
 
         const metrics = buildTeacherDashboardMetrics(loadedExams, loadedAttempts, {
             rosterStudents: shouldSeedDemo ? undefined : loadedRosterStudents,
         });
         setStats({
-            totalStudents: metrics.totalStudents,
-            avgScore: metrics.avgScore,
+            totalStudents: loadedRosterStudents.length > 0
+                ? metrics.totalStudents
+                : snapshot.aggregate?.distinctStudentCount ?? metrics.totalStudents,
+            avgScore: snapshot.aggregate
+                ? Math.round(snapshot.aggregate.averageScorePercent * 10) / 10
+                : metrics.avgScore,
             activeExams: metrics.activeExams,
         });
         setTrendData(metrics.trendData.length === 0 && shouldSeedDemo
             ? [65, 78, 72, 85, 82, 90, metrics.avgScore || 80]
             : metrics.trendData);
         setTrendLabels(metrics.trendData.length === 0 && shouldSeedDemo ? [] : metrics.trendLabels);
-    }, []);
+    }, [invalidateDetailedAttempts]);
+
+    const applyDegradedDashboardSnapshot = useCallback((snapshot: TeacherDashboardDegradedData) => {
+        clearDashboardVisibleState();
+        invalidateDetailedAttempts();
+        setDegradedDashboardData(snapshot);
+        const completed = snapshot.attempts.filter(attempt => attempt.status === "completed" && attempt.totalScore > 0);
+        const averageScore = completed.length > 0
+            ? completed.reduce((sum, attempt) => sum + (attempt.score / attempt.totalScore) * 100, 0) / completed.length
+            : 0;
+        setStats({
+            totalStudents: new Set(snapshot.attempts.flatMap(attempt => attempt.studentId ? [attempt.studentId] : [])).size,
+            avgScore: Math.round(averageScore * 10) / 10,
+            activeExams: snapshot.exams.filter(exam => exam.status === "active").length,
+        });
+    }, [clearDashboardVisibleState, invalidateDetailedAttempts]);
 
     const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
+        const loadObservedAt = new Date().toISOString();
         if (isMockupAccount) {
-            applyDashboardSnapshot({
+            const snapshot: DashboardSnapshot = {
                 exams: [],
                 attempts: [],
                 rosterStudents: [],
                 rosterGroups: [],
                 forceDemoData: true,
-            });
+            };
+            applyDashboardSnapshot(snapshot);
+            setDashboardLoadState(resolveCanonicalLoad({
+                remote: { ok: true, data: snapshot },
+                cache: null,
+                now: loadObservedAt,
+            }, isDashboardSnapshotEmpty));
             if (options.notifyOnSuccess) {
                 toast.success("데모 데이터 새로고침 완료", "고정된 예시 데이터로 화면을 다시 구성했습니다.");
             }
             return;
         }
-        const [examResult, attemptResult, rosterResult] = await Promise.all([
-            loadTeacherExams(),
-            loadTeacherAttempts(),
-            loadTeacherRosterSnapshot(localStorage),
-        ]);
-        if (options.isCancelled?.()) return;
+        const loadIdentity = beginTeacherDashboardIdentityLoad();
+        if (!loadIdentity) {
+            clearDashboardVisibleState();
+            setDashboardLoadState({ state: "error_without_cache", error: "dependency_unavailable" });
+            return;
+        }
+        const completionIsObsolete = () => options.isCancelled?.() === true
+            || !isCurrentTeacherLoadIdentity(loadIdentity);
+        const degradedCache = readTeacherDashboardDegradedCache(localStorage, loadIdentity, new Date(loadObservedAt));
+        const localRoster = readLocalRosterSnapshot(localStorage);
+        const localSnapshot: DashboardSnapshot = {
+            exams: readLocalExams(),
+            attempts: readLocalAttempts(),
+            rosterStudents: localRoster.students,
+            rosterGroups: localRoster.groups,
+        };
+
+        const aggregatePromise = loadTeacherAttemptAggregate().catch(() => ({ status: "service_unavailable" as const }));
+        let results: Awaited<ReturnType<typeof Promise.all<[
+            ReturnType<typeof loadTeacherExams>,
+            ReturnType<typeof loadTeacherAttemptSummaries>,
+            ReturnType<typeof loadTeacherRosterSnapshot>,
+        ]>>>;
+        try {
+            results = await Promise.all([
+                loadTeacherExams(),
+                loadTeacherAttemptSummaries(),
+                loadTeacherRosterSnapshot(localStorage),
+            ]);
+        } catch (error) {
+            if (completionIsObsolete()) return;
+            const message = error instanceof Error ? error.message : "Dashboard synchronization failed";
+            const nextState = resolveCanonicalLoad<DashboardLoadData>({
+                remote: { ok: false },
+                cache: degradedCache ? { data: degradedCache, staleAt: degradedCache.staleAt } : null,
+                now: loadObservedAt,
+            }, isDashboardLoadDataEmpty);
+            const current = teacherLoadIdentityRef.current;
+            if (!current) return;
+            const published = publishTeacherDashboardCompletionIfCurrent(loadIdentity, current, {
+                publishState: () => {
+                    setSyncStatus(summarizePersistenceHealth([{
+                        remoteLoaded: false,
+                        remoteSynced: false,
+                        pendingSyncCount: localSnapshot.exams.length
+                            + localSnapshot.attempts.length
+                            + localSnapshot.rosterStudents.length
+                            + localSnapshot.rosterGroups.length,
+                        remoteError: message,
+                    }]));
+                    setDashboardLoadState(nextState);
+                    if (nextState.state === "degraded_with_cache"
+                        && isTeacherDashboardDegradedData(nextState.data)) {
+                        applyDegradedDashboardSnapshot(nextState.data);
+                    }
+                },
+                persistCache: () => undefined,
+            });
+            if (published && options.notifyOnError === true) {
+                toast.info(
+                    "로컬 데이터 기준으로 표시 중",
+                    "동기화 요청을 완료하지 못했습니다. 저장된 데이터는 유지하고 다음 로드 때 다시 시도합니다."
+                );
+            }
+            return;
+        }
+        const [examResult, attemptResult, rosterResult] = results;
+        const aggregateResult = await aggregatePromise;
+        if (completionIsObsolete()) return;
 
         const nextSyncStatus = summarizePersistenceHealth([examResult, attemptResult, rosterResult]);
-        setSyncStatus(nextSyncStatus);
-        if (nextSyncStatus.kind === "error" && options.notifyOnError !== false) {
+
+        const preferredExams = preferLocalDashboardItems(examResult, localSnapshot.exams);
+        const targetedExamIds = preferredExams
+            .filter(exam => exam.accessConfig?.type === "targeted")
+            .map(exam => exam.id);
+        const assignmentCountsResult = targetedExamIds.length > 0
+            ? await loadTeacherIndividualAssignmentTargetCounts(targetedExamIds).catch(() => ({ status: "service_unavailable" as const }))
+            : { status: "loaded" as const, targetCounts: {}, assignmentModes: {} };
+        if (completionIsObsolete()) return;
+
+        const examRemoteReady = isTeacherDashboardRemoteCollectionReady(examResult, loadIdentity.organizationId);
+        const attemptRemoteReady = isTeacherDashboardRemoteCollectionReady(attemptResult, loadIdentity.organizationId);
+        const rosterRemoteReady = isTeacherDashboardRemoteCollectionReady(rosterResult, loadIdentity.organizationId);
+        const remoteFailed = !examRemoteReady || !attemptRemoteReady || !rosterRemoteReady;
+        const successfulSnapshot: DashboardSnapshot = {
+            exams: preferredExams,
+            attempts: preferLocalDashboardItems(attemptResult, localSnapshot.attempts),
+            rosterStudents: rosterResult.remoteError ? localSnapshot.rosterStudents : rosterResult.students,
+            rosterGroups: rosterResult.remoteError ? localSnapshot.rosterGroups : rosterResult.groups,
+            ...(aggregateResult.status === "loaded" ? { aggregate: aggregateResult.aggregate } : {}),
+            ...(assignmentCountsResult.status === "loaded"
+                ? {
+                    individualAssignmentTargetCounts: assignmentCountsResult.targetCounts,
+                    individualAssignmentModes: assignmentCountsResult.assignmentModes,
+                }
+                : {}),
+        };
+        const nextState = resolveCanonicalLoad<DashboardLoadData>({
+            remote: remoteFailed ? { ok: false } : { ok: true, data: successfulSnapshot },
+            cache: remoteFailed && degradedCache ? { data: degradedCache, staleAt: degradedCache.staleAt } : null,
+            now: loadObservedAt,
+        }, isDashboardLoadDataEmpty);
+        if (completionIsObsolete()) return;
+        const current = teacherLoadIdentityRef.current;
+        if (!current) return;
+        const published = publishTeacherDashboardCompletionIfCurrent(loadIdentity, current, {
+            publishState: () => {
+                setSyncStatus(nextSyncStatus);
+                setDashboardLoadState(nextState);
+                if ((nextState.state === "loaded_empty" || nextState.state === "loaded_data")
+                    && !isTeacherDashboardDegradedData(nextState.data)) {
+                    applyDashboardSnapshot(nextState.data);
+                } else if (nextState.state === "degraded_with_cache"
+                    && isTeacherDashboardDegradedData(nextState.data)) {
+                    applyDegradedDashboardSnapshot(nextState.data);
+                }
+            },
+            persistCache: () => {
+                if (!remoteFailed) {
+                    cacheFreshTeacherDashboardOptional(
+                        localStorage,
+                        loadIdentity,
+                        loadObservedAt,
+                        successfulSnapshot.exams,
+                        successfulSnapshot.attempts,
+                        new Date(loadObservedAt),
+                    );
+                }
+            },
+        });
+
+        // Persistent synchronization health belongs to the inline status pill.
+        // Only an explicit user-triggered request may duplicate it as a toast.
+        if (published && nextSyncStatus.kind === "error" && options.notifyOnError === true) {
             toast.info(
                 "로컬 데이터 기준으로 표시 중",
                 "Supabase 동기화가 일부 지연되고 있어 시험·제출·명단은 다음 로드 때 다시 재시도합니다."
             );
         }
-
-        applyDashboardSnapshot({
-            exams: examResult.items,
-            attempts: attemptResult.items,
-            rosterStudents: rosterResult.students,
-            rosterGroups: rosterResult.groups,
-        });
-
-        if (options.notifyOnSuccess && nextSyncStatus.kind !== "error") {
+        if (published && options.notifyOnSuccess && nextSyncStatus.kind !== "error") {
             toast.success("동기화 확인 완료", nextSyncStatus.detail);
         }
-    }, [applyDashboardSnapshot, isMockupAccount]);
+    }, [
+        applyDashboardSnapshot,
+        applyDegradedDashboardSnapshot,
+        beginTeacherDashboardIdentityLoad,
+        clearDashboardVisibleState,
+        isCurrentTeacherLoadIdentity,
+        isMockupAccount,
+        setDashboardLoadState,
+    ]);
+
+    const handleTeacherSessionIdentityChanged = useCallback(() => {
+        const nextSession = readDashboardTeacherSession();
+        const nextIsMockupAccount = isMockupTeacherIdentity(nextSession);
+        const nextScope = teacherSessionLoadScope();
+        const transition = resolveTeacherDashboardSessionChange(isMockupAccount, {
+            isMockup: nextIsMockupAccount,
+            hasCanonicalIdentity: !!nextScope,
+        });
+        setIsMockupAccount(nextIsMockupAccount);
+        setIsAccountModeResolved(true);
+
+        if (transition === "mode_changed") {
+            dashboardRequestGenerationRef.current += 1;
+            teacherLoadIdentityRef.current = null;
+            dashboardLiveOperationRef.current = {
+                ...dashboardLiveOperationRef.current,
+                identity: null,
+            };
+            clearDashboardVisibleState();
+            invalidateDetailedAttempts();
+            setDashboardLoadState({ state: "loading" });
+            return;
+        }
+        if (transition === "unavailable") {
+            dashboardRequestGenerationRef.current += 1;
+            teacherLoadIdentityRef.current = null;
+            dashboardLiveOperationRef.current = {
+                ...dashboardLiveOperationRef.current,
+                identity: null,
+            };
+            clearDashboardVisibleState();
+            invalidateDetailedAttempts();
+            setDashboardLoadState({ state: "error_without_cache", error: "dependency_unavailable" });
+            return;
+        }
+        void loadDashboardData({ notifyOnError: false });
+    }, [
+        clearDashboardVisibleState,
+        invalidateDetailedAttempts,
+        isMockupAccount,
+        loadDashboardData,
+        setDashboardLoadState,
+    ]);
 
     useEffect(() => {
         if (!isAccountModeResolved) return;
         let cancelled = false;
 
-        // Render the last local snapshot synchronously on mount so the dashboard is
-        // useful without waiting for Supabase reconciliation. The existing loader
-        // then refreshes and replaces it with the merged source of truth.
+        // A local snapshot becomes renderable only when it carries the last
+        // successful canonical verification time. Unverified local rows must not
+        // leak analytics while the server request is still loading or has failed.
         if (isMockupAccount) {
-            applyDashboardSnapshot({
+            const snapshot: DashboardSnapshot = {
                 exams: [],
                 attempts: [],
                 rosterStudents: [],
                 rosterGroups: [],
                 forceDemoData: true,
+            };
+            queueMicrotask(() => {
+                if (cancelled) return;
+                applyDashboardSnapshot(snapshot);
+                setDashboardLoadState(resolveCanonicalLoad({
+                    remote: { ok: true, data: snapshot },
+                    cache: null,
+                    now: new Date().toISOString(),
+                }, isDashboardSnapshotEmpty));
             });
         } else {
-            const localRoster = readLocalRosterSnapshot(localStorage);
-            applyDashboardSnapshot({
-                exams: readLocalExams(),
-                attempts: readLocalAttempts(),
-                rosterStudents: localRoster.students,
-                rosterGroups: localRoster.groups,
+            queueMicrotask(() => {
+                if (cancelled) return;
+                const loadIdentity = beginTeacherDashboardIdentityLoad();
+                if (loadIdentity) {
+                    const degradedCache = readTeacherDashboardDegradedCache(localStorage, loadIdentity, new Date());
+                    if (degradedCache && isCurrentTeacherLoadIdentity(loadIdentity)) {
+                        const cachedState = resolveCanonicalLoad<DashboardLoadData>({
+                            remote: { ok: false },
+                            cache: {
+                            data: degradedCache,
+                            staleAt: degradedCache.staleAt,
+                            },
+                            now: new Date().toISOString(),
+                        }, isDashboardLoadDataEmpty);
+                        setDashboardLoadState(cachedState);
+                        if (cachedState.state === "degraded_with_cache"
+                            && isTeacherDashboardDegradedData(cachedState.data)) {
+                            applyDegradedDashboardSnapshot(cachedState.data);
+                        }
+                    }
+                } else {
+                    clearDashboardVisibleState();
+                    setDashboardLoadState({ state: "error_without_cache", error: "dependency_unavailable" });
+                }
             });
         }
-        const refreshTimer = window.setTimeout(() => {
+        // The mockup snapshot is already complete. Only real accounts need an
+        // initial background load to verify their canonical data.
+        const refreshTimer = isMockupAccount ? undefined : window.setTimeout(() => {
             void loadDashboardData({ isCancelled: () => cancelled });
         }, 0);
         return () => {
             cancelled = true;
-            window.clearTimeout(refreshTimer);
+            if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
         };
-    }, [applyDashboardSnapshot, isAccountModeResolved, isMockupAccount, loadDashboardData]);
+    }, [
+        applyDashboardSnapshot,
+        applyDegradedDashboardSnapshot,
+        beginTeacherDashboardIdentityLoad,
+        clearDashboardVisibleState,
+        isAccountModeResolved,
+        isCurrentTeacherLoadIdentity,
+        isMockupAccount,
+        loadDashboardData,
+        setDashboardLoadState,
+    ]);
 
     // Cross-tab / refocus revalidation: another tab submitting an attempt, saving
     // an exam, or editing the roster fires a "storage" event here; returning to a
@@ -264,6 +912,12 @@ function TeacherDashboard() {
             }
         };
         const onStorage = (event: StorageEvent) => {
+            const sessionIdentityChanged = event.storageArea === window.sessionStorage
+                && event.key === TEACHER_SESSION_KEY;
+            if (sessionIdentityChanged) {
+                handleTeacherSessionIdentityChanged();
+                return;
+            }
             if (!isTeacherDashboardStorageKey(event.key)) return;
             trigger();
         };
@@ -281,13 +935,25 @@ function TeacherDashboard() {
             window.removeEventListener("focus", trigger);
             document.removeEventListener("visibilitychange", onVisibilityChange);
         };
-    }, [isAccountModeResolved, loadDashboardData]);
+    }, [handleTeacherSessionIdentityChanged, isAccountModeResolved, loadDashboardData]);
+
+    useEffect(() => {
+        window.addEventListener(TEACHER_SESSION_IDENTITY_CHANGED_EVENT, handleTeacherSessionIdentityChanged);
+        return () => {
+            window.removeEventListener(TEACHER_SESSION_IDENTITY_CHANGED_EVENT, handleTeacherSessionIdentityChanged);
+        };
+    }, [handleTeacherSessionIdentityChanged]);
 
     useEffect(() => {
         const nextTab = normalizeDashboardTab(searchParams.get('tab'));
         const nextExamId = searchParams.get('examId') || undefined;
-        setActiveTab(nextTab);
-        setSelectedExamIdForAnalytics(nextExamId);
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setActiveTab(nextTab);
+            setSelectedExamIdForAnalytics(nextExamId);
+        });
+        return () => { cancelled = true; };
     }, [searchParams]);
 
     // Switch tabs AND mirror the selection into the URL so refresh / browser-back /
@@ -312,29 +978,67 @@ function TeacherDashboard() {
 
     const handleRefreshDashboardData = async () => {
         if (isRefreshingDashboardData) return;
+        const refreshIdentity = teacherLoadIdentityRef.current;
+        if (!refreshIdentity || !isCurrentTeacherLoadIdentity(refreshIdentity)) return;
         setIsRefreshingDashboardData(true);
+        if (dashboardLoadState.state === "error_without_cache") setDashboardLoadState({ state: "loading" });
         setSyncStatus(summarizePersistenceHealth([]));
         try {
-            await loadDashboardData({ notifyOnSuccess: true });
+            await loadDashboardData({ notifyOnSuccess: true, notifyOnError: true });
         } catch {
-            toast.error("동기화 확인 실패", "데이터를 다시 읽지 못했습니다. 네트워크와 저장소 상태를 확인해주세요.");
+            if (matchesTeacherSessionScope(refreshIdentity)) {
+                toast.error("동기화 확인 실패", "데이터를 다시 읽지 못했습니다. 네트워크와 저장소 상태를 확인해주세요.");
+            }
         } finally {
-            setIsRefreshingDashboardData(false);
+            if (matchesTeacherSessionScope(refreshIdentity)) {
+                setIsRefreshingDashboardData(false);
+            }
         }
     };
 
     const handleRepairAnalyticsData = async () => {
+        if (dashboardLiveOperationRef.current.loadState !== "loaded_data") return;
+        const repairIdentity = teacherLoadIdentityRef.current;
+        if (!repairIdentity) return;
+        const sessionCanRepair = () => canContinueTeacherDashboardRepair(
+            repairIdentity,
+            dashboardLiveOperationRef.current,
+        ) && isCurrentTeacherSessionIdentity(repairIdentity);
+        if (!sessionCanRepair()) return;
         if (questionResultRepairPlan.repairableCount === 0) {
+            if (!sessionCanRepair()) return;
             toast.info("복구할 문항 결과 없음", "현재 자동 복구 가능한 제출이 없습니다.");
             return;
         }
-
+        const startedRepair = beginTeacherDashboardRepairOperation(
+            teacherDashboardRepairOperationRef.current,
+        );
+        teacherDashboardRepairOperationRef.current = startedRepair.state;
+        const repairOperation = startedRepair.operation;
+        const repairOwnerIsCurrent = () => canReleaseTeacherDashboardRepair(
+            repairIdentity,
+            dashboardLiveOperationRef.current,
+        ) && isCurrentTeacherSessionIdentity(repairIdentity);
+        const repairIsCurrent = () => canContinueTeacherDashboardRepair(
+            repairIdentity,
+            dashboardLiveOperationRef.current,
+        ) && isCurrentTeacherSessionIdentity(repairIdentity)
+            && canContinueTeacherDashboardRepairOperation(
+                repairOperation,
+                teacherDashboardRepairOperationRef.current,
+            );
+        if (!repairIsCurrent()) return;
         setIsRepairingAnalyticsData(true);
         try {
             const repairedAttempts: Attempt[] = [];
             let failedCount = 0;
             for (const item of questionResultRepairPlan.items) {
-                const localSaved = await saveLocalAttempt(item.repairedAttempt);
+                if (!repairIsCurrent()) return;
+                const localSaved = await saveLocalAttemptIfCurrent(
+                    item.repairedAttempt,
+                    () => repairIsCurrent(),
+                );
+                if (!repairIsCurrent()) return;
                 if (localSaved) {
                     repairedAttempts.push(item.repairedAttempt);
                 } else {
@@ -342,11 +1046,30 @@ function TeacherDashboard() {
                 }
             }
 
+            if (!repairIsCurrent()) return;
+
             if (repairedAttempts.length > 0) {
                 const repairedById = new Map(repairedAttempts.map(attempt => [attempt.id, attempt]));
-                setAttempts(prev => prev.map(attempt => repairedById.get(attempt.id) || attempt));
+                if (!repairIsCurrent()) return;
+                setAttempts(prev => repairIsCurrent()
+                    ? prev.map(attempt => repairedById.get(attempt.id) || attempt)
+                    : prev);
+                if (!repairIsCurrent()) return;
+                setDetailedAttempts(prev => {
+                    if (!repairIsCurrent()) return prev;
+                    const next = prev?.map(attempt => repairedById.get(attempt.id) || attempt) || prev;
+                    if (next) {
+                        detailedAttemptCacheRef.current = {
+                            generation: detailedAttemptGenerationRef.current,
+                            items: next,
+                            sampleStatus: detailedAttemptSampleStatus,
+                        };
+                    }
+                    return next;
+                });
             }
 
+            if (!repairIsCurrent()) return;
             if (failedCount > 0) {
                 toast.error("일부 복구 실패", `${failedCount}건은 저장하지 못했습니다. 저장소 권한과 용량을 확인하세요.`);
             } else {
@@ -356,7 +1079,16 @@ function TeacherDashboard() {
                 );
             }
         } finally {
-            setIsRepairingAnalyticsData(false);
+            if (canReleaseTeacherDashboardRepairOperation(
+                repairOperation,
+                teacherDashboardRepairOperationRef.current,
+            ) && repairOwnerIsCurrent()) {
+                teacherDashboardRepairOperationRef.current = {
+                    ...teacherDashboardRepairOperationRef.current,
+                    activeToken: null,
+                };
+                setIsRepairingAnalyticsData(false);
+            }
         }
     };
 
@@ -506,16 +1238,46 @@ function TeacherDashboard() {
 
         return actions;
     }, [analyticsDataHealth.issues, analyticsDataHealth.kind, dataMode, isMockupAccount, questionResultRepairPlan.repairableCount]);
+    const isDashboardResolving = !isAccountModeResolved || dashboardLoadState.state === "loading";
+    const isDashboardUnavailable = dashboardLoadState.state === "error_without_cache";
+    const isDashboardDegraded = dashboardLoadState.state === "degraded_with_cache";
+    const teacherDataCapability: TeacherDataCapability = isDashboardDegraded
+        ? "degraded_read_only"
+        : dashboardLoadState.state === "loaded_data" || dashboardLoadState.state === "loaded_empty"
+            ? "fresh_mutable"
+            : "unavailable";
+    const dashboardAllowsAnalysis = teacherDataCapability === "fresh_mutable" && dashboardLoadState.state === "loaded_data";
+    const dashboardAllowsMutations = teacherDataCapability === "fresh_mutable"
+        && (dashboardLoadState.state === "loaded_data" || dashboardLoadState.state === "loaded_empty");
+    const isRealDashboardEmpty = dashboardLoadState.state === "loaded_empty"
+        && !isMockupAccount
+        && dataMode === "real"
+        && isDashboardLoadDataEmpty(dashboardLoadState.data);
+    const dashboardHasRenderableData = dashboardLoadState.state === "loaded_data" || isDashboardDegraded;
+    const dashboardHeading = {
+        overview: {
+            title: "대시보드",
+            subtitle: isMockupAccount ? "대시보드 요약" : "시험 현황과 학생 성취도를 한눈에 확인하세요.",
+        },
+        exam: {
+            title: "결과 분석",
+            subtitle: "시험별 점수, 참여율과 오답 유형을 확인하세요.",
+        },
+        student: {
+            title: "학생 성취도",
+            subtitle: "학생별 성장 흐름과 반복되는 약점을 확인하세요.",
+        },
+    }[activeTab];
 
     // Tab Navigation Component
     const renderTabs = () => isMockupAccount ? (
-        <div className="mockup-dashboard-tabs" role="tablist" aria-label="데모 분석 화면">
-            <button type="button" role="tab" aria-selected={activeTab === "overview"} onClick={() => applyTab("overview")}>개요</button>
-            <button type="button" role="tab" aria-selected={activeTab === "exam"} onClick={() => applyTab("exam", selectedExamIdForAnalytics)}>시험별 분석</button>
-            <button type="button" role="tab" aria-selected={activeTab === "student"} onClick={() => applyTab("student")}>학생별 분석</button>
+        <div className="mockup-dashboard-tabs" role="group" aria-label="데모 분석 화면">
+            <button type="button" aria-pressed={activeTab === "overview"} onClick={() => applyTab("overview")}>개요</button>
+            <button type="button" aria-pressed={activeTab === "exam"} onClick={() => applyTab("exam", selectedExamIdForAnalytics)}>시험별 분석</button>
+            <button type="button" aria-pressed={activeTab === "student"} onClick={() => applyTab("student")}>학생별 분석</button>
         </div>
     ) : (
-        <div style={{
+        <div className="dashboard-tabs" role="group" aria-label="대시보드 보기" style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))',
             gap: '0.5rem',
@@ -525,6 +1287,9 @@ function TeacherDashboard() {
             boxShadow: '0 4px 6px rgba(0,0,0,0.02)'
         }}>
             <button
+                type="button"
+                aria-pressed={activeTab === 'overview'}
+                className={activeTab === 'overview' ? "is-active" : undefined}
                 onClick={() => applyTab('overview')}
                 style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -542,6 +1307,9 @@ function TeacherDashboard() {
                 대시보드 요약
             </button>
             <button
+                type="button"
+                aria-pressed={activeTab === 'exam'}
+                className={activeTab === 'exam' ? "is-active" : undefined}
                 onClick={() => applyTab('exam', selectedExamIdForAnalytics)}
                 style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -559,6 +1327,9 @@ function TeacherDashboard() {
                 시험 분석
             </button>
             <button
+                type="button"
+                aria-pressed={activeTab === 'student'}
+                className={activeTab === 'student' ? "is-active" : undefined}
                 onClick={() => applyTab('student')}
                 style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -579,7 +1350,52 @@ function TeacherDashboard() {
     );
 
     return (
-        <div className={`layout-main${isMockupAccount ? " mockup-dashboard-shell" : ""}`}>
+        <div className={`layout-main teacher-dashboard-shell${isMockupAccount ? " mockup-dashboard-shell" : ""}`}>
+            <aside className="dashboard-sidebar" aria-label="교사 대시보드 내비게이션">
+                <BrandLogo className="dashboard-sidebar-brand" />
+                <nav className="dashboard-sidebar-nav">
+                    <button type="button" aria-current={activeTab === "overview" ? "page" : undefined} onClick={() => applyTab("overview")}>
+                        <LayoutDashboard size={20} aria-hidden="true" />
+                        <span>대시보드</span>
+                    </button>
+                    {(isMockupAccount || dashboardAllowsMutations) && <Link href="/create">
+                        <FilePlus2 size={20} aria-hidden="true" />
+                        <span>시험 만들기</span>
+                    </Link>}
+                    {(isMockupAccount || dashboardAllowsAnalysis) && <>
+                    <button type="button" aria-current={activeTab === "exam" ? "page" : undefined} onClick={() => applyTab("exam", selectedExamIdForAnalytics)}>
+                        <BarChart2 size={20} aria-hidden="true" />
+                        <span>결과 분석</span>
+                    </button>
+                    <button type="button" aria-current={activeTab === "student" ? "page" : undefined} onClick={() => applyTab("student")}>
+                        <GraduationCap size={20} aria-hidden="true" />
+                        <span>학생 성취도</span>
+                    </button>
+                    </>}
+                    <Link href="/teacher/users">
+                        <Users size={20} aria-hidden="true" />
+                        <span>학생 관리</span>
+                    </Link>
+                    <Link href="/teacher/live">
+                        <RadioTower size={20} aria-hidden="true" />
+                        <span>실시간 현황</span>
+                    </Link>
+                    <Link href="/teacher/settings">
+                        <Settings size={20} aria-hidden="true" />
+                        <span>설정</span>
+                    </Link>
+                </nav>
+                <div className="dashboard-sidebar-footer">
+                    <span className="dashboard-sidebar-avatar" aria-hidden="true">{isMockupAccount ? "김" : "교"}</span>
+                    <span className="dashboard-sidebar-profile">
+                        <strong>{isMockupAccount ? "김선생님" : "교사 계정"}</strong>
+                        <small>{isMockupAccount ? "수학교사" : "OMR Maker"}</small>
+                    </span>
+                    <NotificationBell />
+                    <TeacherLogoutButton size="small" />
+                </div>
+            </aside>
+            <div className="dashboard-workspace">
             {/* TeacherHeader also renders SkipToMainContent and GlobalSearch;
                 this replaced a hand-rolled copy of the same header that had
                 drifted from the shared one in search width and badge shape. */}
@@ -591,21 +1407,27 @@ function TeacherDashboard() {
                 showThemeToggle={!isMockupAccount}
             />
 
-            <main id="main-content" tabIndex={-1} className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
+            <main id="main-content" tabIndex={-1} aria-label="분석 센터" className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
                 {/* Welcome Section */}
                 <div className="dashboard-welcome">
-                    <div style={{ minWidth: 0 }}>
-                        <h1 style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--foreground)' }}>
-                            {isMockupAccount ? "좋은아침이에요, 김하늘 선생님" : "분석 센터"}
+                    <div className="dashboard-title-block mobile-section-stack" style={{ minWidth: 0 }}>
+                        <h1 className="dashboard-title" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--foreground)' }}>
+                            {dashboardHeading.title}
                         </h1>
                         <p className="text-muted" style={{ fontSize: '1.1rem' }}>
-                            {isMockupAccount
-                                ? "완성된 예시 시험으로 OMR Maker의 통계와 분석을 편하게 둘러보세요."
-                                : "시험 현황과 학생 성취도를 한눈에 확인하고 다음 조치를 시작하세요."}
+                            {dashboardHeading.subtitle}
                         </p>
                     </div>
+                    <div className="dashboard-welcome-actions">
+                        {dashboardAllowsMutations && (
+                            <Link href="/create" className="dashboard-create-button">
+                                <FilePlus2 size={19} aria-hidden="true" />
+                                시험 만들기
+                            </Link>
+                        )}
                     {!isMockupAccount && <div className="dashboard-welcome-status">
                         <div
+                            className="mobile-action-row"
                             aria-label="데이터 동기화 상태"
                             title={syncStatus.error || syncStatus.detail}
                             style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}
@@ -639,7 +1461,7 @@ function TeacherDashboard() {
                                 <RefreshCw size={14} className={isRefreshingDashboardData ? "animate-spin" : undefined} />
                             </button>
                         </div>
-                        <div
+                        {dashboardAllowsAnalysis && analyticsDataHealth.kind !== "empty" && <div
                             aria-label="분석 데이터 상태"
                             title={analyticsDataHealth.issues[0]?.detail || analyticsDataHealth.detail}
                             style={{ minWidth: 0 }}
@@ -650,21 +1472,28 @@ function TeacherDashboard() {
                                 detail={`${analyticsDataHealth.score}점 · ${analyticsDataHealth.detail}`}
                                 tone={dataHealthPillTone}
                             />
-                        </div>
-                        {activeTab !== 'overview' && (
-                            <Link href="/create" style={{
-                                padding: '0.55rem 1.1rem', background: 'var(--primary)',
-                                color: 'white', borderRadius: 'var(--radius-full)',
-                                fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem',
-                                boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
-                            }}>
-                                시험 출제하기
-                            </Link>
-                        )}
+                        </div>}
                     </div>}
+                    </div>
                 </div>
 
-                {dataMode === "demo" && (
+                {isDashboardDegraded && (
+                    <section
+                        data-testid="canonical-degraded-cache"
+                        role="status"
+                        style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', padding: '1rem 1.1rem', marginBottom: '1.5rem', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 'var(--radius-lg)', background: 'rgba(245,158,11,0.08)', flexWrap: 'wrap' }}
+                    >
+                        <div>
+                            <strong>저장된 데이터를 읽기 전용으로 표시 중</strong>
+                            <p className="text-muted" style={{ marginTop: '0.25rem' }}>
+                                마지막 저장 {new Date(dashboardLoadState.staleAt).toLocaleString('ko-KR')} · 서버 연결을 확인해주세요.
+                            </p>
+                        </div>
+                        <button type="button" className="btn btn-secondary" onClick={() => { void handleRefreshDashboardData(); }}>다시 시도</button>
+                    </section>
+                )}
+
+                {dashboardAllowsAnalysis && dataMode === "demo" && (
                     <div
                         role="status"
                         aria-label="데모 데이터 안내"
@@ -695,7 +1524,7 @@ function TeacherDashboard() {
                     </div>
                 )}
 
-                {dataMode === "real" && analyticsDataHealth.kind !== "ready" && (
+                {dashboardAllowsAnalysis && dataMode === "real" && analyticsDataHealth.kind !== "ready" && analyticsDataHealth.kind !== "empty" && (
                     <div
                         role="status"
                         aria-label="분석 데이터 상태"
@@ -752,7 +1581,7 @@ function TeacherDashboard() {
                                     </span>
                                 </div>
                             ))}
-                            {questionResultRepairPlan.repairableCount > 0 && (
+                            {dashboardAllowsMutations && questionResultRepairPlan.repairableCount > 0 && (
                                 <>
                                     <button
                                         type="button"
@@ -824,7 +1653,7 @@ function TeacherDashboard() {
                     </div>
                 )}
 
-                {!isMockupAccount && <div
+                {dashboardHasRenderableData && !isMockupAccount && teacherDataCapability === "fresh_mutable" && activeTab !== "overview" && activeTab !== "exam" && <div
                     className="dashboard-analysis-actions"
                     aria-label="분석 다음 조치"
                     style={{
@@ -892,11 +1721,82 @@ function TeacherDashboard() {
                     })}
                 </div>}
 
-                {/* Tabs */}
-                {renderTabs()}
+                {isDashboardResolving ? (
+                    <AnalyticsTabSkeleton />
+                ) : isDashboardUnavailable ? (
+                    <section
+                        data-testid="canonical-error-no-cache"
+                        role="alert"
+                        className="bento-card"
+                        style={{ minHeight: 280, display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}
+                    >
+                        <div>
+                            <AlertTriangle size={28} color="var(--warning)" style={{ margin: '0 auto 0.75rem' }} />
+                            <h2 style={{ fontSize: '1.25rem', fontWeight: 850 }}>서버 데이터를 불러오지 못했습니다</h2>
+                            <p className="text-muted" style={{ margin: '0.5rem 0 1rem' }}>검증된 저장 데이터가 없어 빈 대시보드로 표시하지 않습니다.</p>
+                            <button data-testid="canonical-dashboard-retry" type="button" className="btn btn-primary" onClick={() => { void handleRefreshDashboardData(); }}>다시 시도</button>
+                        </div>
+                    </section>
+                ) : isRealDashboardEmpty ? (
+                    <section
+                        className="bento-card dashboard-empty-onboarding"
+                        aria-labelledby="dashboard-empty-title"
+                        style={{
+                            minHeight: 360,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: 'clamp(2rem, 8vw, 4.5rem) 1.5rem',
+                            textAlign: 'center',
+                        }}
+                    >
+                        <span
+                            aria-hidden="true"
+                            style={{
+                                width: 68,
+                                height: 68,
+                                display: 'grid',
+                                placeItems: 'center',
+                                marginBottom: '1.25rem',
+                                borderRadius: 'var(--radius-full)',
+                                background: 'rgba(99,102,241,0.1)',
+                                color: 'var(--primary)',
+                            }}
+                        >
+                            <LayoutDashboard size={28} />
+                        </span>
+                        <h2 id="dashboard-empty-title" style={{ fontSize: '1.35rem', fontWeight: 850, marginBottom: '0.55rem' }}>
+                            첫 시험부터 시작해보세요
+                        </h2>
+                        <p style={{ maxWidth: 480, color: 'var(--muted)', lineHeight: 1.65, marginBottom: '1.4rem', wordBreak: 'keep-all' }}>
+                            시험을 만들고 배포하면 응시 현황, 점수, 학생 성취 분석이 이곳에 자동으로 정리됩니다.
+                        </p>
+                        <Link
+                            href="/create"
+                            style={{
+                                minHeight: 44,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '0.7rem 1.2rem',
+                                borderRadius: 'var(--radius-full)',
+                                background: 'var(--primary)',
+                                color: 'white',
+                                fontWeight: 800,
+                                boxShadow: '0 6px 18px rgba(99,102,241,0.24)',
+                            }}
+                        >
+                            첫 시험 만들기
+                        </Link>
+                    </section>
+                ) : (
+                    <>
+                        {/* Tabs */}
+                        {!isRealDashboardEmpty && teacherDataCapability === "fresh_mutable" && renderTabs()}
 
-                {/* Tab Content */}
-                <div style={{ minHeight: '600px' }}>
+                        {/* Tab Content */}
+                        <div style={{ minHeight: '600px' }}>
                     {activeTab === 'overview' && isMockupAccount && (
                         <MockupOverview
                             exams={exams}
@@ -908,8 +1808,15 @@ function TeacherDashboard() {
                             onNavigateToStudentAnalytics={handleNavigateToStudentAnalytics}
                         />
                     )}
-                    {activeTab === 'overview' && !isMockupAccount && (
+                    {!isMockupAccount && isDashboardDegraded && degradedDashboardData && (
                         <OverviewTab
+                            capability="degraded_read_only"
+                            snapshot={degradedDashboardData}
+                        />
+                    )}
+                    {activeTab === 'overview' && !isMockupAccount && !isDashboardDegraded && (
+                        <OverviewTab
+                            capability="fresh_mutable"
                             exams={exams}
                             attempts={attempts}
                             stats={stats}
@@ -917,32 +1824,52 @@ function TeacherDashboard() {
                             trendLabels={trendLabels}
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
+                            individualAssignmentTargetCounts={individualAssignmentTargetCounts}
+                            individualAssignmentModes={individualAssignmentModes}
                             onNavigateToExamAnalytics={handleNavigateToExamAnalytics}
                             onNavigateToStudentAnalytics={handleNavigateToStudentAnalytics}
+                            onLoadDetailedAttempts={loadDetailedAttempts}
                         />
                     )}
-                    {activeTab === 'exam' && (
+                    {teacherDataCapability === "fresh_mutable" && activeTab !== 'overview' && dataMode === "real" && analyticsSnapshotStatus !== "ready" && (
+                        analyticsSnapshotStatus === "error" ? (
+                            <section className="bento-card" role="alert" style={{ padding: '2rem', textAlign: 'center' }}>
+                                <h2 style={{ fontSize: '1.1rem', fontWeight: 850, marginBottom: '0.5rem' }}>공식 분석 데이터를 불러오지 못했습니다</h2>
+                                <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>요약 분석 데이터를 확인하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.</p>
+                                <button type="button" className="btn btn-primary" onClick={() => setDetailedAttemptGeneration(value => value + 1)}>
+                                    다시 불러오기
+                                </button>
+                            </section>
+                        ) : <AnalyticsTabSkeleton />
+                    )}
+                    {teacherDataCapability === "fresh_mutable" && activeTab === 'exam' && (dataMode === "demo" || analyticsSnapshotStatus === "ready") && (
                         <ExamAnalyticsTab
                             exams={exams}
-                            attempts={attempts}
+                            attempts={analyticsAttempts}
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
                             initialExamId={selectedExamIdForAnalytics}
                             currentPlan={isMockupAccount ? "academy" : currentPlan}
+                            sampleStatus={detailedAttemptSampleStatus}
+                            canonicalAnalyticsSnapshots={dataMode === "real" ? detailedAnalyticsSnapshots : undefined}
                         />
                     )}
-                    {activeTab === 'student' && (
+                    {teacherDataCapability === "fresh_mutable" && activeTab === 'student' && (dataMode === "demo" || analyticsSnapshotStatus === "ready") && (
                         <StudentAnalyticsTab
                             exams={exams}
-                            attempts={attempts}
+                            attempts={analyticsAttempts}
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
                             currentPlan={isMockupAccount ? "academy" : currentPlan}
+                            canonicalAnalyticsSnapshots={dataMode === "real" ? detailedAnalyticsSnapshots : undefined}
                         />
                     )}
-                </div>
+                        </div>
+                    </>
+                )}
 
             </main>
+            </div>
         </div>
     );
 }
