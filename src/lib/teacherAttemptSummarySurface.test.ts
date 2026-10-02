@@ -58,7 +58,7 @@ describe("teacher attempt summary surfaces", () => {
     it("refreshes the selected live exam immediately and blocks answer-dependent actions until rich rows arrive", () => {
         const live = readProjectFile("src/app/teacher/live/page.tsx");
         expect(live).toContain("selectedAttemptDetailsReady");
-        expect(live).toMatch(/useEffect\(\(\) => \{[\s\S]*?void refreshSelectedAttempts\(\);[\s\S]*?\}, \[refreshSelectedAttempts/);
+        expect(live).toMatch(/useEffect\(\(\) => \{[\s\S]*?void refreshSelectedAttempts\(\);[\s\S]*?\}, \[liveDataMode, refreshSelectedAttempts, selectedExamId\]/);
         expect(live).toContain("!isDemoLive && !selectedAttemptDetailsReady");
         expect(live).toContain("loadSelectedAttemptDetails(nextSelectedExamId, true)");
     });

@@ -126,20 +126,20 @@
 - 하단 페이지 툴바(`PDFViewer.tsx:1541-1566`)는 상단 툴바와 기능이 중복됩니다.
 
 **변경**
-- [ ] ≤768px 압축 툴바를 한 줄(44px)로 만듭니다: `[◀ n/N ▶] [−/+] [필기 ▾]`.
+- [x] ≤768px 압축 툴바를 한 줄(44px)로 만듭니다: `[◀ n/N ▶] [−/+] [필기 ▾]`.
   - 필기 도구는 PDF 위에 뜨는 팝오버로 옮겨 레이아웃 높이를 차지하지 않게 합니다.
   - 파일명과 하단 툴바는 ≤768px에서 숨깁니다.
-- [ ] OMR 영역은 `flex: 0 1 clamp(168px, 36dvh, 320px)`, PDF 영역은 `min-height: 45%`로 둡니다.
-- [ ] OMR을 접으면 기존 rail 퀵카드를 하단 56px peek 바로 재사용합니다. 첫 진입 상태는 PO 결정 A-4입니다.
-- [ ] 태블릿 600~1180px: 툴바에 `overflow-x: auto`를 줍니다. 가로 모드에서 PDF 좌측이 잘리는 문제(x=-307)는 Playwright 기하 프로브로 먼저 재현한 뒤 고칩니다.
+- [x] OMR 영역은 `flex: 0 1 clamp(168px, 36dvh, 320px)`, PDF 영역은 `min-height: 45%`로 둡니다.
+- [x] OMR을 접으면 기존 rail 퀵카드를 하단 56px peek 바로 재사용합니다. 첫 진입 상태는 PO 결정 A-4입니다.
+- [x] 태블릿 600~1180px: 툴바에 `overflow-x: auto`를 줍니다. 가로 모드에서 PDF 좌측이 잘리는 문제(x=-307)는 Playwright 기하 프로브로 먼저 재현한 뒤 고칩니다.
   - 후보 원인: `PDFViewer.tsx:281`에서 폭에서 64를 빼는 계산, 316-327행의 focus 스크롤이 OMR 패널 폭을 고려하지 않는 문제.
 - 헤더 3행(157px)은 e2e가 고정하고 있으므로 이번 범위에서 손대지 않습니다.
 
 **테스트**
-- [ ] 신규: `.pdf-viewer-scroll` 높이가 320×568에서 140px 이상, 393×727에서 뷰포트의 30% 이상인지 확인합니다.
-- [ ] 신규: 필기 팝오버를 열어도 PDF 높이가 변하지 않는지 확인합니다.
-- [ ] 신규: 태블릿 가로 1180×820과 1024×768에서 페이지 좌측이 잘리지 않고 툴바 끝까지 보이는지 확인합니다.
-- [ ] 유지할 기존 테스트: `tablet-layout.spec.ts:213-216`(OMR이 PDF 아래 in-flow), `ios-mobile-layout.spec.ts:547-620`(키보드), `design93Surface.test.ts:99`
+- [x] 신규: `.pdf-viewer-scroll` 높이가 320×568에서 140px 이상, 393×727에서 뷰포트의 30% 이상인지 확인합니다.
+- [x] 신규: 필기 팝오버를 열어도 PDF 높이가 변하지 않는지 확인합니다.
+- [x] 신규: 태블릿 가로 1180×820과 1024×768에서 페이지 좌측이 잘리지 않고 툴바 끝까지 보이는지 확인합니다.
+- [x] 유지할 기존 테스트: `tablet-layout.spec.ts:213-216`(OMR이 PDF 아래 in-flow), `ios-mobile-layout.spec.ts:547-620`(키보드), `design93Surface.test.ts:99`
 
 ### A4. 폰·태블릿 세로의 저장 상태 표시 (S)
 - [x] `.solve-autosave{display:none}` 규칙(`globals.css:9179`, `:9486`)을 필기 상태 칩에만 적용되게 범위를 줄입니다.
@@ -168,15 +168,15 @@
 **깨지는 테스트:** `uiSurface.test.ts:965`, `textEncodingSurface.test.ts:117`, `e2e/full-journey.spec.ts:585,669,673,716`
 
 ### B2. 시험 입장 확인 팝업 축소 (M)
-- [ ] 신규 `src/lib/solveEntryIntent.ts`: sessionStorage에 한 번용 진입 의도를 저장합니다. 120초 TTL이고 examId와 studentId에 묶입니다.
+- [x] 신규 `src/lib/solveEntryIntent.ts`: sessionStorage에 한 번용 진입 의도를 저장합니다. 120초 TTL이고 examId와 studentId에 묶입니다.
   - 기록 시점: 대시보드의 "시작", 로그인 직후 `next=/solve/…`로 이동할 때
-- [ ] 자동 입장: 기존 재시험 skip effect(`solve/[id]/page.tsx:2516-2535`)를 일반화합니다. 서버 재검증(`continueEntryAsStudent` → `openStudentExam`)은 그대로 거칩니다. PIN 시험은 PIN 화면이 우선합니다.
-- [ ] 링크로 직접 열면 팝업을 유지하되 정리합니다.
+- [x] 자동 입장: 기존 재시험 skip effect(`solve/[id]/page.tsx:2516-2535`)를 일반화합니다. 서버 재검증(`continueEntryAsStudent` → `openStudentExam`)은 그대로 거칩니다. PIN 시험은 PIN 화면이 우선합니다.
+- [x] 링크로 직접 열면 팝업을 유지하되 정리합니다.
   - "현재 로그인: OOO · A반" + [학생으로 시험 보기]
   - "내가 아니에요"를 누르면 서버 쿠키와 로컬 세션을 먼저 지운 뒤 로그인 화면으로 이동합니다.
   - 게스트 입력은 `<details>` 안으로 접습니다.
-- [ ] 게스트 기본 이름을 `DEFAULT_GUEST_NAME = "게스트"`로 바꿉니다. 과거 "Guest Student"는 표시할 때만 매핑합니다.
-- [ ] × 버튼: 로그인 상태면 `/student/dashboard`, 아니면 `/?role=student`로 보냅니다.
+- [x] 게스트 기본 이름을 `DEFAULT_GUEST_NAME = "게스트"`로 바꿉니다. 과거 "Guest Student"는 표시할 때만 매핑합니다.
+- [x] × 버튼: 로그인 상태면 `/student/dashboard`, 아니면 `/?role=student`로 보냅니다.
 
 **깨지는 테스트:** `e2e/korean-exam-fixture.spec.ts:67`, `e2e/student-dashboard-load-state.spec.ts:66`
 
@@ -211,12 +211,12 @@
 **깨지는 테스트:** `assignmentLifecycleSurface.test.ts:100-110`, `uiSurface.test.ts:1877`, `e2e/student-assignment-lifecycle.spec.ts:122-150`, `e2e/ios-mobile-layout.spec.ts:913,916`, `e2e/pwa-mobile.spec.ts:438`, `e2e/student-dashboard-load-state.spec.ts`, `e2e/korean-exam-fixture.spec.ts:65`
 
 ### B5. 제출 확인·복습·재시험 결과 (S~M)
-- [ ] 제출 확인창에 빈 문항 번호를 보여줍니다: "3, 7, 12번 문항이 비어 있어요." 8개를 넘으면 "외 N문항"으로 줄입니다. 보조 버튼은 "빈 문항으로 이동"입니다.
-- [ ] 복습 화면:
+- [x] 제출 확인창에 빈 문항 번호를 보여줍니다: "3, 7, 12번 문항이 비어 있어요." 8개를 넘으면 "외 N문항"으로 줄입니다. 보조 버튼은 "빈 문항으로 이동"입니다.
+- [x] 복습 화면:
   - 첫 오답이나 미응답을 기본으로 선택합니다.
   - 탭 이름을 "오답·미응답 n"으로 바꿉니다. 요약 숫자와 맞추기 위해서입니다.
   - 만점이면 "다음 오답 →"을 숨기고 "모두 맞혔어요"를 보여줍니다.
-- [ ] 재시험 결과에서 "회복 성공! 🚀"를 없애고 "다시 맞힘" 계열 표현으로 바꿉니다. 근거는 `docs/remediation-management.md`의 "정답 수정은 독립적인 유형 숙달의 증거로 간주하지 않는다"입니다.
+- [x] 재시험 결과에서 "회복 성공! 🚀"를 없애고 "다시 맞힘" 계열 표현으로 바꿉니다. 근거는 `docs/remediation-management.md`의 "정답 수정은 독립적인 유형 숙달의 증거로 간주하지 않는다"입니다.
   - 안내 문구: "같은 문제를 해설을 본 뒤 다시 맞힌 결과예요. 실력이 늘었는지는 비슷한 유형의 새 문제로 확인해보세요."
 
 **깨지는 테스트:** `e2e/ios-mobile-layout.spec.ts:961,982-986`, `e2e/student-simplification.spec.ts:320`

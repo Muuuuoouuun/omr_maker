@@ -1158,6 +1158,8 @@
 .tone-success { color: #15803d; background: #dcfce7; border-color: #bbf7d0; }
 .tone-error   { color: #dc2626; background: #fef2f2; border-color: #fecaca; }
 .tone-text-teal { color: #0f766e; }
+/* Retake-only chip — token-driven, so the dark theme needs no override. */
+.tone-retake  { color: var(--retake); background: var(--retake-soft); border-color: var(--retake-line); }
 
 .away-severity-badge {
   display: inline-flex;
@@ -8503,6 +8505,10 @@ body:has(.create-workspace.is-resizing) {
 .pdf-viewer-drawing-tools {
   display: flex;
   align-items: center;
+  /* A toolbar sibling of .pdf-viewer-controls: keep the pair right-aligned,
+     and let the file name (not the tools) give up width when space is short. */
+  flex: 0 0 auto;
+  margin-left: auto;
   /* Breathing room between tool clusters — the bar gained the highlighter
      swatches and 필압 toggle, and 0.4rem read cramped. */
   gap: 0.55rem;
@@ -8510,6 +8516,88 @@ body:has(.create-workspace.is-resizing) {
   padding-right: 1rem;
   border-right: 1px solid #555;
   min-width: 0;
+}
+
+.pdf-viewer-page-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.pdf-page-indicator {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdf-viewer-drawing-toggle {
+  min-width: 44px;
+  height: 44px;
+  padding: 0 0.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid #555;
+  background: #222;
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  font-size: var(--type-label);
+  font-weight: 700;
+  flex: 0 0 auto;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.pdf-viewer-drawing-toggle.is-armed,
+.pdf-viewer-drawing-toggle[aria-expanded="true"] {
+  background: #4f46e5;
+  border-color: #6366f1;
+}
+
+.pdf-viewer-drawing-toggle:focus-visible {
+  outline: 2px solid #818cf8;
+  outline-offset: 2px;
+}
+
+.pdf-viewer-drawing-toggle[aria-expanded="true"] .pdf-viewer-drawing-toggle-chevron {
+  transform: rotate(180deg);
+}
+
+/* Overlays the page inside .pdf-viewer-stage (the area under the toolbar),
+   so it takes no layout height and never extends past the PDF pane. */
+.pdf-viewer-drawing-popover {
+  position: absolute;
+  z-index: 45;
+  top: 0.375rem;
+  left: 0.375rem;
+  right: 0.375rem;
+  max-height: calc(100% - 0.75rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-md);
+  background: #323639;
+  color: white;
+  box-shadow: var(--shadow-lg);
+}
+
+.pdf-viewer-drawing-popover .pdf-viewer-drawing-tools {
+  flex-wrap: wrap;
+  margin-left: 0;
+  margin-right: 0 !important;
+  padding-right: 0 !important;
+  border-right: 0;
+  gap: 0.4rem;
+}
+
+.pdf-viewer-drawing-popover .pdf-pen-group {
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+}
+
+.pdf-viewer-drawing-popover .pdf-pen-group .pdf-width-control {
+  flex: 1 1 auto;
 }
 
 .pdf-tool-group,
@@ -9362,9 +9450,11 @@ body:has(.create-workspace.is-resizing) {
     overflow: hidden !important;
   }
 
+  /* The PDF keeps at least 45% of the body; the OMR sheet below it is the
+     part that shrinks on short phones (it scrolls internally). */
   .solve-pdf-pane {
-    flex: 1 1 auto !important;
-    min-height: 0;
+    flex: 1 1 0 !important;
+    min-height: 45%;
     border-right: 0 !important;
     border-bottom: 1px solid var(--border);
   }
@@ -9376,8 +9466,9 @@ body:has(.create-workspace.is-resizing) {
   .solve-omr-pane {
     width: 100% !important;
     max-width: none !important;
-    flex: 0 0 min(38dvh, 320px) !important;
-    max-height: min(38dvh, 320px);
+    flex: 0 1 clamp(168px, 36dvh, 320px) !important;
+    min-height: 0;
+    max-height: clamp(168px, 36dvh, 320px);
     border-top: 1px solid var(--border);
     box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.08);
   }
@@ -9444,88 +9535,6 @@ body:has(.create-workspace.is-resizing) {
   .solve-omr-scroll .q-bubble {
     width: 44px;
     height: 44px;
-  }
-
-  .pdf-viewer-toolbar {
-    align-items: stretch !important;
-    flex-direction: column;
-    gap: 0.45rem;
-    max-width: 100%;
-    overflow-x: hidden;
-    padding: 0.45rem 0.55rem !important;
-    font-size: 0.8rem !important;
-  }
-
-  .pdf-viewer-file {
-    min-width: 0;
-  }
-
-  .pdf-viewer-file-name {
-    max-width: 100% !important;
-  }
-
-  .pdf-viewer-controls {
-    width: 100%;
-    flex-wrap: wrap;
-    gap: 0.35rem !important;
-  }
-
-  .pdf-viewer-drawing-tools {
-    flex: 1 1 100%;
-    flex-wrap: wrap;
-    margin-right: 0 !important;
-    padding-right: 0 !important;
-    border-right: 0 !important;
-    padding-bottom: 0.35rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.16);
-  }
-
-  .pdf-tool-button {
-    width: 44px;
-    height: 44px;
-    flex-basis: 44px;
-  }
-
-  .pdf-color-swatch,
-  .pdf-seg-button {
-    min-width: 44px;
-    min-height: 44px;
-  }
-
-  .pdf-width-control {
-    flex: 1 1 132px;
-  }
-
-  .pdf-width-control input {
-    width: 100%;
-    min-width: 64px;
-  }
-
-  .pdf-viewer-controls button,
-  .pdf-viewer-bottom-toolbar button {
-    min-height: 44px;
-  }
-
-  .pdf-viewer-controls input[type="text"],
-  .pdf-viewer-bottom-toolbar input[type="text"] {
-    width: 44px !important;
-    min-width: 44px;
-    min-height: 44px;
-  }
-
-  .pdf-viewer-scroll {
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .pdf-viewer-page-wrap {
-    padding: 0.75rem !important;
-  }
-
-  .pdf-viewer-bottom-toolbar {
-    gap: 0.45rem !important;
-    padding: 0.45rem !important;
-    flex-wrap: wrap;
-    font-size: 0.82rem;
   }
 }
 
@@ -9605,10 +9614,15 @@ body:has(.create-workspace.is-resizing) {
     padding: 0.45rem !important;
   }
 
+  /* min-height: 0 matters: `overflow: clip` is not a scroll container, so
+     the flex item's automatic minimum would otherwise grow the body to the
+     PDF page's full height (the pane stopped scrolling and the page bottom
+     was cut off by .solve-page). */
   .solve-body {
     flex-direction: row !important;
     position: relative;
     isolation: isolate;
+    min-height: 0;
     overflow: clip !important;
   }
 
@@ -9721,9 +9735,14 @@ body:has(.create-workspace.is-resizing) {
 
 /* Desktop solve workspace keeps the PDF width stable while OMR floats above it. */
 @media (min-width: 1181px) {
+  /* clip, not hidden: the collapsed OMR pane is translated past the right
+     edge, and an overflow:hidden body is still programmatically scrollable —
+     OMRCardView's scrollIntoView slid the whole PDF pane ~330px left. */
   .solve-body {
     position: relative;
     isolation: isolate;
+    min-height: 0;
+    overflow: clip !important;
   }
 
   .solve-pdf-pane {
@@ -10429,9 +10448,6 @@ body:has(.create-workspace.is-resizing) {
   .solve-omr-pane {
     width: 100% !important;
     max-width: none !important;
-    flex: 0 0 min(40vh, 430px);
-    height: min(40vh, 430px);
-    min-height: 260px;
     border-top: 1px solid var(--border);
   }
 
@@ -10455,6 +10471,262 @@ body:has(.create-workspace.is-resizing) {
     flex-basis: 160px;
     min-width: 160px;
     max-width: none;
+  }
+}
+
+/* ─── PDF toolbar: phones (≤768px) ─────────────────────
+   One 44px row — [◀ n/N ▶] [− % +] [필기 ▾]. The drawing tools render in an
+   overlay popover (PDFViewer, COMPACT_TOOLBAR_QUERY) so opening them never
+   changes the page's height, and the file name and the duplicate bottom page
+   bar step aside. Placed after the ≤900px block so these rules win. */
+@media (max-width: 768px) {
+  .pdf-viewer-toolbar {
+    align-items: center !important;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 0.375rem;
+    max-width: 100%;
+    overflow-x: hidden;
+    padding: 0.25rem 0.375rem !important;
+    font-size: var(--type-label) !important;
+  }
+
+  .pdf-viewer-file {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .pdf-viewer-toolbar.has-file .pdf-viewer-file {
+    display: none !important;
+  }
+
+  .pdf-viewer-file-name {
+    max-width: 100% !important;
+  }
+
+  .pdf-viewer-controls {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: 0.25rem !important;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .pdf-viewer-page-controls {
+    flex: 0 1 auto;
+    gap: 0.125rem;
+  }
+
+  .pdf-viewer-controls-divider {
+    margin: 0 0.25rem !important;
+  }
+
+  .pdf-viewer-controls button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .pdf-viewer-page-controls button {
+    padding: 0 !important;
+    font-size: var(--type-heading-sm);
+  }
+
+  .pdf-viewer-controls input[type="text"] {
+    width: 44px !important;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .pdf-zoom-value {
+    min-width: 2.75rem;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pdf-tool-button {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+
+  .pdf-color-swatch,
+  .pdf-seg-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .pdf-width-control {
+    flex: 1 1 132px;
+  }
+
+  .pdf-width-control input {
+    width: 100%;
+    min-width: 64px;
+  }
+
+  .pdf-viewer-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .pdf-viewer-page-wrap {
+    padding: 0.75rem !important;
+  }
+
+  .pdf-viewer-bottom-toolbar {
+    display: none !important;
+  }
+}
+
+@media (max-width: 400px) {
+  .pdf-zoom-value,
+  .pdf-viewer-controls-divider,
+  .pdf-viewer-drawing-toggle-label {
+    display: none;
+  }
+}
+
+/* ─── PDF toolbar: tablets (769–1279px) ─────────────────
+   With pen options open the one-row toolbar needs ~1250px, so up to iPad Pro
+   landscape (1194px) its right end (page/zoom) was clipped. Two rows instead:
+   file + page/zoom, then the drawing tools, which scroll sideways if a narrow
+   pane still can't fit them. */
+@media (min-width: 769px) and (max-width: 1279px) {
+  .pdf-viewer-toolbar.has-file {
+    flex-wrap: wrap;
+    align-items: center !important;
+    gap: 0.375rem 0.75rem;
+    padding: 0.375rem 0.75rem !important;
+  }
+
+  .pdf-viewer-toolbar.has-file .pdf-viewer-file {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .pdf-viewer-toolbar.has-file .pdf-viewer-controls {
+    flex: 0 0 auto;
+    width: auto;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .pdf-viewer-toolbar.has-file .pdf-viewer-drawing-tools {
+    order: 1;
+    flex: 1 1 100%;
+    gap: 0.4rem;
+    margin-left: 0;
+    margin-right: 0 !important;
+    padding-right: 0 !important;
+    border-right: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .pdf-viewer-toolbar.has-file .pdf-viewer-drawing-tools::-webkit-scrollbar {
+    display: none;
+  }
+
+  .pdf-viewer-toolbar.has-file .pdf-viewer-drawing-tools > * {
+    flex-shrink: 0;
+  }
+
+  /* The pen options may give up width-slider length before anything scrolls,
+     and keep the row at the tool buttons' height (no jump on pen select). */
+  .pdf-viewer-toolbar.has-file .pdf-viewer-drawing-tools > .pdf-pen-group {
+    flex-shrink: 1;
+    padding-block: 0;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 900px) {
+  /* The nib preview duplicates the swatch + width readout; dropping it (and
+     tightening gaps) lets the pen row fit an 820px portrait pane. */
+  .pdf-nib-preview,
+  .pdf-pen-group-divider {
+    display: none;
+  }
+
+  .pdf-viewer-toolbar.has-file .pdf-viewer-drawing-tools {
+    gap: 0.3rem;
+  }
+}
+
+/* ─── Collapsed OMR dock: phones (<600px) ────────────────
+   With the sheet collapsed (PDF focus), the rail's quick card becomes a 56px
+   bottom dock — current question, its bubbles, jump to the next unanswered —
+   so marking never needs the sheet reopened. The header's 답안지 펼치기
+   button stays the way back to the full sheet. */
+@media (max-width: 599px) {
+  .solve-omr-rail.is-collapsed:has(.solve-omr-quick-card) {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 100% !important;
+    min-height: 56px;
+    padding: 0.375rem 0.5rem !important;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.08);
+  }
+
+  .solve-omr-rail.is-collapsed .solve-omr-rail-button {
+    display: none;
+  }
+
+  .solve-omr-rail .solve-omr-quick-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem;
+    width: 100%;
+    max-width: 30rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .solve-omr-rail .solve-omr-quick-bubbles {
+    display: flex;
+    flex: 1 1 auto;
+    justify-content: center;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+
+  .solve-omr-rail .solve-omr-quick-bubble {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    max-width: 44px;
+  }
+
+  .solve-omr-rail .solve-omr-quick-question,
+  .solve-omr-rail .solve-omr-quick-next {
+    flex: 0 0 44px;
+  }
+
+  .solve-omr-rail .solve-omr-quick-handwriting {
+    display: none;
+  }
+
+  html[data-app-keyboard="open"] .solve-omr-rail.is-collapsed:has(.solve-omr-quick-card) {
+    display: none !important;
+  }
+}
+
+@media (max-width: 360px) {
+  .solve-omr-rail .solve-omr-quick-question,
+  .solve-omr-rail .solve-omr-quick-next {
+    width: 40px;
+    min-width: 40px;
+    flex-basis: 40px;
   }
 }
 

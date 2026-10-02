@@ -1265,14 +1265,16 @@ test.describe("Teacher and student full journey", () => {
         await expect(openRail).toBeVisible();
         await openRail.click();
 
-        const layout = await page.evaluate(() => {
+        const readLayout = () => page.evaluate(() => {
             const body = document.querySelector<HTMLElement>(".solve-body")?.getBoundingClientRect();
             const pdf = document.querySelector<HTMLElement>(".solve-pdf-pane")?.getBoundingClientRect();
             const paneElement = document.querySelector<HTMLElement>("#solve-omr-pane");
             const pane = paneElement?.getBoundingClientRect();
             const paneStyle = paneElement ? getComputedStyle(paneElement) : null;
             return body && pdf && pane ? {
+                bodyLeft: body.left,
                 bodyWidth: body.width,
+                pdfLeft: pdf.left,
                 pdfWidth: pdf.width,
                 bodyRight: body.right,
                 paneRight: pane.right,
@@ -1282,9 +1284,18 @@ test.describe("Teacher and student full journey", () => {
             } : null;
         });
 
+        // The sheet slides in with a transform transition; measure once settled.
+        // (This used to pass instantly only because the clipped body had been
+        // scrolled sideways by the off-screen sheet — plan A2.)
+        await expect.poll(async () => {
+            const current = await readLayout();
+            return current ? Math.abs(current.bodyRight - current.paneRight) : Number.POSITIVE_INFINITY;
+        }).toBeLessThanOrEqual(24);
+        const layout = await readLayout();
+
         expect(layout).not.toBeNull();
+        expect(Math.abs(layout!.bodyLeft - layout!.pdfLeft)).toBeLessThanOrEqual(1);
         expect(Math.abs(layout!.bodyWidth - layout!.pdfWidth)).toBeLessThanOrEqual(2);
-        expect(Math.abs(layout!.bodyRight - layout!.paneRight)).toBeLessThanOrEqual(24);
         expect(layout!.panePosition).toBe("absolute");
         expect(layout!.paneBackdrop).toContain("blur");
         expect(layout!.paneWidth).toBeGreaterThanOrEqual(300);

@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import { Exam } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
+import { recordSolveEntryIntentForPath } from "@/lib/solveEntryIntent";
+import { displayStudentName } from "@/lib/guestIdentity";
 import { createDashboardRevalidationGate, isStudentDashboardStorageKey } from "@/components/dashboard/dashboardRevalidation";
 import ThemeToggle from "@/components/ThemeToggle";
 import StudentGuestRecoveryPanel from "@/components/StudentGuestRecoveryPanel";
@@ -564,8 +566,8 @@ export default function StudentDashboard() {
                     </div>
                     <div className="student-dashboard-identity" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <span className="student-dashboard-user" style={{ fontWeight: 600, fontSize: '0.95rem', display: 'inline-flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                            <span className="student-dashboard-user-name" title={`${user.name} (${user.groupName})`}>
-                                {user.name}{' '}
+                            <span className="student-dashboard-user-name" title={`${displayStudentName(user.name)} (${user.groupName})`}>
+                                {displayStudentName(user.name)}{' '}
                                 <span className={`student-dashboard-group-label${user.isGuest ? " is-redundant" : ""}`} style={{ color: 'var(--muted)', fontWeight: 400 }}>
                                     ({user.groupName})
                                 </span>
@@ -775,8 +777,8 @@ export default function StudentDashboard() {
 
                 {/* Welcome */}
                 <div className="student-dashboard-welcome mobile-section-stack" style={{ margin: '3rem 0' }}>
-                    <h1 className="title-gradient" title={`${user.name}님`} style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
-                        {user.name}님,
+                    <h1 className="title-gradient" title={`${displayStudentName(user.name)}님`} style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
+                        {displayStudentName(user.name)}님,
                     </h1>
                     <p className="text-muted" style={{ fontSize: '1.1rem' }}>
                         {todoExams.length > 0 ? (
@@ -799,6 +801,11 @@ export default function StudentDashboard() {
                             serverNow={assignmentServerNow}
                             serverClock={assignmentServerClock}
                             onClockRefresh={() => setRefreshKey(current => current + 1)}
+                            onStartAssignment={(solveHref) => {
+                                // The student just chose this exam here, so the solve page
+                                // can skip its "학생으로 시험 보기" confirmation once.
+                                if (user && !user.isGuest) recordSolveEntryIntentForPath(solveHref, user.studentId);
+                            }}
                         />
                     </div>
 

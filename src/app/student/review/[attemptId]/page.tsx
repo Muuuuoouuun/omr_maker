@@ -16,9 +16,9 @@ import {
     MessageSquare,
     Printer,
     Repeat2,
+    RotateCcw,
     Send,
     Target,
-    TrendingUp,
 } from "lucide-react";
 import type { Attempt, AttemptFeedback, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming, StudentQuestionNote } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
@@ -43,7 +43,7 @@ import { toast } from "@/components/Toast";
 import ThemeToggle from "@/components/ThemeToggle";
 import CountUp from "@/components/dashboard/CountUp";
 import HandwritingUploadRecoveryCard from "@/components/student/HandwritingUploadRecoveryCard";
-import { GradingEvidenceNote } from "@/components/dashboard/StatusPill";
+import StatusPill, { GradingEvidenceNote } from "@/components/dashboard/StatusPill";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { awaySeverity } from "@/lib/examAwayTracker";
 import {
@@ -206,7 +206,7 @@ function questionStatusLabel(status: QuestionResultStatus): string {
     return "미채점";
 }
 
-function MetaChip({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "primary" | "teal" | "amber" }) {
+function MetaChip({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "primary" | "teal" | "amber" | "retake" }) {
     // Palette lives in globals.css tone classes so both themes render correctly.
     return (
         <span className={`student-review-meta-chip tone-${tone}`}>
@@ -283,7 +283,7 @@ function QuestionCard({
 
             {(recovered || question.label || question.tags?.concept || question.tags?.source || timing) && (
                 <div className="student-review-meta-row">
-                    {recovered && <MetaChip tone="teal">재시험 회복</MetaChip>}
+                    {recovered && <MetaChip tone="retake">재시험에서 맞힘</MetaChip>}
                     {question.label && <MetaChip>#{question.label}</MetaChip>}
                     {question.tags?.concept && <MetaChip tone="primary">{question.tags.concept}</MetaChip>}
                     {question.tags?.source && <MetaChip tone="teal">{question.tags.source}</MetaChip>}
@@ -883,9 +883,15 @@ export default function ReviewPage() {
             timing: timingByQuestionId.get(question.id),
         };
     };
+    // Until the student picks a question, land on the first wrong/unanswered
+    // one — that is what they came to the review for.
     const selectedQuestion = filteredQuestions.find(question => question.id === selectedQuestionId)
+        || filteredQuestions.find(question => wrongQuestionIds.has(question.id))
         || filteredQuestions[0]
         || null;
+    const allGradedCorrect = reviewQuestions.length > 0
+        && wrongAndUnansweredCount === 0
+        && resultCounts.ungradedCount === 0;
     const selectedQuestionState = selectedQuestion ? resolveQuestionState(selectedQuestion) : null;
     const formatRetakeNumbers = (questionIds: number[]) => questionIds
         .map(questionId => questionNumberById.get(questionId))
@@ -1308,17 +1314,20 @@ export default function ReviewPage() {
                                             className={`btn ${filterWrong ? "btn-primary" : "btn-secondary"}`}
                                             aria-pressed={filterWrong}
                                         >
-                                            오답 {wrongAndUnansweredCount}
+                                            오답·미응답 {wrongAndUnansweredCount}
                                         </button>
-                                        <button
-                                            type="button"
-                                            onClick={goToNextWrongQuestion}
-                                            disabled={wrongAndUnansweredCount === 0}
-                                            className="btn btn-secondary"
-                                            title="현재 문항 다음의 오답/미응답 문항으로 이동합니다"
-                                        >
-                                            다음 오답 →
-                                        </button>
+                                        {wrongAndUnansweredCount > 0 ? (
+                                            <button
+                                                type="button"
+                                                onClick={goToNextWrongQuestion}
+                                                className="btn btn-secondary"
+                                                title="현재 문항 다음의 오답/미응답 문항으로 이동합니다"
+                                            >
+                                                다음 오답 →
+                                            </button>
+                                        ) : allGradedCorrect ? (
+                                            <StatusPill tone="success" label="모두 맞혔어요" icon={<CheckCircle2 size={13} />} />
+                                        ) : null}
                                     </div>
                                 </div>
 
@@ -1402,10 +1411,10 @@ export default function ReviewPage() {
                             <p>이번 시험에서 틀린 문항을 바로 다시 풉니다.</p>
                             {sourceRecovery && sourceRecovery.recoveredQuestionIds.length > 0 && (
                                 <p className="student-review-success-note" style={{ marginBottom: '0.6rem' }}>
-                                    이미 재시험으로 {sourceRecovery.recoveredQuestionIds.length}문항을 회복했어요.
+                                    재시험에서 {sourceRecovery.recoveredQuestionIds.length}문항을 다시 맞혔어요.
                                     {sourceRecovery.unrecoveredQuestionIds.length > 0
                                         ? ` 남은 오답은 ${sourceRecovery.unrecoveredQuestionIds.length}문항입니다.`
-                                        : ' 모든 오답을 회복했습니다.'}
+                                        : ' 남은 오답이 없어요.'}
                                 </p>
                             )}
                             <div className="student-review-side-actions mobile-action-row">
@@ -1543,56 +1552,48 @@ export default function ReviewPage() {
                         )}
 
                         {retakeRecovery && (
+                            // Re-answering the same items after seeing the explanation is not
+                            // independent evidence of mastery (docs/remediation-management.md),
+                            // so this card reports what happened without celebrating a "recovery".
                             <section
                                 className="bento-card student-review-side-card kpi-spring"
                                 style={{
                                     animationDelay: '160ms',
                                     ...(retakeRecovery.recoveredCount > 0 ? {
-                                        background: 'linear-gradient(135deg, rgba(34, 197, 94, 0.07) 0%, rgba(99, 102, 241, 0.05) 100%)',
-                                        borderColor: 'rgba(34, 197, 94, 0.35)',
+                                        background: 'var(--retake-soft)',
+                                        borderColor: 'var(--retake-line)',
                                     } : {})
                                 }}
                             >
-                                <div className="student-review-section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.4rem' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                        <TrendingUp size={16} color={retakeRecovery.recoveredCount > 0 ? 'var(--success)' : undefined} />
-                                        <strong>재시험 회복</strong>
-                                    </div>
-                                    {sourceScoreSummary && (scoreSummary.scorePercent ?? 0) > (sourceScoreSummary.scorePercent ?? 0) && (
-                                        <span style={{
-                                            fontSize: '0.76rem',
-                                            padding: '0.15rem 0.5rem',
-                                            borderRadius: '9999px',
-                                            background: 'var(--success-soft, rgba(34, 197, 94, 0.15))',
-                                            color: 'var(--success-text, #15803d)',
-                                            fontWeight: 700,
-                                        }}>
-                                            +{((scoreSummary.scorePercent ?? 0) - (sourceScoreSummary.scorePercent ?? 0))}%p 회복 성공! 🚀
-                                        </span>
-                                    )}
+                                <div className="student-review-section-title">
+                                    <RotateCcw size={16} color="var(--retake)" />
+                                    <strong>재시험 결과</strong>
                                 </div>
                                 <p>
                                     {retakeRecovery.targetCount > 0
-                                        ? `원시험에서 틀린 ${retakeRecovery.targetCount}문항 중 ${retakeRecovery.recoveredCount}문항을 이번에 맞혔어요.`
+                                        ? `원시험에서 틀린 ${retakeRecovery.targetCount}문항 중 ${retakeRecovery.recoveredCount}문항을 다시 풀어 맞혔어요.`
                                         : "이번 범위에는 원시험에서 틀린 문항이 없었습니다."}
+                                </p>
+                                <p style={{ color: 'var(--muted)', fontSize: 'var(--type-caption)', lineHeight: 1.6, wordBreak: 'keep-all' }}>
+                                    같은 문제를 해설을 본 뒤 다시 맞힌 결과예요. 실력이 늘었는지는 비슷한 유형의 새 문제로 확인해보세요.
                                 </p>
                                 <div className="student-review-behavior-grid">
                                     <MiniStat
-                                        label="회복"
+                                        label="다시 맞힘"
                                         value={retakeRecovery.recoveryRate !== undefined
                                             ? `${retakeRecovery.recoveredCount}/${retakeRecovery.targetCount} (${retakeRecovery.recoveryRate}%)`
                                             : "대상 없음"}
-                                        color="var(--success)"
+                                        color="var(--retake)"
                                     />
                                     <MiniStat
-                                        label="점수 변화"
+                                        label="재시험 범위 점수"
                                         value={sourceScoreSummary
                                             ? `${sourceScoreSummary.scorePercent}% → ${scoreSummary.scorePercent}%`
                                             : "-"}
-                                        color="#4f46e5"
+                                        color="var(--foreground)"
                                     />
                                     {retakeRecovery.regressedCount > 0 && (
-                                        <MiniStat label="다시 틀림" value={`${retakeRecovery.regressedCount}문항`} color="var(--error)" />
+                                        <MiniStat label="다시 틀림" value={`${retakeRecovery.regressedCount}문항`} color="var(--grade-red)" />
                                     )}
                                 </div>
                             </section>

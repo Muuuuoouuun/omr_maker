@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, useId, useSyncExternalStore } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, type PdfDrawings } from '@/types/omr';
 import { toast } from '@/components/Toast';
 import {
     Check,
+    ChevronDown,
     Eraser,
     Feather,
     FileText,
@@ -108,6 +109,43 @@ const PDF_EMPTY_STATE_COPY: Record<PdfEmptyStateAudience, { title: string; hint:
 };
 
 type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
+
+const DRAWING_MODE_LABEL: Record<DrawingMode, string> = {
+    click: '선택',
+    pen: '펜',
+    highlighter: '형광펜',
+    eraser: '지우개',
+};
+
+/** Toggle icon: the armed tool, or the pen while nothing is armed (a bare
+    pointer icon would not read as "handwriting"). */
+const DRAWING_MODE_ICON: Record<DrawingMode, typeof PenLine> = {
+    click: PenLine,
+    pen: PenLine,
+    highlighter: Highlighter,
+    eraser: Eraser,
+};
+
+/** Phones get the one-row toolbar with the drawing tools in a popover. Keep in
+    sync with the `@media (max-width: 768px)` PDF toolbar block in globals.css. */
+const COMPACT_TOOLBAR_QUERY = '(max-width: 768px)';
+
+function subscribeCompactToolbar(onChange: () => void) {
+    const query = window.matchMedia(COMPACT_TOOLBAR_QUERY);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+}
+
+function readCompactToolbar() {
+    return window.matchMedia(COMPACT_TOOLBAR_QUERY).matches;
+}
+
+function readCompactToolbarOnServer() {
+    return false;
+}
+
+/** Fallback for the page-wrap's horizontal padding (2rem each side). */
+const DEFAULT_PAGE_WRAP_INSET = 64;
 /**
  * Normalized stroke point. `p` (0..1 pointer pressure) is present only on pen
  * strokes captured from a real stylus with 필압 enabled — mouse/touch strokes
@@ -192,8 +230,15 @@ export default function PDFViewer({
     const [undoStack, setUndoStack] = useState<Record<number, string[][]>>({});
     const [redoStack, setRedoStack] = useState<Record<number, string[][]>>({});
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+    const isCompactToolbar = useSyncExternalStore(subscribeCompactToolbar, readCompactToolbar, readCompactToolbarOnServer);
+    const [drawingPopoverOpen, setDrawingPopoverOpen] = useState(false);
+    const drawingPopoverId = useId();
+    const drawingToggleRef = useRef<HTMLButtonElement>(null);
+    const drawingPopoverRef = useRef<HTMLDivElement>(null);
     const shouldRenderDrawingLayer = enableDrawing || readOnlyDrawings;
     const canEditDrawing = enableDrawing && !readOnlyDrawings;
+    const drawingPopoverVisible = isCompactToolbar && drawingPopoverOpen && canEditDrawing && !!file;
+    const ActiveDrawingModeIcon = DRAWING_MODE_ICON[drawingMode];
     const isDrawingRef = useRef(false);
     const activeDrawingModeRef = useRef<DrawingMode>('pen');
     const currentPathRef = useRef<DrawPoint[]>([]);
@@ -238,6 +283,7 @@ export default function PDFViewer({
     const eraserRingRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
+    const pageWrapRef = useRef<HTMLDivElement>(null);
     const [containerWidth, setContainerWidth] = useState<number>(0);
     const currentPdfRenderIdentity = useMemo<PdfRenderIdentity>(() => ({
         file,
@@ -306,7 +352,14 @@ export default function PDFViewer({
         const observer = new ResizeObserver((entries) => {
             if (entries[0]) {
                 const { width } = entries[0].contentRect;
-                setContainerWidth(width - 64); // Account for 2rem padding (32px * 2)
+                // Subtract the page-wrap's real padding: it shrinks to 1rem /
+                // 0.75rem on tablets and phones, where a fixed 2rem guess
+                // wasted up to 40px of an already narrow page.
+                const wrapStyle = pageWrapRef.current ? window.getComputedStyle(pageWrapRef.current) : null;
+                const inset = wrapStyle
+                    ? parseFloat(wrapStyle.paddingLeft) + parseFloat(wrapStyle.paddingRight)
+                    : Number.NaN;
+                setContainerWidth(width - (Number.isFinite(inset) ? inset : DEFAULT_PAGE_WRAP_INSET));
             }
         });
         observer.observe(wrapperRef.current);
@@ -374,6 +427,29 @@ export default function PDFViewer({
         document.addEventListener('keydown', handleKey);
         return () => document.removeEventListener('keydown', handleKey);
     }, []);
+
+    // The drawing popover is a non-modal disclosure: Escape or a press
+    // anywhere outside it (including the first pen-down on the page) closes it.
+    useEffect(() => {
+        if (!drawingPopoverVisible) return;
+        const handlePointerDown = (event: PointerEvent) => {
+            const target = event.target as Node | null;
+            if (!target) return;
+            if (drawingPopoverRef.current?.contains(target) || drawingToggleRef.current?.contains(target)) return;
+            setDrawingPopoverOpen(false);
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            setDrawingPopoverOpen(false);
+            drawingToggleRef.current?.focus();
+        };
+        document.addEventListener('pointerdown', handlePointerDown, true);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown, true);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [drawingPopoverVisible]);
 
     // Close popup when changing page
     useEffect(() => {
@@ -1058,6 +1134,241 @@ export default function PDFViewer({
         onRenderError?.(error);
     };
 
+    const drawingTools = canEditDrawing ? (
+        <div className="pdf-viewer-drawing-tools">
+            <div className="pdf-tool-group" role="toolbar" aria-label="PDF 필기 도구">
+                <button
+                    type="button"
+                    className={`pdf-tool-button ${drawingMode === 'click' ? 'active' : ''}`}
+                    onClick={() => setDrawingMode('click')}
+                    title="선택 (V)"
+                    aria-label="선택"
+                >
+                    <MousePointer2 size={15} />
+                </button>
+                <button
+                    type="button"
+                    className={`pdf-tool-button has-color ${drawingMode === 'pen' ? 'active' : ''}`}
+                    onClick={() => setDrawingMode('pen')}
+                    title="펜 (P)"
+                    aria-label="펜"
+                >
+                    <PenLine size={15} />
+                    <span className="pdf-tool-color-dot" style={{ background: penColor }} />
+                </button>
+                <button
+                    type="button"
+                    className={`pdf-tool-button has-color ${drawingMode === 'highlighter' ? 'active' : ''}`}
+                    onClick={() => setDrawingMode('highlighter')}
+                    title="형광펜 (H)"
+                    aria-label="형광펜"
+                >
+                    <Highlighter size={15} />
+                    <span className="pdf-tool-color-dot" style={{ background: highlighterColor }} />
+                </button>
+                <button
+                    type="button"
+                    className={`pdf-tool-button ${drawingMode === 'eraser' ? 'active' : ''}`}
+                    onClick={() => setDrawingMode('eraser')}
+                    title="지우개 (E)"
+                    aria-label="지우개"
+                >
+                    <Eraser size={15} />
+                </button>
+            </div>
+
+            {drawingMode === 'eraser' && (
+                <div
+                    role="group"
+                    aria-label="지우개 방식"
+                    style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        height: 32,
+                        border: '1px solid #555',
+                        borderRadius: 8,
+                        overflow: 'hidden',
+                        flex: '0 0 auto',
+                    }}
+                >
+                    {(['pixel', 'stroke'] as const).map((mode, idx) => (
+                        <button
+                            key={mode}
+                            type="button"
+                            className="pdf-seg-button"
+                            onClick={() => setEraserMode(mode)}
+                            aria-pressed={eraserMode === mode}
+                            aria-label={mode === 'stroke' ? '획 지우기: 닿은 획 전체 삭제' : '부분 지우기'}
+                            title={mode === 'stroke' ? '획 지우기 (닿은 획 전체 삭제)' : '부분 지우기'}
+                            style={{
+                                height: 32,
+                                padding: '0 0.6rem',
+                                fontSize: '0.72rem',
+                                fontWeight: 800,
+                                color: 'white',
+                                background: eraserMode === mode ? '#4f46e5' : '#222',
+                                border: 'none',
+                                borderLeft: idx === 0 ? 'none' : '1px solid #555',
+                                cursor: 'pointer',
+                            }}
+                        >
+                            {mode === 'stroke' ? '획' : '부분'}
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {drawingMode === 'pen' && (
+                <div className="pdf-pen-group" role="group" aria-label="펜 옵션">
+                    <div className="pdf-color-swatches" aria-label="펜 색상">
+                        {PEN_COLORS.map(color => (
+                            <button
+                                key={color}
+                                type="button"
+                                className={`pdf-color-swatch ${penColor === color ? 'active' : ''}`}
+                                onClick={() => setPenColor(color)}
+                                title={`펜 색상 ${color}`}
+                                aria-label={`펜 색상 ${color}`}
+                                aria-pressed={penColor === color}
+                                style={{ background: color }}
+                            >
+                                {penColor === color && <Check size={12} strokeWidth={3} aria-hidden="true" />}
+                            </button>
+                        ))}
+                        <label className="pdf-color-custom" title="원하는 색 선택">
+                            <input
+                                type="color"
+                                value={penColor}
+                                onChange={(e) => setPenColor(e.target.value)}
+                                aria-label="원하는 색 직접 선택"
+                            />
+                            <span className="pdf-color-custom-inner" aria-hidden="true">
+                                <Palette size={12} strokeWidth={2.25} />
+                            </span>
+                        </label>
+                    </div>
+                    <span className="pdf-pen-group-divider" aria-hidden="true" />
+                    <span className="pdf-nib-preview" title="펜 미리보기" aria-hidden="true">
+                        <span className="pdf-nib-bar" style={{ background: penColor, height: `${nibBarHeight}px`, boxShadow: `0 0 6px ${penColor}80` }} />
+                    </span>
+                    {widthControl}
+                    <button
+                        type="button"
+                        className={`pdf-tool-button ${pressureEnabled ? 'active' : ''}`}
+                        onClick={() => setPressureEnabled(value => !value)}
+                        title={pressureEnabled ? "필압 켜짐 · 펜 압력에 따라 굵기 변화" : "필압 꺼짐 · 일정한 굵기"}
+                        aria-label={pressureEnabled ? "필압 끄기" : "필압 켜기"}
+                        aria-pressed={pressureEnabled}
+                    >
+                        <Feather size={15} />
+                    </button>
+                </div>
+            )}
+
+            {drawingMode === 'highlighter' && (
+                <div className="pdf-pen-group" role="group" aria-label="형광펜 옵션">
+                    <div className="pdf-color-swatches" aria-label="형광펜 색상">
+                        {HIGHLIGHTER_COLORS.map((color, idx) => (
+                            <button
+                                key={color}
+                                type="button"
+                                className={`pdf-color-swatch ${highlighterColor === color ? 'active' : ''}`}
+                                onClick={() => setHighlighterColor(color)}
+                                title={`형광펜 색상 ${idx + 1}`}
+                                aria-label={`형광펜 색상 ${idx + 1}`}
+                                aria-pressed={highlighterColor === color}
+                                style={{ background: HIGHLIGHTER_CURSOR_COLORS[idx] ?? HIGHLIGHTER_CURSOR_COLORS[0] }}
+                            >
+                                {highlighterColor === color && <Check size={12} strokeWidth={3} aria-hidden="true" />}
+                            </button>
+                        ))}
+                    </div>
+                    <span className="pdf-pen-group-divider" aria-hidden="true" />
+                    {widthControl}
+                </div>
+            )}
+
+            {drawingMode === 'eraser' && widthControl}
+
+            <button
+                type="button"
+                className={`pdf-tool-button ${fingerDrawingEnabled ? 'active' : ''}`}
+                onClick={() => setFingerDrawingEnabled(value => !value)}
+                title={fingerDrawingEnabled ? "손가락 필기 켜짐" : "손가락 필기 꺼짐"}
+                aria-label={fingerDrawingEnabled ? "손가락 필기 끄기" : "손가락 필기 켜기"}
+                aria-pressed={fingerDrawingEnabled}
+            >
+                <Hand size={15} />
+            </button>
+
+            <div className="pdf-tool-divider" />
+
+            <button
+                type="button"
+                className="pdf-tool-button"
+                onClick={handleUndo}
+                disabled={!(undoStack[pageNumber] && undoStack[pageNumber].length > 0)}
+                title="실행 취소 (Cmd/Ctrl+Z)"
+                aria-label="실행 취소"
+            >
+                <Undo2 size={15} />
+            </button>
+            <button
+                type="button"
+                className="pdf-tool-button"
+                onClick={handleRedo}
+                disabled={!(redoStack[pageNumber] && redoStack[pageNumber].length > 0)}
+                title="다시 실행 (Cmd/Ctrl+Y)"
+                aria-label="다시 실행"
+            >
+                <Redo2 size={15} />
+            </button>
+            <button
+                type="button"
+                className="pdf-tool-button danger"
+                onClick={requestClearPage}
+                title="이 페이지의 모든 필기 삭제"
+                aria-label="이 페이지의 모든 필기 삭제"
+            >
+                <Trash2 size={15} />
+            </button>
+            {clearConfirmOpen && (
+                <div
+                    role="alertdialog"
+                    aria-label="필기 삭제 확인"
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.25rem',
+                        borderRadius: 8,
+                        background: 'rgba(15,23,42,0.92)',
+                        border: '1px solid rgba(255,255,255,0.16)',
+                        boxShadow: '0 8px 18px rgba(0,0,0,0.22)',
+                    }}
+                >
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'white', whiteSpace: 'nowrap', padding: '0 0.3rem' }}>
+                        이 페이지 필기 삭제?
+                    </span>
+                    <button
+                        type="button"
+                        onClick={() => setClearConfirmOpen(false)}
+                        style={{ color: '#cbd5e1', fontSize: '0.72rem', fontWeight: 700, padding: '0.25rem 0.45rem' }}
+                    >
+                        취소
+                    </button>
+                    <button
+                        type="button"
+                        onClick={confirmClearPage}
+                        style={{ color: 'white', background: '#ef4444', borderRadius: 6, fontSize: '0.72rem', fontWeight: 800, padding: '0.25rem 0.5rem' }}
+                    >
+                        삭제
+                    </button>
+                </div>
+            )}
+        </div>
+    ) : null;
+
     return (
         <div
             className="pdf-viewer-container"
@@ -1072,537 +1383,339 @@ export default function PDFViewer({
                 <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: 'rgba(99, 102, 241, 0.2)', border: '3px dashed #6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1.5rem', backdropFilter: 'blur(4px)' }}>PDF 파일을 여기에 놓으세요</div>
             )}
 
-            {/* PDF Toolbar */}
-            <div className="pdf-viewer-toolbar" style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
+            {/* PDF Toolbar — one 44px row on phones (≤768px): page, zoom and a
+                필기 toggle; the drawing tools then open as an overlay popover
+                below it instead of stacking rows over the page. */}
+            <div className={`pdf-viewer-toolbar${file ? ' has-file' : ''}`} style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
                 <div className="pdf-viewer-file" style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
                     <FileText size={15} aria-hidden="true" style={{ color: file ? '#cbd5e1' : '#94a3b8', flexShrink: 0 }} />
                     <span className="pdf-viewer-file-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF 없음'}</span>
                 </div>
 
+                {/* Inline tools sit beside (not inside) the page controls so
+                    tablets can wrap them onto their own row. */}
+                {file && !isCompactToolbar && drawingTools}
+
                 {file && (
                     <div className="pdf-viewer-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        {/* Drawing Tools */}
-                        {canEditDrawing && (
-                            <div className="pdf-viewer-drawing-tools">
-                                <div className="pdf-tool-group" role="toolbar" aria-label="PDF 필기 도구">
-                                    <button
-                                        type="button"
-                                        className={`pdf-tool-button ${drawingMode === 'click' ? 'active' : ''}`}
-                                        onClick={() => setDrawingMode('click')}
-                                        title="선택 (V)"
-                                        aria-label="선택"
-                                    >
-                                        <MousePointer2 size={15} />
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className={`pdf-tool-button has-color ${drawingMode === 'pen' ? 'active' : ''}`}
-                                        onClick={() => setDrawingMode('pen')}
-                                        title="펜 (P)"
-                                        aria-label="펜"
-                                    >
-                                        <PenLine size={15} />
-                                        <span className="pdf-tool-color-dot" style={{ background: penColor }} />
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className={`pdf-tool-button has-color ${drawingMode === 'highlighter' ? 'active' : ''}`}
-                                        onClick={() => setDrawingMode('highlighter')}
-                                        title="형광펜 (H)"
-                                        aria-label="형광펜"
-                                    >
-                                        <Highlighter size={15} />
-                                        <span className="pdf-tool-color-dot" style={{ background: highlighterColor }} />
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className={`pdf-tool-button ${drawingMode === 'eraser' ? 'active' : ''}`}
-                                        onClick={() => setDrawingMode('eraser')}
-                                        title="지우개 (E)"
-                                        aria-label="지우개"
-                                    >
-                                        <Eraser size={15} />
-                                    </button>
-                                </div>
+                        <div className="pdf-viewer-page-controls">
+                            <button type="button" onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} aria-label="이전 페이지" style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>◀</button>
+                            <span className="pdf-page-indicator" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    aria-label="페이지 번호"
+                                    value={inputPage}
+                                    onChange={handlePageInputChange}
+                                    onBlur={handlePageInputSubmit}
+                                    onKeyDown={handlePageInputSubmit}
+                                    style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
+                                />
+                                / {numPages}
+                            </span>
+                            <button type="button" onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} aria-label="다음 페이지" style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>▶</button>
+                            <div className="pdf-viewer-controls-divider" aria-hidden="true" style={{ width: '1px', height: '15px', background: '#666', margin: '0 0.5rem' }}></div>
+                            <button type="button" onClick={() => setScale(s => Math.max(0.5, s - 0.1))} aria-label="축소" style={{ color: 'white', cursor: 'pointer' }}>-</button>
+                            <span className="pdf-zoom-value">{Math.round(scale * 100)}%</span>
+                            <button type="button" onClick={() => setScale(s => Math.min(2.5, s + 0.1))} aria-label="확대" style={{ color: 'white', cursor: 'pointer' }}>+</button>
+                        </div>
 
-                                {drawingMode === 'eraser' && (
-                                    <div
-                                        role="group"
-                                        aria-label="지우개 방식"
-                                        style={{
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            height: 32,
-                                            border: '1px solid #555',
-                                            borderRadius: 8,
-                                            overflow: 'hidden',
-                                            flex: '0 0 auto',
-                                        }}
-                                    >
-                                        {(['pixel', 'stroke'] as const).map((mode, idx) => (
-                                            <button
-                                                key={mode}
-                                                type="button"
-                                                className="pdf-seg-button"
-                                                onClick={() => setEraserMode(mode)}
-                                                aria-pressed={eraserMode === mode}
-                                                aria-label={mode === 'stroke' ? '획 지우기: 닿은 획 전체 삭제' : '부분 지우기'}
-                                                title={mode === 'stroke' ? '획 지우기 (닿은 획 전체 삭제)' : '부분 지우기'}
-                                                style={{
-                                                    height: 32,
-                                                    padding: '0 0.6rem',
-                                                    fontSize: '0.72rem',
-                                                    fontWeight: 800,
-                                                    color: 'white',
-                                                    background: eraserMode === mode ? '#4f46e5' : '#222',
-                                                    border: 'none',
-                                                    borderLeft: idx === 0 ? 'none' : '1px solid #555',
-                                                    cursor: 'pointer',
-                                                }}
-                                            >
-                                                {mode === 'stroke' ? '획' : '부분'}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {drawingMode === 'pen' && (
-                                    <div className="pdf-pen-group" role="group" aria-label="펜 옵션">
-                                        <div className="pdf-color-swatches" aria-label="펜 색상">
-                                            {PEN_COLORS.map(color => (
-                                                <button
-                                                    key={color}
-                                                    type="button"
-                                                    className={`pdf-color-swatch ${penColor === color ? 'active' : ''}`}
-                                                    onClick={() => setPenColor(color)}
-                                                    title={`펜 색상 ${color}`}
-                                                    aria-label={`펜 색상 ${color}`}
-                                                    aria-pressed={penColor === color}
-                                                    style={{ background: color }}
-                                                >
-                                                    {penColor === color && <Check size={12} strokeWidth={3} aria-hidden="true" />}
-                                                </button>
-                                            ))}
-                                            <label className="pdf-color-custom" title="원하는 색 선택">
-                                                <input
-                                                    type="color"
-                                                    value={penColor}
-                                                    onChange={(e) => setPenColor(e.target.value)}
-                                                    aria-label="원하는 색 직접 선택"
-                                                />
-                                                <span className="pdf-color-custom-inner" aria-hidden="true">
-                                                    <Palette size={12} strokeWidth={2.25} />
-                                                </span>
-                                            </label>
-                                        </div>
-                                        <span className="pdf-pen-group-divider" aria-hidden="true" />
-                                        <span className="pdf-nib-preview" title="펜 미리보기" aria-hidden="true">
-                                            <span className="pdf-nib-bar" style={{ background: penColor, height: `${nibBarHeight}px`, boxShadow: `0 0 6px ${penColor}80` }} />
-                                        </span>
-                                        {widthControl}
-                                        <button
-                                            type="button"
-                                            className={`pdf-tool-button ${pressureEnabled ? 'active' : ''}`}
-                                            onClick={() => setPressureEnabled(value => !value)}
-                                            title={pressureEnabled ? "필압 켜짐 · 펜 압력에 따라 굵기 변화" : "필압 꺼짐 · 일정한 굵기"}
-                                            aria-label={pressureEnabled ? "필압 끄기" : "필압 켜기"}
-                                            aria-pressed={pressureEnabled}
-                                        >
-                                            <Feather size={15} />
-                                        </button>
-                                    </div>
-                                )}
-
-                                {drawingMode === 'highlighter' && (
-                                    <div className="pdf-pen-group" role="group" aria-label="형광펜 옵션">
-                                        <div className="pdf-color-swatches" aria-label="형광펜 색상">
-                                            {HIGHLIGHTER_COLORS.map((color, idx) => (
-                                                <button
-                                                    key={color}
-                                                    type="button"
-                                                    className={`pdf-color-swatch ${highlighterColor === color ? 'active' : ''}`}
-                                                    onClick={() => setHighlighterColor(color)}
-                                                    title={`형광펜 색상 ${idx + 1}`}
-                                                    aria-label={`형광펜 색상 ${idx + 1}`}
-                                                    aria-pressed={highlighterColor === color}
-                                                    style={{ background: HIGHLIGHTER_CURSOR_COLORS[idx] ?? HIGHLIGHTER_CURSOR_COLORS[0] }}
-                                                >
-                                                    {highlighterColor === color && <Check size={12} strokeWidth={3} aria-hidden="true" />}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <span className="pdf-pen-group-divider" aria-hidden="true" />
-                                        {widthControl}
-                                    </div>
-                                )}
-
-                                {drawingMode === 'eraser' && widthControl}
-
-                                <button
-                                    type="button"
-                                    className={`pdf-tool-button ${fingerDrawingEnabled ? 'active' : ''}`}
-                                    onClick={() => setFingerDrawingEnabled(value => !value)}
-                                    title={fingerDrawingEnabled ? "손가락 필기 켜짐" : "손가락 필기 꺼짐"}
-                                    aria-label={fingerDrawingEnabled ? "손가락 필기 끄기" : "손가락 필기 켜기"}
-                                    aria-pressed={fingerDrawingEnabled}
-                                >
-                                    <Hand size={15} />
-                                </button>
-
-                                <div className="pdf-tool-divider" />
-
-                                <button
-                                    type="button"
-                                    className="pdf-tool-button"
-                                    onClick={handleUndo}
-                                    disabled={!(undoStack[pageNumber] && undoStack[pageNumber].length > 0)}
-                                    title="실행 취소 (Cmd/Ctrl+Z)"
-                                    aria-label="실행 취소"
-                                >
-                                    <Undo2 size={15} />
-                                </button>
-                                <button
-                                    type="button"
-                                    className="pdf-tool-button"
-                                    onClick={handleRedo}
-                                    disabled={!(redoStack[pageNumber] && redoStack[pageNumber].length > 0)}
-                                    title="다시 실행 (Cmd/Ctrl+Y)"
-                                    aria-label="다시 실행"
-                                >
-                                    <Redo2 size={15} />
-                                </button>
-                                <button
-                                    type="button"
-                                    className="pdf-tool-button danger"
-                                    onClick={requestClearPage}
-                                    title="이 페이지의 모든 필기 삭제"
-                                    aria-label="이 페이지의 모든 필기 삭제"
-                                >
-                                    <Trash2 size={15} />
-                                </button>
-                                {clearConfirmOpen && (
-                                    <div
-                                        role="alertdialog"
-                                        aria-label="필기 삭제 확인"
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '0.35rem',
-                                            padding: '0.25rem',
-                                            borderRadius: 8,
-                                            background: 'rgba(15,23,42,0.92)',
-                                            border: '1px solid rgba(255,255,255,0.16)',
-                                            boxShadow: '0 8px 18px rgba(0,0,0,0.22)',
-                                        }}
-                                    >
-                                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'white', whiteSpace: 'nowrap', padding: '0 0.3rem' }}>
-                                            이 페이지 필기 삭제?
-                                        </span>
-                                        <button
-                                            type="button"
-                                            onClick={() => setClearConfirmOpen(false)}
-                                            style={{ color: '#cbd5e1', fontSize: '0.72rem', fontWeight: 700, padding: '0.25rem 0.45rem' }}
-                                        >
-                                            취소
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={confirmClearPage}
-                                            style={{ color: 'white', background: '#ef4444', borderRadius: 6, fontSize: '0.72rem', fontWeight: 800, padding: '0.25rem 0.5rem' }}
-                                        >
-                                            삭제
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
+                        {isCompactToolbar && canEditDrawing && (
+                            <button
+                                ref={drawingToggleRef}
+                                type="button"
+                                className={`pdf-viewer-drawing-toggle ${drawingMode !== 'click' ? 'is-armed' : ''}`}
+                                onClick={() => setDrawingPopoverOpen(open => !open)}
+                                aria-expanded={drawingPopoverVisible}
+                                aria-controls={drawingPopoverId}
+                                aria-label={`필기 도구 · ${DRAWING_MODE_LABEL[drawingMode]}`}
+                                title="필기 도구"
+                            >
+                                <ActiveDrawingModeIcon size={16} aria-hidden="true" />
+                                <span className="pdf-viewer-drawing-toggle-label">필기</span>
+                                <ChevronDown size={12} aria-hidden="true" className="pdf-viewer-drawing-toggle-chevron" />
+                            </button>
                         )}
-
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>◀</button>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <input
-                                type="text"
-                                value={inputPage}
-                                onChange={handlePageInputChange}
-                                onBlur={handlePageInputSubmit}
-                                onKeyDown={handlePageInputSubmit}
-                                style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
-                            />
-                            / {numPages}
-                        </span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>▶</button>
-                        <div style={{ width: '1px', height: '15px', background: '#666', margin: '0 0.5rem' }}></div>
-                        <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} style={{ color: 'white', cursor: 'pointer' }}>-</button>
-                        <span>{Math.round(scale * 100)}%</span>
-                        <button onClick={() => setScale(s => Math.min(2.5, s + 0.1))} style={{ color: 'white', cursor: 'pointer' }}>+</button>
                     </div>
                 )}
             </div>
 
-            {/* PDF Content */}
-            {/* "safe center": plain center clips the left edge of content wider
-                than the pane (left overflow is unreachable by scrolling). */}
-            <div ref={wrapperRef} className="pdf-viewer-scroll scroll-custom" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'safe center', background: '#525659', position: 'relative' }}>
-                <div className="pdf-viewer-page-wrap" style={{ flex: 1, display: 'flex', justifyContent: 'safe center', padding: '2rem', width: '100%' }}>
-                    {file ? (
-                        <Document
-                            file={file}
-                            onLoadSuccess={onDocumentLoadSuccess}
-                            onLoadError={handleDocumentLoadError}
-                            loading={<div style={{ color: 'white' }}>문서 로딩 중...</div>}
-                            error={<div style={{ color: 'white', fontWeight: 700 }}>PDF를 열 수 없습니다.</div>}
-                        >
-                            <div
-                                ref={containerRef}
-                                onClick={handlePageClick}
-                                style={{ position: 'relative', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+            {/* Stage = everything below the toolbar. It positions the drawing
+                popover over the page (no layout height of its own, so opening
+                it never resizes the PDF) and bounds it to the visible pane. */}
+            <div className="pdf-viewer-stage" style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+                {drawingPopoverVisible && (
+                    <div ref={drawingPopoverRef} id={drawingPopoverId} className="pdf-viewer-drawing-popover">
+                        {drawingTools}
+                    </div>
+                )}
+
+                {/* PDF Content */}
+                {/* "safe center": plain center clips the left edge of content wider
+                    than the pane (left overflow is unreachable by scrolling). */}
+                <div ref={wrapperRef} className="pdf-viewer-scroll scroll-custom" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'safe center', background: '#525659', position: 'relative' }}>
+                    <div ref={pageWrapRef} className="pdf-viewer-page-wrap" style={{ flex: 1, display: 'flex', justifyContent: 'safe center', padding: '2rem', width: '100%' }}>
+                        {file ? (
+                            <Document
+                                file={file}
+                                onLoadSuccess={onDocumentLoadSuccess}
+                                onLoadError={handleDocumentLoadError}
+                                loading={<div style={{ color: 'white' }}>문서 로딩 중...</div>}
+                                error={<div style={{ color: 'white', fontWeight: 700 }}>PDF를 열 수 없습니다.</div>}
                             >
-                                <Page
-                                    pageNumber={pageNumber}
-                                    scale={scale}
-                                    width={containerWidth > 0 ? containerWidth : undefined}
-                                    renderTextLayer={true}
-                                    renderAnnotationLayer={false}
-                                    onRenderSuccess={handlePageRenderSuccess}
-                                    onRenderError={handlePageRenderError}
-                                />{/* Canvas Overlay */}
-                                {shouldRenderDrawingLayer && (
-                                    <canvas
-                                        ref={canvasRef}
-                                        data-testid="pdf-draw-overlay"
-                                        data-pdf-ready={pdfRenderReady ? "true" : "false"}
-                                        onPointerDown={startDrawing}
-                                        onPointerMove={handleCanvasPointerMove}
-                                        onPointerUp={stopDrawing}
-                                        onPointerCancel={stopDrawing}
-                                        onPointerEnter={handleCanvasPointerEnter}
-                                        onPointerLeave={handleCanvasPointerLeave}
-                                        style={{
-                                            position: 'absolute',
-                                            top: 0, left: 0,
-                                            width: '100%', height: '100%',
-                                            zIndex: 10,
-                                            cursor: canvasCursor,
-                                            pointerEvents: canEditDrawing ? 'auto' : 'none',
-                                            touchAction: fingerDrawingEnabled && drawingMode !== 'click' ? 'none' : 'pan-x pan-y pinch-zoom'
-                                        }}
-                                    />
-                                )}
-                                {/* Live-stroke overlay: input passes through to the
-                                    main canvas below; this layer only displays the
-                                    in-progress stroke (see renderLiveStroke). */}
-                                {canEditDrawing && (
-                                    <canvas
-                                        ref={liveCanvasRef}
-                                        data-testid="pdf-draw-live-overlay"
-                                        aria-hidden="true"
-                                        style={{
-                                            position: 'absolute',
-                                            top: 0, left: 0,
-                                            width: '100%', height: '100%',
-                                            zIndex: 11,
-                                            pointerEvents: 'none',
-                                        }}
-                                    />
-                                )}
-
-                                {canEditDrawing && drawingMode === 'eraser' && (
-                                    <div
-                                        ref={eraserRingRef}
-                                        data-testid="pdf-eraser-ring"
-                                        aria-hidden="true"
-                                        style={{
-                                            position: 'absolute',
-                                            left: 0,
-                                            top: 0,
-                                            width: `${eraserWidth}px`,
-                                            height: `${eraserWidth}px`,
-                                            transform: 'translate(-50%, -50%)',
-                                            borderRadius: '50%',
-                                            border: eraserMode === 'stroke'
-                                                ? '1.5px dashed rgba(239,68,68,0.95)'
-                                                : '1.5px solid rgba(255,255,255,0.95)',
-                                            boxShadow: '0 0 0 1px rgba(0,0,0,0.45)',
-                                            pointerEvents: 'none',
-                                            zIndex: 15,
-                                            display: 'none',
-                                        }}
-                                    />
-                                )}
-
-                                {/* Markers Overlay */}
-                                {markers.filter(m => m.page === pageNumber).map((marker, i) => {
-                                    const popupKey = `${pageNumber}-${i}`;
-                                    const isPopupActive = activePopupKey === popupKey;
-                                    const optsCount = normalizeChoiceCount(marker.optionsCount, DEFAULT_CHOICE_COUNT);
-                                    const hasAnswerHandler = !!marker.onAnswer;
-                                    const markerColor = marker.color || '#ef4444';
-                                    const isMarked = marker.currentAnswer !== undefined && marker.currentAnswer !== null;
-                                    const regionBackground = marker.kind === 'passage'
-                                        ? 'rgba(15,118,110,0.09)'
-                                        : markerColor === '#6366f1'
-                                        ? 'rgba(99,102,241,0.1)'
-                                        : 'rgba(239,68,68,0.07)';
-
-                                    return (
-                                        <div
-                                            key={i}
+                                <div
+                                    ref={containerRef}
+                                    onClick={handlePageClick}
+                                    style={{ position: 'relative', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+                                >
+                                    <Page
+                                        pageNumber={pageNumber}
+                                        scale={scale}
+                                        width={containerWidth > 0 ? containerWidth : undefined}
+                                        renderTextLayer={true}
+                                        renderAnnotationLayer={false}
+                                        onRenderSuccess={handlePageRenderSuccess}
+                                        onRenderError={handlePageRenderError}
+                                    />{/* Canvas Overlay */}
+                                    {shouldRenderDrawingLayer && (
+                                        <canvas
+                                            ref={canvasRef}
+                                            data-testid="pdf-draw-overlay"
+                                            data-pdf-ready={pdfRenderReady ? "true" : "false"}
+                                            onPointerDown={startDrawing}
+                                            onPointerMove={handleCanvasPointerMove}
+                                            onPointerUp={stopDrawing}
+                                            onPointerCancel={stopDrawing}
+                                            onPointerEnter={handleCanvasPointerEnter}
+                                            onPointerLeave={handleCanvasPointerLeave}
                                             style={{
                                                 position: 'absolute',
-                                                inset: 0,
-                                                zIndex: isPopupActive ? 40 : 20,
+                                                top: 0, left: 0,
+                                                width: '100%', height: '100%',
+                                                zIndex: 10,
+                                                cursor: canvasCursor,
+                                                pointerEvents: canEditDrawing ? 'auto' : 'none',
+                                                touchAction: fingerDrawingEnabled && drawingMode !== 'click' ? 'none' : 'pan-x pan-y pinch-zoom'
+                                            }}
+                                        />
+                                    )}
+                                    {/* Live-stroke overlay: input passes through to the
+                                        main canvas below; this layer only displays the
+                                        in-progress stroke (see renderLiveStroke). */}
+                                    {canEditDrawing && (
+                                        <canvas
+                                            ref={liveCanvasRef}
+                                            data-testid="pdf-draw-live-overlay"
+                                            aria-hidden="true"
+                                            style={{
+                                                position: 'absolute',
+                                                top: 0, left: 0,
+                                                width: '100%', height: '100%',
+                                                zIndex: 11,
                                                 pointerEvents: 'none',
                                             }}
-                                        >
-                                            {marker.region && (
-                                                <div
-                                                    aria-hidden="true"
-                                                    title={marker.kind === 'passage' ? `공통 지문 영역 ${marker.label}` : `문항 영역 ${marker.label}번`}
-                                                    style={{
-                                                        position: 'absolute',
-                                                        left: `${marker.region.x * 100}%`,
-                                                        top: `${marker.region.y * 100}%`,
-                                                        width: `${marker.region.width * 100}%`,
-                                                        height: `${marker.region.height * 100}%`,
-                                                        border: `2px solid ${markerColor}`,
-                                                        background: regionBackground,
-                                                        borderRadius: 6,
-                                                        boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.55)',
-                                                    }}
-                                                />
-                                            )}
+                                        />
+                                    )}
 
+                                    {canEditDrawing && drawingMode === 'eraser' && (
+                                        <div
+                                            ref={eraserRingRef}
+                                            data-testid="pdf-eraser-ring"
+                                            aria-hidden="true"
+                                            style={{
+                                                position: 'absolute',
+                                                left: 0,
+                                                top: 0,
+                                                width: `${eraserWidth}px`,
+                                                height: `${eraserWidth}px`,
+                                                transform: 'translate(-50%, -50%)',
+                                                borderRadius: '50%',
+                                                border: eraserMode === 'stroke'
+                                                    ? '1.5px dashed rgba(239,68,68,0.95)'
+                                                    : '1.5px solid rgba(255,255,255,0.95)',
+                                                boxShadow: '0 0 0 1px rgba(0,0,0,0.45)',
+                                                pointerEvents: 'none',
+                                                zIndex: 15,
+                                                display: 'none',
+                                            }}
+                                        />
+                                    )}
+
+                                    {/* Markers Overlay */}
+                                    {markers.filter(m => m.page === pageNumber).map((marker, i) => {
+                                        const popupKey = `${pageNumber}-${i}`;
+                                        const isPopupActive = activePopupKey === popupKey;
+                                        const optsCount = normalizeChoiceCount(marker.optionsCount, DEFAULT_CHOICE_COUNT);
+                                        const hasAnswerHandler = !!marker.onAnswer;
+                                        const markerColor = marker.color || '#ef4444';
+                                        const isMarked = marker.currentAnswer !== undefined && marker.currentAnswer !== null;
+                                        const regionBackground = marker.kind === 'passage'
+                                            ? 'rgba(15,118,110,0.09)'
+                                            : markerColor === '#6366f1'
+                                            ? 'rgba(99,102,241,0.1)'
+                                            : 'rgba(239,68,68,0.07)';
+
+                                        return (
                                             <div
+                                                key={i}
                                                 style={{
                                                     position: 'absolute',
-                                                    left: `${marker.x * 100}%`,
-                                                    top: `${marker.y * 100}%`,
-                                                    transform: 'translate(-50%, -50%)',
-                                                    pointerEvents: 'auto',
+                                                    inset: 0,
+                                                    zIndex: isPopupActive ? 40 : 20,
+                                                    pointerEvents: 'none',
                                                 }}
                                             >
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        if (marker.onClick) marker.onClick();
-                                                        if (hasAnswerHandler) {
-                                                            setActivePopupKey(isPopupActive ? null : popupKey);
-                                                        }
-                                                    }}
-                                                    style={{
-                                                        width: 'auto',
-                                                        minWidth: '20px',
-                                                        height: '22px',
-                                                        padding: '0 4px',
-                                                        background: 'rgba(255,255,255,0.92)',
-                                                        color: isMarked ? '#4f46e5' : markerColor,
-                                                        borderRadius: '5px',
-                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                        fontWeight: 900, fontSize: '0.76rem',
-                                                        boxShadow: isPopupActive
-                                                            ? '0 3px 12px rgba(0,0,0,0.32), 0 0 0 3px rgba(99,102,241,0.24)'
-                                                            : '0 1px 5px rgba(0,0,0,0.22)',
-                                                        border: `1px solid ${isMarked ? '#4f46e5' : markerColor}`,
-                                                        cursor: 'pointer',
-                                                        transition: 'transform 0.15s, box-shadow 0.15s',
-                                                        transform: isPopupActive ? 'scale(1.06)' : 'scale(1)',
-                                                        fontVariantNumeric: 'tabular-nums',
-                                                    }}
-                                                    title={marker.kind === 'passage'
-                                                        ? `공통 지문 ${marker.label}`
-                                                        : `문제 ${marker.label}번${isMarked ? ` · 현재: ${marker.currentAnswer}` : ''}`}
-                                                >
-                                                    {formatMarkerLabel(marker.label)}
-                                                </button>
-
-                                                {/* Floating OMR popup */}
-                                                {isPopupActive && hasAnswerHandler && (
+                                                {marker.region && (
                                                     <div
-                                                        className="pdf-marker-popup"
+                                                        aria-hidden="true"
+                                                        title={marker.kind === 'passage' ? `공통 지문 영역 ${marker.label}` : `문항 영역 ${marker.label}번`}
                                                         style={{
-                                                            left: '50%',
-                                                            top: '-14px',
+                                                            position: 'absolute',
+                                                            left: `${marker.region.x * 100}%`,
+                                                            top: `${marker.region.y * 100}%`,
+                                                            width: `${marker.region.width * 100}%`,
+                                                            height: `${marker.region.height * 100}%`,
+                                                            border: `2px solid ${markerColor}`,
+                                                            background: regionBackground,
+                                                            borderRadius: 6,
+                                                            boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.55)',
                                                         }}
-                                                        onClick={(e) => e.stopPropagation()}
-                                                    >
-                                                        {Array.from({ length: optsCount }, (_, j) => {
-                                                            const optNum = j + 1;
-                                                            const thisMarked = marker.currentAnswer === optNum;
-                                                            return (
-                                                                <button
-                                                                    key={j}
-                                                                    className={`pdf-popup-bubble ${thisMarked ? 'marked' : ''}`}
-                                                                    onClick={(e) => {
-                                                                        e.stopPropagation();
-                                                                        marker.onAnswer?.(optNum);
-                                                                        setActivePopupKey(null);
-                                                                    }}
-                                                                >
-                                                                    {optNum}
-                                                                </button>
-                                                            );
-                                                        })}
-                                                        <button
-                                                            className="pdf-popup-close"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setActivePopupKey(null);
-                                                            }}
-                                                            title="닫기"
-                                                        >
-                                                            ×
-                                                        </button>
-                                                    </div>
+                                                    />
                                                 )}
+
+                                                <div
+                                                    style={{
+                                                        position: 'absolute',
+                                                        left: `${marker.x * 100}%`,
+                                                        top: `${marker.y * 100}%`,
+                                                        transform: 'translate(-50%, -50%)',
+                                                        pointerEvents: 'auto',
+                                                    }}
+                                                >
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (marker.onClick) marker.onClick();
+                                                            if (hasAnswerHandler) {
+                                                                setActivePopupKey(isPopupActive ? null : popupKey);
+                                                            }
+                                                        }}
+                                                        style={{
+                                                            width: 'auto',
+                                                            minWidth: '20px',
+                                                            height: '22px',
+                                                            padding: '0 4px',
+                                                            background: 'rgba(255,255,255,0.92)',
+                                                            color: isMarked ? '#4f46e5' : markerColor,
+                                                            borderRadius: '5px',
+                                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                            fontWeight: 900, fontSize: '0.76rem',
+                                                            boxShadow: isPopupActive
+                                                                ? '0 3px 12px rgba(0,0,0,0.32), 0 0 0 3px rgba(99,102,241,0.24)'
+                                                                : '0 1px 5px rgba(0,0,0,0.22)',
+                                                            border: `1px solid ${isMarked ? '#4f46e5' : markerColor}`,
+                                                            cursor: 'pointer',
+                                                            transition: 'transform 0.15s, box-shadow 0.15s',
+                                                            transform: isPopupActive ? 'scale(1.06)' : 'scale(1)',
+                                                            fontVariantNumeric: 'tabular-nums',
+                                                        }}
+                                                        title={marker.kind === 'passage'
+                                                            ? `공통 지문 ${marker.label}`
+                                                            : `문제 ${marker.label}번${isMarked ? ` · 현재: ${marker.currentAnswer}` : ''}`}
+                                                    >
+                                                        {formatMarkerLabel(marker.label)}
+                                                    </button>
+
+                                                    {/* Floating OMR popup */}
+                                                    {isPopupActive && hasAnswerHandler && (
+                                                        <div
+                                                            className="pdf-marker-popup"
+                                                            style={{
+                                                                left: '50%',
+                                                                top: '-14px',
+                                                            }}
+                                                            onClick={(e) => e.stopPropagation()}
+                                                        >
+                                                            {Array.from({ length: optsCount }, (_, j) => {
+                                                                const optNum = j + 1;
+                                                                const thisMarked = marker.currentAnswer === optNum;
+                                                                return (
+                                                                    <button
+                                                                        key={j}
+                                                                        className={`pdf-popup-bubble ${thisMarked ? 'marked' : ''}`}
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            marker.onAnswer?.(optNum);
+                                                                            setActivePopupKey(null);
+                                                                        }}
+                                                                    >
+                                                                        {optNum}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                            <button
+                                                                className="pdf-popup-close"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setActivePopupKey(null);
+                                                                }}
+                                                                title="닫기"
+                                                            >
+                                                                ×
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </div>
-                                        </div>
-                                    );
-                                })}
+                                        );
+                                    })}
+                                </div>
+                            </Document>
+                        ) : (
+                            <div
+                                className="pdf-upload-empty"
+                                onClick={() => document.getElementById('pdf-upload-input')?.click()}
+                            >
+                                <div className="pdf-upload-empty-icon">
+                                    <UploadCloud size={30} aria-hidden="true" />
+                                </div>
+                                <p>{emptyStateCopy.title}</p>
+                                <span>{emptyStateCopy.hint}</span>
+                                <strong>{emptyStateCopy.caption}</strong>
                             </div>
-                        </Document>
-                    ) : (
-                        <div
-                            className="pdf-upload-empty"
-                            onClick={() => document.getElementById('pdf-upload-input')?.click()}
-                        >
-                            <div className="pdf-upload-empty-icon">
-                                <UploadCloud size={30} aria-hidden="true" />
-                            </div>
-                            <p>{emptyStateCopy.title}</p>
-                            <span>{emptyStateCopy.hint}</span>
-                            <strong>{emptyStateCopy.caption}</strong>
+                        )}
+                    </div>
+
+                    {/* Bottom Pagination Toolbar (Only visible if file exists) */}
+                    {file && (
+                        <div className="pdf-viewer-bottom-toolbar" style={{
+                            width: '100%',
+                            padding: '0.5rem',
+                            background: '#323639',
+                            color: 'white',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '1rem',
+                            borderTop: '1px solid #000',
+                            marginTop: 'auto'
+                        }}>
+                            <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>◀ 이전</button>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <input
+                                    type="text"
+                                    value={inputPage}
+                                    onChange={handlePageInputChange}
+                                    onBlur={handlePageInputSubmit}
+                                    onKeyDown={handlePageInputSubmit}
+                                    style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
+                                />
+                                / {numPages}
+                            </span>
+                            <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>다음 ▶</button>
                         </div>
                     )}
                 </div>
-
-                {/* Bottom Pagination Toolbar (Only visible if file exists) */}
-                {file && (
-                    <div className="pdf-viewer-bottom-toolbar" style={{
-                        width: '100%',
-                        padding: '0.5rem',
-                        background: '#323639',
-                        color: 'white',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '1rem',
-                        borderTop: '1px solid #000',
-                        marginTop: 'auto'
-                    }}>
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>◀ 이전</button>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <input
-                                type="text"
-                                value={inputPage}
-                                onChange={handlePageInputChange}
-                                onBlur={handlePageInputSubmit}
-                                onKeyDown={handlePageInputSubmit}
-                                style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
-                            />
-                            / {numPages}
-                        </span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>다음 ▶</button>
-                    </div>
-                )}
             </div>
         </div>
     );

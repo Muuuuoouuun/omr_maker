@@ -1,4 +1,4 @@
-import { expect, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -49,14 +49,25 @@ function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export function teacherLoginFixture() {
+    const environment = test.info().config.webServer?.env;
+    const identifier = environment?.TEACHER_LOGIN_ID;
+    const password = environment?.TEACHER_PASSWORD;
+    if (!identifier?.trim() || !password?.trim()) {
+        throw new Error("Teacher UI login requires a single Playwright webServer with non-blank TEACHER_LOGIN_ID and TEACHER_PASSWORD fixture values.");
+    }
+    return { identifier, password };
+}
+
 export async function loginAsTeacher(page: Page, nextPath = "/teacher/dashboard") {
+    const { identifier, password } = teacherLoginFixture();
     await page.goto(`/?role=teacher&next=${encodeURIComponent(nextPath)}`);
     // The server-rendered form is inert until React hydration completes. Wait
     // for that product signal before entering credentials or submitting.
     const submitButton = page.getByRole("button", { name: "대시보드 입장" });
     await expect(submitButton).toBeEnabled({ timeout: 30_000 });
-    await page.getByPlaceholder("admin 또는 teacher@example.com").fill("admin");
-    await page.getByPlaceholder("비밀번호 입력").fill("admin123");
+    await page.locator("#teacher-identifier").fill(identifier);
+    await page.getByPlaceholder("비밀번호 입력").fill(password);
     await submitButton.click();
     await expect(page).toHaveURL(new RegExp(`${escapeRegExp(nextPath)}(?:[?#].*)?$`), { timeout: 25_000 });
 }

@@ -63,6 +63,8 @@ import {
   type StudentSession,
 } from "@/utils/storage";
 import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
+import { recordSolveEntryIntentForPath } from "@/lib/solveEntryIntent";
+import { DEFAULT_GUEST_NAME } from "@/lib/guestIdentity";
 import { normalizeTeacherRedirectPath, saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { setCurrentPlan } from "@/utils/plans";
 import { readGuestRecoveryState } from "@/lib/studentGuestRecovery";
@@ -225,7 +227,7 @@ export default function Home() {
   const [needsCode, setNeedsCode] = useState(false);
   // A newly issued start code acts as the student's password on their next
   // login, so it must be shown persistently (not a 3s toast) until acknowledged.
-  const [issuedCodeModal, setIssuedCodeModal] = useState<{ code: string; next: string } | null>(null);
+  const [issuedCodeModal, setIssuedCodeModal] = useState<{ code: string; next: string; studentId: string } | null>(null);
   const [copiedIssuedCode, setCopiedIssuedCode] = useState(false);
   const [needsStudentLookup, setNeedsStudentLookup] = useState(false);
   const [inviteToken, setInviteToken] = useState("");
@@ -632,9 +634,12 @@ export default function Home() {
     saveSession(session, { rememberDevice: rememberStudentOnDevice });
     if (issuedCode) {
       setCopiedIssuedCode(false);
-      setIssuedCodeModal({ code: issuedCode, next });
+      setIssuedCodeModal({ code: issuedCode, next, studentId: session.studentId });
       return true;
     }
+    // Logging in to reach an exam is the choice; skip the solve page's
+    // "학생으로 시험 보기" confirmation once (tab-scoped, 120s, re-validated).
+    if (!session.isGuest) recordSolveEntryIntentForPath(next, session.studentId);
     router.push(next);
     return true;
   };
@@ -823,7 +828,7 @@ export default function Home() {
     const session: StudentSession = {
       studentId: `guest:${guestId}`,
       loginId: guestLoginIdFor(guestId),
-      name: "Guest Student",
+      name: DEFAULT_GUEST_NAME,
       isGuest: true,
       identityType: "guest",
       guestId,
@@ -872,8 +877,11 @@ export default function Home() {
 
   const handleAcknowledgeIssuedCode = () => {
     const next = issuedCodeModal?.next;
+    const studentId = issuedCodeModal?.studentId;
     setIssuedCodeModal(null);
-    if (next) router.push(next);
+    if (!next) return;
+    if (studentId) recordSolveEntryIntentForPath(next, studentId);
+    router.push(next);
   };
 
   const handleBack = () => {
