@@ -132,6 +132,8 @@
 - **상태 pill/배지** (동기화 상태, 데이터 상태, 오답 수 등): `src/components/dashboard/StatusPill.tsx`
   공유 컴포넌트를 씁니다. 화면마다 `style={{ borderRadius: 'var(--radius-full)', border: ..., background: ... }}`
   를 새로 쓰지 마세요 — 패딩·아이콘 비율·폰트 크기가 화면마다 미묘하게 달라지는 원인이었습니다.
+  폰(≤768px)에서 더 짧은 문구가 필요하면 `compactLabel`을 넘기세요. 전체 문구는 화면에서만
+  숨겨지고 스크린리더에는 그대로 읽힙니다(예: 풀이 화면 저장 상태 칩 "저장 실패" → "실패").
 - **통계 숫자 강조**: `.numeric-emphasis` 클래스 (폰트·tabular-nums·등장 애니메이션 포함).
 - 새 공유 컴포넌트가 필요하면 `src/components/dashboard/`(대시보드 전용) 또는
   `src/components/`(범용) 중 실제 재사용 범위에 맞는 곳에 둡니다. `ui/` 같은 별도 하위 폴더

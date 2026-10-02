@@ -142,9 +142,9 @@
 - [ ] 유지할 기존 테스트: `tablet-layout.spec.ts:213-216`(OMR이 PDF 아래 in-flow), `ios-mobile-layout.spec.ts:547-620`(키보드), `design93Surface.test.ts:99`
 
 ### A4. 폰·태블릿 세로의 저장 상태 표시 (S)
-- [ ] `.solve-autosave{display:none}` 규칙(`globals.css:9179`, `:9486`)을 필기 상태 칩에만 적용되게 범위를 줄입니다.
-- [ ] 상태 행에 `StatusPill` sm 크기로 저장 / 저장 실패 / 오프라인 칩을 둡니다. `aria-live="polite"`를 쓰고 `role="status"`는 쓰지 않습니다.
-- [ ] `saveDraftSnapshot`의 catch에서 상태를 `failed`로 바꿉니다.
+- [x] `.solve-autosave{display:none}` 규칙(`globals.css:9179`, `:9486`)을 필기 상태 칩에만 적용되게 범위를 줄입니다.
+- [x] 상태 행에 `StatusPill` sm 크기로 저장 / 저장 실패 / 오프라인 칩을 둡니다. `aria-live="polite"`를 쓰고 `role="status"`는 쓰지 않습니다.
+- [x] `saveDraftSnapshot`의 catch에서 상태를 `failed`로 바꿉니다.
 
 ### A5. 오프라인 배너와 안전한 결과 화면 이동 (M)
 - [ ] 신규 `src/lib/useNetworkStatus.ts`를 `useSyncExternalStore`로 만듭니다.

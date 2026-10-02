@@ -29,6 +29,10 @@ interface StatusPillProps {
   tone?: StatusPillTone;
   /** Main label text (the bold line). */
   label: string;
+  /** Optional shorter label for phones (≤768px). The full label stays in the
+   *  accessibility tree there (visually hidden), so screen readers still hear
+   *  the complete status. Single-line pills only. */
+  compactLabel?: string;
   /** Optional smaller muted line rendered under the label — switches the
    *  pill into its two-line shape when present. */
   detail?: string;
@@ -79,6 +83,7 @@ export function GradingEvidenceNote({ source }: { source?: AttemptGradingSource 
 export default function StatusPill({
   tone = "primary",
   label,
+  compactLabel,
   detail,
   icon,
   variant = "filled",
@@ -102,6 +107,11 @@ export default function StatusPill({
         <span className="status-pill-copy">
           <span className="status-pill-label">{label}</span>
           <span className="status-pill-detail">{detail}</span>
+        </span>
+      ) : compactLabel ? (
+        <span className="status-pill-label">
+          <span className="status-pill-label-full">{label}</span>
+          <span className="status-pill-label-compact" aria-hidden="true">{compactLabel}</span>
         </span>
       ) : (
         <span className="status-pill-label">{label}</span>

@@ -711,6 +711,28 @@
   line-height: 1.1;
 }
 
+.status-pill-label-compact {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .status-pill-label-full {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .status-pill-label-compact {
+    display: inline;
+  }
+}
+
 .student-handwriting-recovery-button {
   min-height: 44px;
   white-space: normal;
@@ -9026,6 +9048,12 @@ body:has(.create-workspace.is-resizing) {
   min-width: 0;
 }
 
+.solve-save-status {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
 .solve-tools-disclosure {
   position: relative;
   flex: 0 0 auto;
@@ -9195,8 +9223,19 @@ body:has(.create-workspace.is-resizing) {
     min-width: 48px;
   }
 
-  .solve-autosave {
+  /* Only the handwriting chip yields its space on phones; the save-status
+     chip (.solve-save-status) stays visible in a compact form. */
+  .solve-handwriting-status {
     display: none !important;
+  }
+
+  .solve-save-status .status-pill.is-sm {
+    gap: 0.2rem;
+    padding: 0.2rem 0.45rem;
+  }
+
+  .solve-save-status .status-pill.is-sm .status-pill-label {
+    font-size: var(--type-micro);
   }
 
   .solve-controls {
@@ -9503,7 +9542,7 @@ body:has(.create-workspace.is-resizing) {
 
 /* ─── Solve Page Tablet Sidebar ──────────────────────── */
 @media (min-width: 600px) and (max-width: 1180px) {
-  .solve-autosave {
+  .solve-handwriting-status {
     display: none !important;
   }
 

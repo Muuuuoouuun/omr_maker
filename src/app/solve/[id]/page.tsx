@@ -9,7 +9,8 @@ import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
 import { toast } from "@/components/Toast";
 import PdfPaneBoundary, { PdfPaneErrorCard } from "@/components/PdfPaneBoundary";
-import { AlertTriangle, Clock, LoaderCircle, PanelRightClose, PanelRightOpen, PenLine, RotateCcw, Save } from "lucide-react";
+import { AlertTriangle, Clock, LoaderCircle, PanelRightClose, PanelRightOpen, PenLine, RotateCcw, Save, WifiOff } from "lucide-react";
+import StatusPill from "@/components/dashboard/StatusPill";
 import { deleteStoredData, storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
 import { resolveDraftDrawings } from "@/lib/draftRecovery";
 import { verifyTeacherPassword } from "@/app/actions/auth";
@@ -27,6 +28,7 @@ import { uploadStudentAttemptHandwriting } from "@/app/actions/remoteAssets";
 import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
 import { hasTeacherSession, saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { shouldOfferStudentPdfOpen, shouldOfferTeacherPreview } from "@/lib/solveToolsVisibility";
+import { solveSaveStatusChip, type SolveDraftSaveState } from "@/lib/solveSaveStatus";
 import { attemptBelongsToSession, getOrCreateGuestId, getSession, getStudentSessionGeneration, getStudentSharedIdentityEpoch, guestLoginIdFor, saveSession, STORAGE_KEYS, STUDENT_SESSION_CHANGED_EVENT, STUDENT_SESSION_KEY, STUDENT_SHARED_IDENTITY_EPOCH_KEY, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
@@ -1215,6 +1217,7 @@ export default function SolvePage() {
     const notified5MinRef = useRef(false);
     const notified1MinRef = useRef(false);
     const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+    const [draftSaveState, setDraftSaveState] = useState<SolveDraftSaveState>("idle");
     const [legacyDraftRecoveryExport, setLegacyDraftRecoveryExport] = useState<{
         fileName: string;
         json: string;
@@ -1586,7 +1589,9 @@ export default function SolvePage() {
         try {
             localStorage.setItem(DRAFT_KEY, JSON.stringify(lightweightDraft));
             setLastSavedAt(new Date(savedAt));
+            setDraftSaveState("saved");
         } catch {
+            setDraftSaveState("failed");
             if (!autosaveErrorShownRef.current) {
                 autosaveErrorShownRef.current = true;
                 toast.error("임시저장 실패", "브라우저 저장소가 가득 찼거나 차단되어 답안을 저장하지 못했습니다.");
@@ -3836,6 +3841,7 @@ export default function SolvePage() {
 
     const viewerPdfFile = activeTab === 'problem' ? pdfFile : answerFile;
     const studentPdfOpenOffered = shouldOfferStudentPdfOpen(examData);
+    const saveStatusChip = solveSaveStatusChip({ saveState: draftSaveState, online: true });
     const retryPdfPane = () => {
         setFailedPdfFile(null);
         setPdfPaneAttempt(attempt => attempt + 1);
@@ -4027,18 +4033,28 @@ export default function SolvePage() {
                         )}
                     </div>
 
-                    {/* Autosave indicator */}
-                    {lastSavedAt && (
-                        <span
-                            className="solve-autosave"
-                            title={`마지막 저장: ${lastSavedAt.toLocaleTimeString('ko-KR')}`}
-                            style={{
-                                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
-                                fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, flexShrink: 0
-                            }}>
-                            <Save size={11} /> 저장됨
-                        </span>
-                    )}
+                    {/* Save status: stays mounted so aria-live announces changes. */}
+                    <span
+                        className="solve-save-status"
+                        data-state={saveStatusChip?.kind ?? "idle"}
+                        aria-live="polite"
+                        aria-atomic="true"
+                        title={lastSavedAt ? `마지막 저장: ${lastSavedAt.toLocaleTimeString('ko-KR')}` : undefined}
+                    >
+                        {saveStatusChip && (
+                            <StatusPill
+                                size="sm"
+                                tone={saveStatusChip.tone}
+                                label={saveStatusChip.label}
+                                compactLabel={saveStatusChip.compactLabel}
+                                icon={saveStatusChip.kind === "failed"
+                                    ? <AlertTriangle size={11} aria-hidden="true" />
+                                    : saveStatusChip.kind === "offline"
+                                    ? <WifiOff size={11} aria-hidden="true" />
+                                    : <Save size={11} aria-hidden="true" />}
+                            />
+                        )}
+                    </span>
                     {(hasActiveDrawings || handwritingArchiveEnabled) && (
                         <span
                             className="solve-autosave solve-handwriting-status"

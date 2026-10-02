@@ -330,6 +330,59 @@ test.describe("student UI simplification regressions", () => {
     });
     }
 
+    for (const viewport of [{ width: 320, height: 568 }, { width: 820, height: 1180 }]) {
+    test(`${viewport.width}px solve status row shows the save status chip without growing the header`, async ({ page }) => {
+        await page.setViewportSize(viewport);
+        await seedStudentSurface(page, { guest: true });
+        await page.goto(`/solve/${EXAM_ID}`);
+        await continueSolveEntryIfPresent(page);
+
+        const header = page.locator("header.solve-header");
+        await expect(page.getByRole("button", { name: "제출하기" })).toBeVisible();
+        const saveStatus = page.locator(".solve-status-row .solve-save-status");
+        await expect(saveStatus).toHaveAttribute("aria-live", "polite");
+        await expect(saveStatus).not.toHaveAttribute("role", /.+/);
+        const headerBefore = (await header.boundingBox())!;
+
+        const expandSheet = page.getByRole("banner").getByRole("button", { name: "답안지 펼치기" });
+        if (await expandSheet.isVisible()) await expandSheet.click();
+        await page.getByRole("radio", { name: "문제 1번 보기 2" }).dispatchEvent("click");
+        await expect(saveStatus).toHaveAttribute("data-state", "saved");
+        const pill = saveStatus.locator(".status-pill");
+        await expect(pill).toBeVisible();
+        await expect(pill).toContainText("저장됨");
+        await expect(page.locator(".solve-handwriting-status")).toHaveCount(0);
+
+        const geometry = await page.locator(".solve-header-content").evaluate(element => {
+            const status = element.querySelector<HTMLElement>(".solve-status-row")!.getBoundingClientRect();
+            const progress = element.querySelector<HTMLElement>(".solve-progress")!.getBoundingClientRect();
+            const chip = element.querySelector<HTMLElement>(".solve-save-status .status-pill")!.getBoundingClientRect();
+            const label = element.querySelector<HTMLElement>(".solve-save-status .status-pill-label")!;
+            return {
+                status: { top: status.top, bottom: status.bottom },
+                progressHeight: progress.height,
+                chip: { left: chip.left, right: chip.right, top: chip.top, bottom: chip.bottom, height: chip.height },
+                labelFontSize: parseFloat(getComputedStyle(label).fontSize),
+                rootFontSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+                viewportWidth: window.innerWidth,
+            };
+        });
+        expect(geometry.chip.left).toBeGreaterThanOrEqual(0);
+        expect(geometry.chip.right).toBeLessThanOrEqual(geometry.viewportWidth);
+        expect(geometry.chip.top).toBeGreaterThanOrEqual(geometry.status.top - 1);
+        expect(geometry.chip.bottom).toBeLessThanOrEqual(geometry.status.bottom + 1);
+        expect(geometry.chip.height).toBeLessThanOrEqual(geometry.progressHeight + 1);
+        if (viewport.width <= 768) {
+            // Phones: icon + short label at --type-micro (0.7rem).
+            expect(geometry.labelFontSize).toBeCloseTo(geometry.rootFontSize * 0.7, 1);
+            await expect(pill.locator(".status-pill-label-compact")).toBeVisible();
+        }
+        const headerAfter = (await header.boundingBox())!;
+        expect(headerAfter.height).toBeLessThanOrEqual(headerBefore.height + 1);
+        await expectInsideViewport(page, ".solve-header, .solve-header-content, .solve-status-row > *");
+    });
+    }
+
     test("390px review contains long metadata, explanation, prompts, and Q&A tokens", async ({ page }) => {
         await page.setViewportSize({ width: 390, height: 844 });
         await seedStudentSurface(page, { completed: true, guest: true });
