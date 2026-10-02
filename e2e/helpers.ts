@@ -1,6 +1,8 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { startShowcaseEntryDiagnostics } from "./showcaseEntryDiagnostics";
 
 export function exactNextActionId(filename: string, exportedName: string, worker: string): string {
     const buildDirectory = process.env.OMR_ISOLATED_E2E === "1" ? ".next-e2e" : ".next";
@@ -72,21 +74,73 @@ export async function loginAsTeacher(page: Page, nextPath = "/teacher/dashboard"
     await expect(page).toHaveURL(new RegExp(`${escapeRegExp(nextPath)}(?:[?#].*)?$`), { timeout: 25_000 });
 }
 
+let showcaseDiagnosticSequence = 0;
+const showcaseDiagnosticProjects = new Set([
+    "ios-se-webkit", "ios-standard-webkit", "ios-max-webkit",
+    "mobile-ios-webkit-pwa", "tablet-ios-webkit-pwa", "tablet-ios-webkit-landscape-pwa",
+    "mobile-ios-webkit-teacher", "tablet-ios-webkit-teacher", "tablet-ios-webkit-landscape-teacher",
+]);
+
+function showcaseDiagnosticScenario(title: string): string {
+    if (title === "teacher live pause stops data refresh without freezing or resuming a stale countdown") return "live-pause";
+    if (title === "connects dashboard metrics to the next analysis action") return "metrics-next-action";
+    if (title === "progressively reveals showcase exam results on a 390px phone") return "progressive-results";
+    if (title === "keeps mobile roster search and detail actions clear of data-source toasts") return "roster-toast";
+    return "other";
+}
+
 export async function loginAsShowcaseTeacher(page: Page) {
-    await page.goto("/?role=teacher");
-    // The server-rendered button remains disabled until its React handler is
-    // hydrated, so a cold WebKit worker cannot silently discard the click.
-    const showcaseButton = page.getByRole("button", { name: "데모 계정으로 둘러보기" });
-    await expect(showcaseButton).toBeEnabled({ timeout: 30_000 });
-    await showcaseButton.click();
-    await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1(?:#.*)?$/, { timeout: 25_000 });
-    // The URL changes before the showcase dashboard's dynamic overview chunk
-    // has finished rendering. Replacing that navigation immediately can abort
-    // the chunk request in WebKit and surface a false application runtime error.
-    // CI traces show Linux WebKit needing over 30s for this dev-mode chunk.
-    const overviewTimeout = page.context().browser()?.browserType().name() === "webkit" ? 45_000 : 30_000;
-    await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible({ timeout: overviewTimeout });
-    await page.waitForLoadState("networkidle");
+    const diagnostics = process.env.OMR_SHOWCASE_ENTRY_DIAGNOSTICS === "1"
+        ? startShowcaseEntryDiagnostics(page) : null;
+    let outcome: "passed" | "failed" = "failed";
+    try {
+        diagnostics?.stage("before-goto");
+        await page.goto("/?role=teacher");
+        diagnostics?.stage("home-loaded");
+        // The server-rendered button remains disabled until its React handler is
+        // hydrated, so a cold WebKit worker cannot silently discard the click.
+        const showcaseButton = page.getByRole("button", { name: "데모 계정으로 둘러보기" });
+        await expect(showcaseButton).toBeEnabled({ timeout: 30_000 });
+        diagnostics?.stage("button-enabled");
+        await showcaseButton.click();
+        diagnostics?.stage("clicked");
+        await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1(?:#.*)?$/, { timeout: 25_000 });
+        diagnostics?.stage("dashboard-url");
+        // The URL changes before the showcase dashboard's dynamic overview chunk
+        // has finished rendering. Replacing that navigation immediately can abort
+        // the chunk request in WebKit and surface a false application runtime error.
+        // CI traces show Linux WebKit needing over 30s for this dev-mode chunk.
+        const overviewTimeout = page.context().browser()?.browserType().name() === "webkit" ? 45_000 : 30_000;
+        await expect(page.getByRole("region", { name: "데모 계정 대시보드 개요" })).toBeVisible({ timeout: overviewTimeout });
+        diagnostics?.stage("overview-visible");
+        await page.waitForLoadState("networkidle");
+        diagnostics?.stage("network-idle");
+        outcome = "passed";
+    } finally {
+        if (diagnostics) {
+            // Emit only the recorder's allowlisted schema. Never export browser
+            // traces, auth headers/bodies, storage, or arbitrary test errors.
+            try {
+                const report = await diagnostics.finish(outcome);
+                const info = test.info();
+                const testKey = createHash("sha256").update(info.testId).digest("hex").slice(0, 16);
+                const directory = join(process.cwd(), "showcase-entry-diagnostics");
+                mkdirSync(directory, { recursive: true });
+                const file = `${testKey}-${info.repeatEachIndex}-${info.retry}-${showcaseDiagnosticSequence++}.json`;
+                writeFileSync(join(directory, file), JSON.stringify({
+                    testKey,
+                    project: showcaseDiagnosticProjects.has(info.project.name) ? info.project.name : "other",
+                    scenario: showcaseDiagnosticScenario(info.title),
+                    repeatEachIndex: info.repeatEachIndex,
+                    retry: info.retry,
+                    report,
+                }));
+            } catch {
+                // A diagnostic error must never replace the original assertion.
+                console.warn("Showcase entry diagnostics could not be saved.");
+            }
+        }
+    }
 }
 
 export async function openTeacherPage(page: Page, path: string) {

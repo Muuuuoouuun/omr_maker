@@ -435,7 +435,8 @@ test.describe("Mobile PWA entry", () => {
         expect(headerContentBox!.y + headerContentBox!.height).toBeLessThanOrEqual(headerBox!.y + headerBox!.height + 1);
         expect(mainBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height - 1);
         await expectTouchTarget(page.getByRole("button", { name: "로그아웃" }));
-        await expectTouchTarget(page.getByRole("link", { name: /나의 원시험 평균/ }));
+        await expectTouchTarget(page.getByRole("link", { name: /내 평균 점수/ }));
+        await expectTouchTarget(page.getByRole("link", { name: "지난 기록 보기 →" }));
         await expectNoHorizontalOverflow(page);
 
         await page.goto("/student/history");

@@ -196,17 +196,17 @@
 **주의:** `studentSessionRecoveryFlow.test.ts:106`이 대시보드에 `href="/?role=student"`가 없는지 단언합니다. 링크는 helper로만 생성합니다.
 
 ### B4. 학생 대시보드 "할 일" 정리 (M)
-- [ ] `useMonotonicAssignmentTime`를 `useAssignmentClock.ts`로 옮겨 대시보드에서 한 번만 계산하고 공유합니다. prop이 없으면 기존처럼 내부에서 계산합니다.
-- [ ] `presentTodoAssignments()`로 할 일을 나눕니다.
+- [x] `useMonotonicAssignmentTime`를 `useAssignmentClock.ts`로 옮겨 대시보드에서 한 번만 계산하고 공유합니다. prop이 없으면 기존처럼 내부에서 계산합니다.
+- [x] `presentTodoAssignments()`로 할 일을 나눕니다.
   - "지금 풀 수 있어요": 마감 임박 순
   - "예정": 시작 빠른 순
   - "마감된 과제": `<details>`로 접어 둠
-- [ ] 마감 표시를 KST 기준으로 합니다: "오늘 18:00 마감", "내일 …", "10/3(금) 23:59 마감 · D-2"
-- [ ] 헤드라인을 바꿉니다. 대상은 `dashboard/page.tsx:783`입니다.
+- [x] 마감 표시를 KST 기준으로 합니다: "오늘 18:00 마감", "내일 …", "10/3(금) 23:59 마감 · D-2"
+- [x] 헤드라인을 바꿉니다. 대상은 `dashboard/page.tsx:783`입니다.
   - 응시 가능한 시험이 있으면: "지금 풀 수 있는 시험이 n개 있어요."
   - 없으면: "다음 시험은 …에 시작해요."
-- [ ] 완료 카드에서는 상태 칩을 없애고 "완료 · 10/1 제출"만 보여줍니다.
-- [ ] "나의 원시험 평균"을 "내 평균 점수"(보조 문구 "재시험 제외")로 바꾸고, "지난 기록 보기 →" 링크를 항상 노출합니다.
+- [x] 완료 카드에서는 상태 칩을 없애고 "완료 · 10/1 제출"만 보여줍니다.
+- [x] "나의 원시험 평균"을 "내 평균 점수"(보조 문구 "재시험 제외")로 바꾸고, "지난 기록 보기 →" 링크를 항상 노출합니다.
 
 **깨지는 테스트:** `assignmentLifecycleSurface.test.ts:100-110`, `uiSurface.test.ts:1877`, `e2e/student-assignment-lifecycle.spec.ts:122-150`, `e2e/ios-mobile-layout.spec.ts:913,916`, `e2e/pwa-mobile.spec.ts:438`, `e2e/student-dashboard-load-state.spec.ts`, `e2e/korean-exam-fixture.spec.ts:65`
 

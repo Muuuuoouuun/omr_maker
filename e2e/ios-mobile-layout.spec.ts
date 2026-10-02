@@ -960,10 +960,10 @@ test.describe("iPhone WebKit mobile layout", () => {
         await page.goto("/student/dashboard");
 
         const identity = page.getByRole("heading", { name: `${STUDENT_NAME}님,` });
-        const status = page.getByText("오늘 1개의 시험이 기다리고 있어요.");
+        const status = page.getByText("지금 풀 수 있는 시험이 1개 있어요.");
         const pendingTitle = page.getByText(PENDING_EXAM_TITLE, { exact: true });
         const primaryAction = page.getByRole("link", { name: "시작" });
-        const historyAction = page.getByRole("link", { name: /나의 원시험 평균/ });
+        const historyAction = page.getByRole("link", { name: /내 평균 점수/ });
 
         for (const element of [identity, status, pendingTitle, primaryAction]) {
             await expectWithinViewport(element, page);

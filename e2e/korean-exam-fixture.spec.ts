@@ -62,7 +62,8 @@ test.describe("live Korean exam Supabase fixture", () => {
     test("student 3 can open the private PDF, enter an answer, and use handwriting tools", async ({ page }) => {
         await loginStudent(page, { name: "학생 3", loginId: "student3", code: "CDE456" });
 
-        await expect(page.getByText("미완료 과제").first()).toContainText("3", { timeout: 20_000 });
+        // The header badge counts only assignments that can be solved right now.
+        await expect(page.locator(".student-assignment-open-count")).toHaveText("3", { timeout: 20_000 });
         await page.getByRole("link", { name: "시작", exact: true }).first().click();
         // The dashboard "시작" already confirmed who is entering, so the solve
         // page opens directly without the "시험 입장 확인" dialog.

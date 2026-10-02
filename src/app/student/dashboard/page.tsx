@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import { Exam } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
+import { useMonotonicAssignmentTime, type AssignmentServerClock } from "@/components/dashboard/useAssignmentClock";
+import { presentTodoAssignments, summarizeTodoHeadline } from "@/lib/studentAssignmentPresentation";
 import { recordSolveEntryIntentForPath } from "@/lib/solveEntryIntent";
 import { displayStudentName } from "@/lib/guestIdentity";
 import { createDashboardRevalidationGate, isStudentDashboardStorageKey } from "@/components/dashboard/dashboardRevalidation";
@@ -78,6 +80,8 @@ type DashboardAssignment = (Exam | StudentAssignmentPreview) & {
 };
 type DashboardCompletedAssignment = (Exam | StudentAssignmentPreview | ReviewOnlyCompletedAssignment) & {
     attemptId: string;
+    /** When the completed attempt was submitted — shown as "완료 · 10/1 제출". */
+    finishedAt?: string;
     hasUnreadFeedback?: boolean;
     answeredQuestionCount?: number;
 };
@@ -276,6 +280,7 @@ export default function StudentDashboard() {
                     done.push({
                         ...exam,
                         attemptId: attempt.id,
+                        finishedAt: attempt.finishedAt,
                         hasUnreadFeedback: unreadFeedbackAttemptIds.has(attempt.id),
                         answeredQuestionCount: attempt.answeredQuestionCount,
                     });
@@ -291,8 +296,10 @@ export default function StudentDashboard() {
                 }
             });
 
+            const finishedAtByAttemptId = new Map(myAttempts.map(attempt => [attempt.id, attempt.finishedAt]));
             done.push(...buildMissingCompletedReviewAssignments(visibleAssignmentScopes, myAttempts).map(review => ({
                 ...review,
+                finishedAt: finishedAtByAttemptId.get(review.attemptId),
                 hasUnreadFeedback: unreadFeedbackAttemptIds.has(review.attemptId),
             })));
 
@@ -428,6 +435,8 @@ export default function StudentDashboard() {
             document.removeEventListener("visibilitychange", onVisibilityChange);
         };
     }, []);
+
+    const refreshAssignmentClock = useCallback(() => setRefreshKey(current => current + 1), []);
 
     const handleConnectStudentAccount = async () => {
         if (accountConnectionPending) return;
@@ -843,80 +852,139 @@ export default function StudentDashboard() {
                     </details>
                 )}
 
-                {/* Welcome */}
-                <div className="student-dashboard-welcome mobile-section-stack" style={{ margin: '3rem 0' }}>
-                    <h1 className="title-gradient" title={`${displayStudentName(user.name)}님`} style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
-                        {displayStudentName(user.name)}님,
-                    </h1>
-                    <p className="text-muted" style={{ fontSize: '1.1rem' }}>
-                        {todoExams.length > 0 ? (
-                            <>오늘 <strong style={{ color: 'var(--primary)', fontWeight: 700 }}>{todoExams.length}개</strong>의 시험이 기다리고 있어요.</>
-                        ) : (
-                            <>오늘은 예정된 시험이 없습니다. 편안한 하루 보내세요.</>
-                        )}
-                    </p>
-                </div>
-
-                {user?.identityType === "registered" && <Link href="/student/remediation" className="btn btn-secondary" style={{ marginBottom: "1rem" }}>선생님이 배정한 오답 보강 →</Link>}
-                {/* Dashboard Grid */}
-                <div className={`bento-grid student-dashboard-grid student-dashboard-task-flow${stats.completedCount === 0 ? " is-zero-completions" : ""}`}>
-                    {/* Todo List (Main Focus) */}
-                    <div className="col-span-2 row-span-2 student-dashboard-primary-task">
-                        <AssignmentBlock
-                            type="todo"
-                            exams={todoExams}
-                            readOnly={dashboardReadOnly}
-                            serverNow={assignmentServerNow}
-                            serverClock={assignmentServerClock}
-                            onClockRefresh={() => setRefreshKey(current => current + 1)}
-                            onStartAssignment={(solveHref) => {
-                                // The student just chose this exam here, so the solve page
-                                // can skip its "학생으로 시험 보기" confirmation once.
-                                if (user && !user.isGuest) recordSolveEntryIntentForPath(solveHref, user.studentId);
-                            }}
-                        />
-                    </div>
-
-                    {/* Stats */}
-                    <Link href="/student/history" className="bento-card col-span-1 card-hover student-dashboard-average-card student-dashboard-history-action" style={{
-                        background: 'linear-gradient(135deg, var(--secondary), #f472b6)',
-                        color: 'white', border: 'none',
-                        display: 'flex', flexDirection: 'column', justifyContent: 'center'
-                    }}>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>나의 원시험 평균</div>
-                        <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>
-                            {stats.avgScore}<span style={{ fontSize: '1.5rem', fontWeight: 700, opacity: 0.85 }}>%</span>
-                        </div>
-                    </Link>
-
-                    {stats.completedCount > 0 && <div className="bento-card col-span-1 student-dashboard-secondary-status" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)', position: 'relative', overflow: 'hidden' }}>
-                        <Award size={22} color="var(--primary)" style={{ position: 'absolute', top: 16, right: 16, opacity: 0.6 }} />
-                        <div style={{ fontSize: '3rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1, marginBottom: '0.5rem' }}>
-                            {stats.completedCount}
-                        </div>
-                        <div style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600 }}>완료한 원시험</div>
-                        {stats.retakeCount > 0 && (
-                            <div style={{ marginTop: '0.5rem', color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '999px', padding: '0.2rem 0.55rem', fontSize: 'var(--type-caption)', fontWeight: 800 }}>
-                                재시험 {stats.retakeCount}회
-                            </div>
-                        )}
-                    </div>}
-
-                    {/* Completed List */}
-                    <div className="col-span-2 student-dashboard-completed-task">
-                        <AssignmentBlock
-                            type="done"
-                            exams={doneExams}
-                            readOnly={dashboardReadOnly}
-                            serverNow={assignmentServerNow}
-                            serverClock={assignmentServerClock}
-                            onClockRefresh={() => setRefreshKey(current => current + 1)}
-                        />
-                    </div>
-                </div>
+                <StudentDashboardTaskFlow
+                    user={user}
+                    todoExams={todoExams}
+                    doneExams={doneExams}
+                    stats={stats}
+                    dashboardReadOnly={dashboardReadOnly}
+                    assignmentServerNow={assignmentServerNow}
+                    assignmentServerClock={assignmentServerClock}
+                    onClockRefresh={refreshAssignmentClock}
+                />
                     </div>
                 )}
             </main>
         </div>
+    );
+}
+
+type StudentDashboardStats = { avgScore: number; completedCount: number; retakeCount: number };
+
+/**
+ * Headline, quick links, and the assignment grid. Mounted only once the
+ * dashboard data has loaded, so the shared clock below anchors on the fresh
+ * server time synchronously (no frame where every card reads "확인 필요").
+ */
+function StudentDashboardTaskFlow({
+    user,
+    todoExams,
+    doneExams,
+    stats,
+    dashboardReadOnly,
+    assignmentServerNow,
+    assignmentServerClock,
+    onClockRefresh,
+}: {
+    user: StudentSession;
+    todoExams: DashboardAssignment[];
+    doneExams: DashboardCompletedAssignment[];
+    stats: StudentDashboardStats;
+    dashboardReadOnly: boolean;
+    assignmentServerNow: string;
+    assignmentServerClock?: AssignmentServerClock;
+    onClockRefresh: () => void;
+}) {
+    // One server-anchored clock for the headline and both assignment blocks,
+    // so the "open" count and the sections can never disagree.
+    const assignmentClock = useMonotonicAssignmentTime(assignmentServerNow, assignmentServerClock, todoExams, onClockRefresh);
+    const todoHeadline = summarizeTodoHeadline(presentTodoAssignments(todoExams, assignmentClock), assignmentClock);
+
+    return (
+        <>
+        {/* Welcome */}
+        <div className="student-dashboard-welcome mobile-section-stack" style={{ margin: '3rem 0' }}>
+            <h1 className="title-gradient" title={`${displayStudentName(user.name)}님`} style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
+                {displayStudentName(user.name)}님,
+            </h1>
+            <p className="text-muted student-dashboard-headline" style={{ fontSize: '1.1rem', wordBreak: 'keep-all' }}>
+                {todoHeadline.kind === "open" ? (
+                    <>
+                        지금 풀 수 있는 시험이 <strong style={{ color: 'var(--primary)', fontWeight: 700, whiteSpace: 'nowrap' }}>{todoHeadline.openCount}개</strong> 있어요.
+                        {todoHeadline.dueTodayCount > 0 && (
+                            <> 그중 <strong style={{ color: 'var(--text-warning)', fontWeight: 700, whiteSpace: 'nowrap' }}>{todoHeadline.dueTodayCount}개</strong>는 오늘 마감이에요.</>
+                        )}
+                    </>
+                ) : todoHeadline.kind === "scheduled" ? (
+                    <>다음 시험은 <strong style={{ color: 'var(--primary)', fontWeight: 700, whiteSpace: 'nowrap' }}>{todoHeadline.startLabel}</strong>에 시작해요.</>
+                ) : (
+                    <>지금 풀어야 할 시험이 없어요.</>
+                )}
+            </p>
+            <nav className="student-dashboard-quick-links" aria-label="학습 바로가기">
+                <Link href="/student/history" className="btn btn-secondary">지난 기록 보기 →</Link>
+                {user.identityType === "registered" && (
+                    <Link href="/student/remediation" className="btn btn-secondary">선생님이 배정한 오답 보강 →</Link>
+                )}
+            </nav>
+        </div>
+
+        {/* Dashboard Grid */}
+        <div className={`bento-grid student-dashboard-grid student-dashboard-task-flow${stats.completedCount === 0 ? " is-zero-completions" : ""}`}>
+            {/* Todo List (Main Focus) */}
+            <div className="col-span-2 row-span-2 student-dashboard-primary-task">
+                <AssignmentBlock
+                    type="todo"
+                    exams={todoExams}
+                    readOnly={dashboardReadOnly}
+                    serverNow={assignmentServerNow}
+                    clock={assignmentClock}
+                    onStartAssignment={(solveHref) => {
+                        // The student just chose this exam here, so the solve page
+                        // can skip its "학생으로 시험 보기" confirmation once.
+                        if (user && !user.isGuest) recordSolveEntryIntentForPath(solveHref, user.studentId);
+                    }}
+                />
+            </div>
+
+            {/* Stats */}
+            <Link href="/student/history" className="bento-card col-span-1 card-hover student-dashboard-average-card student-dashboard-history-action" style={{
+                background: 'linear-gradient(135deg, var(--secondary), #f472b6)',
+                color: 'white', border: 'none',
+                display: 'flex', flexDirection: 'column', justifyContent: 'center'
+            }}>
+                <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>내 평균 점수</div>
+                <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>
+                    {stats.avgScore}<span style={{ fontSize: '1.5rem', fontWeight: 700, opacity: 0.85 }}>%</span>
+                </div>
+                {/* Retake attempts are excluded: only first attempts count toward the average. */}
+                <div style={{ marginTop: '0.6rem', fontSize: 'var(--type-caption)', fontWeight: 600, opacity: 0.9 }}>재시험 제외 · 기록 보기 →</div>
+            </Link>
+
+            {stats.completedCount > 0 && <div className="bento-card col-span-1 student-dashboard-secondary-status" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)', position: 'relative', overflow: 'hidden' }}>
+                <Award size={22} color="var(--primary)" style={{ position: 'absolute', top: 16, right: 16, opacity: 0.6 }} />
+                <div style={{ fontSize: '3rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1, marginBottom: '0.5rem' }}>
+                    {stats.completedCount}
+                </div>
+                <div style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600 }}>완료한 시험</div>
+                {stats.retakeCount > 0 && (
+                    <div style={{ marginTop: '0.5rem', color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '999px', padding: '0.2rem 0.55rem', fontSize: 'var(--type-caption)', fontWeight: 800 }}>
+                        재시험 {stats.retakeCount}회
+                    </div>
+                )}
+            </div>}
+
+            {/* Completed List */}
+            <div className="col-span-2 student-dashboard-completed-task">
+                <AssignmentBlock
+                    type="done"
+                    exams={doneExams}
+                    readOnly={dashboardReadOnly}
+                    serverNow={assignmentServerNow}
+                    clock={assignmentClock}
+                />
+            </div>
+        </div>
+        </>
     );
 }

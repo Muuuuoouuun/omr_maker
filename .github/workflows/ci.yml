@@ -134,14 +134,40 @@ jobs:
         run: npm run test:e2e:ios-webkit -- --shard=${{ matrix.shard }}/3
         env:
           CI: "true"
-      - name: Upload Playwright artifacts on failure
-        if: failure()
+          OMR_SHOWCASE_ENTRY_DIAGNOSTICS: "1"
+      - name: Repeat previous showcase readiness failures without retries
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          case "${{ matrix.shard }}" in
+            1)
+              spec=e2e/ios-mobile-layout.spec.ts
+              project=ios-se-webkit
+              pattern='teacher live pause stops data refresh without freezing or resuming a stale countdown'
+              ;;
+            2)
+              spec=e2e/teacher-mobile.spec.ts
+              project=tablet-ios-webkit-teacher
+              pattern='connects dashboard metrics to the next analysis action|progressively reveals showcase exam results on a 390px phone'
+              ;;
+            3)
+              spec=e2e/teacher-mobile.spec.ts
+              project=tablet-ios-webkit-landscape-teacher
+              pattern='keeps mobile roster search and detail actions clear of data-source toasts'
+              ;;
+          esac
+          npx playwright test "$spec" --project="$project" --grep="$pattern" --repeat-each=5 --retries=0 --trace=off --output=showcase-readiness-results
+        env:
+          CI: "true"
+          PLAYWRIGHT_ENABLE_WEBKIT: "1"
+          OMR_SHOWCASE_ENTRY_DIAGNOSTICS: "1"
+      - name: Upload sanitized showcase entry diagnostics
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-ios-webkit-${{ matrix.shard }}
-          path: |
-            playwright-report/
-            test-results/
+          name: showcase-entry-diagnostics-${{ matrix.shard }}
+          path: showcase-entry-diagnostics/*.json
+          if-no-files-found: warn
           retention-days: 7
 
   build:

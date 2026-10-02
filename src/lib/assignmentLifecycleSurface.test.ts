@@ -13,6 +13,7 @@ import type { StudentAssignmentPreview } from "@/lib/studentExamContract";
 
 type SurfaceAssignment = StudentAssignmentPreview & {
     attemptId?: string;
+    finishedAt?: string;
     hasLocalDraft?: boolean;
     hasRemoteProgress?: boolean;
 };
@@ -62,7 +63,9 @@ describe("assignment lifecycle dashboard surface", () => {
         const html = renderAssignments([assignment("scheduled", "scheduled")], "todo");
 
         expect(html).toContain("예정");
-        expect(html).toMatch(/2026.*8.*9.*10:00/);
+        // SERVER_NOW is 8/9 09:00 KST; the start reads relative to that day.
+        expect(html).toContain("오늘 10:00 시작");
+        expect(html).toContain('data-assignment-section="scheduled"');
         expect(html).toContain('aria-disabled="true"');
         expect(html).not.toContain('href="/solve/scheduled');
     });
@@ -74,7 +77,11 @@ describe("assignment lifecycle dashboard surface", () => {
             assignment("remote-progress", "open", { hasRemoteProgress: true }),
         ], "todo");
 
-        expect(html).toContain("응시 가능");
+        expect(html).toContain("지금 풀 수 있어요");
+        expect(html).toContain('data-assignment-section="open"');
+        // Open rows show their KST deadline instead of an "응시 가능" pill.
+        expect(html).not.toContain("응시 가능");
+        expect(html).toContain("오늘 11:00 마감");
         expect(html).toContain('href="/solve/fresh"');
         expect(html).toContain('href="/solve/draft"');
         expect(html).toContain('href="/solve/remote-progress"');
@@ -94,17 +101,38 @@ describe("assignment lifecycle dashboard surface", () => {
         expect(html).toContain("확인 필요");
         expect(html.match(/aria-disabled="true"/g)).toHaveLength(4);
         expect(html).not.toContain('href="/solve/');
+        // Closed rows sit in a collapsed disclosure; the rest are flagged for checking.
+        expect(html).toMatch(/<details class="student-assignment-closed" data-assignment-section="closed">/);
+        expect(html).toContain("마감된 과제");
+        expect(html).toContain("미응시 마감");
+        expect(html).toContain('data-assignment-section="invalid"');
+        // Nothing is solvable now, so no open-count badge.
+        expect(html).not.toContain("student-assignment-open-count");
+    });
+
+    it("counts only open assignments in the todo header badge", () => {
+        const html = renderAssignments([
+            assignment("open-a", "open"),
+            assignment("open-b", "open"),
+            assignment("scheduled", "scheduled"),
+            assignment("closed", "closed"),
+        ], "todo");
+
+        expect(html).toMatch(/class="student-assignment-open-count"[^>]*>2</);
     });
 
     it("keeps completion independent and exposes review, never solve, for completed open and closed cards", () => {
         const html = renderAssignments([
-            assignment("open-done", "open", { attemptId: "attempt-open" }),
+            assignment("open-done", "open", { attemptId: "attempt-open", finishedAt: "2026-08-08T15:30:00.000Z" }),
             assignment("closed-done", "closed", { attemptId: "attempt-closed" }),
         ], "done");
 
-        expect(html).toContain("응시 가능");
-        expect(html).toContain("마감");
-        expect(html).toContain("완료");
+        // Completed cards drop the availability pills and say when they were submitted.
+        expect(html).not.toContain("응시 가능");
+        expect(html).not.toContain("마감");
+        expect(html).not.toContain("예정");
+        expect(html).toContain("완료 · 8/9 제출");
+        expect(html).toContain(">완료<");
         expect(html).toContain('href="/student/review/attempt-open"');
         expect(html).toContain('href="/student/review/attempt-closed"');
         expect(html).not.toContain('href="/solve/');
@@ -122,12 +150,16 @@ describe("assignment lifecycle dashboard surface", () => {
             serverClock: { serverNow: SERVER_NOW, requestStartedMonotonicMs: 0, receivedMonotonicMs: 0 },
         }));
 
-        expect(screen.getByText("예정", { exact: true })).toBeVisible();
+        expect(screen.getByRole("heading", { name: /예정/ })).toBeVisible();
+        expect(screen.getByText("오늘 09:00 시작", { exact: true })).toBeVisible();
         act(() => { vi.advanceTimersByTime(1_000); });
-        expect(screen.getByText("응시 가능", { exact: true })).toBeVisible();
+        expect(screen.getByRole("heading", { name: /지금 풀 수 있어요/ })).toBeVisible();
+        expect(screen.getByText("오늘 09:00 마감", { exact: true })).toBeVisible();
         expect(screen.getByRole("link", { name: "시작" })).toBeVisible();
         act(() => { vi.advanceTimersByTime(1_000); });
-        expect(screen.getAllByText("마감", { exact: true })[0]).toBeVisible();
+        expect(screen.queryByRole("heading", { name: /지금 풀 수 있어요/ })).not.toBeInTheDocument();
+        expect(screen.getByText("마감된 과제")).toBeVisible();
+        expect(screen.getByText("미응시 마감", { exact: true })).toBeInTheDocument();
         expect(screen.queryByRole("link", { name: "시작" })).not.toBeInTheDocument();
     });
 
@@ -144,7 +176,7 @@ describe("assignment lifecycle dashboard surface", () => {
         }));
         act(() => { vi.advanceTimersByTime(1_000); });
         act(() => { vi.advanceTimersByTime(1_000); });
-        expect(screen.getAllByText("마감", { exact: true })[0]).toBeVisible();
+        expect(screen.getByText("미응시 마감", { exact: true })).toBeInTheDocument();
 
         vi.setSystemTime("2034-01-01T00:00:00.000Z");
         view.rerender(createElement(AssignmentBlock, {
@@ -157,7 +189,18 @@ describe("assignment lifecycle dashboard surface", () => {
                 receivedMonotonicMs: 0,
             },
         }));
-        expect(screen.getAllByText("마감", { exact: true })[0]).toBeVisible();
+        expect(screen.getByText("미응시 마감", { exact: true })).toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: "시작" })).not.toBeInTheDocument();
+    });
+
+    it("follows a clock shared by the dashboard instead of its own", () => {
+        const shared = { lowerNow: "2026-08-09T01:30:00.000Z", upperNow: "2026-08-09T01:30:00.000Z", trusted: true };
+        const html = renderToStaticMarkup(createElement(AssignmentBlock, {
+            exams: [assignment("later", "scheduled")], type: "todo", serverNow: SERVER_NOW, clock: shared,
+        }));
+        // At SERVER_NOW this is scheduled; the shared clock says it is already open.
+        expect(html).toContain('href="/solve/later"');
+        expect(html).toContain("오늘 11:00 마감");
     });
 
     it("never enables a near-end assignment when request transit uncertainty crosses the close boundary", () => {

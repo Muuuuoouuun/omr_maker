@@ -120,15 +120,37 @@ if (hostedMode) {
         await seedLifecycleDashboard(page);
         await page.goto("/student/dashboard");
 
-        const lifecycleBadge = (id: string, label: string) => page
-            .locator(`[data-assignment-id="${id}"] .student-assignment-meta`)
-            .getByText(label, { exact: true });
-        await expect(lifecycleBadge("one-second-before-start", "예정")).toBeVisible();
-        await expect(lifecycleBadge("at-start-boundary", "응시 가능")).toBeVisible();
-        await expect(lifecycleBadge("one-second-before-end", "응시 가능")).toBeVisible();
-        await expect(lifecycleBadge("at-end-boundary", "마감")).toBeVisible();
-        await expect(lifecycleBadge("archived-closed", "마감")).toBeVisible();
-        await expect(lifecycleBadge("malformed-lifecycle", "확인 필요")).toBeVisible();
+        const section = (name: "open" | "scheduled" | "invalid" | "closed") => page
+            .locator(`[data-assignment-section="${name}"]`);
+        const rowIn = (name: "open" | "scheduled" | "invalid" | "closed", id: string) => section(name)
+            .locator(`[data-assignment-id="${id}"]`);
+        const meta = (id: string) => page.locator(`[data-assignment-id="${id}"] .student-assignment-meta`);
+
+        // The headline and the header badge count only what can be solved now.
+        await expect(page.locator(".student-dashboard-headline"))
+            .toHaveText("지금 풀 수 있는 시험이 2개 있어요. 그중 2개는 오늘 마감이에요.");
+        await expect(page.locator(".student-assignment-open-count")).toHaveText("2");
+
+        // 2035-01-01T00:00Z is 09:00 KST: the open rows close at 09:01 today.
+        await expect(section("open").getByRole("heading", { name: /지금 풀 수 있어요/ })).toBeVisible();
+        await expect(rowIn("open", "at-start-boundary")).toBeVisible();
+        await expect(rowIn("open", "one-second-before-end")).toBeVisible();
+        await expect(meta("at-start-boundary").getByText("오늘 09:01 마감", { exact: true })).toBeVisible();
+        await expect(rowIn("scheduled", "one-second-before-start")).toBeVisible();
+        await expect(meta("one-second-before-start").getByText("오늘 09:01 시작", { exact: true })).toBeVisible();
+        await expect(rowIn("invalid", "malformed-lifecycle")).toBeVisible();
+        await expect(meta("malformed-lifecycle").getByText("확인 필요", { exact: true })).toBeVisible();
+
+        // Closed, never-submitted assignments are collapsed out of the way.
+        const closed = section("closed");
+        await expect(closed).not.toHaveAttribute("open", "");
+        await expect(closed.locator("summary")).toContainText(/마감된 과제\s*2/);
+        await expect(rowIn("closed", "at-end-boundary")).toBeHidden();
+        await closed.locator("summary").click();
+        await expect(closed).toHaveAttribute("open", "");
+        await expect(meta("at-end-boundary").getByText("마감", { exact: true })).toBeVisible();
+        await expect(meta("archived-closed").getByText("마감", { exact: true })).toBeVisible();
+        await expect(rowIn("closed", "at-end-boundary").getByText("미응시 마감", { exact: true })).toBeVisible();
 
         for (const id of ["one-second-before-start", "at-end-boundary", "archived-closed", "malformed-lifecycle"]) {
             const row = page.locator(`[data-assignment-id="${id}"]`);
@@ -139,22 +161,36 @@ if (hostedMode) {
             await expect(disabled).not.toBeFocused();
         }
 
-        await expect(page.locator('[data-assignment-id="at-start-boundary"]')
+        await expect(rowIn("open", "at-start-boundary")
             .getByRole("link", { name: "시작" })).toBeVisible();
-        await expect(page.locator('[data-assignment-id="one-second-before-end"]')
+        await expect(rowIn("open", "one-second-before-end")
             .getByRole("link", { name: "계속 풀기" })).toBeVisible();
 
-        const transitioning = page.locator('[data-assignment-id="one-second-before-start"]');
+        // At the shared boundary the scheduled row opens while the two open rows close.
         await page.clock.runFor(60_000);
-        await expect(transitioning.getByText("응시 가능", { exact: true })).toBeVisible();
-        await expect(transitioning.getByRole("link", { name: "시작" })).toBeVisible();
+        await expect(rowIn("open", "one-second-before-start").getByRole("link", { name: "시작" })).toBeVisible();
+        await expect(meta("one-second-before-start").getByText("오늘 09:02 마감", { exact: true })).toBeVisible();
+        await expect(rowIn("closed", "at-start-boundary")).toBeVisible();
+        await expect(rowIn("closed", "one-second-before-end")).toBeVisible();
+        await expect(section("scheduled")).toHaveCount(0);
+        await expect(page.locator(".student-dashboard-headline"))
+            .toHaveText("지금 풀 수 있는 시험이 1개 있어요. 그중 1개는 오늘 마감이에요.");
+        await expect(page.locator(".student-assignment-open-count")).toHaveText("1");
+
         await page.clock.runFor(60_000);
-        await expect(transitioning.locator(".student-assignment-meta").getByText("마감", { exact: true })).toBeVisible();
-        await expect(transitioning.getByRole("link", { name: /시작|계속 풀기/ })).toHaveCount(0);
+        const transitioned = rowIn("closed", "one-second-before-start");
+        await expect(transitioned.locator(".student-assignment-meta").getByText("마감", { exact: true })).toBeVisible();
+        await expect(transitioned.getByRole("link", { name: /시작|계속 풀기/ })).toHaveCount(0);
+        await expect(section("open")).toHaveCount(0);
+        await expect(page.locator(".student-assignment-open-count")).toHaveCount(0);
+        await expect(page.locator(".student-dashboard-headline")).toHaveText("지금 풀어야 할 시험이 없어요.");
 
         const done = page.getByRole("heading", { name: "완료 기록" }).locator("..").locator("..");
         await expect(done.getByRole("link", { name: "복습" })).toHaveCount(4);
         await expect(done.locator('a[href^="/solve/"]')).toHaveCount(0);
+        // Completed cards carry no availability pills, only the submission day.
+        await expect(done.getByText(/^(응시 가능|마감|예정)$/)).toHaveCount(0);
+        await expect(page.locator('[data-assignment-id="completed-open"]').getByText(/^완료 · \d{1,2}\/\d{1,2} 제출$/)).toBeVisible();
         const archivedReview = page.locator('[data-assignment-id="omitted-archived"]');
         await expect(archivedReview.getByText("복습 전용", { exact: true })).toBeVisible();
         await expect(archivedReview.getByRole("link", { name: "복습" })).toHaveAttribute("href", "/student/review/attempt-3");

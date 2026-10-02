@@ -1904,8 +1904,9 @@ describe("service UI surface", () => {
             + readProjectFile("src/components/teacher/users/GroupsTab.tsx")
             + readProjectFile("src/components/teacher/users/InvitesTab.tsx");
 
-        expect(studentDashboard).toContain("나의 원시험 평균");
-        expect(studentDashboard).toContain("완료한 원시험");
+        expect(studentDashboard).toContain("내 평균 점수");
+        expect(studentDashboard).toContain("재시험 제외 · 기록 보기 →");
+        expect(studentDashboard).toContain("완료한 시험");
         expect(studentDashboard).toContain("attempt => !attempt.retakeSourceAttemptId");
         expect(studentDashboard).toContain("attempt => !!attempt.retakeSourceAttemptId");
         expect(studentHistory).toContain("원시험 응시");

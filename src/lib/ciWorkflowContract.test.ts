@@ -64,13 +64,17 @@ function extractCheckoutSteps(source = workflow): string[] {
 }
 
 describe("CI quality gates", () => {
-    it("runs every WebKit shard independently and retains separate failure evidence", () => {
+    it("runs every WebKit shard independently and retains separate sanitized entry evidence", () => {
         const job = extractBlock("ios-webkit-pwa", 2);
         expect(job).toContain("runs-on: macos-15");
         expect(job).toContain("fail-fast: false");
         expect(job).toContain("shard: [1, 2, 3]");
         expect(job).toContain("npm run test:e2e:ios-webkit -- --shard=${{ matrix.shard }}/3");
-        expect(job).toContain("name: playwright-report-ios-webkit-${{ matrix.shard }}");
+        expect(job).toContain("name: showcase-entry-diagnostics-${{ matrix.shard }}");
+        expect(job).toContain("path: showcase-entry-diagnostics/*.json");
+        expect(job).toContain("if: ${{ !cancelled() }}");
+        expect(job).not.toContain("path: |\n            playwright-report/");
+        expect(job).not.toContain("            test-results/");
     });
 
     it("limits execution and permissions at the workflow level", () => {
