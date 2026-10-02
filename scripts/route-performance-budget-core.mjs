@@ -32,7 +32,7 @@ function normalizeChunkPaths(paths) {
     const normalized = paths.map(path => path.replaceAll("\\", "/"));
     if (new Set(normalized).size !== normalized.length) return null;
     return normalized.every(path => (
-        /^\.next\/static\/chunks\/[a-zA-Z0-9_./-]+\.js$/.test(path)
+        /^\.next\/static\/(?:immutable\/)?chunks\/[a-zA-Z0-9_./-]+\.js$/.test(path)
         && !path.split("/").includes("..")
     )) ? normalized : null;
 }

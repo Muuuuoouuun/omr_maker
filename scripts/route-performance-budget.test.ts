@@ -29,6 +29,23 @@ describe("route performance budget", () => {
         expect(result.routes[0].compressedBytes).toBeGreaterThan(0);
     });
 
+    it("accepts Vercel immutable chunks alongside mutable runtime chunks", () => {
+        const reads: string[] = [];
+        const paths = [".next/static/immutable/chunks/home.js", ".next/static/chunks/runtime.js"];
+        const result = evaluateRoutePerformanceBudgets([{
+            route: "/",
+            firstLoadUncompressedJsBytes: 10,
+            firstLoadChunkPaths: paths,
+        }], (path: string) => {
+            reads.push(path);
+            return Buffer.from("ok");
+        }, { "/": homeBudget });
+
+        expect(result.passed).toBe(true);
+        expect(reads).toEqual(paths);
+        expect(result.routes[0].chunkCount).toBe(2);
+    });
+
     it("fails closed for a missing route, oversized raw bundle, oversized compressed bundle, and missing chunk", () => {
         const missingRoute = evaluateRoutePerformanceBudgets([], () => null, { "/": homeBudget });
         expect(missingRoute.failures).toEqual(["missing_route:/"]);
@@ -77,6 +94,9 @@ describe("route performance budget", () => {
         [".next\\static\\chunks\\..\\secret.js"],
         [".next/static/chunks/..\\secret.js"],
         ["C:\\outside\\home.js"],
+        [".next/static/immutable/chunks/../secret.js"],
+        [".next/static/immutable/media/home.js"],
+        [".next/static/immutable/chunks/home.js", ".next\\static\\immutable\\chunks\\home.js"],
     ])("rejects unsafe or duplicate normalized paths: %j", (...paths) => {
         let reads = 0;
         const result = evaluateRoutePerformanceBudgets([{
