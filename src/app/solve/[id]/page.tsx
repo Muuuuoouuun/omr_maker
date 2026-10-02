@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useEffectEvent, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
@@ -25,7 +25,8 @@ import {
 } from "@/app/actions/studentAttemptSession";
 import { uploadStudentAttemptHandwriting } from "@/app/actions/remoteAssets";
 import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
-import { saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
+import { hasTeacherSession, saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
+import { shouldOfferStudentPdfOpen, shouldOfferTeacherPreview } from "@/lib/solveToolsVisibility";
 import { attemptBelongsToSession, getOrCreateGuestId, getSession, getStudentSessionGeneration, getStudentSharedIdentityEpoch, guestLoginIdFor, saveSession, STORAGE_KEYS, STUDENT_SESSION_CHANGED_EVENT, STUDENT_SESSION_KEY, STUDENT_SHARED_IDENTITY_EPOCH_KEY, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
@@ -1118,6 +1119,18 @@ function questionDrawingsById(questionDrawings: ReturnType<typeof summarizeQuest
     }, {} as Record<number, ReturnType<typeof summarizeQuestionDrawings>[number]>);
 }
 
+// The teacher-preview offer depends on browser-only state (sessionStorage and
+// the URL), so it is read through useSyncExternalStore: the server snapshot is
+// "not offered" and the client snapshot takes over after hydration.
+const subscribeToTeacherPreviewOffer = () => () => {};
+function readTeacherPreviewOffer(): boolean {
+    if (typeof window === "undefined") return false;
+    return shouldOfferTeacherPreview({
+        hasTeacherSession: hasTeacherSession(),
+        search: window.location.search,
+    });
+}
+
 export default function SolvePage() {
     const params = useParams();
     const router = useRouter();
@@ -1161,6 +1174,11 @@ export default function SolvePage() {
     const [teacherPassword, setTeacherPassword] = useState("");
     const [teacherAuthError, setTeacherAuthError] = useState("");
     const [isTeacherAuthing, setIsTeacherAuthing] = useState(false);
+    const teacherPreviewOffered = useSyncExternalStore(
+        subscribeToTeacherPreviewOffer,
+        readTeacherPreviewOffer,
+        () => false,
+    );
 
     // Layout State
     const [isOMRCollapsed, setIsOMRCollapsed] = useState(false);
@@ -3817,6 +3835,7 @@ export default function SolvePage() {
         : null;
 
     const viewerPdfFile = activeTab === 'problem' ? pdfFile : answerFile;
+    const studentPdfOpenOffered = shouldOfferStudentPdfOpen(examData);
     const retryPdfPane = () => {
         setFailedPdfFile(null);
         setPdfPaneAttempt(attempt => attempt + 1);
@@ -4043,40 +4062,41 @@ export default function SolvePage() {
                         <details className="solve-tools-disclosure">
                             <summary className="btn btn-secondary" aria-label="풀이 도구">도구</summary>
                             <div className="solve-tools-panel">
-                                <label className="solve-teacher-toggle">
-                                    <input
-                                        type="checkbox"
-                                        aria-label="선생님 모드"
-                                        checked={isTeacherMode}
-                                        onChange={(e) => toggleTeacherMode(e.target.checked)}
-                                    />
-                                    <span className="solve-teacher-toggle-label">선생님 모드</span>
-                                </label>
+                                {(teacherPreviewOffered || isTeacherMode) && (
+                                    <label className="solve-teacher-toggle">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="선생님 모드"
+                                            checked={isTeacherMode}
+                                            onChange={(e) => toggleTeacherMode(e.target.checked)}
+                                        />
+                                        <span className="solve-teacher-toggle-label">선생님 모드</span>
+                                    </label>
+                                )}
 
                                 {isTeacherMode ? (
                                     <div className="solve-tab-toggle">
                                         <button className="solve-tab-button" onClick={() => setActiveTab('problem')} aria-pressed={activeTab === 'problem'}>문제지</button>
                                         <button className="solve-tab-button" onClick={() => setActiveTab('answer')} aria-pressed={activeTab === 'answer'}>정답/해설</button>
                                     </div>
-                                ) : (
-                                    <>
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary solve-pdf-button"
-                                            onClick={() => studentPdfUploadInputRef.current?.click()}
-                                        >
-                                            PDF 열기
-                                        </button>
-                                        <input
-                                            ref={studentPdfUploadInputRef}
-                                            id="pdf-upload-input"
-                                            type="file"
-                                            accept=".pdf"
-                                            onChange={(e) => e.target.files && handleStudentPdfUpload(e.target.files[0])}
-                                            style={{ display: 'none' }}
-                                        />
-                                    </>
-                                )}
+                                ) : studentPdfOpenOffered ? (
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary solve-pdf-button"
+                                        onClick={() => studentPdfUploadInputRef.current?.click()}
+                                    >
+                                        PDF 열기
+                                    </button>
+                                ) : null}
+                                {/* Kept mounted: PDFViewer's empty state opens this input by id. */}
+                                <input
+                                    ref={studentPdfUploadInputRef}
+                                    id="pdf-upload-input"
+                                    type="file"
+                                    accept=".pdf"
+                                    onChange={(e) => e.target.files && handleStudentPdfUpload(e.target.files[0])}
+                                    style={{ display: 'none' }}
+                                />
                                 <ThemeToggle />
                             </div>
                         </details>
@@ -4213,6 +4233,7 @@ export default function SolvePage() {
                                 onRenderError={() => setFailedPdfFile(viewerPdfFile)}
                                 onFileDrop={activeTab === 'problem' ? handleStudentPdfUpload : setAnswerFile}
                                 enableDrawing={activeTab === 'problem'}
+                                emptyStateAudience={isTeacherMode ? "editor" : "student"}
                                 drawings={drawings}
                                 onDrawingsChange={handleDrawingsChange}
                                 forcePage={activeTab === 'problem' ? pdfCurrentPage : undefined}

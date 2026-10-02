@@ -317,7 +317,7 @@ async function seedTeacherExamDetail(page: Page) {
     });
 }
 
-async function seedSolveExam(page: Page) {
+async function seedSolveExam(page: Page, options: { withoutPdf?: boolean } = {}) {
     await page.addInitScript(({ examId, pdfData, studentId }) => {
         const session = {
             createdAt: "2026-08-05T00:00:00.000Z",
@@ -353,7 +353,7 @@ async function seedSolveExam(page: Page) {
         window.sessionStorage.setItem("omr_student_session", JSON.stringify(session));
     }, {
         examId: SOLVE_EXAM_ID,
-        pdfData: SAMPLE_PDF_DATA_URL,
+        pdfData: options.withoutPdf ? undefined : SAMPLE_PDF_DATA_URL,
         studentId: SOLVE_STUDENT_ID,
     });
 }
@@ -506,16 +506,14 @@ test.describe("iPhone WebKit mobile layout", () => {
         await toolsSummary.press("Enter");
         await expect(toolsDisclosure).toHaveJSProperty("open", true);
         const toolsPanel = toolsDisclosure.locator(".solve-tools-panel");
-        const pdfOpenButton = toolsPanel.getByRole("button", { name: "PDF 열기", exact: true });
-        await expectMinimumTouchTarget(pdfOpenButton);
-        await expectWithinViewport(pdfOpenButton, page);
-        await pdfOpenButton.focus();
-        await expect(pdfOpenButton).toBeFocused();
-        const fileChooserPromise = page.waitForEvent("filechooser");
-        await pdfOpenButton.press("Enter");
-        await fileChooserPromise;
+        // The exam has an attached PDF, so students get no "PDF 열기" picker.
+        await expect(toolsPanel.getByRole("button", { name: "PDF 열기", exact: true })).toHaveCount(0);
+        await expect(toolsPanel.getByLabel("선생님 모드")).toHaveCount(0);
+        const themeToggle = toolsPanel.getByRole("button", { name: /모드로 전환/ });
+        await expectMinimumTouchTarget(themeToggle);
+        await expectWithinViewport(themeToggle, page);
         const solveControls = [
-            pdfOpenButton,
+            themeToggle,
             page.locator(".solve-controls").getByRole("button", { name: "답안지 접기" }),
             page.locator(".solve-controls").getByRole("button", { name: "제출하기" }),
         ];
@@ -541,6 +539,43 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expectMinimumTouchTarget(pageInput);
         await expectWithinViewport(pageInput, page);
         await expectWithinVisualViewport(pdfToolbar, page);
+        await expectNoDocumentHorizontalOverflow(page);
+    });
+
+    test("solve route without an attached PDF opens the PDF picker from the tools menu and the empty state", async ({ page }) => {
+        await seedSolveExam(page, { withoutPdf: true });
+        await page.goto(`/solve/${SOLVE_EXAM_ID}`);
+        await continueSolveEntryIfPresent(page);
+
+        await expect(page.locator(".solve-body")).toBeVisible({ timeout: 20_000 });
+        const emptyState = page.locator(".pdf-upload-empty");
+        await expect(emptyState).toBeVisible();
+        await expect(emptyState).toContainText("문제지 PDF 열기");
+        await expect(emptyState).not.toContainText("정답지");
+
+        const toolsDisclosure = page.locator(".solve-tools-disclosure");
+        const toolsSummary = toolsDisclosure.locator(":scope > summary");
+        await toolsSummary.focus();
+        await toolsSummary.press("Enter");
+        await expect(toolsDisclosure).toHaveJSProperty("open", true);
+        const toolsPanel = toolsDisclosure.locator(".solve-tools-panel");
+        await expect(toolsPanel.getByLabel("선생님 모드")).toHaveCount(0);
+        const pdfOpenButton = toolsPanel.getByRole("button", { name: "PDF 열기", exact: true });
+        await expectMinimumTouchTarget(pdfOpenButton);
+        await expectWithinViewport(pdfOpenButton, page);
+        await pdfOpenButton.focus();
+        await expect(pdfOpenButton).toBeFocused();
+        const fileChooserPromise = page.waitForEvent("filechooser");
+        await pdfOpenButton.press("Enter");
+        await fileChooserPromise;
+
+        await toolsSummary.click();
+        await expect(toolsDisclosure).toHaveJSProperty("open", false);
+        const emptyStateChooser = page.waitForEvent("filechooser");
+        // At 320x568 the PDF pane is still squeezed by the OMR pane (plan A2),
+        // so dispatch the click to check the hidden-input wiring itself.
+        await emptyState.dispatchEvent("click");
+        await emptyStateChooser;
         await expectNoDocumentHorizontalOverflow(page);
     });
 
@@ -633,7 +668,7 @@ test.describe("iPhone WebKit mobile layout", () => {
 
     test("teacher solve preview shows both PDF tabs without horizontal control scrolling", async ({ page }) => {
         await seedSolveExam(page);
-        await page.goto(`/solve/${SOLVE_EXAM_ID}`);
+        await page.goto(`/solve/${SOLVE_EXAM_ID}?preview=teacher`);
         await continueSolveEntryIfPresent(page);
         await expect(page.locator(".solve-body")).toBeVisible({ timeout: 20_000 });
 

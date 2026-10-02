@@ -86,7 +86,26 @@ interface PDFViewerProps {
     markers?: MarkerData[];
     forcePage?: number;
     focusTarget?: PdfFocusTarget | null;
+    /** Copy for the no-file state. "student" drops answer-key wording. */
+    emptyStateAudience?: PdfEmptyStateAudience;
 }
+
+type PdfEmptyStateAudience = "editor" | "student";
+
+const PDF_EMPTY_STATE_COPY: Record<PdfEmptyStateAudience, { title: string; hint: string; caption: string; dropError: string }> = {
+    editor: {
+        title: "PDF 업로드",
+        hint: "클릭하거나 파일을 드래그하세요",
+        caption: "문제지 · 정답지 PDF",
+        dropError: "문제지 또는 정답지는 PDF 형식으로 올려주세요.",
+    },
+    student: {
+        title: "문제지 PDF 열기",
+        hint: "선생님께 받은 문제지 PDF가 있으면 눌러서 열어주세요",
+        caption: "PDF 없이도 답안 마킹과 제출은 할 수 있어요",
+        dropError: "문제지는 PDF 파일만 열 수 있어요.",
+    },
+};
 
 type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
 /**
@@ -149,7 +168,9 @@ export default function PDFViewer({
     markers = [],
     forcePage,
     focusTarget,
+    emptyStateAudience = "editor",
 }: PDFViewerProps) {
+    const emptyStateCopy = PDF_EMPTY_STATE_COPY[emptyStateAudience];
     const [numPages, setNumPages] = useState<number>(0);
     const [pageNumber, setPageNumber] = useState<number>(1);
     const [inputPage, setInputPage] = useState<string>("1");
@@ -1019,7 +1040,7 @@ export default function PDFViewer({
         if (onFileDrop && e.dataTransfer.files[0] && isPdfUploadFile(e.dataTransfer.files[0])) {
             onFileDrop(e.dataTransfer.files[0]);
         } else {
-            toast.error("PDF 파일만 업로드 가능", "문제지 또는 정답지는 PDF 형식으로 올려주세요.");
+            toast.error("PDF 파일만 업로드 가능", emptyStateCopy.dropError);
         }
     };
 
@@ -1546,9 +1567,9 @@ export default function PDFViewer({
                             <div className="pdf-upload-empty-icon">
                                 <UploadCloud size={30} aria-hidden="true" />
                             </div>
-                            <p>PDF 업로드</p>
-                            <span>클릭하거나 파일을 드래그하세요</span>
-                            <strong>문제지 · 정답지 PDF</strong>
+                            <p>{emptyStateCopy.title}</p>
+                            <span>{emptyStateCopy.hint}</span>
+                            <strong>{emptyStateCopy.caption}</strong>
                         </div>
                     )}
                 </div>

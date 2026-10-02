@@ -12,7 +12,7 @@ function samplePdfDataUrl(): string {
     return `data:application/pdf;base64,${bytes.toString("base64")}`;
 }
 
-async function seedStudentSurface(page: Page, options: { completed?: boolean; guest?: boolean } = {}) {
+async function seedStudentSurface(page: Page, options: { completed?: boolean; guest?: boolean; withoutPdf?: boolean } = {}) {
     await page.addInitScript(({ examId, attemptId, completed, guest, longToken, pdfData }) => {
         try { window.localStorage.clear(); } catch {}
         try { window.sessionStorage.clear(); } catch {}
@@ -121,7 +121,7 @@ async function seedStudentSurface(page: Page, options: { completed?: boolean; gu
         completed: options.completed ?? false,
         guest: options.guest ?? false,
         longToken: LONG_TOKEN,
-        pdfData: samplePdfDataUrl(),
+        pdfData: options.withoutPdf ? undefined : samplePdfDataUrl(),
     });
 }
 
@@ -225,10 +225,32 @@ test.describe("student UI simplification regressions", () => {
     });
 
     for (const width of [320, 390]) {
-    test(`${width}px solve header keeps secondary tools visible outside control clipping`, async ({ page }) => {
+    test(`${width}px student solve tools hide the teacher preview and the PDF picker for an attached PDF`, async ({ page }) => {
         await page.setViewportSize({ width, height: 844 });
         await seedStudentSurface(page, { guest: true });
         await page.goto(`/solve/${EXAM_ID}`);
+        await continueSolveEntryIfPresent(page);
+
+        const tools = page.locator("details.solve-tools-disclosure");
+        await expect(page.getByRole("button", { name: "제출하기" })).toBeVisible();
+        await tools.locator("summary").click();
+        const toolsPanel = tools.locator(".solve-tools-panel");
+        await expect(tools.getByRole("button", { name: /모드로 전환/ })).toBeVisible();
+        await expect(toolsPanel.locator(".solve-teacher-toggle")).toHaveCount(0);
+        await expect(toolsPanel.getByLabel("선생님 모드")).toHaveCount(0);
+        await expect(toolsPanel.locator(".solve-pdf-button")).toHaveCount(0);
+        await expect(page.getByText("PDF 열기", { exact: true })).toHaveCount(0);
+        // The empty-state picker input stays mounted for the PDFViewer.
+        await expect(page.locator("#pdf-upload-input")).toHaveCount(1);
+        await expectInsideViewport(page, ".solve-header, .solve-header-content, .solve-tools-panel");
+    });
+
+    test(`${width}px solve header keeps secondary tools visible outside control clipping`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 844 });
+        // Teacher preview of an exam without an attached PDF: both secondary
+        // tools (teacher toggle and "PDF 열기") are offered.
+        await seedStudentSurface(page, { guest: true, withoutPdf: true });
+        await page.goto(`/solve/${EXAM_ID}?preview=teacher`);
         await continueSolveEntryIfPresent(page);
 
         const tools = page.locator("details.solve-tools-disclosure");

@@ -76,8 +76,8 @@
 **원인:** 교사 미리보기용 토글과 PDF 업로드가 학생에게 항상 보입니다(`solve/[id]/page.tsx:4032-4071`). 교사 인증 다이얼로그를 거치므로 보안 문제는 아니고 UX 노출 문제입니다.
 
 **변경**
-- [ ] `shouldOfferTeacherPreview()`가 true일 때만 선생님 모드를 렌더링합니다. 조건은 `hasTeacherSession()` 또는 `?preview=teacher`입니다. (PO 결정 A-2)
-- [ ] "PDF 열기"는 첨부 PDF가 없을 때만 보여줍니다. 숨김 input은 유지합니다. 빈 화면 문구는 학생용으로 따로 둡니다. (PO 결정 A-3)
+- [x] `shouldOfferTeacherPreview()`가 true일 때만 선생님 모드를 렌더링합니다. 조건은 `hasTeacherSession()` 또는 `?preview=teacher`입니다. (PO 결정 A-2)
+- [x] "PDF 열기"는 첨부 PDF가 없을 때만 보여줍니다. 숨김 input은 유지합니다. 빈 화면 문구는 학생용으로 따로 둡니다. (PO 결정 A-3)
 
 **깨지는 테스트:** `e2e/student-simplification.spec.ts:227-279`, `e2e/ios-mobile-layout.spec.ts:509-518, 633-660`(→ `?preview=teacher`)
 
