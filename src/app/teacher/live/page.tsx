@@ -399,9 +399,9 @@ export default function LiveResultsPage() {
     }, [loadSelectedAttemptDetails, selectedExamId]);
 
     const refreshSelectedAttempts = useCallback(async () => {
-        if (!selectedExamId) return;
+        if (liveDataMode === "demo" || !selectedExamId) return;
         await loadSelectedAttemptDetails(selectedExamId);
-    }, [loadSelectedAttemptDetails, selectedExamId]);
+    }, [liveDataMode, loadSelectedAttemptDetails, selectedExamId]);
 
     const reconcilePartialForceFinish = useCallback(() => {
         void refreshFromStorage();
@@ -452,22 +452,24 @@ export default function LiveResultsPage() {
     }, [catalogLoadRequest]);
 
     useEffect(() => {
-        if (!selectedExamId) {
+        if (!selectedExamId || liveDataMode === "demo") {
+            // Demo students are display-only. Fence any pending real response
+            // when entering demo mode without dismissing its confirmation.
             const requestGeneration = selectedAttemptRequestGenerationRef.current + 1;
             selectedAttemptRequestGenerationRef.current = requestGeneration;
             setSelectedAttemptDetails({ examId: "", requestGeneration, status: "idle" });
-            setForceFinishConfirmOpen(false);
+            if (!selectedExamId) setForceFinishConfirmOpen(false);
             setActiveSessions([]);
             return;
         }
         void refreshSelectedAttempts();
-    }, [refreshSelectedAttempts, selectedExamId]);
+    }, [liveDataMode, refreshSelectedAttempts, selectedExamId]);
 
     // Poll only the selected exam every 3s after the previous request settles.
     // The catalog is loaded on entry and after explicit mutations, avoiding
     // overlapping detail reads and full-organization payload downloads.
     useEffect(() => {
-        if (isScreenRefreshPaused) return;
+        if (liveDataMode === "demo" || isScreenRefreshPaused) return;
         let cancelled = false;
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const poll = async () => {
@@ -484,7 +486,7 @@ export default function LiveResultsPage() {
             cancelled = true;
             if (timeoutId !== undefined) clearTimeout(timeoutId);
         };
-    }, [isScreenRefreshPaused, refreshSelectedAttempts]);
+    }, [isScreenRefreshPaused, liveDataMode, refreshSelectedAttempts]);
 
     const selectedExam = exams.find(e => e.id === selectedExamId) ?? exams[0];
     const hasExam = !!selectedExam;

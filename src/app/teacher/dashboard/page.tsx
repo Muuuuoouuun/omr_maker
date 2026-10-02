@@ -864,12 +864,14 @@ function TeacherDashboard() {
                 }
             });
         }
-        const refreshTimer = window.setTimeout(() => {
+        // The mockup snapshot is already complete. Only real accounts need an
+        // initial background load to verify their canonical data.
+        const refreshTimer = isMockupAccount ? undefined : window.setTimeout(() => {
             void loadDashboardData({ isCancelled: () => cancelled });
         }, 0);
         return () => {
             cancelled = true;
-            window.clearTimeout(refreshTimer);
+            if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
         };
     }, [
         applyDashboardSnapshot,

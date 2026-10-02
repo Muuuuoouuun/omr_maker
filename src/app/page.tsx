@@ -1466,7 +1466,7 @@ export default function Home() {
                           setTeacherIdentifier(event.target.value);
                           clearLoginError();
                         }}
-                        placeholder={visibleTeacherAccountMode === "login" ? "admin 또는 teacher@example.com" : "teacher@example.com"}
+                        placeholder={visibleTeacherAccountMode === "login" ? "운영자가 발급한 교사 아이디 또는 이메일" : "teacher@example.com"}
                         autoFocus
                         autoComplete={visibleTeacherAccountMode === "login" ? "username" : "email"}
                         inputMode={visibleTeacherAccountMode === "login" ? undefined : "email"}
@@ -1616,6 +1616,11 @@ export default function Home() {
                         <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", fontWeight: 600 }}>
                           {teacherLoginHelp.message}
                         </p>
+                        {teacherLoginHelp.recoveryHelp && (
+                          <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", lineHeight: 1.5, wordBreak: "keep-all" }}>
+                            {teacherLoginHelp.recoveryHelp}
+                          </p>
+                        )}
                         {teacherLoginHelp.operatorHelp && (
                           <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", lineHeight: 1.5, wordBreak: "keep-all" }}>
                             {teacherLoginHelp.operatorHelp}
@@ -1624,7 +1629,11 @@ export default function Home() {
                       </>
                     ) : (
                       <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", opacity: 0.82 }}>
-                        {visibleTeacherAccountMode === "login" ? "교사용 계정 정보를 입력하세요." : "요청 결과가 여기에 표시됩니다."}
+                        {visibleTeacherAccountMode === "login"
+                          ? teacherSelfServiceEnabled
+                            ? "교사 계정으로 로그인하세요. 계정이 없으면 아래 ‘교사 계정 만들기’를 선택하세요."
+                            : "운영자가 발급한 교사 계정으로 로그인하세요. 처음 이용하면 운영자에게 계정 발급을 요청해주세요."
+                          : "요청 결과가 여기에 표시됩니다."}
                       </p>
                     )}
                   </div>

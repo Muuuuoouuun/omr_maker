@@ -59,4 +59,36 @@ describe("teacher live selected-attempt request fencing", () => {
             /\(selectedAttemptDetails\.status === "ready" \|\| selectedAttemptDetails\.status === "refreshing"\)/,
         );
     });
+
+    it("limits selected-attempt reads and polling to real mode without expanding showcase authority", () => {
+        const refreshStart = livePage.indexOf("const refreshSelectedAttempts = useCallback");
+        const refreshEnd = livePage.indexOf("const reconcilePartialForceFinish", refreshStart);
+        const refresh = livePage.slice(refreshStart, refreshEnd);
+        expect(refresh).toContain('if (liveDataMode === "demo" || !selectedExamId) return;');
+        expect(refresh).toContain("[liveDataMode, loadSelectedAttemptDetails, selectedExamId]");
+
+        const pollStart = livePage.indexOf("// Poll only the selected exam every 3s");
+        const pollEnd = livePage.indexOf("const selectedExam =", pollStart);
+        const poll = livePage.slice(pollStart, pollEnd);
+        expect(poll).toContain('if (liveDataMode === "demo" || isScreenRefreshPaused) return;');
+        expect(poll).toContain("[isScreenRefreshPaused, liveDataMode, refreshSelectedAttempts]");
+    });
+
+    it("fences pending real detail responses on mode transitions without closing a demo confirmation", () => {
+        const effectStart = livePage.indexOf('if (!selectedExamId || liveDataMode === "demo")');
+        const effectEnd = livePage.indexOf("// Poll only the selected exam every 3s", effectStart);
+        const effect = livePage.slice(effectStart, effectEnd);
+        const invalidate = effect.indexOf("selectedAttemptRequestGenerationRef.current = requestGeneration");
+        const refresh = effect.indexOf("void refreshSelectedAttempts()");
+        expect(effectStart).toBeGreaterThan(-1);
+        expect(invalidate).toBeGreaterThan(-1);
+        expect(refresh).toBeGreaterThan(invalidate);
+        expect(effect).toContain("if (!selectedExamId) setForceFinishConfirmOpen(false);");
+        expect(effect).toContain("[liveDataMode, refreshSelectedAttempts, selectedExamId]");
+
+        const loadStart = livePage.indexOf("const loadSelectedAttemptDetails = useCallback");
+        const loadEnd = livePage.indexOf("const refreshFromStorage", loadStart);
+        const loader = livePage.slice(loadStart, loadEnd);
+        expect(loader).toMatch(/if \(attemptResult\.remoteError \|\| sessionResult\.remoteError\) \{[\s\S]*status: "failed"[\s\S]*setForceFinishConfirmOpen\(false\)/);
+    });
 });

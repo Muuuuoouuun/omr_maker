@@ -2,6 +2,23 @@ import type { StoredDataRef } from "@/types/omr";
 
 const DRAFT_KEY = "omr_exam_draft";
 
+export function isNewExamDraftDirty(input: {
+    isEditing: boolean;
+    isReady: boolean;
+    slot: string;
+    baseline: { slot: string; signature: string } | null;
+    currentSignature: string;
+    hasAttachments: boolean;
+    matchesSavedDraft?: boolean;
+}): boolean {
+    return !input.isEditing && input.isReady && !input.matchesSavedDraft && input.baseline?.slot === input.slot
+        && (input.baseline.signature !== input.currentSignature || input.hasAttachments);
+}
+
+export function initialCreateWorkspacePanel(editId: string | null): "pdf" | "settings" {
+    return editId ? "pdf" : "settings";
+}
+
 interface DraftPdfAssets {
     pdfDataRef?: StoredDataRef;
     answerKeyPdfRef?: StoredDataRef;

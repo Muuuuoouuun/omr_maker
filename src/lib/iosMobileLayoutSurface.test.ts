@@ -47,4 +47,23 @@ describe("shared iPhone mobile layout surface", () => {
         expect(iosLayoutSpec).toContain("await expectWithinViewport(control, page);");
         expect(iosLayoutSpec).toContain("await expectWithinViewport(interactiveActions.nth(index), page);");
     });
+
+    it("captures a rendered frame before keeping the strict viewport geometry assertions", () => {
+        const start = iosLayoutSpec.indexOf("async function expectWithinViewport(");
+        const end = iosLayoutSpec.indexOf("async function expectWithinVisualViewport", start);
+        const helper = iosLayoutSpec.slice(start, end);
+        expect(helper).toContain("await expect(locator).toBeVisible();");
+        expect(helper).toContain("await expect.poll(async () => {");
+        expect(helper).toContain("renderedFrame.box = bounds;");
+        expect(helper).toContain("renderedFrame.viewportWidth = width;");
+        expect(helper).toContain("control did not settle on a rendered frame");
+        expect(helper).toContain("}).not.toBeNull();");
+        expect(helper).toContain("const { box, viewportWidth } = renderedFrame;");
+        expect(helper).toContain("control did not have a rendered bounding box");
+        expect(helper).toContain("control extended beyond the viewport's left edge");
+        expect(helper).toContain(".toBeGreaterThanOrEqual(-tolerance)");
+        expect(helper).toContain("control extended beyond the viewport's right edge");
+        expect(helper).toContain(".toBeLessThanOrEqual(viewportWidth + tolerance)");
+        expect(helper).not.toContain("waitForTimeout");
+    });
 });

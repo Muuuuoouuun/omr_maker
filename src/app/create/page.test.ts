@@ -5,6 +5,8 @@ import {
     getOrCreateNewExamPublishTarget,
     getOrCreatePdfUploadAttemptNonce,
     isEditDraftNewerThanExam,
+    isNewExamDraftDirty,
+    initialCreateWorkspacePanel,
     isLoadedExamCurrentForEdit,
     mergePdfHydrationFailures,
     rotatePdfUploadAttemptNonce,
@@ -27,6 +29,31 @@ function memoryStorage() {
         removeItem: (key: string) => { values.delete(key); },
     };
 }
+
+describe("first-run editor recovery", () => {
+    const unchanged = { isEditing: false, isReady: true, slot: "new", baseline: { slot: "new", signature: "defaults" }, currentSignature: "defaults", hasAttachments: false };
+    it("starts a new mobile exam on its meaningful settings instead of optional PDF upload", () => {
+        expect(initialCreateWorkspacePanel(null)).toBe("settings");
+        expect(initialCreateWorkspacePanel("exam-1")).toBe("pdf");
+    });
+    it("does not warn for untouched defaults or unready/different routes", () => {
+        expect(isNewExamDraftDirty(unchanged)).toBe(false);
+        expect(isNewExamDraftDirty({ ...unchanged, isReady: false, currentSignature: "changed" })).toBe(false);
+        expect(isNewExamDraftDirty({ ...unchanged, slot: "other", currentSignature: "changed" })).toBe(false);
+        expect(isNewExamDraftDirty({ ...unchanged, baseline: null })).toBe(false);
+    });
+    it("protects new metadata changes and manually attached PDFs before autosave", () => {
+        expect(isNewExamDraftDirty({ ...unchanged, currentSignature: "changed" })).toBe(true);
+        expect(isNewExamDraftDirty({ ...unchanged, hasAttachments: true })).toBe(true);
+    });
+    it("leaves edit-mode dirty tracking to the saved exam comparison", () => {
+        expect(isNewExamDraftDirty({ ...unchanged, isEditing: true, currentSignature: "changed" })).toBe(false);
+    });
+    it("does not warn again when the exact current metadata and PDFs were manually saved", () => {
+        expect(isNewExamDraftDirty({ ...unchanged, currentSignature: "changed", hasAttachments: true, matchesSavedDraft: true })).toBe(false);
+        expect(isNewExamDraftDirty({ ...unchanged, currentSignature: "changed", hasAttachments: true, matchesSavedDraft: false })).toBe(true);
+    });
+});
 
 describe("scopedExamDraftStorageKey", () => {
     it("isolates draft bodies and PDF blob keys by organization, actor, and editor slot", () => {

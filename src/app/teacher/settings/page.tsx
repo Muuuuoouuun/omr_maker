@@ -399,16 +399,16 @@ export default function SettingsPage() {
 
     const saveSection = useCallback(<K extends keyof Settings>(key: K) => {
         const next: Settings = { ...persistedRef.current, [key]: draftRef.current[key] };
+        try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        } catch {
+            toast.error("설정 저장 실패", "브라우저 저장 공간 또는 권한을 확인해주세요. 변경한 내용은 그대로 유지됩니다.");
+            return false;
+        }
         persistedRef.current = next;
         setPersisted(next);
-        if (typeof window !== "undefined") {
-            try {
-                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-                if (key === "theme") persistThemeMode(next.theme);
-            } catch {
-                // ignore quota errors
-            }
-        }
+        if (key === "theme") persistThemeMode(next.theme);
+        return true;
     }, []);
 
     const cancelSection = useCallback(<K extends keyof Settings>(key: K) => {
@@ -418,15 +418,16 @@ export default function SettingsPage() {
     const importInputRef = useRef<HTMLInputElement | null>(null);
 
     const resetAllToDefaults = useCallback(() => {
+        try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_SETTINGS));
+        } catch {
+            toast.error("설정 초기화 실패", "브라우저 저장 공간 또는 권한을 확인해주세요. 기존 설정은 그대로 유지됩니다.");
+            return;
+        }
         setDraft(DEFAULT_SETTINGS);
         setPersisted(DEFAULT_SETTINGS);
         draftRef.current = DEFAULT_SETTINGS;
         persistedRef.current = DEFAULT_SETTINGS;
-        try {
-            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_SETTINGS));
-        } catch {
-            // ignore
-        }
         applyTheme(DEFAULT_SETTINGS.theme);
         persistThemeMode(DEFAULT_SETTINGS.theme);
         setResetConfirmOpen(false);
@@ -455,15 +456,16 @@ export default function SettingsPage() {
                 toast.error("가져오기 실패", "OMR Maker에서 내보낸 전체 설정 백업 파일을 선택해주세요.");
                 return;
             }
+            try {
+                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+            } catch {
+                toast.error("설정 가져오기 실패", "브라우저 저장 공간 또는 권한을 확인해주세요. 기존 설정은 그대로 유지됩니다.");
+                return;
+            }
             setDraft(merged);
             setPersisted(merged);
             draftRef.current = merged;
             persistedRef.current = merged;
-            try {
-                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-            } catch {
-                // ignore quota errors
-            }
             applyTheme(merged.theme);
             persistThemeMode(merged.theme);
             toast.success("설정 가져오기 완료", "백업 파일을 성공적으로 불러왔습니다.");
@@ -718,12 +720,15 @@ function Card({ title, desc, children }: { title: string; desc?: string; childre
     );
 }
 
-function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: React.ReactNode }) {
+function Field({ label, children, hint, controlId, error }: { label: string; children: React.ReactNode; hint?: React.ReactNode; controlId?: string; error?: string }) {
     return (
         <div style={{ marginBottom: '1.25rem' }}>
-            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.5rem', letterSpacing: '0.02em' }}>{label}</label>
+            {controlId
+                ? <label htmlFor={controlId} style={{ display: 'block', fontSize: 'var(--type-label)', fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.5rem' }}>{label}</label>
+                : <div style={{ fontSize: 'var(--type-label)', fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.5rem' }}>{label}</div>}
             {children}
             {hint && <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.4rem' }}>{hint}</div>}
+            {error && <p id={`${controlId}-error`} style={{ color: 'var(--error)', fontSize: 'var(--type-label)', marginTop: '0.4rem' }}>{error}</p>}
         </div>
     );
 }
@@ -757,7 +762,7 @@ function Toggle({ checked, onChange, label, desc }: { checked: boolean; onChange
     );
 }
 
-function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => void }) {
+function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => boolean }) {
     const [saved, setSaved] = useState(false);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -768,9 +773,10 @@ function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => voi
     }, []);
 
     const handleSave = () => {
-        onSave();
-        setSaved(true);
         if (timerRef.current) clearTimeout(timerRef.current);
+        const success = onSave();
+        setSaved(success);
+        if (!success) return;
         timerRef.current = setTimeout(() => setSaved(false), 1800);
     };
 
@@ -778,6 +784,7 @@ function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => voi
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)', alignItems: 'center' }}>
             {saved && (
                 <span
+                    role="status"
                     style={{
                         fontSize: '0.85rem',
                         fontWeight: 600,
@@ -790,8 +797,8 @@ function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => voi
                     저장됨
                 </span>
             )}
-            <button onClick={onCancel} style={{ padding: '0.7rem 1.4rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem' }}>취소</button>
-            <button onClick={handleSave} style={{ padding: '0.7rem 1.4rem', background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.4rem', boxShadow: '0 4px 12px rgba(99,102,241,0.3)' }}>
+            <button type="button" onClick={() => { setSaved(false); onCancel(); }} style={{ padding: '0.7rem 1.4rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem' }}>취소</button>
+            <button type="button" onClick={handleSave} style={{ padding: '0.7rem 1.4rem', background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.4rem', boxShadow: '0 4px 12px rgba(99,102,241,0.3)' }}>
                 <Save size={14} /> 저장
             </button>
         </div>
@@ -801,7 +808,7 @@ function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => voi
 type SectionProps<T> = {
     value: T;
     onChange: (v: Partial<T>) => void;
-    onSave: () => void;
+    onSave: () => boolean;
     onCancel: () => void;
 };
 
@@ -878,28 +885,48 @@ function NotificationsSection() {
 }
 
 function ExamDefaultsSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["examDefaults"]>) {
+    const [validationAttempted, setValidationAttempted] = useState(false);
+    const errors: Partial<Record<keyof Settings["examDefaults"], string>> = {};
+    if (!Number.isInteger(value.questions) || value.questions < MIN_QUESTION_COUNT || value.questions > MAX_QUESTION_COUNT) {
+        errors.questions = `${MIN_QUESTION_COUNT}~${MAX_QUESTION_COUNT} 사이의 정수를 입력해주세요.`;
+    }
+    if (!Number.isInteger(value.duration) || value.duration < 1 || value.duration > 360) {
+        errors.duration = "1~360분 사이의 정수를 입력해주세요.";
+    }
+    if (!Number.isFinite(value.scorePerQ) || value.scorePerQ <= 0) {
+        errors.scorePerQ = "배점은 0보다 큰 숫자로 입력해주세요.";
+    }
+    if (value.choices !== 4 && value.choices !== 5) errors.choices = "4지선다 또는 5지선다를 선택해주세요.";
+    if (![0, 10, 30, 60].includes(value.autosaveSec)) errors.autosaveSec = "자동 저장 주기를 다시 선택해주세요.";
+    const visibleErrors = validationAttempted ? errors : {};
+    const saveDefaults = () => {
+        setValidationAttempted(true);
+        if (Object.keys(errors).length > 0) return false;
+        return onSave();
+    };
     return (
         <Card title="시험 기본값" desc="새 시험 생성 시 자동으로 적용될 값을 설정하세요.">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <Field label="기본 문항 수"><input className="input-field" type="number" min={MIN_QUESTION_COUNT} max={MAX_QUESTION_COUNT} step={1} value={value.questions} onChange={e => onChange({ questions: Number(e.target.value) })} /></Field>
-                <Field label="기본 시간 (분)"><input className="input-field" type="number" value={value.duration} onChange={e => onChange({ duration: Number(e.target.value) })} /></Field>
-                <Field label="문항당 기본 배점"><input className="input-field" type="number" value={value.scorePerQ} step={0.5} onChange={e => onChange({ scorePerQ: Number(e.target.value) })} /></Field>
-                <Field label="선택지 수">
-                    <select className="input-field" value={value.choices} onChange={e => onChange({ choices: Number(e.target.value) as 4 | 5 })}>
+                <Field label="기본 문항 수" controlId="exam-default-questions" error={visibleErrors.questions}><input id="exam-default-questions" className="input-field" type="number" min={MIN_QUESTION_COUNT} max={MAX_QUESTION_COUNT} step={1} value={value.questions} aria-invalid={Boolean(visibleErrors.questions)} aria-describedby={visibleErrors.questions ? "exam-default-questions-error" : undefined} onChange={e => onChange({ questions: Number(e.target.value) })} /></Field>
+                <Field label="기본 시간 (분)" controlId="exam-default-duration" error={visibleErrors.duration}><input id="exam-default-duration" className="input-field" type="number" min={1} max={360} step={1} value={value.duration} aria-invalid={Boolean(visibleErrors.duration)} aria-describedby={visibleErrors.duration ? "exam-default-duration-error" : undefined} onChange={e => onChange({ duration: Number(e.target.value) })} /></Field>
+                <Field label="문항당 기본 배점" controlId="exam-default-score" error={visibleErrors.scorePerQ}><input id="exam-default-score" className="input-field" type="number" value={value.scorePerQ} step={0.5} aria-invalid={Boolean(visibleErrors.scorePerQ)} aria-describedby={visibleErrors.scorePerQ ? "exam-default-score-error" : undefined} onChange={e => onChange({ scorePerQ: Number(e.target.value) })} /></Field>
+                <Field label="선택지 수" controlId="exam-default-choices" error={visibleErrors.choices}>
+                    <select id="exam-default-choices" className="input-field" value={value.choices} aria-invalid={Boolean(visibleErrors.choices)} aria-describedby={visibleErrors.choices ? "exam-default-choices-error" : undefined} onChange={e => onChange({ choices: Number(e.target.value) as 4 | 5 })}>
                         <option value={5}>5지선다</option>
                         <option value={4}>4지선다</option>
                     </select>
                 </Field>
             </div>
-            <Field label="자동 저장 주기" hint="편집 중 자동으로 저장됩니다.">
-                <select className="input-field" value={value.autosaveSec} onChange={e => onChange({ autosaveSec: Number(e.target.value) })}>
+            <Field label="자동 저장 주기" controlId="exam-default-autosave" error={visibleErrors.autosaveSec} hint="초안은 이 기기에 저장됩니다. 선택한 시간 동안 편집을 멈추면 자동 저장되며, 수동을 선택하면 직접 저장해야 합니다.">
+                <select id="exam-default-autosave" className="input-field" value={value.autosaveSec} aria-invalid={Boolean(visibleErrors.autosaveSec)} aria-describedby={visibleErrors.autosaveSec ? "exam-default-autosave-error" : undefined} onChange={e => onChange({ autosaveSec: Number(e.target.value) })}>
                     <option value={10}>10초</option>
                     <option value={30}>30초</option>
                     <option value={60}>1분</option>
                     <option value={0}>수동</option>
                 </select>
             </Field>
-            <SaveBar onCancel={onCancel} onSave={onSave} />
+            {validationAttempted && Object.keys(errors).length > 0 && <p role="alert" style={{ color: 'var(--error)', fontSize: 'var(--type-label)' }}>기본값을 저장하지 않았습니다. 표시된 입력값을 확인해주세요.</p>}
+            <SaveBar onCancel={() => { setValidationAttempted(false); onCancel(); }} onSave={saveDefaults} />
         </Card>
     );
 }
@@ -931,10 +958,12 @@ function ApiSection({ value, onChange, onSave, onCancel, showKey, setShowKey }: 
 
             <Field
                 label="개인 Gemini API Key"
+                controlId="settings-gemini-key"
                 hint={<span>키 발급: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', fontWeight: 600 }}>aistudio.google.com/apikey</a></span>}
             >
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <input
+                        id="settings-gemini-key"
                         className="input-field"
                         type={showKey ? "text" : "password"}
                         value={realKey}

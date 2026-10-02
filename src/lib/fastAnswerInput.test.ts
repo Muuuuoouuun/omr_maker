@@ -1,38 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { parseFastAnswerInput } from "./fastAnswerInput";
+import { applyFastAnswers, parseFastAnswerInput } from "./fastAnswerInput";
+import type { Question } from "@/types/omr";
 
-describe("parseFastAnswerInput", () => {
-    it("maps each digit to the next question in order", () => {
-        expect(parseFastAnswerInput("31251", 5)).toEqual({ value: "31251", answers: [3, 1, 2, 5, 1], rejectedCount: 0 });
+const questions: Question[] = Array.from({ length: 5 }, (_, index) => ({ id: index + 1, number: index + 1, choices: 5, answer: 3 }));
+
+describe("quick answer entry", () => {
+    it("preserves a skipped question instead of shifting later answers", () => {
+        expect(parseFastAnswerInput("12-45", questions)).toEqual({ ok: true, answers: [1, 2, undefined, 4, 5] });
+        expect(parseFastAnswerInput("12045", questions)).toEqual({ ok: true, answers: [1, 2, undefined, 4, 5] });
     });
-
-    it("treats - as a blank that keeps its position so later answers do not shift", () => {
-        const result = parseFastAnswerInput("3-25", 5);
-        expect(result.answers).toEqual([3, undefined, 2, 5]);
-        expect(result.answers[3]).toBe(5);
-        expect(result.value).toBe("3-25");
-        expect(result.rejectedCount).toBe(0);
+    it("accepts whitespace and list separators without changing positions", () => {
+        expect(parseFastAnswerInput("1, 2;\n- 4\t5", questions)).toEqual({ ok: true, answers: [1, 2, undefined, 4, 5] });
     });
-
-    it("uses spaces and commas only as separators", () => {
-        expect(parseFastAnswerInput("12 34,5-", 5)).toEqual({
-            value: "12 34,5-",
-            answers: [1, 2, 3, 4, 5, undefined],
-            rejectedCount: 0,
-        });
+    it.each(["12645", "1x245", "12.45", "①②③", "123451"])("rejects %s as a whole instead of silently deleting input", input => {
+        expect(parseFastAnswerInput(input, questions).ok).toBe(false);
+        expect(questions.map(question => question.answer)).toEqual([3, 3, 3, 3, 3]);
     });
-
-    it("rejects out-of-range digits and other characters with a count", () => {
-        expect(parseFastAnswerInput("1502a3", 4)).toEqual({ value: "123", answers: [1, 2, 3], rejectedCount: 3 });
-        expect(parseFastAnswerInput("5", 5).rejectedCount).toBe(0);
-        expect(parseFastAnswerInput("5", 4)).toEqual({ value: "", answers: [], rejectedCount: 1 });
+    it("validates each question's actual choice count", () => {
+        const mixed = questions.map((question, index) => ({ ...question, choices: index === 2 ? 4 as const : 5 as const }));
+        expect(parseFastAnswerInput("12545", mixed)).toMatchObject({ ok: false, message: expect.stringContaining("3번은 4지선다") });
+        expect(parseFastAnswerInput("12445", mixed).ok).toBe(true);
     });
-
-    it("only accepts - as the blank marker", () => {
-        expect(parseFastAnswerInput("1.0", 5)).toEqual({ value: "1", answers: [1], rejectedCount: 2 });
+    it("clears only the previously covered tail when shortening input", () => {
+        expect(applyFastAnswers(questions, [1, 2], 4).map(question => question.answer)).toEqual([1, 2, undefined, undefined, 3]);
     });
-
-    it("returns no answers for empty input", () => {
-        expect(parseFastAnswerInput("", 5)).toEqual({ value: "", answers: [], rejectedCount: 0 });
+    it("clears skipped slots and preserves separately entered answers beyond the quick entry", () => {
+        expect(applyFastAnswers(questions, [1, undefined], 0).map(question => question.answer)).toEqual([1, undefined, 3, 3, 3]);
+    });
+    it("keeps an invalid intermediate entry from becoming the clear-tail boundary", () => {
+        const original = applyFastAnswers(questions, [1, 2, 3, 4, 5], 0);
+        expect(parseFastAnswerInput("12645", original).ok).toBe(false);
+        expect(applyFastAnswers(original, [1, 2], 5).map(question => question.answer)).toEqual([1, 2, undefined, undefined, undefined]);
+    });
+    it("can remove all quick-entered answers", () => {
+        expect(parseFastAnswerInput("", questions)).toEqual({ ok: true, answers: [] });
+        expect(applyFastAnswers(questions, [], 5).every(question => question.answer === undefined)).toBe(true);
     });
 });

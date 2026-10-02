@@ -6,6 +6,7 @@ import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from 
 import { createTeacherSession, LEGACY_TEACHER_TOKEN_KEY, TEACHER_SESSION_KEY } from "../src/lib/teacherSession";
 import { STUDENT_SERVER_SESSION_COOKIE } from "../src/lib/studentServerSession";
 import { registerCanonicalRemoteFixture } from "./fixtures/canonical-remote-fixture";
+import { teacherLoginFixture } from "./helpers";
 
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 
@@ -16,8 +17,9 @@ const hostedMode = process.env.OMR_STUDENT_CREDENTIAL_HOSTED_MODE === "1";
 const START_CODE = /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/;
 
 async function authenticateLocalTeacher(page: Page, baseURL: string | undefined) {
+    const { identifier } = teacherLoginFixture();
     const identity = {
-        teacherId: "admin", email: "admin@example.com", displayName: "E2E Admin",
+        teacherId: identifier, email: "fixture-owner@example.invalid", displayName: "E2E Admin",
         organizationId: "default", organizationName: "E2E Workspace", memberRole: "admin" as const,
         sessionAuthority: "bootstrap" as const,
         accountSessionGeneration: 1,
@@ -100,7 +102,7 @@ function requireHostedEnvironment(baseURL: string | undefined) {
 
 async function loginHostedTeacher(page: Page, login: string, password: string) {
     await page.goto("/?role=teacher&next=%2Fteacher%2Fusers");
-    await page.getByPlaceholder("admin 또는 teacher@example.com").fill(login);
+    await page.locator("#teacher-identifier").fill(login);
     await submitWithSecret(
         page.getByPlaceholder("비밀번호 입력"),
         password,

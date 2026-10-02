@@ -8,7 +8,13 @@ const SKIP_WAITING_MESSAGE = "OMR_SKIP_WAITING";
 const DEFERRED_UPDATE_KEY = "omr_pwa_deferred_update_v1";
 
 function isActiveWorkScreen(pathname: string): boolean {
-  return pathname === "/create"
+  // Home also hosts login and account recovery; an update must not erase entry fields.
+  return pathname === "/"
+    // Dashboard entry loads session/data and lazy content; settings holds unsaved drafts.
+    || pathname === "/teacher/dashboard"
+    || pathname === "/student/dashboard"
+    || pathname === "/teacher/settings"
+    || pathname === "/create"
     || pathname.startsWith("/solve/")
     || pathname.startsWith("/teacher/exam/")
     || pathname.startsWith("/teacher/live")
@@ -102,10 +108,14 @@ export default function PWARegister() {
       if (isDisposed) return;
       if (reloadOnNextController) {
         reloadOnNextController = false;
-        notifyOnNextController = false;
-        clearDeferredUpdate();
-        window.location.reload();
-        return;
+        // Activation is asynchronous: navigation may have entered a protected screen since it began.
+        if (canReloadForServiceWorkerUpdate(pathnameRef.current)) {
+          notifyOnNextController = false;
+          clearDeferredUpdate();
+          window.location.reload();
+          return;
+        }
+        notifyOnNextController = true;
       }
       if (notifyOnNextController && !hasShownDeferredUpdateNotice) {
         notifyOnNextController = false;

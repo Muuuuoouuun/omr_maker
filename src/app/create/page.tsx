@@ -12,6 +12,7 @@ import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import CreatePdfUploadPlaceholder from "@/components/CreatePdfUploadPlaceholder";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { activateFilePicker } from "@/lib/activateFilePicker";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
@@ -65,6 +66,7 @@ import { secureRandomId } from "@/utils/ids";
 import { isPdfFileByMagic, uploadTeacherPdfDirect } from "@/lib/directTeacherAssetUpload.client";
 import { createEditorRouteGenerationController } from "@/lib/editorRouteGeneration";
 import { validateExamDraft } from "@/lib/examValidation";
+import { applyFastAnswers, parseFastAnswerInput } from "@/lib/fastAnswerInput";
 import { buildSolveShareUrl, isShareUrlReachableByStudents } from "@/lib/shareLink";
 import type { DistributionShareResultLike } from "@/lib/distributionInviteRotation";
 import type {
@@ -79,7 +81,6 @@ import {
     QUESTION_COUNT_CLAMPED_NOTICE,
     resolveQuestionCountInput,
 } from "@/lib/questionCount";
-import { FAST_ANSWER_BLANK, parseFastAnswerInput } from "@/lib/fastAnswerInput";
 import { readLocalExam, saveExam, saveLocalExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
@@ -129,6 +130,8 @@ import {
     getOrCreateNewExamPublishTarget,
     getOrCreatePdfUploadAttemptNonce,
     isEditDraftNewerThanExam,
+    isNewExamDraftDirty,
+    initialCreateWorkspacePanel,
     isLoadedExamCurrentForEdit,
     mergePdfHydrationFailures,
     rotatePdfUploadAttemptNonce,
@@ -686,6 +689,9 @@ function CreateOMRPageInner() {
     const [columns, setColumns] = useState(2);
     const [questions, setQuestions] = useState<Question[]>(() => buildDefaultQuestions(20, DEFAULT_CHOICE_COUNT, 5));
     const [initialDefaultsReady, setInitialDefaultsReady] = useState(false);
+    const [savedNewDraftState, setSavedNewDraftState] = useState<{
+        slot: string; signature: string; problemFile: File | null; answerFile: File | null;
+    } | null>(null);
 
     // Interaction State
     const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(null);
@@ -703,12 +709,12 @@ function CreateOMRPageInner() {
     const [labelSettingsScopeLabel, setLabelSettingsScopeLabel] = useState("이 브라우저 최근");
 
     // Validation
-    const [fastAnswerState, setFastAnswerState] = useState({ slot: editorDraftSlot, value: "", rejected: 0 });
-    const fastAnswerInSlot = fastAnswerState.slot === editorDraftSlot;
-    const fastAnswer = fastAnswerInSlot ? fastAnswerState.value : "";
-    const fastAnswerRejected = fastAnswerInSlot ? fastAnswerState.rejected : 0;
-    const setFastAnswer = useCallback((value: string, rejected = 0) => {
-        setFastAnswerState({ slot: editorDraftSlot, value, rejected });
+    const [fastAnswerState, setFastAnswerState] = useState({ slot: editorDraftSlot, value: "", appliedLength: 0 });
+    const fastAnswer = fastAnswerState.slot === editorDraftSlot ? fastAnswerState.value : "";
+    const fastAnswerResult = parseFastAnswerInput(fastAnswer, questions);
+    const fastAnswerError = fastAnswerResult.ok ? "" : fastAnswerResult.message;
+    const setFastAnswer = useCallback((value: string) => {
+        setFastAnswerState({ slot: editorDraftSlot, value, appliedLength: 0 });
     }, [editorDraftSlot]);
 
     // Layout Sizing
@@ -716,7 +722,7 @@ function CreateOMRPageInner() {
     const [sidebarWidth, setSidebarWidth] = useState(SETTINGS_SIDEBAR_DEFAULT_WIDTH);
     const [settingsZoom, setSettingsZoom] = useState(1);
     const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
-    const [mobileWorkspacePanel, setMobileWorkspacePanel] = useState<CreateWorkspacePanel>('pdf');
+    const [mobileWorkspacePanel, setMobileWorkspacePanel] = useState<CreateWorkspacePanel>(() => initialCreateWorkspacePanel(editId));
     const [activeResizer, setActiveResizer] = useState<'pdf' | 'sidebar' | null>(null);
     const createWorkspaceRef = useRef<HTMLDivElement>(null);
     const settingsSidebarRef = useRef<HTMLElement>(null);
@@ -1109,6 +1115,7 @@ function CreateOMRPageInner() {
     const draftPromptedRef = useRef(false);
     const editDraftPromptedRef = useRef(false);
     const lastSnapshotRef = useRef<HistorySnapshot | null>(null);
+    const newExamInitialSignatureRef = useRef<{ slot: string; signature: string } | null>(null);
 
     // Helpers to convert ISO <-> datetime-local ("YYYY-MM-DDTHH:mm")
     const isoToLocalInput = (iso?: string): string => {
@@ -1147,6 +1154,20 @@ function CreateOMRPageInner() {
         });
     }, [loadedExam]);
     const isEditDirty = Boolean(editId && loadedExam && loadedExamSignature !== currentEditorSignature);
+    const currentDraftSignature = useMemo(() => JSON.stringify({ title, questionsCount, columns, questions, defaultChoices, durationMin, startAt, endAt }), [title, questionsCount, columns, questions, defaultChoices, durationMin, startAt, endAt]);
+    const isNewExamDirty = isNewExamDraftDirty({
+        isEditing: Boolean(editId),
+        isReady: initialDefaultsReady,
+        slot: editorDraftSlot,
+        baseline: newExamInitialSignatureRef.current,
+        currentSignature: currentDraftSignature,
+        hasAttachments: Boolean(pdfFile || answerKeyPdf),
+        matchesSavedDraft: savedNewDraftState?.slot === editorDraftSlot
+            && savedNewDraftState.signature === currentDraftSignature
+            && savedNewDraftState.problemFile === pdfFile
+            && savedNewDraftState.answerFile === answerKeyPdf,
+    });
+    const hasUnsavedEditorChanges = isEditDirty || isNewExamDirty || Boolean(fastAnswerError);
     const durationValue = typeof durationMin === 'number' && durationMin > 0 ? durationMin : 50;
     const setDurationAndSyncEnd = (minutes: number) => {
         const safeMinutes = Math.max(1, Math.floor(minutes));
@@ -1250,7 +1271,21 @@ function CreateOMRPageInner() {
         }
         setIsDetectingLocation(false);
         const routeDefaults = readStoredExamDefaults();
+        newExamInitialSignatureRef.current = {
+            slot: editorDraftSlot,
+            signature: JSON.stringify({
+                title: "기말고사 OMR",
+                questionsCount: routeDefaults.questions,
+                columns: 2,
+                questions: buildDefaultQuestions(routeDefaults.questions, routeDefaults.choices, routeDefaults.scorePerQ),
+                defaultChoices: routeDefaults.choices,
+                durationMin: routeDefaults.duration,
+                startAt: "",
+                endAt: "",
+            }),
+        };
         setLoadedExam(null);
+        setSavedNewDraftState(null);
         setLoadedExamIsCanonical(false);
         problemPdfFileRef.current = null;
         answerKeyPdfFileRef.current = null;
@@ -1286,6 +1321,7 @@ function CreateOMRPageInner() {
         });
         setFastAnswer("");
         setActiveViewTab('problem');
+        setMobileWorkspacePanel(initialCreateWorkspacePanel(editId));
         setActiveResizer(null);
         pendingPdfReadyToastRef.current = null;
         historyRef.current = [];
@@ -1412,7 +1448,7 @@ function CreateOMRPageInner() {
         };
         void loadExistingExam();
         return () => { cancelled = true; };
-    }, [editId, setFastAnswer]);
+    }, [editId, editorDraftSlot, setFastAnswer]);
 
     // Initialize questions when count changes
     useEffect(() => {
@@ -1547,7 +1583,7 @@ function CreateOMRPageInner() {
         hasHydratedRef.current = true;
     }, []);
 
-    // ─── Autosave draft every 2s when editor state changes ───────────
+    // ─── Autosave after the configured idle interval ─────────────────
     useEffect(() => {
         if (!hasHydratedRef.current) return;
         if (!draftStorageKey) return;
@@ -1570,18 +1606,10 @@ function CreateOMRPageInner() {
         return () => clearTimeout(handle);
     }, [autosaveIntervalMs, editId, loadedExam, isEditDirty, draftStorageKey, confirmState, initialDefaultsReady, title, questionsCount, columns, questions, defaultChoices, durationMin, startAt, endAt]);
 
-    // ─── Warn before leaving edit mode with unsaved changes ──────────
-    // Autosave recovers from a crash, but the 2s debounce leaves a window where
-    // a deliberate tab close/refresh loses the most recent edits; guard it.
-    useEffect(() => {
-        if (!isEditDirty) return;
-        const onBeforeUnload = (e: BeforeUnloadEvent) => {
-            e.preventDefault();
-            e.returnValue = "";
-        };
-        window.addEventListener("beforeunload", onBeforeUnload);
-        return () => window.removeEventListener("beforeunload", onBeforeUnload);
-    }, [isEditDirty]);
+    // ─── Protect both new and existing exams during the autosave gap ──
+    // The default idle interval is 30s and typing resets it. New exams need the
+    // same departure warning as edit mode; PDFs still require explicit draft save.
+    useUnsavedChangesWarning(hasUnsavedEditorChanges);
 
     // ─── History snapshotting (push PREVIOUS state onto undo stack) ──
     const snapshotCurrent = useCallback((): HistorySnapshot => ({
@@ -2851,23 +2879,18 @@ function CreateOMRPageInner() {
     };
 
     const handleFastAnswerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        // Digits 1..defaultChoices set answers in order; "-" is an explicit blank
-        // that keeps its slot so later answers do not shift; spaces/commas only
-        // separate. Anything else is dropped and counted for the inline notice.
-        const { value, answers, rejectedCount } = parseFastAnswerInput(e.target.value, defaultChoices);
-        const previousLength = parseFastAnswerInput(fastAnswer, defaultChoices).answers.length;
-        const shouldClearTrimmedAnswers = answers.length < previousLength;
-        setFastAnswer(value, rejectedCount);
-
-        setQuestions(prev => prev.map((q, i) => {
-            if (i < answers.length) {
-                return q.answer === answers[i] ? q : { ...q, answer: answers[i] };
-            }
-            if (shouldClearTrimmedAnswers && i < previousLength && q.answer !== undefined) {
-                return { ...q, answer: undefined };
-            }
-            return q;
-        }));
+        const value = e.target.value;
+        const result = parseFastAnswerInput(value, questions);
+        const previousAppliedLength = fastAnswerState.slot === editorDraftSlot ? fastAnswerState.appliedLength : 0;
+        setFastAnswerState({
+            slot: editorDraftSlot,
+            value,
+            appliedLength: result.ok ? result.answers.length : previousAppliedLength,
+        });
+        // Preserve all existing answers until the entire input is valid. Never
+        // strip an invalid digit and shift every subsequent answer to the left.
+        if (!result.ok) return;
+        setQuestions(prev => applyFastAnswers(prev, result.answers, previousAppliedLength));
     };
 
     const handleSaveImage = async () => {
@@ -2900,6 +2923,11 @@ function CreateOMRPageInner() {
     };
 
     const handleSaveDraftNow = async () => {
+        if (fastAnswerError) {
+            toast.error("빠른 정답 입력 확인", fastAnswerError);
+            document.getElementById("create-fast-answers")?.focus();
+            return;
+        }
         if (!draftStorageKey) {
             toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 초안을 저장해주세요.");
             return;
@@ -2971,6 +2999,12 @@ function CreateOMRPageInner() {
             }
             if (isEditorRouteGenerationCurrent(routeGeneration)) {
                 draftAssetsRef.current = assets;
+                if (!editId) setSavedNewDraftState({
+                    slot: editorDraftSlot,
+                    signature: currentDraftSignature,
+                    problemFile: currentProblemPdf,
+                    answerFile: currentAnswerKeyPdf,
+                });
                 toast.success(
                     "초안 저장 완료",
                     currentProblemPdf || currentAnswerKeyPdf
@@ -2986,6 +3020,11 @@ function CreateOMRPageInner() {
     };
 
     const handleOpenDistribution = (event: ReactMouseEvent<HTMLButtonElement>) => {
+        if (fastAnswerError) {
+            toast.error("빠른 정답 입력 확인", fastAnswerError);
+            document.getElementById("create-fast-answers")?.focus();
+            return;
+        }
         if (!serviceReadiness.canOpenDistribution) {
             toast.error("배포 전 확인 필요", serviceReadiness.detail || "시험 설정을 확인해주세요.");
             return;
@@ -3479,8 +3518,10 @@ function CreateOMRPageInner() {
                         <div className="create-section-label">
                             <span className="step">1</span>시험 기본
                         </div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 500 }}>시험 제목</label>
+                        <p style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', lineHeight: 1.5, marginBottom: '0.75rem' }}>PDF 없이 OMR부터 만들 수 있습니다. 제목·문항 수를 확인한 뒤 정답을 입력하세요. 라벨·필기 영역은 나중에 보강해도 됩니다.</p>
+                        <label htmlFor="create-exam-title" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 500 }}>시험 제목</label>
                         <input
+                            id="create-exam-title"
                             type="text"
                             aria-label="시험 제목"
                             value={title}
@@ -3679,17 +3720,19 @@ function CreateOMRPageInner() {
                         </div>
 
                         <div className="create-section-label">
-                            <span className="step">3</span>정답 · 라벨 입력
+                            <span className="step">2</span>정답 · 라벨 입력
                             <span className="hint">{designSummary.answered}/{questionsCount} 정답</span>
                         </div>
                         <div style={{ marginBottom: '1rem' }}>
-                            <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary)' }}>
+                            <label htmlFor="create-fast-answers" style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary)' }}>
                                 빠른 정답 입력 (연속 입력)
                             </label>
                             <input
+                                id="create-fast-answers"
                                 type="text"
                                 aria-label="빠른 정답 입력"
-                                aria-describedby={fastAnswerRejected > 0 ? "fast-answer-hint fast-answer-rejected" : "fast-answer-hint"}
+                                aria-invalid={Boolean(fastAnswerError)}
+                                aria-describedby={`create-fast-answer-help${fastAnswerError ? ' create-fast-answer-error' : ''}`}
                                 placeholder={defaultChoices === 4 ? "예: 3124..." : "예: 31251..."}
                                 value={fastAnswer}
                                 disabled={!initialDefaultsReady}
@@ -3697,14 +3740,13 @@ function CreateOMRPageInner() {
                                 className="input-field"
                                 style={{ width: '100%', padding: '0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', fontSize: '1rem', letterSpacing: '2px' }}
                             />
-                            <div id="fast-answer-hint" style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', marginTop: '0.3rem' }}>
-                                {`1~${defaultChoices}의 숫자를 입력하면 문항 순서대로 정답이 즉시 반영됩니다. 빈 문항은 ${FAST_ANSWER_BLANK} 로 입력하고, 띄어쓰기와 쉼표는 구분용으로만 씁니다.`}
+                            <p id="create-fast-answer-help" style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', lineHeight: 1.5, marginTop: '0.4rem' }}>
+                                1번부터 순서대로 바로 적용됩니다. 빈 문항은 0 또는 -를 넣으세요. 예: 12-45는 3번을 비웁니다. 공백·쉼표·줄바꿈도 사용할 수 있습니다.
+                            </p>
+                            {fastAnswerError && <p id="create-fast-answer-error" role="alert" style={{ fontSize: 'var(--type-label)', color: 'var(--error)', lineHeight: 1.5, marginTop: '0.4rem' }}>{fastAnswerError}</p>}
+                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '0.3rem' }}>
+                                {`1~${defaultChoices}의 숫자를 입력하면 문항 순서대로 정답이 즉시 반영됩니다.`}
                             </div>
-                            {fastAnswerRejected > 0 && (
-                                <div id="fast-answer-rejected" role="status" style={{ fontSize: 'var(--type-caption)', color: 'var(--text-warning)', marginTop: '0.2rem' }}>
-                                    {`1~${defaultChoices}, ${FAST_ANSWER_BLANK} 가 아닌 입력 ${fastAnswerRejected}개는 반영하지 않았습니다.`}
-                                </div>
-                            )}
                         </div>
 
                         <div className="create-question-quick-card">

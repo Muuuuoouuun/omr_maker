@@ -748,7 +748,7 @@ describe("PWA assets", () => {
         expect(harness.self.skipWaiting).toHaveBeenCalledOnce();
     });
 
-    it("PWA registration checks for mobile app updates without reloading active work screens", () => {
+    it("PWA registration checks for mobile app updates without reloading auth entry or active work screens", () => {
         const source = getPwaRegisterSource();
 
         expect(source).toContain("showToast");
@@ -761,6 +761,10 @@ describe("PWA assets", () => {
         expect(source).toContain("controllerchange");
         expect(source).toContain("updatefound");
         expect(source).toContain("getRegistration(\"/sw.js\")");
+        expect(source).toContain('pathname === "/"');
+        expect(source).toContain('pathname === "/teacher/dashboard"');
+        expect(source).toContain('pathname === "/student/dashboard"');
+        expect(source).toContain('pathname === "/teacher/settings"');
         expect(source).toContain('pathname === "/create"');
         expect(source).toContain('pathname.startsWith("/solve/")');
         expect(source).toContain('pathname.startsWith("/teacher/exam/")');
@@ -776,6 +780,7 @@ describe("PWA assets", () => {
         expect(source).toContain("안전한 화면으로 이동하면 최신 앱으로 전환됩니다");
         expect(source).toContain("6500");
         expect(source).toContain("OMR_SKIP_WAITING");
+        expect(source).toMatch(/if \(reloadOnNextController\)\s*\{[\s\S]*?if \(canReloadForServiceWorkerUpdate\(pathnameRef\.current\)\)/);
     });
 
     it("external PWA smoke requires HTTPS and separates offline browser network noise", () => {

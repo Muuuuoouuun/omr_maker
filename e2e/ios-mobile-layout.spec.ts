@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { continueSolveEntryIfPresent, loginAsShowcaseTeacher, loginAsTeacher } from "./helpers";
+import { activateControl, continueSolveEntryIfPresent, loginAsShowcaseTeacher, loginAsTeacher, teacherLoginFixture } from "./helpers";
 
 const STUDENT_NAME = "김모바일학생";
 const PENDING_EXAM_TITLE = "여름방학을 앞두고 차근차근 준비하는 국어 독해와 문법 종합 진단 평가";
@@ -43,10 +43,23 @@ async function expectMinimumTouchTarget(locator: Locator) {
 
 async function expectWithinViewport(locator: Locator, page: Page) {
     await expect(locator).toBeVisible();
-    const [box, viewportWidth] = await Promise.all([
-        locator.boundingBox(),
-        page.evaluate(() => document.documentElement.clientWidth),
-    ]);
+    const renderedFrame = {
+        box: null as Awaited<ReturnType<Locator["boundingBox"]>>,
+        viewportWidth: 0,
+    };
+    // A React remount can occur between visibility and a separate layout read.
+    // Sample the rendered frame with a bounded web-first assertion, then retain
+    // the original strict left/right bounds checks on that captured frame.
+    await expect.poll(async () => {
+        const [bounds, width] = await Promise.all([
+            locator.boundingBox(),
+            page.evaluate(() => document.documentElement.clientWidth),
+        ]);
+        renderedFrame.box = bounds;
+        renderedFrame.viewportWidth = width;
+        return bounds;
+    }, { message: "control did not settle on a rendered frame" }).not.toBeNull();
+    const { box, viewportWidth } = renderedFrame;
     const tolerance = 1;
 
     expect(box, "control did not have a rendered bounding box").not.toBeNull();
@@ -361,8 +374,8 @@ async function seedSolveExam(page: Page, options: { withoutPdf?: boolean } = {})
 }
 
 test.describe("iPhone WebKit mobile layout", () => {
-    test("create completion actions and panel tabs respect safe bounds and keyboard flow", async ({ page }) => {
-        await loginAsTeacher(page, "/create");
+    test("create completion actions and panel tabs respect safe bounds and keyboard flow", async ({ page, hasTouch }) => {
+        await loginAsTeacher(page, "/create", hasTouch);
         await page.getByRole("tab", { name: "설정" }).click();
         await page.getByLabel("시험 제목").fill("아이폰 안전영역과 키보드에서도 작업을 마칠 수 있는 국어 종합 평가");
         await page.getByLabel("문항 수 직접 입력").fill("10");
@@ -434,8 +447,8 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expectNoDocumentHorizontalOverflow(page);
     });
 
-    test("distribution overlay fits the synchronized viewport and preserves dialog focus semantics", async ({ page }) => {
-        await loginAsTeacher(page, "/create");
+    test("distribution overlay fits the synchronized viewport and preserves dialog focus semantics", async ({ page, hasTouch }) => {
+        await loginAsTeacher(page, "/create", hasTouch);
         await page.getByRole("tab", { name: "설정" }).click();
         await page.getByLabel("시험 제목").fill("아이폰 안전영역과 키보드에서도 작업을 마칠 수 있는 국어 종합 평가");
         await page.getByLabel("문항 수 직접 입력").fill("10");
@@ -681,8 +694,9 @@ test.describe("iPhone WebKit mobile layout", () => {
         await toolsPanel.getByLabel("선생님 모드").click();
         const authDialog = page.getByRole("dialog", { name: "선생님 모드 인증" });
         await expect(authDialog).toBeVisible();
-        await authDialog.getByPlaceholder("아이디 또는 이메일").fill("admin");
-        await authDialog.getByPlaceholder("비밀번호").fill("admin123");
+        const { identifier, password } = teacherLoginFixture();
+        await authDialog.getByPlaceholder("아이디 또는 이메일").fill(identifier);
+        await authDialog.getByPlaceholder("비밀번호").fill(password);
         await authDialog.getByRole("button", { name: "인증" }).click();
         await expect(authDialog).toBeHidden({ timeout: 15_000 });
 
@@ -749,8 +763,8 @@ test.describe("iPhone WebKit mobile layout", () => {
         }
     });
 
-    test("authenticated teacher header keeps primary actions visible and moves live monitoring into the account menu", async ({ page }) => {
-        await loginAsTeacher(page);
+    test("authenticated teacher header keeps primary actions visible and moves live monitoring into the account menu", async ({ page, hasTouch }) => {
+        await loginAsTeacher(page, undefined, hasTouch);
 
         await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
         const actions = page.locator(".teacher-header-actions");
@@ -776,8 +790,8 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expectNoDocumentHorizontalOverflow(page);
     });
 
-    test("teacher dashboard orders context, demo state, KPIs, recent exams, and its primary analysis action", async ({ page }) => {
-        await loginAsShowcaseTeacher(page);
+    test("teacher dashboard orders context, demo state, KPIs, recent exams, and its primary analysis action", async ({ page, hasTouch }) => {
+        await loginAsShowcaseTeacher(page, hasTouch);
 
         const title = page.getByRole("heading", { name: "대시보드", exact: true });
         const state = page.getByRole("status", { name: "데모 데이터 안내" });
@@ -799,8 +813,8 @@ test.describe("iPhone WebKit mobile layout", () => {
         await page.screenshot({ path: `/tmp/omr-mobile-dashboard-${test.info().project.name}.png` });
     });
 
-    test("teacher users puts roster state and KPI cards before mobile actions and student cards", async ({ page }) => {
-        await loginAsShowcaseTeacher(page);
+    test("teacher users puts roster state and KPI cards before mobile actions and student cards", async ({ page, hasTouch }) => {
+        await loginAsShowcaseTeacher(page, hasTouch);
         await page.goto("/teacher/users");
 
         const title = page.getByRole("heading", { name: "사용자 관리" });
@@ -826,9 +840,9 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expectNoDocumentHorizontalOverflow(page);
     });
 
-    test("teacher live keeps factual status and KPI results before its stacked control group", async ({ page }) => {
+    test("teacher live keeps factual status and KPI results before its stacked control group", async ({ page, hasTouch }) => {
         test.setTimeout(Math.max(test.info().timeout, 60_000));
-        await loginAsShowcaseTeacher(page);
+        await loginAsShowcaseTeacher(page, hasTouch);
         await page.goto("/teacher/live");
 
         const title = page.getByRole("heading", { name: "응시 결과 확인" });
@@ -852,8 +866,8 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expectNoDocumentHorizontalOverflow(page);
     });
 
-    test("teacher live pause stops data refresh without freezing or resuming a stale countdown", async ({ page }) => {
-        await loginAsShowcaseTeacher(page);
+    test("teacher live pause stops data refresh without freezing or resuming a stale countdown", async ({ page, hasTouch }) => {
+        await loginAsShowcaseTeacher(page, hasTouch);
         await page.goto("/teacher/live");
 
         const timer = page.locator(".numeric-emphasis");
@@ -862,7 +876,7 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expect.poll(() => readCountdownSeconds(timer), { timeout: 5_000 }).toBeGreaterThan(0);
         const beforePause = await readCountdownSeconds(timer);
 
-        await pause.click();
+        await activateControl(pause, hasTouch);
         await expect(actions.getByRole("button", { name: "화면 갱신 재개" })).toHaveAttribute("aria-pressed", "true");
         await expect.poll(() => readCountdownSeconds(timer), {
             message: "countdown froze while only screen data refresh was paused",
@@ -871,13 +885,13 @@ test.describe("iPhone WebKit mobile layout", () => {
 
         const whilePaused = await readCountdownSeconds(timer);
         const resume = actions.getByRole("button", { name: "화면 갱신 재개" });
-        await resume.click();
+        await activateControl(resume, hasTouch);
         expect(await readCountdownSeconds(timer), "resume jumped back to a stale countdown").toBeLessThanOrEqual(whilePaused);
         await expect(actions.getByRole("button", { name: "화면 갱신 일시정지" })).toHaveAttribute("aria-pressed", "false");
     });
 
-    test("teacher live force-finish dialog traps focus, closes with Escape, and restores its trigger", async ({ page }) => {
-        await loginAsShowcaseTeacher(page);
+    test("teacher live force-finish dialog traps focus, closes with Escape, and restores its trigger", async ({ page, hasTouch }) => {
+        await loginAsShowcaseTeacher(page, hasTouch);
         await page.goto("/teacher/live");
 
         const actions = page.getByRole("region", { name: "실시간 시험 작업" });
@@ -898,8 +912,8 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expect(trigger).toBeFocused();
     });
 
-    test("real teacher live empty state keeps truthful context and its primary action in view", async ({ page }) => {
-        await loginAsTeacher(page, "/teacher/live");
+    test("real teacher live empty state keeps truthful context and its primary action in view", async ({ page, hasTouch }) => {
+        await loginAsTeacher(page, "/teacher/live", hasTouch);
 
         const title = page.getByRole("heading", { name: "응시 결과 확인" });
         const state = page.getByText("진행 중인 시험이 없습니다", { exact: true });
@@ -913,9 +927,9 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expectNoDocumentHorizontalOverflow(page);
     });
 
-    test("teacher exam detail wraps long context and result names before mobile result actions", async ({ page }) => {
+    test("teacher exam detail wraps long context and result names before mobile result actions", async ({ page, hasTouch }) => {
         await seedTeacherExamDetail(page);
-        await loginAsTeacher(page, `/teacher/exam/${TEACHER_EXAM_ID}`);
+        await loginAsTeacher(page, `/teacher/exam/${TEACHER_EXAM_ID}`, hasTouch);
 
         const title = page.getByRole("heading", { name: TEACHER_EXAM_TITLE });
         const summary = page.getByRole("region", { name: "시험 결과 요약" });
