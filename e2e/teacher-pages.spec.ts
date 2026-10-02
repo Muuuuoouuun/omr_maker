@@ -16,9 +16,9 @@ import type { RosterSnapshot } from "../src/lib/rosterPersistence";
 test.describe.configure({ timeout: 45_000 });
 
 const TEACHER_IDENTITY: TeacherSessionIdentity = {
-    teacherId: "admin",
-    email: "admin@example.com",
-    displayName: "Demo Admin",
+    teacherId: "fixture-teacher-owner",
+    email: "fixture-teacher-owner@example.com",
+    displayName: "Demo fixture-teacher-owner",
     organizationId: "default",
     organizationName: "E2E Workspace",
     memberRole: "admin",
@@ -206,7 +206,7 @@ async function seedStudentResultHub(page: Page) {
             id: "result-hub-exam",
             title: "학생 결과 허브 시험",
             organizationId: "default",
-            createdByUserId: "admin",
+            createdByUserId: "fixture-teacher-owner",
             createdAt: "2026-07-22T00:00:00.000Z",
             updatedAt: "2026-07-22T00:00:00.000Z",
             questions: [
@@ -220,7 +220,7 @@ async function seedStudentResultHub(page: Page) {
             examId: exam.id,
             examTitle: exam.title,
             organizationId: "default",
-            createdByUserId: "admin",
+            createdByUserId: "fixture-teacher-owner",
             studentName: "결과 허브 학생",
             studentId: "result-hub-student",
             studentProfileId: "result-hub-student",
@@ -260,7 +260,7 @@ async function seedStudentResultHub(page: Page) {
             examId: exam.id,
             examTitle: exam.title,
             organizationId: "default",
-            createdByUserId: "admin",
+            createdByUserId: "fixture-teacher-owner",
             studentName: "결과 허브 학생",
             studentId: "result-hub-student",
             studentProfileId: "result-hub-student",
@@ -291,7 +291,7 @@ async function seedAwaySeverityAttempts(page: Page) {
             id: "away-severity-exam",
             title: "화면 이탈 표시 시험",
             organizationId: "default",
-            createdByUserId: "admin",
+            createdByUserId: "fixture-teacher-owner",
             createdAt: "2026-07-28T00:00:00.000Z",
             updatedAt: "2026-07-28T00:00:00.000Z",
             durationMin: 60,
@@ -305,7 +305,7 @@ async function seedAwaySeverityAttempts(page: Page) {
             examId: exam.id,
             examTitle: exam.title,
             organizationId: "default",
-            createdByUserId: "admin",
+            createdByUserId: "fixture-teacher-owner",
             studentName: `이탈 ${count}회 학생`,
             studentId: `away-severity-student-${count}`,
             startedAt: `2026-07-28T09:0${count}:00.000Z`,
@@ -727,7 +727,7 @@ test.describe("Create page label memory", () => {
             await page.getByRole("tab", { name: /^설정/ }).click();
         }
         await expect(labelCard.getByText("문항 라벨 일괄 적용")).toBeVisible();
-        await expect(labelCard.getByText(/Demo Admin 최근/)).toBeVisible();
+        await expect(labelCard.getByText(/Demo fixture-teacher-owner 최근/)).toBeVisible();
 
         const hideGrammar = labelCard.getByRole("button", { name: "문법 후보 숨김" });
         await expect(hideGrammar).toBeVisible();
@@ -799,13 +799,13 @@ test.describe("Create page label memory", () => {
         await expect(notice).toHaveCount(0);
     });
 
-    test("quick answer input keeps blank positions and reports rejected characters", async ({ page }) => {
+    test("quick answer input keeps blank positions and rejects an invalid input without shifting answers", async ({ page }) => {
         await page.goto("/create");
         const fastAnswer = page.getByLabel("빠른 정답 입력");
         if (!await fastAnswer.isVisible()) {
             await page.getByRole("tab", { name: /^설정/ }).click();
         }
-        await expect(page.locator("#fast-answer-hint")).toContainText("빈 문항은 - 로 입력");
+        await expect(page.locator("#create-fast-answer-help")).toContainText("빈 문항은 0 또는 -");
 
         await fastAnswer.fill("1-3, 4");
         await expect(fastAnswer).toHaveValue("1-3, 4");
@@ -817,9 +817,23 @@ test.describe("Create page label memory", () => {
         await expect(page.getByRole("radio", { name: "문제 4번 보기 4" }).first()).toHaveAttribute("aria-checked", "true");
 
         await fastAnswer.fill("1-39");
-        await expect(fastAnswer).toHaveValue("1-3");
-        await expect(page.locator("#fast-answer-rejected")).toContainText("1개는 반영하지 않았습니다");
+        await expect(fastAnswer).toHaveValue("1-39");
+        await expect(fastAnswer).toHaveAttribute("aria-invalid", "true");
+        await expect(page.locator("#create-fast-answer-error")).toBeVisible();
+        // Reject the whole candidate: previously valid answers remain untouched.
+        await expect(page.getByRole("radio", { name: "문제 3번 보기 3" }).first()).toHaveAttribute("aria-checked", "true");
+        await expect(page.getByRole("radio", { name: "문제 4번 보기 4" }).first()).toHaveAttribute("aria-checked", "true");
+
+        await fastAnswer.fill("1-3");
+        await expect(fastAnswer).toHaveAttribute("aria-invalid", "false");
+        await expect(page.locator("#create-fast-answer-error")).toHaveCount(0);
         await expect(page.getByRole("radio", { name: "문제 4번 보기 4" }).first()).toHaveAttribute("aria-checked", "false");
+
+        await fastAnswer.fill("103, 4");
+        await expect(fastAnswer).toHaveValue("103, 4");
+        await expect(page.locator('[role="radio"][aria-label^="문제 2번 보기"][aria-checked="true"]')).toHaveCount(0);
+        await expect(page.getByRole("radio", { name: "문제 3번 보기 3" }).first()).toHaveAttribute("aria-checked", "true");
+        await expect(page.getByRole("radio", { name: "문제 4번 보기 4" }).first()).toHaveAttribute("aria-checked", "true");
     });
 
     test("keeps settings view options touch sized without crowding the summary row", async ({ page }) => {

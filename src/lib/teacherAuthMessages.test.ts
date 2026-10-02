@@ -3,6 +3,7 @@ import {
     TEACHER_AUTH_ACCOUNT_OPERATOR_HELP,
     TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR,
     TEACHER_AUTH_ERROR,
+    TEACHER_AUTH_RECOVERY_HELP,
     TEACHER_AUTH_SESSION_CONFIG_ERROR,
     TEACHER_AUTH_SESSION_COOKIE_ERROR,
     TEACHER_AUTH_SESSION_OPERATOR_HELP,
@@ -11,6 +12,7 @@ import {
 } from "./teacherAuthMessages";
 
 const ENV_VAR_PATTERN = /[A-Z]{2,}_[A-Z_]+/;
+const SAMPLE_LOGIN_PATTERN = /[a-z0-9._-]+\/[a-z0-9._-]+/i;
 
 describe("teacher auth messages", () => {
     it("keeps the server error codes stable", () => {
@@ -20,10 +22,23 @@ describe("teacher auth messages", () => {
         expect(TEACHER_AUTH_SESSION_COOKIE_ERROR).toContain("쿠키 설정");
     });
 
+    it("gives teachers a usable recovery path without exposing configuration or demo accounts", () => {
+        expect(TEACHER_AUTH_RECOVERY_HELP).toContain("다시 시도");
+        expect(TEACHER_AUTH_RECOVERY_HELP).toContain("계정 발급을 담당하는 운영자에게 문의");
+        expect(TEACHER_AUTH_RECOVERY_HELP).not.toMatch(ENV_VAR_PATTERN);
+        expect(TEACHER_AUTH_RECOVERY_HELP).not.toMatch(/Supabase|서명키/);
+        expect(TEACHER_AUTH_RECOVERY_HELP).not.toMatch(SAMPLE_LOGIN_PATTERN);
+    });
+
     it("operator guidance matches the current identity-mode policy", () => {
         expect(TEACHER_AUTH_ACCOUNT_OPERATOR_HELP).toContain("OMR_TEACHER_IDENTITY_MODE=self_service");
         expect(TEACHER_AUTH_ACCOUNT_OPERATOR_HELP).toContain("TEACHER_ACCOUNTS");
         expect(TEACHER_AUTH_ACCOUNT_OPERATOR_HELP).toContain("provisioned_only");
+        expect(TEACHER_AUTH_ACCOUNT_OPERATOR_HELP).toContain("docs/operator-teacher-provisioning.md");
+        // Ignore the allowed documentation path when rejecting sample login pairs.
+        const setupGuidance = TEACHER_AUTH_ACCOUNT_OPERATOR_HELP.replace("docs/operator-teacher-provisioning.md", "");
+        expect(setupGuidance).not.toMatch(SAMPLE_LOGIN_PATTERN);
+        expect(setupGuidance).not.toContain("데모 계정");
         // Production is provisioned_only, so env accounts are not a production fix.
         expect(TEACHER_AUTH_ACCOUNT_OPERATOR_HELP).not.toContain("Supabase가 아니라");
         expect(TEACHER_AUTH_SESSION_OPERATOR_HELP).toContain("TEACHER_SESSION_SECRET");
@@ -31,11 +46,16 @@ describe("teacher auth messages", () => {
 
     it("never attaches configuration hints to a wrong password", () => {
         for (const production of [true, false]) {
-            expect(teacherLoginHelpFor(TEACHER_AUTH_ERROR, { production })).toEqual({ message: TEACHER_AUTH_ERROR });
+            const help = teacherLoginHelpFor(TEACHER_AUTH_ERROR, { production });
+            expect(help).toEqual({ message: TEACHER_AUTH_ERROR, recoveryHelp: TEACHER_AUTH_RECOVERY_HELP });
+            expect(help.operatorHelp).toBeUndefined();
+            expect(`${help.message} ${help.recoveryHelp}`).not.toMatch(ENV_VAR_PATTERN);
+            expect(`${help.message} ${help.recoveryHelp}`).not.toMatch(/Supabase|서명키/);
+            expect(`${help.message} ${help.recoveryHelp}`).not.toMatch(SAMPLE_LOGIN_PATTERN);
         }
     });
 
-    it("shows a plain contact-your-admin message for config errors in production", () => {
+    it("shows a plain contact-your-operator message for config errors in production", () => {
         for (const error of [TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR, TEACHER_AUTH_SESSION_CONFIG_ERROR]) {
             const help = teacherLoginHelpFor(error, { production: true });
             expect(help).toEqual({ message: TEACHER_LOGIN_UNAVAILABLE_MESSAGE });

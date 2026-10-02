@@ -58,8 +58,8 @@ describe("create save and publish hierarchy", () => {
             source.indexOf("Mark hydration so autosave"),
         );
         const autosave = source.slice(
-            source.indexOf("Autosave draft every"),
-            source.indexOf("Warn before leaving edit mode"),
+            source.indexOf("Autosave after the configured idle interval"),
+            source.indexOf("Protect both new and existing exams during the autosave gap"),
         );
         const publish = source.slice(
             source.indexOf("const handleShareConfig = async"),
@@ -162,11 +162,10 @@ describe("create save and publish hierarchy", () => {
         expect(editEffect).toContain('unit: ""');
         expect(editEffect).toContain('concept: ""');
         expect(editEffect).toContain('difficulty: ""');
-        expect(source).toContain('const [fastAnswerState, setFastAnswerState] = useState({ slot: editorDraftSlot, value: "", rejected: 0 });');
-        expect(source).toContain("const fastAnswerInSlot = fastAnswerState.slot === editorDraftSlot;");
-        expect(source).toContain('const fastAnswer = fastAnswerInSlot ? fastAnswerState.value : "";');
-        expect(source).toContain("const fastAnswerRejected = fastAnswerInSlot ? fastAnswerState.rejected : 0;");
-        expect(source).toContain("setFastAnswerState({ slot: editorDraftSlot, value, rejected });");
+        expect(source).toContain('const [fastAnswerState, setFastAnswerState] = useState({ slot: editorDraftSlot, value: "", appliedLength: 0 });');
+        expect(source).toContain('const fastAnswer = fastAnswerState.slot === editorDraftSlot ? fastAnswerState.value : "";');
+        expect(source).toContain("setFastAnswerState({ slot: editorDraftSlot, value, appliedLength: 0 });");
+        expect(source).toContain("setMobileWorkspacePanel(initialCreateWorkspacePanel(editId))");
     });
 
     it("fences delayed A file, image, draft, and publish completions from B state", () => {

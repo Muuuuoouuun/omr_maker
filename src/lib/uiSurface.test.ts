@@ -934,6 +934,25 @@ describe("service UI surface", () => {
         expect(recoveryPanel).not.toContain("handleMergeGuestIntoCurrentStudent");
     });
 
+    it("guides first-use teachers to the account path allowed by their identity mode", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+
+        expect(homePage).toMatch(/visibleTeacherAccountMode === "login"\s*\? teacherSelfServiceEnabled\s*\? "교사 계정으로 로그인하세요\. 계정이 없으면 아래 ‘교사 계정 만들기’를 선택하세요\."\s*:\s*"운영자가 발급한 교사 계정으로 로그인하세요\. 처음 이용하면 운영자에게 계정 발급을 요청해주세요\."/);
+    });
+
+    it("preserves the identity type signed by the server after student login", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+        const serverLoginStart = homePage.indexOf("const result = await issueStudentSession({");
+        const serverLoginEnd = homePage.indexOf("await finishStudentLogin(session, next, undefined, result.guestClaim);", serverLoginStart);
+        const serverLogin = homePage.slice(serverLoginStart, serverLoginEnd);
+
+        expect(serverLoginStart).toBeGreaterThan(-1);
+        expect(serverLoginEnd).toBeGreaterThan(serverLoginStart);
+        expect(serverLogin).toContain("identityType: identity.identityType");
+        expect(serverLogin).not.toContain('identityType: "registered"');
+        expect(serverLogin).not.toContain('identityType: "temporary"');
+    });
+
     it("keeps teacher session health visible in operational headers", () => {
         const nextConfig = readProjectFile("next.config.ts");
         const teacherHeader = readProjectFile("src/components/TeacherHeader.tsx");
@@ -959,9 +978,13 @@ describe("service UI surface", () => {
         expect(homePage).toContain("saveTeacherSessionWithIdentity");
         expect(homePage).toContain("teacherLoginHelpFor(error, { production: process.env.NODE_ENV === \"production\" })");
         expect(homePage).toContain("teacherLoginHelp.operatorHelp");
+        expect(homePage).toContain("teacherLoginHelp.recoveryHelp");
+        expect(homePage).not.toContain("shouldShowTeacherDeploymentHelp");
         expect(homePage).not.toContain("TEACHER_AUTH_DEPLOYMENT_HELP");
         expect(authMessages).toContain("OMR_TEACHER_IDENTITY_MODE=self_service");
         expect(authMessages).toContain("TEACHER_ACCOUNTS");
+        expect(authMessages).toContain("계정 발급을 담당하는 운영자에게 문의");
+        expect(authMessages).not.toContain("Supabase가 아니라");
         expect(homePage).toContain("학생번호 또는 이메일");
         expect(homePage).toContain("계정 ID처럼 사용합니다.");
         expect(homePage).toContain("명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");

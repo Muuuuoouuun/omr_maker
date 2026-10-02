@@ -1,5 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "dot/onboarding-setup-review-20261002": false
+    }
+  },
   "crons": [
     {
       "path": "/api/internal/asset-gc",
