@@ -6,6 +6,11 @@ const source = readFileSync(join(process.cwd(), "src/app/create/page.tsx"), "utf
 const answerImportSource = readFileSync(join(process.cwd(), "src/components/AnswerImportModal.tsx"), "utf8");
 
 describe("create save and publish hierarchy", () => {
+    it("describes PDF question targeting without assuming a left-side desktop panel", () => {
+        expect(source).toContain("문제지 PDF에서 이 문항의 번호 위치를 클릭하세요.");
+        expect(source).not.toContain("왼쪽 문제지 PDF에서 이 문항의 번호 위치를 클릭하세요.");
+    });
+
     it("offers an explicit recoverable draft save before distribution", () => {
         expect(source).toContain("const handleSaveDraftNow = async () => {");
         expect(source).toContain('saveFileDataUrl(`${draftStorageKey}:problemPdf`, currentProblemPdf)');
@@ -58,7 +63,7 @@ describe("create save and publish hierarchy", () => {
             source.indexOf("Mark hydration so autosave"),
         );
         const autosave = source.slice(
-            source.indexOf("Autosave after the configured idle interval"),
+            source.indexOf("Idle autosave plus synchronous departure metadata recovery"),
             source.indexOf("Protect both new and existing exams during the autosave gap"),
         );
         const publish = source.slice(
@@ -76,7 +81,9 @@ describe("create save and publish hierarchy", () => {
 
         expect(newRestore).toContain("if (!draftStorageKey) return;");
         expect(editRestore).toContain("if (!draftStorageKey) return;");
-        expect(autosave).toContain("if (!draftStorageKey) return;");
+        expect(autosave).toContain("if (!draftStorageKey) return false;");
+        expect(autosave).toContain("scopeKey: draftStorageKey");
+        expect(autosave).toContain("enabled: Boolean(hasHydratedRef.current && draftStorageKey");
         expect(discard).toContain("if (!draftStorageKey) return;");
         expect(publish).toContain("if (!draftStorageKey) {");
         expect(manualSave).toContain("if (!draftStorageKey) {");

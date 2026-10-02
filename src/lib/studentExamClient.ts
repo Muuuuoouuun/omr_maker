@@ -249,7 +249,8 @@ export interface LoadReviewExamClientResult {
 /**
  * Post-submit review exam: server-first (PIN/answer-key PDF withheld
  * server-side), falling back to the existing client exam load for degraded,
- * unsynced, or offline setups.
+ * unsynced, or offline setups. An explicit server rejection never permits
+ * reading the answer-bearing local copy.
  */
 export async function loadReviewExamClient(
     attemptId: string,
@@ -262,6 +263,9 @@ export async function loadReviewExamClient(
         const res = await deps.server(attemptId);
         if (res.status === "ok" && res.exam) {
             return { status: "ok", exam: res.exam as Exam, source: "server" };
+        }
+        if (res.status === "denied" || res.status === "unauthenticated") {
+            return { status: "error", source: "server" };
         }
     } catch {
         // fall through to local
@@ -283,13 +287,14 @@ export async function loadMyAttemptClient(
         localFallback: (attemptId: string) => Promise<Attempt | null>;
     },
 ): Promise<LoadAttemptClientResult> {
-    let serverDenied = false;
     try {
         const res = await deps.server(attemptId);
         if (res.status === "ok" && res.attempt) {
             return { status: "ok", attempt: res.attempt, source: "server" };
         }
-        serverDenied = res.status === "denied";
+        if (res.status === "denied" || res.status === "unauthenticated") {
+            return { status: "denied", source: "server" };
+        }
     } catch {
         // fall through to local
     }
@@ -299,5 +304,5 @@ export async function loadMyAttemptClient(
     } catch {
         // fall through
     }
-    return { status: serverDenied ? "denied" : "error", source: "local" };
+    return { status: "error", source: "local" };
 }

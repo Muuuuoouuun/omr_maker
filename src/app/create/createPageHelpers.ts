@@ -24,6 +24,26 @@ interface DraftPdfAssets {
     answerKeyPdfRef?: StoredDataRef;
 }
 
+interface SerializedDraftPdfAssets extends DraftPdfAssets {
+    pdfData?: string;
+    answerKeyPdf?: string;
+}
+
+/** Preserve the last recoverable PDF pair until a replacement File is serialized. */
+export function recoverableDraftPdfAssets(
+    current: SerializedDraftPdfAssets,
+    persisted: SerializedDraftPdfAssets,
+): SerializedDraftPdfAssets {
+    const problem = current.pdfData || current.pdfDataRef ? current : persisted;
+    const answer = current.answerKeyPdf || current.answerKeyPdfRef ? current : persisted;
+    return {
+        pdfData: problem.pdfData,
+        pdfDataRef: problem.pdfDataRef,
+        answerKeyPdf: answer.answerKeyPdf,
+        answerKeyPdfRef: answer.answerKeyPdfRef,
+    };
+}
+
 export async function deleteScopedDraftPdfAssets(input: {
     draft: DraftPdfAssets;
     scopedDraftKey: string;

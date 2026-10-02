@@ -7,7 +7,8 @@ import {
 
 const root = process.cwd();
 const diagnosticsPath = resolve(root, ".next/diagnostics/route-bundle-stats.json");
-const chunksRoot = `${resolve(root, ".next/static/chunks")}${sep}`;
+const chunksRoots = [".next/static/chunks", ".next/static/immutable/chunks"]
+    .map(path => `${resolve(root, path)}${sep}`);
 
 function readBoundedJson(path) {
     const size = statSync(path).size;
@@ -21,7 +22,7 @@ try {
     const routeStats = readBoundedJson(diagnosticsPath);
     const result = evaluateRoutePerformanceBudgets(routeStats, chunkPath => {
         const absolute = resolve(root, chunkPath);
-        if (!absolute.startsWith(chunksRoot)) return null;
+        if (!chunksRoots.some(chunksRoot => absolute.startsWith(chunksRoot))) return null;
         try {
             return readFileSync(absolute);
         } catch {

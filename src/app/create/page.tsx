@@ -13,6 +13,7 @@ import ThemeToggle from "@/components/ThemeToggle";
 import CreatePdfUploadPlaceholder from "@/components/CreatePdfUploadPlaceholder";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
+import { useEditorDraftAutosave } from "./useEditorDraftAutosave";
 import { activateFilePicker } from "@/lib/activateFilePicker";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
@@ -135,6 +136,7 @@ import {
     isLoadedExamCurrentForEdit,
     mergePdfHydrationFailures,
     rotatePdfUploadAttemptNonce,
+    recoverableDraftPdfAssets,
     retryPendingScopedDraftPdfCleanup,
     resolvePdfHydrationPairSequentially,
     resolveExamEditorLoad,
@@ -466,7 +468,11 @@ function CreateConfirmDialog({
     // Backdrop / Escape must never be the destructive path (esp. deleting a
     // recovered draft): they resolve to the safe, non-destructive action.
     const titleId = useId();
-    const dialogRef = useDialogFocus(true, onDismiss);
+    const dialogRef = useDialogFocus(
+        true,
+        onDismiss,
+        state.kind === "restoreDraft" ? "[data-restore-draft]" : undefined,
+    );
     const copy = (() => {
         if (state.kind === "restoreDraft") {
             return {
@@ -556,6 +562,7 @@ function CreateConfirmDialog({
                     <button
                         type="button"
                         onClick={onConfirm}
+                        data-restore-draft={state.kind === "restoreDraft" ? "" : undefined}
                         style={{ padding: '0.7rem 1rem', background: copy.tone, color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 800, fontSize: '0.9rem' }}
                     >
                         {copy.confirm}
@@ -1583,28 +1590,39 @@ function CreateOMRPageInner() {
         hasHydratedRef.current = true;
     }, []);
 
-    // ─── Autosave after the configured idle interval ─────────────────
-    useEffect(() => {
-        if (!hasHydratedRef.current) return;
-        if (!draftStorageKey) return;
-        if (confirmState?.kind === "restoreDraft") return;
-        if (!initialDefaultsReady || autosaveIntervalMs <= 0) return;
-        // Edit mode: wait for the existing exam to hydrate, then only autosave
-        // once the editor actually diverges from the saved exam. Persisting the
-        // untouched loaded snapshot would re-surface it as a "newer" draft and
-        // spuriously prompt for restore on the next visit.
-        if (editId && (!loadedExam || !isEditDirty)) return;
-        const handle = setTimeout(() => {
+    // ─── Idle autosave plus synchronous departure metadata recovery ──
+    const persistRecoverableDraft = useCallback(() => {
+        if (!draftStorageKey) return false;
+        try {
+            // Cleanup owns these references until its retry finishes. Never
+            // replace the body used to recover a failed deletion.
+            if (localStorage.getItem(`${draftStorageKey}:cleanupPending`)) return false;
+            const raw = localStorage.getItem(draftStorageKey);
+            let persistedAssets: EditorDraftAssets = {};
+            try { persistedAssets = raw ? JSON.parse(raw) ?? {} : {}; } catch { /* no usable prior assets */ }
             const draft: EditorDraft = {
-                ...draftAssetsRef.current,
+                ...recoverableDraftPdfAssets(draftAssetsRef.current, persistedAssets),
                 title, questionsCount, columns, questions,
                 defaultChoices, durationMin, startAt, endAt,
                 savedAt: new Date().toISOString(),
             };
-            safeSetLocal(draftStorageKey, JSON.stringify(draft));
-        }, autosaveIntervalMs);
-        return () => clearTimeout(handle);
-    }, [autosaveIntervalMs, editId, loadedExam, isEditDirty, draftStorageKey, confirmState, initialDefaultsReady, title, questionsCount, columns, questions, defaultChoices, durationMin, startAt, endAt]);
+            return safeSetLocal(draftStorageKey, JSON.stringify(draft));
+        } catch {
+            toast.error("초안 저장 실패", "변경한 내용은 그대로 유지됩니다. 저장 공간을 확인한 뒤 초안을 다시 저장해주세요.");
+            return false;
+        }
+    }, [draftStorageKey, title, questionsCount, columns, questions, defaultChoices, durationMin, startAt, endAt]);
+    const cancelDraftAutosave = useEditorDraftAutosave({
+        scopeKey: draftStorageKey,
+        enabled: Boolean(hasHydratedRef.current && draftStorageKey
+            && confirmState?.kind !== "restoreDraft" && initialDefaultsReady
+            && autosaveIntervalMs > 0
+            && (editId ? loadedExam && isEditDirty : !loadedExam)),
+        intervalMs: autosaveIntervalMs,
+        revision: currentDraftSignature,
+        flushOnExit: isEditDirty || isNewExamDirty,
+        persist: persistRecoverableDraft,
+    });
 
     // ─── Protect both new and existing exams during the autosave gap ──
     // The default idle interval is 30s and typing resets it. New exams need the
@@ -2581,6 +2599,7 @@ function CreateOMRPageInner() {
             }
             rememberLabelUsage(labelSettingsUsageFromQuestions(questionsWithRegions));
             if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                cancelDraftAutosave();
                 problemPdfReplacedRef.current = false;
                 answerKeyPdfReplacedRef.current = false;
                 setLoadedExam(persistedExam);
@@ -4488,7 +4507,7 @@ function CreateOMRPageInner() {
                                         </div>
                                     ) : (
                                         <div style={{ fontSize: '0.75rem', color: 'var(--muted)', lineHeight: 1.5, marginBottom: '0.65rem' }}>
-                                            왼쪽 문제지 PDF에서 이 문항의 번호 위치를 클릭하세요.
+                                            문제지 PDF에서 이 문항의 번호 위치를 클릭하세요.
                                         </div>
                                     )}
 
