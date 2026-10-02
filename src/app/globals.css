@@ -9605,10 +9605,15 @@ body:has(.create-workspace.is-resizing) {
     padding: 0.45rem !important;
   }
 
+  /* min-height: 0 matters: `overflow: clip` is not a scroll container, so
+     the flex item's automatic minimum would otherwise grow the body to the
+     PDF page's full height (the pane stopped scrolling and the page bottom
+     was cut off by .solve-page). */
   .solve-body {
     flex-direction: row !important;
     position: relative;
     isolation: isolate;
+    min-height: 0;
     overflow: clip !important;
   }
 
@@ -9721,9 +9726,14 @@ body:has(.create-workspace.is-resizing) {
 
 /* Desktop solve workspace keeps the PDF width stable while OMR floats above it. */
 @media (min-width: 1181px) {
+  /* clip, not hidden: the collapsed OMR pane is translated past the right
+     edge, and an overflow:hidden body is still programmatically scrollable —
+     OMRCardView's scrollIntoView slid the whole PDF pane ~330px left. */
   .solve-body {
     position: relative;
     isolation: isolate;
+    min-height: 0;
+    overflow: clip !important;
   }
 
   .solve-pdf-pane {
