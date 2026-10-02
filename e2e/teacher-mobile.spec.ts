@@ -2,7 +2,7 @@ import { devices, expect, test, type Locator, type Page } from "@playwright/test
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { registerCanonicalRemoteFixture } from "./fixtures/canonical-remote-fixture";
-import { loginAsShowcaseTeacher, loginAsTeacher } from "./helpers";
+import { loginAsShowcaseTeacher, loginAsTeacher, teacherLoginFixture } from "./helpers";
 import { mintTeacherToken } from "../src/lib/teacherAuth";
 import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
 import {
@@ -13,16 +13,18 @@ import {
 } from "../src/lib/teacherSession";
 import type { RosterSnapshot } from "../src/lib/rosterPersistence";
 
-const CANONICAL_TEACHER_IDENTITY: TeacherSessionIdentity = {
-    teacherId: "admin",
-    email: "admin@example.com",
-    displayName: "E2E Admin",
-    organizationId: "default",
-    organizationName: "E2E Workspace",
-    memberRole: "admin",
-    sessionAuthority: "bootstrap",
-    accountSessionGeneration: 1,
-};
+function canonicalTeacherIdentity(): TeacherSessionIdentity {
+    return {
+        teacherId: teacherLoginFixture().identifier,
+        email: "teacher-fixture@example.invalid",
+        displayName: "E2E Teacher",
+        organizationId: "default",
+        organizationName: "E2E Workspace",
+        memberRole: "admin",
+        sessionAuthority: "bootstrap",
+        accountSessionGeneration: 1,
+    };
+}
 
 function isLocalBaseURL(baseURL?: string): boolean {
     const url = new URL(baseURL || "http://localhost:3003");
@@ -50,8 +52,9 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 async function authenticateCanonicalTeacher(page: Page, baseURL?: string) {
     const token = mintTeacherToken();
-    const session = createTeacherSession(token, Date.now(), CANONICAL_TEACHER_IDENTITY);
-    const signedCookie = createSignedTeacherSessionCookie(token, CANONICAL_TEACHER_IDENTITY);
+    const identity = canonicalTeacherIdentity();
+    const session = createTeacherSession(token, Date.now(), identity);
+    const signedCookie = createSignedTeacherSessionCookie(token, identity);
     if (!signedCookie) throw new Error("canonical teacher fixture cookie is invalid");
     const origin = new URL(baseURL || "http://localhost:3003").origin;
 
@@ -223,13 +226,14 @@ async function expectTeacherHeaderTouchFriendly(page: Page, options: { hasDashbo
 }
 
 async function seedTeacherAttemptReview(page: Page) {
+    const { identifier: teacherId } = teacherLoginFixture();
     const pdfBytes = readFileSync(path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf"));
     const pdfData = `data:application/pdf;base64,${pdfBytes.toString("base64")}`;
-    await page.addInitScript(({ pdfData }) => {
+    await page.addInitScript(({ pdfData, teacherId }) => {
         const exam = {
             id: "teacher-mobile-review-exam",
             organizationId: "default",
-            createdByUserId: "admin",
+            createdByUserId: teacherId,
             title: "교사 모바일 리뷰 시험",
             createdAt: "2026-07-13T00:00:00.000Z",
             updatedAt: "2026-07-13T00:00:00.000Z",
@@ -289,7 +293,7 @@ async function seedTeacherAttemptReview(page: Page) {
             examId: exam.id,
             organizationId: "default",
             studentProfileId: attempt.studentProfileId,
-            teacherUserId: "admin",
+            teacherUserId: teacherId,
             status: "returned",
             revision: 1,
             summary: "모바일 필기 검토 완료",
@@ -313,7 +317,7 @@ async function seedTeacherAttemptReview(page: Page) {
         // The shared E2E server intentionally runs on Free. Returned feedback is
         // the supported read-only path for viewing archived handwriting after a downgrade.
         window.localStorage.setItem("omr_attempt_feedback", JSON.stringify([returnedFeedback]));
-    }, { pdfData });
+    }, { pdfData, teacherId });
 }
 
 test.describe("Teacher phone and tablet app surfaces", () => {
@@ -564,6 +568,14 @@ test.describe("Teacher phone and tablet app surfaces", () => {
     test("keeps the exam creation toolbar touch friendly", async ({ page }) => {
         await loginAsTeacher(page, "/create");
 
+        const workspaceTabs = page.getByRole("tablist", { name: "출제 작업 화면" });
+        if ((await workspaceTabs.count()) > 0) {
+            await expect(workspaceTabs.getByRole("tab", { name: /설정/ })).toHaveAttribute("aria-selected", "true");
+            await expect(page.locator("#create-settings-panel")).toBeVisible();
+            await expect(page.locator("#create-pdf-panel")).toBeHidden();
+            await expect(page.locator("#create-preview-panel")).toBeHidden();
+        }
+
         const toolbar = page.locator(".create-editor-actions");
         await expect(toolbar).toBeVisible();
         await expectTouchTarget(toolbar.getByRole("button", { name: /되돌리기/ }));
@@ -597,6 +609,14 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expect(pdfMenu).toBeVisible();
         await toolbar.getByRole("button", { name: /되돌리기/ }).focus();
         await expect(pdfMenu).toBeHidden();
+        if ((await workspaceTabs.count()) > 0) {
+            const pdfTab = workspaceTabs.getByRole("tab", { name: /문제지/ });
+            await pdfTab.click();
+            await expect(pdfTab).toHaveAttribute("aria-selected", "true");
+            await expect(page.locator("#create-pdf-panel")).toBeVisible();
+            await expect(page.locator("#create-settings-panel")).toBeHidden();
+            await expect(page.locator("#create-preview-panel")).toBeHidden();
+        }
         await pdfMenuTrigger.click();
         await expect(pdfMenu).toBeVisible();
         await page.locator("#create-pdf-panel").click({ position: { x: 8, y: 200 } });
@@ -608,7 +628,6 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectTouchTarget(toolbar.getByRole("button", { name: /모드로 전환/ }));
         expect(await smallTargets(page, ".create-editor-actions button, .create-editor-actions label")).toEqual([]);
 
-        const workspaceTabs = page.getByRole("tablist", { name: "출제 작업 화면" });
         if ((await workspaceTabs.count()) > 0) {
             const pdfTab = workspaceTabs.getByRole("tab", { name: /문제지/ });
             const settingsTab = workspaceTabs.getByRole("tab", { name: /설정/ });
@@ -617,9 +636,13 @@ test.describe("Teacher phone and tablet app surfaces", () => {
             await settingsTab.click();
             await expect(settingsTab).toHaveAttribute("aria-selected", "true");
             await expect(page.locator("#create-settings-panel")).toBeVisible();
+            await expect(page.locator("#create-pdf-panel")).toBeHidden();
+            await expect(page.locator("#create-preview-panel")).toBeHidden();
             await previewTab.click();
             await expect(previewTab).toHaveAttribute("aria-selected", "true");
             await expect(page.locator("#create-preview-panel")).toBeVisible();
+            await expect(page.locator("#create-pdf-panel")).toBeHidden();
+            await expect(page.locator("#create-settings-panel")).toBeHidden();
             expect(await smallTargets(page, ".create-mobile-panel-nav button")).toEqual([]);
         } else {
             await expect(page.locator("#create-pdf-panel")).toBeVisible();
@@ -667,13 +690,23 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         expect(workspaceBox!.x).toBeGreaterThanOrEqual(0);
         expect(workspaceBox!.x + workspaceBox!.width).toBeLessThanOrEqual(viewport.width);
         await expect(page.locator(".create-resizer").first()).toBeHidden();
+        const settingsTab = tabs.getByRole("tab", { name: "설정", exact: true });
+        const pdfTab = tabs.getByRole("tab", { name: /문제지/ });
+        await expect(settingsTab).toHaveAttribute("aria-selected", "true");
+        await expect(page.locator("#create-pdf-panel")).toBeHidden();
+        await expect(page.locator("#create-settings-panel")).toBeVisible();
+        await expect(page.locator("#create-preview-panel")).toBeHidden();
+
+        await pdfTab.click();
+        await expect(pdfTab).toHaveAttribute("aria-selected", "true");
         await expect(page.locator("#create-pdf-panel")).toBeVisible();
         await expect(page.locator("#create-settings-panel")).toBeHidden();
         await expect(page.locator("#create-preview-panel")).toBeHidden();
-
-        await tabs.getByRole("tab", { name: "설정", exact: true }).click();
+        await settingsTab.click();
+        await expect(settingsTab).toHaveAttribute("aria-selected", "true");
         await expect(page.locator("#create-pdf-panel")).toBeHidden();
         await expect(page.locator("#create-settings-panel")).toBeVisible();
+        await expect(page.locator("#create-preview-panel")).toBeHidden();
         const title = page.getByLabel("시험 제목");
         await title.fill("태블릿 회전 중인 시험");
         await page.setViewportSize({ width: 820, height: 1180 });
