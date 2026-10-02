@@ -101,8 +101,8 @@
 - [x] 문항 수 51 이상: 토스트 대신 입력 칸 아래에 inline 메시지를 띄웁니다. 기본안은 50으로 고정하고 "최대 50문항까지 만들 수 있어 50으로 맞췄습니다"라고 안내하는 것입니다. (PO 결정 A-1)
 
 ### A9. README의 로컬 교사 로그인 안내 (S)
-- [ ] dev 기본값 `provisioned_only`는 의도된 보안 기본값이므로 유지합니다.
-- [ ] README 18줄과 `.env.example`에 "Supabase 미설정 로컬에서 admin/admin123을 쓰려면 `OMR_TEACHER_IDENTITY_MODE=self_service`"를 명시합니다.
+- [x] dev 기본값 `provisioned_only`는 의도된 보안 기본값이므로 유지합니다.
+- [x] README 18줄과 `.env.example`에 "Supabase 미설정 로컬에서 admin/admin123을 쓰려면 `OMR_TEACHER_IDENTITY_MODE=self_service`"를 명시합니다.
 
 ### B0. 서버 로그인 결과의 identityType 전달 버그 (S)
 **원인:** 서버가 `registered`로 서명한 학생을 `src/app/page.tsx:694`가 `identityType: "temporary"`로 저장합니다. 그래서 로그인 직후 대시보드의 "선생님이 배정한 오답 보강 →" 링크(`dashboard/page.tsx:790`)가 보이지 않습니다.

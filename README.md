@@ -15,7 +15,16 @@ The dev server runs on [http://localhost:3003](http://localhost:3003).
 
 Production uses operator-provisioned, database-backed teacher accounts (`provisioned_only`). Issue them with `npm run ops:teacher:provision` under the [Go-Live Gate](docs/production-readiness.md). Development/legacy QA accounts may use `.env.local` `TEACHER_ACCOUNTS`; do not publish credentials or commit environment files.
 
-Only local development falls back to `admin` / `admin123` when no teacher credentials are configured. Development fixtures do not prove production login, billing, or external integration readiness.
+Only local development falls back to the demo accounts `admin` / `admin123`, `owner1` / `owner123` (원장 1, owner) and `teacher1` / `teacher123` (교사 1, teacher) when no teacher credentials are configured. Development fixtures do not prove production login, billing, or external integration readiness.
+
+The teacher identity mode defaults to `provisioned_only` everywhere, which is the intended secure default. Without Supabase, a fresh checkout therefore reports "배포 환경에 교사 계정이 설정되어 있지 않습니다." until you opt into the local fallback in `.env.local`:
+
+```bash
+# .env.local (development only; ignored when NODE_ENV=production)
+OMR_TEACHER_IDENTITY_MODE=self_service
+```
+
+With that set, the demo accounts above (or your `TEACHER_ACCOUNTS` / `TEACHER_LOGIN_ID` values) work locally. Production always stays `provisioned_only` regardless of this variable. See [deployment test accounts](docs/deployment-test-accounts.md) and [operator provisioning](docs/operator-teacher-provisioning.md).
 
 There is no default production account. These legacy account settings do not replace production operator provisioning:
 
