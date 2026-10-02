@@ -2517,7 +2517,7 @@ function CreateOMRPageInner() {
                         : ` 서버본 버전: ${serverSave.currentRevision}`;
                     toast.error(
                         "다른 곳에서 먼저 수정됨",
-                        `현재 편집 내용과 자동 저장 초안은 그대로 유지됩니다.${serverVersion} 새로고침해 서버본과 비교하거나 복제본으로 저장해주세요.`,
+                        `현재 편집 내용과 자동 저장 초안은 그대로 유지됩니다.${serverVersion} 새로고침해 서버본과 비교해주세요.`,
                     );
                 }
                 return "";

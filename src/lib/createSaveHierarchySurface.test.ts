@@ -272,7 +272,9 @@ describe("create save and publish hierarchy", () => {
         const nextStatusBranch = publish.indexOf('if (serverSave.status === "service_unavailable")', conflict);
         const branch = publish.slice(conflict, nextStatusBranch);
         expect(branch).toContain("현재 편집 내용과 자동 저장 초안은 그대로 유지됩니다");
-        expect(branch).toContain("새로고침해 서버본과 비교하거나 복제본으로 저장해주세요");
+        expect(branch).toContain("새로고침해 서버본과 비교해주세요");
+        // There is no "save as copy" action, so the toast must not point to one.
+        expect(branch).not.toContain("복제본");
         expect(branch).not.toContain("rollbackNewExamPublish");
         expect(branch).not.toContain("saveExam(");
     });
