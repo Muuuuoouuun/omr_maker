@@ -964,9 +964,13 @@ describe("service UI surface", () => {
         expect(authMessages).toContain("TEACHER_ACCOUNTS");
         expect(homePage).toContain("학생번호 또는 이메일");
         expect(homePage).toContain("계정 ID처럼 사용합니다.");
-        expect(homePage).toContain("명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
+        expect(homePage).toContain("이 반 명단에 있는 학생이에요. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
         expect(homePage).toContain("명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다.");
-        expect(homePage).toContain("학생 계정 비밀번호처럼 쓰이는 6자리 코드입니다.");
+        expect(homePage).toContain("처음 로그인한다면 비워두세요. 로그인하면 새 코드를 알려드려요.");
+        expect(homePage).toContain("선생님이 알려준 6자리 코드예요. 영문 대문자와 숫자로 되어 있고 O·I·0·1은 쓰지 않아요.");
+        expect(homePage).toContain('<StatusPill tone="warning" size="sm" label="필수"');
+        expect(homePage).toContain("resolveLocalRosterNameGuard");
+        expect(homePage).toContain("명단에 없는 새 학생으로 시작");
         expect(homePage).toContain('aria-label="이름"');
         expect(homePage).toContain('aria-label="학생번호 또는 이메일"');
         expect(homePage).toContain('aria-label="반 선택"');

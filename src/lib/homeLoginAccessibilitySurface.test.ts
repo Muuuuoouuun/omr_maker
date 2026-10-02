@@ -7,7 +7,7 @@ const homeSource = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8")
 describe("home login accessibility and recovery", () => {
     it("keeps authentication errors available until the user edits or resubmits", () => {
         expect(homeSource).not.toContain('setTimeout(() => setError(""),');
-        expect(homeSource).toContain('const clearLoginError = () => setError("");');
+        expect(homeSource).toContain('const clearLoginError = () => {\n    setError("");\n    setRosterNameGuard(null);');
         expect(homeSource).toContain('setTeacherIdentifier(event.target.value);\n                          clearLoginError();');
         expect(homeSource).toContain('setStudentName(e.target.value);\n                      clearLoginError();');
         expect(homeSource).toContain('id="student-login-feedback"');
@@ -46,6 +46,19 @@ describe("home login accessibility and recovery", () => {
         expect(homeSource).toContain('htmlFor="student-group"');
         expect(homeSource).toContain('htmlFor="student-start-code"');
         expect(homeSource).toContain('type="submit"');
+    });
+
+    it("always renders name, class, student number/email and start code in that order", () => {
+        const form = homeSource.slice(
+            homeSource.indexOf('className="student-account-login-form"'),
+            homeSource.indexOf("</form>", homeSource.indexOf('className="student-account-login-form"')),
+        );
+        const order = ['htmlFor="student-name"', 'htmlFor="student-group"', 'htmlFor="student-lookup"', 'htmlFor="student-start-code"']
+            .map(marker => form.indexOf(marker));
+        expect(order.every(index => index >= 0)).toBe(true);
+        expect([...order].sort((a, b) => a - b)).toEqual(order);
+        // The start-code field is no longer gated behind an error.
+        expect(form).not.toContain("{(needsCode || requiresServerStudentVerification) && (");
     });
 
     it("requires explicit consent before retaining a student identity on the device", () => {

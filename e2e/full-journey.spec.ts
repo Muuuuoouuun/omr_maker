@@ -582,7 +582,7 @@ test.describe("Teacher and student full journey", () => {
         await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
         await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
         await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page.getByText("명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.")).toBeVisible();
+        await expect(page.getByText("이 반 명단에 있는 학생이에요. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.")).toBeVisible();
         await expect(page.getByText("명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다.")).toBeVisible();
 
         await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
@@ -666,11 +666,11 @@ test.describe("Teacher and student full journey", () => {
         await page.getByLabel("학생번호 또는 이메일").fill(SAME_NAME_SECOND_EMAIL);
         await expect(page.getByLabel("시작 코드")).toBeVisible();
         await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page.getByText("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.")).toBeVisible();
+        await expect(page.getByText("이미 시작 코드가 있는 학생이에요. 처음 로그인할 때 받은 6자리 코드를 입력해주세요.")).toBeVisible();
 
         await page.getByLabel("시작 코드").fill("WRONG1");
         await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page.getByText("시작 코드가 일치하지 않습니다.")).toBeVisible();
+        await expect(page.getByText("시작 코드가 맞지 않아요. 6자리를 다시 확인해주세요(O·I·0·1은 쓰지 않아요). 잊었다면 선생님에게 재발급을 요청하세요.")).toBeVisible();
 
         await page.getByLabel("시작 코드").fill(SAME_NAME_START_CODE);
         await page.getByRole("button", { name: "시험 시작하기" }).click();
@@ -713,7 +713,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByLabel("시작 코드")).toBeVisible();
 
         await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page.getByText("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.")).toBeVisible();
+        await expect(page.getByText("이미 시작 코드가 있는 학생이에요. 처음 로그인할 때 받은 6자리 코드를 입력해주세요.")).toBeVisible();
 
         await page.getByLabel("시작 코드").fill(TEST_STUDENT_START_CODE);
         await page.getByRole("button", { name: "시험 시작하기" }).click();

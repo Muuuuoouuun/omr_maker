@@ -286,3 +286,58 @@ export function resolveStudentStartCodeLogin(params: {
 
     return { status: "allowed", codes: nextCodes, code: storedCode, codesChanged };
 }
+
+/**
+ * Comparison key for catching roster-name typos on the local login form:
+ * NFC-normalized, every whitespace character removed, lowercased. Only used
+ * to *suggest* a roster name — identity matching itself stays exact.
+ */
+export function normalizeRosterNameForComparison(value: string): string {
+    return value.normalize("NFC").replace(/\s+/gu, "").toLowerCase();
+}
+
+/** Roster students that belong to the given class (same rules as identity resolution). */
+export function rosterStudentsForGroup<T extends StudentCodeStudentLike>(
+    group: StudentCodeGroupLike | undefined,
+    students: T[],
+): T[] {
+    if (!group) return [];
+    return students.filter(student => studentMatchesGroup(student, group));
+}
+
+export type LocalRosterNameGuardResult =
+    | { status: "matched" }
+    | { status: "no_roster_for_group" }
+    | { status: "unmatched_in_roster"; suggestion?: string };
+
+/**
+ * Local-mode guard run before a start code is issued: when the selected class
+ * has a roster and the typed name is not on it, stop instead of silently
+ * creating a brand-new student (e.g. "김학생" vs roster "김 학생"). Suggests the
+ * roster name only when exactly one distinct roster name normalizes the same.
+ */
+export function resolveLocalRosterNameGuard(params: {
+    name: string;
+    group?: StudentCodeGroupLike;
+    students: StudentCodeStudentLike[];
+}): LocalRosterNameGuardResult {
+    const groupStudents = rosterStudentsForGroup(params.group, params.students);
+    if (groupStudents.length === 0) return { status: "no_roster_for_group" };
+
+    const trimmedName = params.name.trim();
+    if (groupStudents.some(student => student.name.trim() === trimmedName)) {
+        return { status: "matched" };
+    }
+
+    const typedKey = normalizeRosterNameForComparison(trimmedName);
+    const candidateNames = new Set(
+        groupStudents
+            .map(student => student.name.trim())
+            .filter(name => !!typedKey && normalizeRosterNameForComparison(name) === typedKey),
+    );
+    if (candidateNames.size === 1) {
+        const [suggestion] = candidateNames;
+        return { status: "unmatched_in_roster", suggestion };
+    }
+    return { status: "unmatched_in_roster" };
+}
