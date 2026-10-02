@@ -10,6 +10,7 @@ import {
     isLoadedExamCurrentForEdit,
     mergePdfHydrationFailures,
     rotatePdfUploadAttemptNonce,
+    recoverableDraftPdfAssets,
     resolveExamEditorLoad,
     resolvePdfHydrationPairSequentially,
     safeBrowserStorage,
@@ -541,5 +542,24 @@ describe("runPdfAssetUploadsSequentially", () => {
         expect(result.problem.status).toBe("failed");
         expect(result.answer.status).toBe("failed");
         expect(rollbackCalls).toBe(1);
+    });
+});
+
+
+describe("recoverable draft PDF metadata", () => {
+    const persisted = {
+        pdfDataRef: { store: "indexeddb" as const, key: "scoped:problemPdf" },
+        answerKeyPdf: "data:application/pdf;base64,old-answer",
+    };
+    it("retains the last serialized PDFs while newly selected Files have no recoverable representation", () => {
+        expect(recoverableDraftPdfAssets({ pdfData: undefined, pdfDataRef: undefined }, persisted)).toEqual({
+            ...persisted, pdfData: undefined, answerKeyPdfRef: undefined,
+        });
+    });
+    it("adopts a newly serialized pair without mixing its inline data with a stale ref", () => {
+        expect(recoverableDraftPdfAssets({ pdfData: "data:application/pdf;base64,new" }, persisted)).toEqual({
+            pdfData: "data:application/pdf;base64,new", pdfDataRef: undefined,
+            answerKeyPdf: persisted.answerKeyPdf, answerKeyPdfRef: undefined,
+        });
     });
 });

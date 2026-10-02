@@ -296,17 +296,31 @@ describe("loadReviewExamClient", () => {
         expect(localFallback).not.toHaveBeenCalled();
     });
 
-    it("falls back to the local exam on degraded/denied/throw", async () => {
+    it.each(["denied", "unauthenticated"])("never reads the local exam after an explicit %s response", async status => {
+        const localFallback = vi.fn().mockResolvedValue(LOCAL_EXAM);
+        const res = await loadReviewExamClient("a1", {
+            server: vi.fn().mockResolvedValue({ status, exam: LOCAL_EXAM }),
+            localFallback,
+        });
+
+        expect(res).toEqual({ status: "error", source: "server" });
+        expect(localFallback).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the local exam on degraded/not-found/error/throw", async () => {
         for (const server of [
             vi.fn().mockResolvedValue({ status: "degraded_local" }),
-            vi.fn().mockResolvedValue({ status: "denied" }),
+            vi.fn().mockResolvedValue({ status: "not_found" }),
+            vi.fn().mockResolvedValue({ status: "error" }),
             vi.fn().mockRejectedValue(new Error("network")),
         ]) {
+            const localFallback = vi.fn().mockResolvedValue(LOCAL_EXAM);
             const res = await loadReviewExamClient("a1", {
                 server,
-                localFallback: vi.fn().mockResolvedValue(LOCAL_EXAM),
+                localFallback,
             });
-            expect(res).toMatchObject({ status: "ok", source: "local" });
+            expect(res).toEqual({ status: "ok", exam: LOCAL_EXAM, source: "local" });
+            expect(localFallback).toHaveBeenCalledOnce();
         }
     });
 
@@ -321,26 +335,49 @@ describe("loadReviewExamClient", () => {
 
 describe("loadMyAttemptClient", () => {
     it("returns the server attempt when owned", async () => {
+        const localFallback = vi.fn();
         const res = await loadMyAttemptClient("a1", {
             server: vi.fn().mockResolvedValue({ status: "ok", attempt: ATTEMPT }),
-            localFallback: vi.fn(),
+            localFallback,
         });
-        expect(res).toMatchObject({ status: "ok", source: "server" });
+        expect(res).toEqual({ status: "ok", attempt: ATTEMPT, source: "server" });
+        expect(localFallback).not.toHaveBeenCalled();
     });
 
-    it("falls back to a device-local attempt when the server denies or degrades", async () => {
+    it.each(["denied", "unauthenticated"])("never reads a device-local attempt after an explicit %s response", async status => {
+        const localFallback = vi.fn().mockResolvedValue(ATTEMPT);
         const res = await loadMyAttemptClient("a1", {
-            server: vi.fn().mockResolvedValue({ status: "degraded_local" }),
-            localFallback: vi.fn().mockResolvedValue(ATTEMPT),
+            server: vi.fn().mockResolvedValue({ status, attempt: ATTEMPT }),
+            localFallback,
         });
-        expect(res).toMatchObject({ status: "ok", source: "local" });
+
+        expect(res).toEqual({ status: "denied", source: "server" });
+        expect(localFallback).not.toHaveBeenCalled();
     });
 
-    it("reports denied when the server denies and the device has no copy", async () => {
+    it("falls back to a device-local attempt on degraded/not-found/error/throw", async () => {
+        for (const server of [
+            vi.fn().mockResolvedValue({ status: "degraded_local" }),
+            vi.fn().mockResolvedValue({ status: "not_found" }),
+            vi.fn().mockResolvedValue({ status: "error" }),
+            vi.fn().mockRejectedValue(new Error("network")),
+        ]) {
+            const localFallback = vi.fn().mockResolvedValue(ATTEMPT);
+            const res = await loadMyAttemptClient("a1", { server, localFallback });
+
+            expect(res).toEqual({ status: "ok", attempt: ATTEMPT, source: "local" });
+            expect(localFallback).toHaveBeenCalledExactlyOnceWith("a1");
+        }
+    });
+
+    it("reports error when neither source has the attempt", async () => {
+        const localFallback = vi.fn().mockResolvedValue(null);
         const res = await loadMyAttemptClient("a1", {
-            server: vi.fn().mockResolvedValue({ status: "denied" }),
-            localFallback: vi.fn().mockResolvedValue(null),
+            server: vi.fn().mockResolvedValue({ status: "not_found" }),
+            localFallback,
         });
-        expect(res.status).toBe("denied");
+
+        expect(res).toEqual({ status: "error", source: "local" });
+        expect(localFallback).toHaveBeenCalledExactlyOnceWith("a1");
     });
 });
