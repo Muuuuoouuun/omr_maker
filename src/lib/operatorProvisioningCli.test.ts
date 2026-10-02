@@ -961,6 +961,133 @@ describe("operator teacher provisioning CLI", () => {
         expect(failureStderr.join(" ")).not.toContain(PASSWORD);
     });
 
+    describe("academy teacher member requests", () => {
+        const MEMBER_SUCCESS = {
+            status: "provisioned" as const,
+            organizationId: SUCCESS.organizationId,
+            accountId: `teacher_${"d".repeat(16)}`,
+            provisionId: `pilot_member_${"e".repeat(24)}`,
+            memberRole: "teacher" as const,
+            replayed: false,
+        };
+
+        async function memberFixture(overrides: Record<string, unknown> = {}) {
+            const current = await fixture();
+            const request = {
+                organizationId: SUCCESS.organizationId,
+                email: "Member@Example.com",
+                displayName: "교사 1",
+                memberRole: "teacher",
+                actor: "operator:launch",
+                reason: "academy_teacher",
+                idempotencyKey: `prov_${"M".repeat(32)}`,
+                credentialStatePath: current.statePath,
+                ...overrides,
+            };
+            await writeFile(current.requestPath, `${JSON.stringify(request)}\n`, { mode: 0o600 });
+            current.deps.provisionWithVerifier.mockImplementation(async () => MEMBER_SUCCESS);
+            return { ...current, memberRequest: request };
+        }
+
+        it("provisions a teacher into the named academy with a member receipt", async () => {
+            const current = await memberFixture();
+            const output = await executeOperatorProvisioning(
+                { argv: [`--request=${current.requestPath}`], env: {} }, current.deps,
+            );
+
+            expect(current.deps.provisionWithVerifier).toHaveBeenCalledWith({
+                kind: "teacher",
+                organizationId: SUCCESS.organizationId,
+                email: "member@example.com",
+                displayName: "교사 1",
+                memberRole: "teacher",
+                actor: "operator:launch",
+                reason: "academy_teacher",
+                idempotencyKey: `prov_${"M".repeat(32)}`,
+                encodedVerifier: VERIFIER,
+            }, {});
+            expect(output).toEqual({ receiptPath: `${current.statePath}.receipt`, ...MEMBER_SUCCESS });
+            const stored = await receipt(current.statePath);
+            expect(Object.keys(stored).sort()).toEqual([
+                "accountId", "idempotencyKeyHash", "initialPassword", "integrity", "memberRole",
+                "organizationId", "provisionId", "replayed", "requestFingerprint", "schemaVersion", "status",
+            ]);
+            expect(stored).toMatchObject({ initialPassword: PASSWORD, memberRole: "teacher" });
+            expect(JSON.stringify(stored)).not.toContain(VERIFIER);
+
+            const replay = await executeOperatorProvisioning(
+                { argv: [`--request=${current.requestPath}`], env: {} }, current.deps,
+            );
+            expect(replay).toEqual(output);
+            expect(current.deps.provisionWithVerifier).toHaveBeenCalledTimes(1);
+        });
+
+        it.each([
+            ["an owner-only role", { memberRole: "owner" }],
+            ["a non-pilot organization", { organizationId: "teacher_abcdefg" }],
+            ["a plan, which members never carry", { plan: "pro" }],
+            ["an organization name, which only owners create", { organizationName: "서울 파일럿" }],
+        ])("rejects %s before generating credentials", async (_label, overrides) => {
+            const current = await memberFixture(overrides);
+            const generatePassword = vi.fn(() => PASSWORD);
+            await expect(executeOperatorProvisioning(
+                { argv: [`--request=${current.requestPath}`], env: {} },
+                { ...current.deps, generatePassword },
+            )).rejects.toMatchObject({ code: "invalid_request" });
+            expect(generatePassword).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ["another academy", { organizationId: `pilot_org_${"f".repeat(24)}` }],
+            ["an owner envelope", { memberRole: "owner" }],
+            ["an extra grant field", { grantId: SUCCESS.grantId }],
+        ])("rejects a member result naming %s", async (_label, drift) => {
+            const current = await memberFixture();
+            current.deps.provisionWithVerifier.mockImplementation(async () => ({ ...MEMBER_SUCCESS, ...drift }));
+            await expect(executeOperatorProvisioning(
+                { argv: [`--request=${current.requestPath}`], env: {} }, current.deps,
+            )).rejects.toMatchObject({ code: "dependency_unavailable" });
+        });
+
+        it("refuses an owner receipt replayed against a member request", async () => {
+            const current = await fixture();
+            await executeOperatorProvisioning({ argv: [`--request=${current.requestPath}`], env: {} }, current.deps);
+            await writeFile(current.requestPath, JSON.stringify({
+                organizationId: SUCCESS.organizationId,
+                email: "teacher@example.com",
+                displayName: "김교사",
+                memberRole: "teacher",
+                actor: "operator:launch",
+                reason: "initial_pilot",
+                idempotencyKey: IDEMPOTENCY_KEY,
+                credentialStatePath: current.statePath,
+            }), { mode: 0o600 });
+            await expect(executeOperatorProvisioning(
+                { argv: [`--request=${current.requestPath}`], env: {} }, current.deps,
+            )).rejects.toMatchObject({ code: "unsafe_receipt" });
+        });
+
+        it("prints the provision id and role instead of grant fields", async () => {
+            const current = await memberFixture();
+            const stdout: string[] = [];
+            const code = await runOperatorProvisioningCli({
+                argv: [`--request=${current.requestPath}`],
+                env: {},
+                stdout: (line: string) => stdout.push(line),
+                stderr: vi.fn(),
+                deps: current.deps,
+            });
+            expect(code).toBe(0);
+            expect(stdout).toEqual([
+                `receipt_path=${current.statePath}.receipt`,
+                `organization_id=${MEMBER_SUCCESS.organizationId}`,
+                `account_id=${MEMBER_SUCCESS.accountId}`,
+                `provision_id=${MEMBER_SUCCESS.provisionId}`,
+                "member_role=teacher",
+            ]);
+        });
+    });
+
     it("does not expose raw dependency errors through the public CLI error", () => {
         const error = new OperatorProvisioningCliError("dependency_unavailable", `${PASSWORD} ${VERIFIER}`);
         expect(error.message).not.toContain(PASSWORD);

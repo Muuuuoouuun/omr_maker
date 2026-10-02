@@ -122,6 +122,7 @@ revoke all on table public.omr_teacher_account_tokens from public, anon, authent
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
 revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
 revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
+revoke all on table public.omr_pilot_member_provisions from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_credential_epochs from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_credential_batch_receipts from public, anon, authenticated, service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
@@ -581,6 +582,8 @@ alter table if exists public.omr_operational_job_status enable row level securit
 alter table if exists public.omr_operational_job_status force row level security;
 alter table if exists public.omr_pilot_plan_grants enable row level security;
 alter table if exists public.omr_pilot_plan_grants force row level security;
+alter table if exists public.omr_pilot_member_provisions enable row level security;
+alter table if exists public.omr_pilot_member_provisions force row level security;
 alter table if exists public.omr_initial_ops_metrics enable row level security;
 alter table if exists public.omr_initial_ops_metrics force row level security;
 alter table if exists public.omr_teacher_notification_states enable row level security;
@@ -677,7 +680,7 @@ begin
         ('omr_rate_limit_buckets'), ('omr_exam_mutations'), ('omr_feedback_mutations'),
         ('omr_initial_ops_metrics'), ('omr_teacher_accounts'), ('omr_teacher_account_tokens'),
         ('omr_teacher_notification_states'), ('omr_operational_job_status'),
-        ('omr_pilot_plan_grants'), ('omr_student_credential_epochs'),
+        ('omr_pilot_plan_grants'), ('omr_pilot_member_provisions'), ('omr_student_credential_epochs'),
         ('omr_student_credential_batch_receipts'),
         ('omr_kakao_reminder_legacy_quarantine'),
         ('omr_reminder_settings'), ('omr_reminder_contacts'), ('omr_reminder_deliveries'), ('omr_remediation_cases')
@@ -717,7 +720,7 @@ begin
                    'omr_exam_entry_invites',
                    'omr_initial_ops_metrics', 'omr_teacher_accounts', 'omr_teacher_account_tokens',
                    'omr_teacher_notification_states', 'omr_operational_job_status',
-                   'omr_pilot_plan_grants', 'omr_student_credential_batch_receipts',
+                   'omr_pilot_plan_grants', 'omr_pilot_member_provisions', 'omr_student_credential_batch_receipts',
                    'omr_student_credential_epochs', 'omr_student_start_credentials',
                    'omr_remote_assets', 'omr_remote_asset_upload_intents',
                    'omr_remote_asset_cleanup_queue', 'omr_plan_usage',
@@ -769,6 +772,10 @@ begin
         )
         and not pg_catalog.has_table_privilege(
             'service_role', 'public.omr_pilot_plan_grants',
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_pilot_member_provisions',
             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
         )
         and not pg_catalog.has_table_privilege(
@@ -1488,6 +1495,42 @@ begin
         and not pg_catalog.has_table_privilege(
             'service_role', 'public.omr_pilot_plan_grants',
             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        -- Academy teacher members: RPC-only ledger plus one audited gateway.
+        and pg_catalog.to_regclass('public.omr_pilot_member_provisions') is not null
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_pilot_member_provisions',
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and exists (
+            select 1 from pg_catalog.pg_index index_record
+             where index_record.indexrelid = pg_catalog.to_regclass(
+                       'public.omr_pilot_member_provisions_idempotency_hash_unique'
+                   )
+               and index_record.indrelid = 'public.omr_pilot_member_provisions'::pg_catalog.regclass
+               and index_record.indisvalid and index_record.indisready and index_record.indisunique
+        )
+        and exists (
+            select 1
+              from pg_catalog.pg_proc routine
+             where routine.oid = pg_catalog.to_regprocedure(
+                       'public.omr_provision_pilot_org_teacher_v1(text,text,text,text,text,text,text)'
+                   )
+               and routine.prosecdef
+               and routine.prokind = 'f'
+               and pg_catalog.pg_get_userbyid(routine.proowner) = 'postgres'
+               and pg_catalog.pg_get_function_result(routine.oid) = 'jsonb'
+               and routine.proconfig @> array[
+                   'search_path=""', 'statement_timeout=10s', 'lock_timeout=3s'
+               ]::text[]
+               and pg_catalog.has_function_privilege('service_role', routine.oid, 'EXECUTE')
+               and not pg_catalog.has_function_privilege('anon', routine.oid, 'EXECUTE')
+               and not pg_catalog.has_function_privilege('authenticated', routine.oid, 'EXECUTE')
+               and pg_catalog.obj_description(routine.oid, 'pg_proc')
+                   = 'atomic-operator-pilot-org-teacher-provisioning:202610020001'
+               and pg_catalog.encode(extensions.digest(
+                   pg_catalog.pg_get_functiondef(routine.oid), 'sha256'
+               ), 'hex') = '4be105f115716a0cdc5bad391eee5c4bb1e1c1c12daa81e853ed851004e0a7de'
         );
 
     v_provisioned_teacher_login_ready :=
@@ -1593,22 +1636,22 @@ begin
         ) = 'side-effect-free exact provisioned teacher release canary:202608080007'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_lookup_teacher_account_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '1516cbbe5f44bddf3c683f90b99721b3f7399d5d1c8a84fa4a5bc71f1f7a5101'
+        ), 'sha256'), 'hex') = 'fe3169c6a0146ea882781dd50718b5db72060c7169349f0ed47f49e14072237b'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_validate_teacher_session_v1(text,bigint)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = 'bf69cc465b78ca4bfc8fdd9a117320ea056f5d2508666f77ceb9ac3b4079d5a4'
+        ), 'sha256'), 'hex') = '214f1a6cd051aa90b24ba36678c0814fb158851e264a4406600e3af539807c09'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = 'e40b1ef3b480d17343722d65768cac963ecce235e9c1c0c848b7ad41a344a3e9'
+        ), 'sha256'), 'hex') = '96bd9001d47dbaee16dee36554167283f5659c1cfc7eba649dda3a485e5f0cd4'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_complete_teacher_password_reset_v1(text,text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = 'c0398cd9badc1b495517f39902e7383413f8051e487425cdd1e18880213b64ba'
+        ), 'sha256'), 'hex') = 'db7999bd381f8b2eee44a869aaa962a0f084ec44debcfd5187cac885521a0a02'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_lookup_provisioned_teacher_login_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = 'aabf7ecf6c20e281b8c19662280f5af0b3f25bf0f874053adc76f77ff0799de9'
+        ), 'sha256'), 'hex') = 'e82d5d9ae9bc15ec2291ff38645019ab703ede49f09d9860a88f9b1d939e37cd'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '62b67281c2132c3f80a6a8cf415227ba38a24e0bfffa483be01ce7437b5227c9'
+        ), 'sha256'), 'hex') = '2f95ff43660f1e645e4c322306fb2a427de2d7f1c5555d22311dfe8afb207358'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_probe_provisioned_teacher_canary_v1(text)'::pg_catalog.regprocedure
         ), 'sha256'), 'hex') = '0302d984bd9f280d887ff17d7953f1e3346b36631ed0bc40ef2e55be5a61cb4e';
@@ -2329,7 +2372,7 @@ begin
                E'\n-- phase-c-routine --\n' order by name, args
                ), 'sha256'), 'hex')
              from actual
-       ) = 'b31ae76012052188576cae98c9e1ca3e807efe10812a028c3237b0d8f6f62494'
+       ) = 'b28a8a1017a68925b8c6d1acbcf45e95eb1abdd894aa7b4947abcb4ae0a0ce2e'
        and not exists (
            select 1 from (values
                ('omr_remote_assets'), ('omr_remote_asset_upload_intents'),

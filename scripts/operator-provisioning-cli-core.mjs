@@ -14,12 +14,19 @@ const VERIFIER_PATTERN = /^pbkdf2-sha256:120000:[a-f0-9]{32}:[a-f0-9]{64}$/;
 const ORGANIZATION_ID_PATTERN = /^pilot_org_[a-f0-9]{24}$/;
 const ACCOUNT_ID_PATTERN = /^teacher_[a-f0-9]{16}$/;
 const GRANT_ID_PATTERN = /^pilot_grant_[a-f0-9]{24}$/;
+const PROVISION_ID_PATTERN = /^pilot_member_[a-f0-9]{24}$/;
 const INPUT_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const RESULT_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,6}Z$/;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 const REQUEST_KEYS = [
     "actor", "credentialStatePath", "displayName", "email", "expiresAt",
     "idempotencyKey", "organizationName", "plan", "reason",
+];
+// A teacher member joins an existing academy, so it names the owner's
+// organization instead of creating one and carries no plan of its own.
+const MEMBER_REQUEST_KEYS = [
+    "actor", "credentialStatePath", "displayName", "email", "idempotencyKey",
+    "memberRole", "organizationId", "reason",
 ];
 const PENDING_KEYS = [
     "createdAt", "idempotencyKey", "initialPassword", "integrity", "passwordVerifier",
@@ -29,6 +36,11 @@ const RECEIPT_KEYS = [
     "accountId", "expiresAt", "grantId", "idempotencyKeyHash", "initialPassword",
     "integrity", "organizationId", "plan", "replayed", "requestFingerprint", "schemaVersion", "status",
 ];
+const MEMBER_RECEIPT_KEYS = [
+    "accountId", "idempotencyKeyHash", "initialPassword", "integrity", "memberRole",
+    "organizationId", "provisionId", "replayed", "requestFingerprint", "schemaVersion", "status",
+];
+const MEMBER_RECEIPT_DOMAIN = "omr.operator-member-provisioning-receipt:v1";
 const SAFE_CODES = new Set([
     "invalid_arguments", "unsupported_platform", "unsafe_request", "invalid_request",
     "unsafe_state", "unsafe_receipt", "dependency_unavailable", "provisioning_rejected",
@@ -695,7 +707,50 @@ async function releaseLock(lock, deps) {
     }
 }
 
+function validateIdentityFields({ email, displayName, actor, reason, idempotencyKey }) {
+    return !(
+        email.length < 3 || email.length > 254 || Buffer.byteLength(email, "utf8") > 254
+        || CONTROL_CHARACTER_PATTERN.test(email)
+        || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+        || displayName.length < 1 || displayName.length > 80
+        || Buffer.byteLength(displayName, "utf8") > 240 || /[\u0000-\u001f\u007f]/.test(displayName)
+        || actor.length < 10 || actor.length > 73 || !/^operator:[a-z0-9][a-z0-9._-]{0,63}$/.test(actor)
+        || reason.length < 1 || reason.length > 64 || !/^[a-z][a-z0-9_]{0,63}$/.test(reason)
+        || Buffer.byteLength(idempotencyKey, "utf8") < 37 || Buffer.byteLength(idempotencyKey, "utf8") > 128
+        || !/^prov_[A-Za-z0-9_-]{32,123}$/.test(idempotencyKey)
+    );
+}
+
+function validateMemberRequest(raw) {
+    const value = exactObject(raw, MEMBER_REQUEST_KEYS, "invalid_request");
+    const provisioningInput = {
+        kind: "teacher",
+        organizationId: clean(value.organizationId).toLowerCase(),
+        email: clean(value.email).toLowerCase(),
+        displayName: clean(value.displayName),
+        memberRole: clean(value.memberRole),
+        actor: clean(value.actor),
+        reason: clean(value.reason),
+        idempotencyKey: clean(value.idempotencyKey),
+    };
+    const credentialStatePath = normalizedAbsolutePath(value.credentialStatePath, "invalid_request");
+    if (
+        !ORGANIZATION_ID_PATTERN.test(provisioningInput.organizationId)
+        || provisioningInput.memberRole !== "teacher"
+        || !validateIdentityFields(provisioningInput)
+    ) fail("invalid_request");
+    return {
+        ...provisioningInput,
+        credentialStatePath,
+        requestFingerprint: sha256(JSON.stringify(canonicalize(provisioningInput))),
+    };
+}
+
 function validateRequest(raw, now) {
+    if (raw && typeof raw === "object" && !Array.isArray(raw)
+        && Object.prototype.hasOwnProperty.call(raw, "organizationId")) {
+        return validateMemberRequest(raw);
+    }
     const value = exactObject(raw, REQUEST_KEYS, "invalid_request");
     const organizationName = clean(value.organizationName);
     const email = clean(value.email).toLowerCase();
@@ -729,6 +784,7 @@ function validateRequest(raw, now) {
     };
     return {
         ...provisioningInput,
+        kind: "owner",
         credentialStatePath,
         requestFingerprint: sha256(JSON.stringify(canonicalize(provisioningInput))),
     };
@@ -750,7 +806,26 @@ function validatePending(raw, request) {
     return value;
 }
 
+function validateMemberReceipt(raw, request) {
+    const value = exactObject(raw, MEMBER_RECEIPT_KEYS, "unsafe_receipt");
+    if (
+        value.schemaVersion !== 1
+        || value.status !== "provisioned"
+        || value.requestFingerprint !== request.requestFingerprint
+        || value.idempotencyKeyHash !== sha256(request.idempotencyKey)
+        || value.integrity !== integrity(MEMBER_RECEIPT_DOMAIN, value)
+        || !PASSWORD_PATTERN.test(value.initialPassword)
+        || value.organizationId !== request.organizationId
+        || !ACCOUNT_ID_PATTERN.test(value.accountId)
+        || !PROVISION_ID_PATTERN.test(value.provisionId)
+        || value.memberRole !== "teacher"
+        || typeof value.replayed !== "boolean"
+    ) fail("unsafe_receipt");
+    return value;
+}
+
 function validateReceipt(raw, request) {
+    if (request.kind === "teacher") return validateMemberReceipt(raw, request);
     const value = exactObject(raw, RECEIPT_KEYS, "unsafe_receipt");
     if (
         value.schemaVersion !== 1
@@ -770,7 +845,23 @@ function validateReceipt(raw, request) {
     return value;
 }
 
+function validateMemberProvisionedResult(value, request) {
+    const expectedKeys = ["accountId", "memberRole", "organizationId", "provisionId", "replayed", "status"];
+    if (
+        !value || typeof value !== "object" || Array.isArray(value)
+        || Object.keys(value).sort().join("\0") !== expectedKeys.sort().join("\0")
+        || value.status !== "provisioned"
+        || value.organizationId !== request.organizationId
+        || !ACCOUNT_ID_PATTERN.test(value.accountId)
+        || !PROVISION_ID_PATTERN.test(value.provisionId)
+        || value.memberRole !== "teacher"
+        || typeof value.replayed !== "boolean"
+    ) fail("dependency_unavailable");
+    return value;
+}
+
 function validateProvisionedResult(value, request) {
+    if (request.kind === "teacher") return validateMemberProvisionedResult(value, request);
     const expectedKeys = ["accountId", "expiresAt", "grantId", "organizationId", "plan", "replayed", "status"];
     if (
         !value || typeof value !== "object" || Array.isArray(value)
@@ -790,6 +881,17 @@ function validateProvisionedResult(value, request) {
 }
 
 function publicResult(receiptPath, value) {
+    if (value.provisionId !== undefined) {
+        return {
+            status: "provisioned",
+            receiptPath,
+            organizationId: value.organizationId,
+            accountId: value.accountId,
+            provisionId: value.provisionId,
+            memberRole: value.memberRole,
+            replayed: value.replayed,
+        };
+    }
     return {
         status: "provisioned",
         receiptPath,
@@ -819,17 +921,27 @@ async function defaultProvisionWithVerifier(input, env) {
                 origin,
             ) },
         });
-        const result = await client.rpc("omr_provision_pilot_teacher_v1", {
-            p_organization_name: input.organizationName,
-            p_email: input.email,
-            p_display_name: input.displayName,
-            p_password_hash: input.encodedVerifier,
-            p_plan: input.plan,
-            p_expires_at: input.expiresAt,
-            p_actor: input.actor,
-            p_reason: input.reason,
-            p_idempotency_key: input.idempotencyKey,
-        });
+        const result = input.kind === "teacher"
+            ? await client.rpc("omr_provision_pilot_org_teacher_v1", {
+                p_organization_id: input.organizationId,
+                p_email: input.email,
+                p_display_name: input.displayName,
+                p_password_hash: input.encodedVerifier,
+                p_actor: input.actor,
+                p_reason: input.reason,
+                p_idempotency_key: input.idempotencyKey,
+            })
+            : await client.rpc("omr_provision_pilot_teacher_v1", {
+                p_organization_name: input.organizationName,
+                p_email: input.email,
+                p_display_name: input.displayName,
+                p_password_hash: input.encodedVerifier,
+                p_plan: input.plan,
+                p_expires_at: input.expiresAt,
+                p_actor: input.actor,
+                p_reason: input.reason,
+                p_idempotency_key: input.idempotencyKey,
+            });
         if (result.error) {
             const message = clean(result.error.message);
             if (message === "invalid_provisioning_request") return { status: "rejected", error: "invalid_input" };
@@ -931,7 +1043,17 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
     const provision = overrides.provisionWithVerifier ?? defaultProvisionWithVerifier;
     let result;
     try {
-        result = await provision({
+        result = await provision(request.kind === "teacher" ? {
+            kind: "teacher",
+            organizationId: request.organizationId,
+            email: request.email,
+            displayName: request.displayName,
+            memberRole: request.memberRole,
+            actor: request.actor,
+            reason: request.reason,
+            idempotencyKey: request.idempotencyKey,
+            encodedVerifier: pending.passwordVerifier,
+        } : {
             organizationName: request.organizationName,
             email: request.email,
             displayName: request.displayName,
@@ -970,10 +1092,28 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
                 finalized.initialPassword !== pending.initialPassword
                 || finalized.organizationId !== result.organizationId
                 || finalized.accountId !== result.accountId
-                || finalized.grantId !== result.grantId
-                || finalized.plan !== result.plan
-                || finalized.expiresAt !== result.expiresAt
+                || (request.kind === "teacher"
+                    ? finalized.provisionId !== result.provisionId
+                        || finalized.memberRole !== result.memberRole
+                    : finalized.grantId !== result.grantId
+                        || finalized.plan !== result.plan
+                        || finalized.expiresAt !== result.expiresAt)
             ) fail("unsafe_receipt");
+        } else if (request.kind === "teacher") {
+            finalized = {
+                schemaVersion: 1,
+                status: "provisioned",
+                requestFingerprint: request.requestFingerprint,
+                idempotencyKeyHash: sha256(request.idempotencyKey),
+                organizationId: result.organizationId,
+                accountId: result.accountId,
+                provisionId: result.provisionId,
+                memberRole: result.memberRole,
+                replayed: result.replayed,
+                initialPassword: pending.initialPassword,
+            };
+            finalized.integrity = integrity(MEMBER_RECEIPT_DOMAIN, finalized);
+            await atomicPublish(receiptPath, finalized, stateBoundary, deps, "unsafe_receipt");
         } else {
             finalized = {
                 schemaVersion: 1,
@@ -1007,8 +1147,13 @@ export async function runOperatorProvisioningCli({ argv, env, deps, stdout = con
         stdout(`receipt_path=${result.receiptPath}`);
         stdout(`organization_id=${result.organizationId}`);
         stdout(`account_id=${result.accountId}`);
-        stdout(`grant_id=${result.grantId}`);
-        stdout(`expires_at=${result.expiresAt}`);
+        if (result.provisionId !== undefined) {
+            stdout(`provision_id=${result.provisionId}`);
+            stdout(`member_role=${result.memberRole}`);
+        } else {
+            stdout(`grant_id=${result.grantId}`);
+            stdout(`expires_at=${result.expiresAt}`);
+        }
         return 0;
     } catch (error) {
         const code = error instanceof OperatorProvisioningCliError && SAFE_CODES.has(error.code)

@@ -450,8 +450,10 @@ async function runSqlMatrix(
     psqlFile("supabase/individual-student-assignments-assertions.sql");
     psqlFile("supabase/teacher-force-finish-compact-assertions.sql");
     psqlFile("supabase/teacher-session-revocation-assertions.sql");
+    psqlFile("supabase/pilot-org-teacher-assertions.sql");
     psqlFile("supabase/production-server-boundary.sql");
     psqlFile("supabase/live-test-boundary-assertions.sql");
+    psqlFile("supabase/pilot-org-teacher-assertions.sql");
     releaseProofReports.push(releaseProofReport(psqlFile("supabase/initial-operations-release-proof-assertions.sql", [], {
         capture: true,
         variables: ["release_proof_phase=boundary_asserted"],

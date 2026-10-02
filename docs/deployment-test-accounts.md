@@ -16,7 +16,7 @@
 |---|---|---|---|
 | 로컬 개발 (`NODE_ENV≠production`, `OMR_TEACHER_IDENTITY_MODE=self_service`, 교사 계정 환경변수 없음) | `NEXT_PUBLIC_OMR_SEED_TEST_ACCOUNTS=1`일 때 `student1` / 시작 코드 `ABC234` | `teacher1` / `teacher123` | `owner1` / `owner123` |
 | Preview QA (아래 절차) | `student1` / `OMR_QA_STUDENT_START_CODES` 값 | `teacher1` / `OMR_QA_TEACHER_PASSWORDS` 값 | `owner1` / `OMR_QA_TEACHER_PASSWORDS` 값 |
-| Production | 원장이 명단 화면에서 학생을 등록하고 시작 코드를 발급 | 지원 안 함: `provisioned_only` 로그인은 `owner` 계정만 허용 | `npm run ops:teacher:provision`으로 발급 ([운영자 발급 절차](operator-teacher-provisioning.md)) |
+| Production | 원장이나 교사가 명단 화면에서 학생을 등록하고 시작 코드를 발급 | 원장 학원에 `npm run ops:teacher:provision`으로 추가 ([교사 추가](operator-teacher-provisioning.md#add-a-teacher-to-an-existing-academy)) | `npm run ops:teacher:provision`으로 발급 ([운영자 발급 절차](operator-teacher-provisioning.md)) |
 
 로컬 `owner1`과 `teacher1`은 같은 `teacher_localdemo` 작업공간을 공유하며 production 빌드에서는 반환되지 않습니다. 로컬 교사 데모 계정(`admin`/`admin123` 포함)은 기본 모드인 `provisioned_only`에서는 쓸 수 없으므로 `.env.local`에 `OMR_TEACHER_IDENTITY_MODE=self_service`를 설정해야 합니다. 로그인 없이 둘러보는 공개 데모는 읽기 전용 `omr-showcase` 목업입니다.
 

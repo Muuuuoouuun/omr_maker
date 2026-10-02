@@ -1,4 +1,5 @@
 import {
+    isProvisionedTeacherMemberRole,
     isTeacherSessionActive,
     readTeacherSession,
     type TeacherSession,
@@ -101,14 +102,14 @@ export function workspaceContextFromIdentity(
         const organizationName = clean(identity?.organizationName);
         if (!/^pilot_org_[a-f0-9]{24}$/.test(organizationId)
             || !/^teacher_[a-f0-9]{16}$/.test(actorUserId)
-            || !organizationName || identity?.memberRole !== "owner") return DEFAULT_CONTEXT;
+            || !organizationName || !isProvisionedTeacherMemberRole(identity?.memberRole)) return DEFAULT_CONTEXT;
         return {
             organizationId,
             organizationName,
             actorUserId,
             actorEmail: clean(identity?.email).toLowerCase() || undefined,
             actorLabel: clean(identity?.displayName) || clean(identity?.email) || actorUserId,
-            memberRole: "owner",
+            memberRole: identity.memberRole,
         };
     }
     const key = identityKey(identity);

@@ -143,6 +143,7 @@ begin
                'omr_teacher_notification_states',
                'omr_operational_job_status',
                'omr_pilot_plan_grants',
+               'omr_pilot_member_provisions',
                'omr_remote_assets',
                'omr_remote_asset_upload_intents',
                'omr_remote_asset_cleanup_queue',
@@ -214,6 +215,9 @@ begin
          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
     ) or has_table_privilege(
          'service_role', 'public.omr_pilot_plan_grants',
+         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+     ) or has_table_privilege(
+         'service_role', 'public.omr_pilot_member_provisions',
          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
      ) or has_table_privilege(
          'service_role', 'public.omr_student_credential_epochs',

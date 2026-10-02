@@ -7,6 +7,7 @@ import {
     createTeacherSession,
     hasTeacherSession,
     formatTeacherSessionRemaining,
+    isTeacherSessionActive,
     LEGACY_TEACHER_TOKEN_KEY,
     normalizeTeacherRedirectPath,
     parseTeacherSession,
@@ -461,5 +462,31 @@ describe("teacher session", () => {
         expect(normalizeTeacherRedirectPath("https://evil.example/teacher/dashboard")).toBe("/teacher/dashboard");
         expect(normalizeTeacherRedirectPath("/student/dashboard")).toBe("/teacher/dashboard");
         expect(normalizeTeacherRedirectPath("//evil.example")).toBe("/teacher/dashboard");
+    });
+});
+
+describe("provisioned academy member sessions", () => {
+    const identity = {
+        teacherId: "teacher_0123456789abcdef",
+        organizationId: "pilot_org_0123456789abcdef01234567",
+        organizationName: "파일럿 학원",
+        plan: "academy" as const,
+        sessionAuthority: "account" as const,
+        accountSessionGeneration: 2,
+    };
+
+    it("treats an operator-provisioned teacher like its owner", () => {
+        expect(isTeacherSessionActive(createTeacherSession(VALID_TOKEN, 1_000, {
+            ...identity, memberRole: "teacher",
+        }), 2_000)).toBe(true);
+        expect(isTeacherSessionActive(createTeacherSession(VALID_TOKEN, 1_000, {
+            ...identity, memberRole: "owner",
+        }), 2_000)).toBe(true);
+    });
+
+    it.each(["admin", "assistant", "viewer"] as const)("never activates an unprovisionable %s account session", (memberRole) => {
+        expect(isTeacherSessionActive(createTeacherSession(VALID_TOKEN, 1_000, {
+            ...identity, memberRole,
+        }), 2_000)).toBe(false);
     });
 });

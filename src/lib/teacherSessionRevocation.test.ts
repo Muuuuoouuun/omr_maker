@@ -96,6 +96,44 @@ describe("teacher account session revocation", () => {
         })).resolves.toBeNull();
     });
 
+    it("re-validates an academy teacher member against the provisioned binding on every request", async () => {
+        const resolve = (teacherServerSession as typeof teacherServerSession & {
+            resolveAuthorizedTeacherSessionCookie: SessionResolver;
+        }).resolveAuthorizedTeacherSessionCookie;
+        const identity = {
+            teacherId: "teacher_fedcba9876543210",
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "파일럿 학원",
+            memberRole: "teacher" as const,
+            plan: "academy" as const,
+            sessionAuthority: "account" as const,
+            accountSessionGeneration: 2,
+        };
+        const cookie = teacherServerSession.createSignedTeacherSessionCookie(TOKEN, identity, ENV, 1_000);
+        const client = clientWith({
+            accountId: identity.teacherId,
+            sessionGeneration: 2,
+            organizationId: identity.organizationId,
+            organizationName: identity.organizationName,
+            memberRole: "teacher",
+            plan: "free",
+            grantExpiresAt: null,
+        });
+
+        await expect(resolve(cookie, { env: ENV, now: 1_000, accountClient: client })).resolves.toMatchObject({
+            teacherId: identity.teacherId,
+            memberRole: "teacher",
+            plan: "free",
+        });
+        expect(client.rpc).toHaveBeenCalledWith("omr_validate_provisioned_teacher_session_v1", {
+            p_account_id: identity.teacherId,
+            p_session_generation: 2,
+            p_organization_id: identity.organizationId,
+        });
+        await expect(resolve(cookie, { env: ENV, now: 1_000, accountClient: clientWith(null) }))
+            .resolves.toBeNull();
+    });
+
     it("keeps explicitly bootstrap and demo sessions independent of the account RPC", async () => {
         const resolveAuthorizedTeacherSessionCookie = (
             teacherServerSession as typeof teacherServerSession & {

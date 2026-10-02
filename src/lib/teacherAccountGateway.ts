@@ -1,4 +1,5 @@
 import { normalizeTeacherAccountEmail } from "./teacherAccountLifecycle";
+import { isProvisionedTeacherMemberRole, type ProvisionedTeacherMemberRole } from "./teacherSession";
 
 export interface TeacherAccountGatewayClient {
     rpc(functionName: string, args: Record<string, unknown>): PromiseLike<{
@@ -29,7 +30,7 @@ export interface ProvisionedTeacherLogin {
     sessionGeneration: number;
     organizationId: string;
     organizationName: string;
-    memberRole: "owner";
+    memberRole: ProvisionedTeacherMemberRole;
     plan: "free" | "pro" | "academy";
     grantExpiresAt: string | null;
 }
@@ -39,7 +40,7 @@ export interface ProvisionedTeacherSessionValidation {
     sessionGeneration: number;
     organizationId: string;
     organizationName: string;
-    memberRole: "owner";
+    memberRole: ProvisionedTeacherMemberRole;
     plan: "free" | "pro" | "academy";
     grantExpiresAt: string | null;
 }
@@ -220,10 +221,10 @@ export async function lookupProvisionedTeacherLogin(
     if (!ACCOUNT_ID_PATTERN.test(accountId) || !email || !displayName
         || !PASSWORD_HASH_PATTERN.test(passwordHash) || !sessionGeneration
         || !PILOT_ORGANIZATION_ID_PATTERN.test(organizationId) || !organizationName
-        || memberRole !== "owner" || !validPlanFields(plan, row.grantExpiresAt, now)) return null;
+        || !isProvisionedTeacherMemberRole(memberRole) || !validPlanFields(plan, row.grantExpiresAt, now)) return null;
     return {
         accountId, email, displayName, passwordHash, sessionGeneration,
-        organizationId, organizationName, memberRole: "owner",
+        organizationId, organizationName, memberRole,
         plan: plan as ProvisionedTeacherLogin["plan"],
         grantExpiresAt: row.grantExpiresAt,
     };
@@ -262,10 +263,10 @@ export async function validateProvisionedTeacherSession(
     const plan = clean(row.plan);
     if (returnedAccountId !== accountId || returnedGeneration !== sessionGeneration
         || returnedOrganizationId !== organizationId || !organizationName
-        || memberRole !== "owner" || !validPlanFields(plan, row.grantExpiresAt, now)) return null;
+        || !isProvisionedTeacherMemberRole(memberRole) || !validPlanFields(plan, row.grantExpiresAt, now)) return null;
     return {
         accountId, sessionGeneration, organizationId, organizationName,
-        memberRole: "owner", plan: plan as ProvisionedTeacherSessionValidation["plan"],
+        memberRole, plan: plan as ProvisionedTeacherSessionValidation["plan"],
         grantExpiresAt: row.grantExpiresAt,
     };
 }

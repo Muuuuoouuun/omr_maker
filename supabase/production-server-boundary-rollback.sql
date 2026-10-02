@@ -161,6 +161,7 @@ revoke all on table public.omr_teacher_account_tokens from public, anon, authent
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
 revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
 revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
+revoke all on table public.omr_pilot_member_provisions from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_credential_epochs from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_credential_batch_receipts from public, anon, authenticated, service_role;
 revoke all on table public.omr_kakao_candidate_reviews
@@ -290,6 +291,7 @@ declare
         'omr_complete_operational_job_run_v1',
         'omr_read_operational_job_status_v1',
         'omr_provision_pilot_teacher_v1',
+        'omr_provision_pilot_org_teacher_v1',
         'omr_read_effective_workspace_plan_v1',
         'omr_lookup_provisioned_teacher_login_v1',
         'omr_validate_provisioned_teacher_session_v1',

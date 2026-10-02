@@ -23,6 +23,13 @@ export function canTeacherRoleWrite(role: TeacherMemberRole | null | undefined):
     return !!role && TEACHER_WRITE_ROLES.has(role);
 }
 
+/** Roles an operator can provision into a pilot academy (원장 owner, 교사 teacher). */
+export type ProvisionedTeacherMemberRole = "owner" | "teacher";
+
+export function isProvisionedTeacherMemberRole(role: unknown): role is ProvisionedTeacherMemberRole {
+    return role === "owner" || role === "teacher";
+}
+
 function normalizeMemberRole(value: unknown): TeacherMemberRole | undefined {
     return typeof value === "string" && ["owner", "admin", "teacher", "assistant", "viewer"].includes(value.trim())
         ? value.trim() as TeacherMemberRole
@@ -225,7 +232,7 @@ export function isTeacherSessionActive(session: TeacherSession | null | undefine
         return /^teacher_[a-f0-9]{16}$/.test(session.teacherId || "")
             && PILOT_ORGANIZATION_ID_PATTERN.test(session.organizationId || "")
             && !!session.organizationName?.trim()
-            && session.memberRole === "owner"
+            && isProvisionedTeacherMemberRole(session.memberRole)
             && !!session.plan
             && Number.isSafeInteger(session.accountSessionGeneration)
             && (session.accountSessionGeneration || 0) >= 1;

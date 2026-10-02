@@ -112,6 +112,7 @@ describe("production boundary rollback contract", () => {
             "omr_teacher_notification_states",
             "omr_operational_job_status",
             "omr_pilot_plan_grants",
+            "omr_pilot_member_provisions",
             "omr_student_credential_epochs",
             "omr_kakao_candidate_reviews",
             "omr_kakao_dispatch_logs",

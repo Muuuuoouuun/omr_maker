@@ -68,8 +68,8 @@ administrator; environment variables and redeploy steps are kept here instead. W
 consulted depends on the identity mode (`src/lib/teacherIdentityModePolicy.ts`,
 `src/app/actions/auth.ts`):
 
-- **Production** is always `provisioned_only`. Teacher login accepts only owner accounts provisioned
-  in Supabase with the command above; `TEACHER_ACCOUNTS` and `TEACHER_LOGIN_ID`/`TEACHER_PASSWORD`
+- **Production** is always `provisioned_only`. Teacher login accepts only owner and academy teacher
+  accounts provisioned in Supabase with the command above; `TEACHER_ACCOUNTS` and `TEACHER_LOGIN_ID`/`TEACHER_PASSWORD`
   are never consulted there, even with `OMR_ALLOW_TEACHER_BOOTSTRAP_LOGIN=true`. To add an account,
   run a new provisioning request (fresh `idempotencyKey`). `TEACHER_SESSION_SECRET` (or
   `OMR_TEACHER_SESSION_SECRET`) must be set, otherwise login reports a session-signing error and
@@ -81,6 +81,47 @@ consulted depends on the identity mode (`src/lib/teacherIdentityModePolicy.ts`,
   Change those values and restart the server (or redeploy the preview) to replace them. With none
   set, local development falls back to the demo accounts `admin`/`admin123`, `owner1`/`owner123`
   and `teacher1`/`teacher123` (see [deployment-test-accounts.md](deployment-test-accounts.md)).
+
+## Add a teacher to an existing academy
+
+An academy owner (원장) provisioned above can be joined by non-owner teachers (교사). A teacher
+belongs to exactly the owner's organization, holds no plan grant of its own, and always uses the
+owner's current academy plan: when the owner's grant expires or is superseded, every teacher in that
+academy drops to Free with the owner. Use the `organization_id` printed by the owner's provisioning
+run. The request has exactly these fields:
+
+```json
+{
+  "organizationId": "pilot_org_REPLACE_WITH_OWNER_ORGANIZATION_ID",
+  "email": "teacher2@example.com",
+  "displayName": "이교사",
+  "memberRole": "teacher",
+  "actor": "operator:launch",
+  "reason": "academy_teacher",
+  "idempotencyKey": "prov_REPLACE_WITH_AT_LEAST_32_RANDOM_URLSAFE_CHARS",
+  "credentialStatePath": "/absolute/owner-only/credentials/teacher2.state.json"
+}
+```
+
+The same file-safety rules, pending journal, receipt, and command apply:
+
+```sh
+npm run ops:teacher:provision -- --request=/absolute/owner-only/teacher2.json
+```
+
+On success it prints `receipt_path`, `organization_id`, `account_id`, `provision_id`, and
+`member_role=teacher`. The receipt carries the one-time initial password, as for an owner.
+
+- Re-running with a **new** idempotency key, the same email, organization, and display name rotates
+  that teacher's password and revokes its existing sessions. An exact replay of an earlier key
+  returns the stored receipt without changing the current password.
+- The database refuses (`provisioning_rejected`) an email that already belongs to an owner, to a
+  teacher of another academy, or to a self-service account; a display-name change; and an
+  organization without exactly one intact provisioned owner. Owner provisioning likewise refuses a
+  teacher's email.
+- Teachers sign in through the same `provisioned_only` login. Each request re-validates the teacher's
+  membership and the owner's grant, so suspending the member row signs the teacher out on the next
+  request.
 
 ## Stale lock recovery
 

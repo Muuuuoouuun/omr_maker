@@ -262,7 +262,7 @@ describe("effective workspace plan enforcement migration", () => {
         expect(productionBoundary).toContain("'statement_timeout=5s'");
         expect(productionBoundary).toContain("'lock_timeout=2s'");
         expect(productionBoundary).toMatch(/extensions\.digest\([\s\S]*phase-c-effective-plan-enforcement:202608080008/);
-        expect(productionBoundary).toContain("b31ae76012052188576cae98c9e1ca3e807efe10812a028c3237b0d8f6f62494");
+        expect(productionBoundary).toContain("b28a8a1017a68925b8c6d1acbcf45e95eb1abdd894aa7b4947abcb4ae0a0ce2e");
         expect(productionBoundary).toContain("omr_save_exam_effective_worker_v3");
         expect(productionBoundary).toContain("omr_set_effective_plan_transaction_proof_v1");
         expect(productionBoundary).toContain("omr_claim_remote_asset_cleanup_v8_snapshot");

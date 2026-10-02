@@ -152,6 +152,29 @@ describe("provisioned teacher account gateway", () => {
             .resolves.toBeNull();
     });
 
+    it("accepts an academy teacher member and rejects every other non-owner role", async () => {
+        const member = { ...valid, memberRole: "teacher" };
+        await expect(lookupProvisionedTeacherLogin(clientWith({
+            omr_lookup_provisioned_teacher_login_v1: member,
+        }), "teacher@example.com", now)).resolves.toEqual(member);
+        const session = {
+            accountId: valid.accountId, sessionGeneration: 3, organizationId: valid.organizationId,
+            organizationName: valid.organizationName, memberRole: "teacher", plan: "pro",
+            grantExpiresAt: valid.grantExpiresAt,
+        };
+        await expect(validateProvisionedTeacherSession(clientWith({
+            omr_validate_provisioned_teacher_session_v1: session,
+        }), valid.accountId, 3, valid.organizationId, now)).resolves.toEqual(session);
+        for (const memberRole of ["admin", "assistant", "viewer", "Teacher", ""]) {
+            await expect(lookupProvisionedTeacherLogin(clientWith({
+                omr_lookup_provisioned_teacher_login_v1: { ...valid, memberRole },
+            }), "teacher@example.com", now)).resolves.toBeNull();
+            await expect(validateProvisionedTeacherSession(clientWith({
+                omr_validate_provisioned_teacher_session_v1: { ...session, memberRole },
+            }), valid.accountId, 3, valid.organizationId, now)).resolves.toBeNull();
+        }
+    });
+
     it("accepts only the exact one-call canary envelope", async () => {
         const client = clientWith({ omr_probe_provisioned_teacher_canary_v1: { ready: true } });
         await expect(probeProvisionedTeacherCanary(client, valid.accountId)).resolves.toBe(true);

@@ -1,5 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { createTeacherSession, isTeacherSessionActive, type TeacherSession, type TeacherSessionIdentity } from "@/lib/teacherSession";
+import {
+    createTeacherSession,
+    isProvisionedTeacherMemberRole,
+    isTeacherSessionActive,
+    type TeacherSession,
+    type TeacherSessionIdentity,
+} from "@/lib/teacherSession";
 import { resolveServerSigningSecret } from "@/lib/serverSigningSecret";
 import { resolveTeacherIdentityModeForEnvironment } from "@/lib/teacherIdentityModePolicy";
 import { isExactMockupTeacherIdentity } from "@/lib/mockupAccount";
@@ -184,7 +190,7 @@ export async function resolveAuthorizedTeacherSessionCookie(
             );
             return active ? session : null;
         }
-        if (!session.organizationId || session.memberRole !== "owner") return null;
+        if (!session.organizationId || !isProvisionedTeacherMemberRole(session.memberRole)) return null;
         const current = await validateProvisionedTeacherSession(
             accountClient,
             session.teacherId,
