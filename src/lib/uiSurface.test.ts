@@ -909,7 +909,8 @@ describe("service UI surface", () => {
         expect(solvePage).toContain("SolveLoadErrorCard");
         expect(solvePage).toContain("시험을 찾을 수 없습니다");
         expect(solvePage).toContain("시험 데이터를 읽지 못했습니다");
-        expect(solvePage).toContain('Link href="/?role=student"');
+        expect(solvePage).toContain('Link href={error.loginHref || "/?role=student"}');
+        expect(solvePage).toContain('loginHref: buildStudentReturnLoginHref(currentPath, { reason: "expired" })');
     });
 
     it("keeps guest recovery visible and merges only server-acknowledged rows", () => {

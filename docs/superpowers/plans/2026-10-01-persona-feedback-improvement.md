@@ -181,16 +181,16 @@
 **깨지는 테스트:** `e2e/korean-exam-fixture.spec.ts:67`, `e2e/student-dashboard-load-state.spec.ts:66`
 
 ### B3. 세션 만료·재방문·원래 위치 복귀 (M, 토큰 보존까지 하면 L)
-- [ ] 대시보드 상태에 `expired`를 추가합니다.
+- [x] 대시보드 상태에 `expired`를 추가합니다.
   - 제목: "로그인 시간이 끝났어요"
   - 본문: "보안을 위해 12시간이 지나면 다시 확인해요. 시작 코드만 다시 입력하면 이어서 할 수 있어요."
   - CTA: 비프로덕션은 `next=`가 붙은 "다시 로그인", 프로덕션은 "초대 링크를 다시 열기" 안내와 [다시 확인]
-- [ ] 신규 `src/lib/studentReturnHint.ts`: opt-in일 때만 이름과 반을 30일 기억합니다. 시작 코드와 토큰은 절대 저장하지 않습니다.
+- [x] 신규 `src/lib/studentReturnHint.ts`: opt-in일 때만 이름과 반을 30일 기억합니다. 시작 코드와 토큰은 절대 저장하지 않습니다.
   - 로그인 폼은 이 값을 미리 채우고 시작 코드 칸에 포커스합니다.
   - 배너: "OOO님, 다시 오셨네요"
-- [ ] 홈의 "최근 학생 · 이어가기"는 이동 전에 `refreshStudentSession()`으로 세션을 확인합니다.
-- [ ] 체크박스 문구를 "이 기기에서 로그인 유지"에서 **"이 기기에서 내 정보 기억하기"**로 바꿉니다. 실제 동작과 맞추기 위해서입니다.
-- [ ] `normalizeStudentRedirectPath`는 `/solve/`와 `/student/`만 허용하므로 open redirect 위험이 없습니다. 모든 학생 로그인 링크에 `next=`를 붙입니다.
+- [x] 홈의 "최근 학생 · 이어가기"는 이동 전에 `refreshStudentSession()`으로 세션을 확인합니다.
+- [x] 체크박스 문구를 "이 기기에서 로그인 유지"에서 **"이 기기에서 내 정보 기억하기"**로 바꿉니다. 실제 동작과 맞추기 위해서입니다.
+- [x] `normalizeStudentRedirectPath`는 `/solve/`와 `/student/`만 허용하므로 open redirect 위험이 없습니다. 모든 학생 로그인 링크에 `next=`를 붙입니다.
 - (PO 결정 B-1, B-2, B-3)
 
 **주의:** `studentSessionRecoveryFlow.test.ts:106`이 대시보드에 `href="/?role=student"`가 없는지 단언합니다. 링크는 helper로만 생성합니다.

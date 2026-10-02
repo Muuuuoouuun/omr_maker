@@ -51,9 +51,18 @@ import {
   rosterStudentsForGroup,
   writeStudentCodes,
 } from "@/lib/studentCodes";
+import {
+  buildStudentReturnHint,
+  clearStudentReturnHint,
+  readStudentReturnHint,
+  refreshStudentReturnHint,
+  saveStudentReturnHint,
+  type StudentReturnHint,
+} from "@/lib/studentReturnHint";
 import StatusPill from "@/components/dashboard/StatusPill";
 import { loadLocalStudentCodes } from "@/lib/studentCredentialLocalState";
 import {
+  clearSession,
   consumePendingGuestMerge,
   getSession,
   getOrCreateGuestId,
@@ -239,6 +248,11 @@ export default function Home() {
   const [studentDirectoryStatus, setStudentDirectoryStatus] = useState<"local" | "loading" | "remote" | "signed_guest" | "degraded_local" | "error">("local");
   const [studentLoginPending, setStudentLoginPending] = useState(false);
   const [rememberStudentOnDevice, setRememberStudentOnDevice] = useState(false);
+  // Opt-in returning-student hint (name + class only) used to pre-fill the form.
+  const [returnHint, setReturnHint] = useState<StudentReturnHint | null>(null);
+  const returnHintAppliedRef = useRef(false);
+  const studentLookupInputRef = useRef<HTMLInputElement>(null);
+  const startCodeInputRef = useRef<HTMLInputElement>(null);
   // Local-mode typo guard: the typed name is not on the selected class roster.
   const [rosterNameGuard, setRosterNameGuard] = useState<{ name: string; suggestion?: string } | null>(null);
   const [confirmUnrosteredStudent, setConfirmUnrosteredStudent] = useState(false);
@@ -309,7 +323,8 @@ export default function Home() {
     }
 
     const query = new URLSearchParams(window.location.search);
-    const requestedRole = query.get("role");
+    // An expired-session return link always opens the student form.
+    const requestedRole = query.get("reason") === "expired" ? "student" : query.get("role");
     const teacherOperatorRecovery = query.get("teacherRecovery") === "legacy_link";
     if (teacherOperatorRecovery) {
       setRole("teacher");
@@ -427,6 +442,35 @@ export default function Home() {
     }
     return () => { cancelled = true; };
   }, [router, teacherSelfServiceEnabled]);
+
+  // Pre-fill a returning student's name and class from the opt-in hint, then
+  // move focus to the first credential they still have to type.
+  useEffect(() => {
+    if (role !== "student" || returnHintAppliedRef.current || !isHydrated) return;
+    if (studentDirectoryStatus === "loading") return;
+    returnHintAppliedRef.current = true;
+    const hint = readStudentReturnHint();
+    if (!hint) return;
+    // Derived from client-only localStorage after the role is chosen.
+    setReturnHint(hint);
+    setRememberStudentOnDevice(true);
+    setStudentName(previous => previous.trim() ? previous : hint.name);
+    const hintGroup = studentGroupOptions.find(group => group.id === hint.groupId);
+    if (hintGroup || studentGroupOptions.length === 0) {
+      setSelectedGroupId(previous => previous || hint.groupId);
+    }
+  }, [role, isHydrated, studentDirectoryStatus, studentGroupOptions]);
+
+  useEffect(() => {
+    if (!returnHint || role !== "student") return;
+    const focusTimer = window.setTimeout(() => {
+      const lookupMissing = studentLookupRequired && !studentLookupInputRef.current?.value.trim();
+      (lookupMissing ? studentLookupInputRef.current : startCodeInputRef.current)?.focus();
+    }, 0);
+    return () => window.clearTimeout(focusTimer);
+    // Focus once when the hint is applied, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [returnHint, role]);
 
   // Surface the start-code field proactively for returning students.
   useEffect(() => {
@@ -650,6 +694,9 @@ export default function Home() {
     }
 
     saveSession(session, { rememberDevice: rememberStudentOnDevice });
+    // "내 정보 기억하기" stores name + class only; unchecking forgets them.
+    if (rememberStudentOnDevice) saveStudentReturnHint(session);
+    else clearStudentReturnHint();
     if (issuedCode) {
       setCopiedIssuedCode(false);
       setIssuedCodeModal({ code: issuedCode, next, studentId: session.studentId });
@@ -887,14 +934,64 @@ export default function Home() {
     void startGuestSession(guestGroup);
   };
 
-  const handleContinueRecentStudent = () => {
+  const applyReturnHint = (hint: StudentReturnHint, remembered: boolean) => {
+    returnHintAppliedRef.current = true;
+    setReturnHint(hint);
+    setRememberStudentOnDevice(remembered);
+    setStudentName(hint.name);
+    setSelectedGroupId(hint.groupId);
+    setStudentLookup("");
+    setStartCode("");
+  };
+
+  const handleContinueRecentStudent = async () => {
     const restoredSession = getSession();
-    if (restoredSession && !restoredSession.isGuest) {
+    if (!restoredSession || restoredSession.isGuest) {
+      setRecentStudentSession(null);
+      toast.info("최근 학생 정보 없음", "이름과 반으로 다시 로그인해주세요.");
+      return;
+    }
+    // The local card can outlive the 12h server session; confirm it first so
+    // "이어가기" never lands on a dashboard that only says "login required".
+    let restored: Awaited<ReturnType<typeof refreshStudentSession>>;
+    try {
+      restored = await refreshStudentSession();
+    } catch {
+      toast.error("학생 정보를 확인하지 못했어요", "네트워크를 확인한 뒤 다시 시도해주세요.");
+      return;
+    }
+    if (restored.ok && restored.session && !restored.session.isGuest) {
+      saveSession(restored.session);
       router.push(studentRedirectPath());
       return;
     }
+    if (!restored.ok && restored.status !== "unauthenticated") {
+      toast.error("학생 정보를 확인하지 못했어요", "네트워크를 확인한 뒤 다시 시도해주세요.");
+      return;
+    }
+    refreshStudentReturnHint(restoredSession);
+    // Without an opt-in hint, the still-open local session pre-fills this one
+    // login only; nothing new is persisted.
+    const storedHint = readStudentReturnHint();
+    const hint = storedHint || buildStudentReturnHint(restoredSession);
+    clearSession();
     setRecentStudentSession(null);
-    toast.info("최근 학생 정보 없음", "이름과 반으로 다시 로그인해주세요.");
+    setError("");
+    setRole("student");
+    if (hint) applyReturnHint(hint, !!storedHint);
+  };
+
+  const handleNotThisStudent = () => {
+    clearStudentReturnHint();
+    returnHintAppliedRef.current = true;
+    setReturnHint(null);
+    setRememberStudentOnDevice(false);
+    setStudentName("");
+    setSelectedGroupId("");
+    setStudentLookup("");
+    setStartCode("");
+    clearLoginError();
+    studentNameInputRef.current?.focus();
   };
 
   const handleUseSuggestedRosterName = (suggestion: string) => {
@@ -1272,7 +1369,7 @@ export default function Home() {
             </div>
             <button
               type="button"
-              onClick={handleContinueRecentStudent}
+              onClick={() => { void handleContinueRecentStudent(); }}
               className="btn btn-primary"
               style={{
                 background: "linear-gradient(135deg, var(--secondary), #c026d3)",
@@ -1639,6 +1736,7 @@ export default function Home() {
                     }}
                   >
                     <strong style={{ display: "block", color: "var(--foreground)", marginBottom: "0.25rem" }}>
+                      {returnHint ? <span style={{ display: "block" }}>{returnHint.name}님, 다시 오셨네요.</span> : null}
                       학생 계정 로그인에는 선생님이 보낸 최신 초대 링크가 필요합니다.
                     </strong>
                     초대 링크를 다시 열어 이름과 시작 코드로 로그인해주세요. 링크나 시작 코드를 잃어버렸다면 선생님에게 재전송 또는 재발급을 요청해주세요.
@@ -1652,6 +1750,41 @@ export default function Home() {
                   }}
                   noValidate
                 >
+                {returnHint && (
+                  <section
+                    className="student-return-hint-banner"
+                    role="status"
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "0.5rem 0.75rem",
+                      marginBottom: "1.25rem",
+                      padding: "0.8rem 0.95rem",
+                      borderRadius: "var(--radius-md)",
+                      border: "1px solid rgba(99,102,241,0.2)",
+                      background: "rgba(99,102,241,0.08)",
+                      color: "var(--foreground)",
+                      fontSize: "var(--type-label)",
+                      lineHeight: 1.55,
+                      wordBreak: "keep-all",
+                    }}
+                  >
+                    <span style={{ flex: "1 1 14rem", minWidth: 0 }}>
+                      {returnHint.name}님, 다시 오셨네요. 시작 코드를 입력하면 이어서 할 수 있어요.
+                    </span>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={handleNotThisStudent}
+                      style={{ minHeight: 44, padding: "0.45rem 0.8rem", fontSize: "var(--type-label)", flexShrink: 0 }}
+                    >
+                      다른 학생이에요
+                    </button>
+                  </section>
+                )}
+
                 <div style={{ marginBottom: "1.1rem" }}>
                   <label
                     htmlFor="student-name"
@@ -1681,7 +1814,7 @@ export default function Home() {
                       clearLoginError();
                     }}
                     placeholder="이름을 입력하세요"
-                    autoFocus
+                    autoFocus={!returnHint}
                     autoComplete="name"
                   />
                   {error === "이름을 입력해주세요." && (
@@ -1775,6 +1908,7 @@ export default function Home() {
                     )}
                   </label>
                   <input
+                    ref={studentLookupInputRef}
                     id="student-lookup"
                     type="text"
                     className="input-field"
@@ -1823,6 +1957,7 @@ export default function Home() {
                     시작 코드
                   </label>
                   <input
+                    ref={startCodeInputRef}
                     id="student-start-code"
                     type="text"
                     className="input-field"
@@ -1981,33 +2116,38 @@ export default function Home() {
                   {studentLoginPending ? "계정 확인 중…" : "시험 시작하기"}
                 </button>
 
-                <label
-                  htmlFor="remember-student-device"
-                  style={{
-                    minHeight: 44,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.65rem",
-                    margin: "0.35rem 0 0.75rem",
-                    color: "var(--foreground)",
-                    fontSize: "var(--type-label)",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    id="remember-student-device"
-                    type="checkbox"
-                    checked={rememberStudentOnDevice}
-                    onChange={(event) => setRememberStudentOnDevice(event.target.checked)}
-                  />
-                  <span>
-                    이 기기에서 로그인 유지
-                    <small style={{ display: "block", marginTop: "0.15rem", color: "var(--muted)", fontWeight: 550 }}>
-                      공용 기기에서는 선택하지 마세요.
-                    </small>
-                  </span>
-                </label>
+                <div style={{ margin: "0.35rem 0 0.75rem" }}>
+                  <label
+                    htmlFor="remember-student-device"
+                    style={{
+                      minHeight: 44,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.65rem",
+                      color: "var(--foreground)",
+                      fontSize: "var(--type-label)",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      id="remember-student-device"
+                      type="checkbox"
+                      aria-describedby="remember-student-device-help"
+                      checked={rememberStudentOnDevice}
+                      onChange={(event) => setRememberStudentOnDevice(event.target.checked)}
+                    />
+                    이 기기에서 내 정보 기억하기
+                  </label>
+                  {/* Kept outside the <label> so the checkbox's name stays short
+                      (the helper mentions "이름", which would collide with the name field). */}
+                  <small
+                    id="remember-student-device-help"
+                    style={{ display: "block", marginTop: "-0.2rem", paddingLeft: "1.65rem", color: "var(--muted)", fontSize: "var(--type-caption)", fontWeight: 550, lineHeight: 1.5, wordBreak: "keep-all" }}
+                  >
+                    다음 로그인 때 이름·반을 채워둬요. 보안을 위해 12시간마다 시작 코드를 다시 확인해요. 공용 기기에서는 선택하지 마세요.
+                  </small>
+                </div>
 
                 <p style={{ fontSize: "var(--type-caption)", color: "var(--muted)", margin: "0 0 0.75rem", lineHeight: 1.5, wordBreak: "keep-all" }}>
                   {requiresServerStudentVerification

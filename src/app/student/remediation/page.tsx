@@ -6,20 +6,22 @@ import { loadStudentRemediation } from "@/app/actions/remediation";
 import { REMEDIATION_STATE_LABELS, type StudentRemediationCase } from "@/lib/remediation";
 import styles from "../../teacher/remediation/remediation.module.css";
 import RetakeEntry from "./RetakeEntry";
+import { buildStudentLoginHref } from "@/lib/studentRedirect";
 
 export default function StudentRemediationPage() {
     const [cases, setCases] = useState<StudentRemediationCase[] | null>(null);
     const [error, setError] = useState("");
+    const [loginRequired, setLoginRequired] = useState(false);
     const [loading, setLoading] = useState(true);
     const generation = useRef(0);
     const load = useCallback(async () => {
         const current = ++generation.current;
-        setLoading(true); setError(""); setCases(null);
+        setLoading(true); setError(""); setLoginRequired(false); setCases(null);
         try {
             const result = await loadStudentRemediation();
             if (current !== generation.current) return;
             if (result.status === "loaded") setCases(result.cases);
-            else setError(result.error); // server returns student-facing copy
+            else { setError(result.error); setLoginRequired(result.code === "unauthorized"); } // server returns student-facing copy
         } catch { if (current === generation.current) setError("보강 목록을 불러오지 못했습니다. 다시 시도해주세요."); }
         finally { if (current === generation.current) setLoading(false); }
     }, []);
@@ -30,6 +32,7 @@ export default function StudentRemediationPage() {
             <p>오답을 다시 풀고 선생님에게 풀이를 설명해보세요. 문제를 수정한 뒤 선생님의 확인을 받으면 완료됩니다.</p></div>
             <button className="btn btn-secondary" disabled={loading} onClick={() => void load()}>새로고침</button></header>
         {error && <p role="alert" className={styles.error}>{error}</p>}
+        {loginRequired && <Link className="btn btn-primary" href={buildStudentLoginHref("/student/remediation")}>다시 로그인</Link>}
         {loading && <p role="status">보강 목록을 확인하고 있습니다…</p>}
         {cases && !cases.length && <section className={styles.card}><p>배정된 보강이 없습니다.</p></section>}
         {cases && <div className={styles.grid}>{cases.map(item => <article className={styles.card} key={item.sourceAttemptId}>

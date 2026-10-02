@@ -28,6 +28,8 @@ import { uploadStudentAttemptHandwriting } from "@/app/actions/remoteAssets";
 import { clearStudentServerSession, issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
 import { consumeSolveEntryIntent, hasSolveEntryIntent } from "@/lib/solveEntryIntent";
 import { DEFAULT_GUEST_NAME, displayStudentName } from "@/lib/guestIdentity";
+import { buildStudentLoginHref as buildStudentReturnLoginHref } from "@/lib/studentRedirect";
+import { clearStudentReturnHint, refreshStudentReturnHint } from "@/lib/studentReturnHint";
 import { hasTeacherSession, saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { shouldOfferStudentPdfOpen, shouldOfferTeacherPreview } from "@/lib/solveToolsVisibility";
 import { solveSaveStatusChip, type SolveDraftSaveState } from "@/lib/solveSaveStatus";
@@ -224,6 +226,8 @@ interface ExamGuestEntryGroup {
 interface SolveLoadError {
     title: string;
     body: string;
+    /** Set when the student session expired: re-login returns to this exam. */
+    loginHref?: string;
 }
 
 interface DurableSolveAttempt {
@@ -910,8 +914,8 @@ function SolveLoadErrorCard({ error }: { error: SolveLoadError }) {
                         <RotateCcw size={15} />
                         다시 시도
                     </button>
-                    <Link href="/?role=student" className="btn btn-primary" style={{ flex: 1, minWidth: '130px', justifyContent: 'center' }}>
-                        학생 홈으로
+                    <Link href={error.loginHref || "/?role=student"} className="btn btn-primary" style={{ flex: 1, minWidth: '130px', justifyContent: 'center' }}>
+                        {error.loginHref ? "다시 로그인" : "학생 홈으로"}
                     </Link>
                 </div>
             </div>
@@ -2219,9 +2223,16 @@ export default function SolvePage() {
                 return;
             }
             if (res.status === "unauthenticated") {
+                // A remembered student whose 12h server session ended: keep the
+                // opt-in hint fresh so the login form can pre-fill, and return here.
+                const expiredStudent = session && !session.isGuest ? session : null;
+                if (expiredStudent) refreshStudentReturnHint(expiredStudent);
                 setLoadError({
                     title: "세션을 확인하지 못했습니다",
                     body: "브라우저 쿠키가 차단되어 있거나 세션이 만료되었습니다. 새로고침해도 반복되면 처음 화면에서 다시 로그인해주세요.",
+                    ...(expiredStudent && process.env.NODE_ENV !== "production"
+                        ? { loginHref: buildStudentReturnLoginHref(currentPath, { reason: "expired" }) }
+                        : {}),
                 });
                 return;
             }
@@ -2995,6 +3006,8 @@ export default function SolvePage() {
             setEntryError("로그아웃하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.");
             return;
         }
+        // "내가 아니에요" also forgets the remembered name/class on this device.
+        clearStudentReturnHint();
         clearSession();
         router.push(currentSolvePath
             ? `/?role=student&next=${encodeURIComponent(currentSolvePath)}`
