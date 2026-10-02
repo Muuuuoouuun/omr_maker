@@ -572,9 +572,9 @@ test.describe("iPhone WebKit mobile layout", () => {
         await toolsSummary.click();
         await expect(toolsDisclosure).toHaveJSProperty("open", false);
         const emptyStateChooser = page.waitForEvent("filechooser");
-        // At 320x568 the PDF pane is still squeezed by the OMR pane (plan A2),
-        // so dispatch the click to check the hidden-input wiring itself.
-        await emptyState.dispatchEvent("click");
+        // Plan A2 keeps the PDF pane tall enough on a 320x568 phone for a real
+        // tap on the empty state to reach it.
+        await emptyState.click();
         await emptyStateChooser;
         await expectNoDocumentHorizontalOverflow(page);
     });

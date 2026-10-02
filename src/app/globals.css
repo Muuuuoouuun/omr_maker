@@ -9448,9 +9448,11 @@ body:has(.create-workspace.is-resizing) {
     overflow: hidden !important;
   }
 
+  /* The PDF keeps at least 45% of the body; the OMR sheet below it is the
+     part that shrinks on short phones (it scrolls internally). */
   .solve-pdf-pane {
-    flex: 1 1 auto !important;
-    min-height: 0;
+    flex: 1 1 0 !important;
+    min-height: 45%;
     border-right: 0 !important;
     border-bottom: 1px solid var(--border);
   }
@@ -9462,8 +9464,9 @@ body:has(.create-workspace.is-resizing) {
   .solve-omr-pane {
     width: 100% !important;
     max-width: none !important;
-    flex: 0 0 min(38dvh, 320px) !important;
-    max-height: min(38dvh, 320px);
+    flex: 0 1 clamp(168px, 36dvh, 320px) !important;
+    min-height: 0;
+    max-height: clamp(168px, 36dvh, 320px);
     border-top: 1px solid var(--border);
     box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.08);
   }
@@ -10443,9 +10446,6 @@ body:has(.create-workspace.is-resizing) {
   .solve-omr-pane {
     width: 100% !important;
     max-width: none !important;
-    flex: 0 0 min(40vh, 430px);
-    height: min(40vh, 430px);
-    min-height: 260px;
     border-top: 1px solid var(--border);
   }
 
@@ -10649,6 +10649,82 @@ body:has(.create-workspace.is-resizing) {
 
   .pdf-viewer-toolbar.has-file .pdf-viewer-drawing-tools {
     gap: 0.3rem;
+  }
+}
+
+/* ─── Collapsed OMR dock: phones (<600px) ────────────────
+   With the sheet collapsed (PDF focus), the rail's quick card becomes a 56px
+   bottom dock — current question, its bubbles, jump to the next unanswered —
+   so marking never needs the sheet reopened. The header's 답안지 펼치기
+   button stays the way back to the full sheet. */
+@media (max-width: 599px) {
+  .solve-omr-rail.is-collapsed:has(.solve-omr-quick-card) {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 100% !important;
+    min-height: 56px;
+    padding: 0.375rem 0.5rem !important;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.08);
+  }
+
+  .solve-omr-rail.is-collapsed .solve-omr-rail-button {
+    display: none;
+  }
+
+  .solve-omr-rail .solve-omr-quick-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem;
+    width: 100%;
+    max-width: 30rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .solve-omr-rail .solve-omr-quick-bubbles {
+    display: flex;
+    flex: 1 1 auto;
+    justify-content: center;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+
+  .solve-omr-rail .solve-omr-quick-bubble {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    max-width: 44px;
+  }
+
+  .solve-omr-rail .solve-omr-quick-question,
+  .solve-omr-rail .solve-omr-quick-next {
+    flex: 0 0 44px;
+  }
+
+  .solve-omr-rail .solve-omr-quick-handwriting {
+    display: none;
+  }
+
+  html[data-app-keyboard="open"] .solve-omr-rail.is-collapsed:has(.solve-omr-quick-card) {
+    display: none !important;
+  }
+}
+
+@media (max-width: 360px) {
+  .solve-omr-rail .solve-omr-quick-question,
+  .solve-omr-rail .solve-omr-quick-next {
+    width: 40px;
+    min-width: 40px;
+    flex-basis: 40px;
   }
 }
 
