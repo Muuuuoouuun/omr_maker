@@ -43,10 +43,23 @@ async function expectMinimumTouchTarget(locator: Locator) {
 
 async function expectWithinViewport(locator: Locator, page: Page) {
     await expect(locator).toBeVisible();
-    const [box, viewportWidth] = await Promise.all([
-        locator.boundingBox(),
-        page.evaluate(() => document.documentElement.clientWidth),
-    ]);
+    const renderedFrame = {
+        box: null as Awaited<ReturnType<Locator["boundingBox"]>>,
+        viewportWidth: 0,
+    };
+    // A React remount can occur between visibility and a separate layout read.
+    // Sample the rendered frame with a bounded web-first assertion, then retain
+    // the original strict left/right bounds checks on that captured frame.
+    await expect.poll(async () => {
+        const [bounds, width] = await Promise.all([
+            locator.boundingBox(),
+            page.evaluate(() => document.documentElement.clientWidth),
+        ]);
+        renderedFrame.box = bounds;
+        renderedFrame.viewportWidth = width;
+        return bounds;
+    }, { message: "control did not settle on a rendered frame" }).not.toBeNull();
+    const { box, viewportWidth } = renderedFrame;
     const tolerance = 1;
 
     expect(box, "control did not have a rendered bounding box").not.toBeNull();

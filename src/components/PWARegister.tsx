@@ -10,6 +10,10 @@ const DEFERRED_UPDATE_KEY = "omr_pwa_deferred_update_v1";
 function isActiveWorkScreen(pathname: string): boolean {
   // Home also hosts login and account recovery; an update must not erase entry fields.
   return pathname === "/"
+    // Dashboard entry loads session/data and lazy content; settings holds unsaved drafts.
+    || pathname === "/teacher/dashboard"
+    || pathname === "/student/dashboard"
+    || pathname === "/teacher/settings"
     || pathname === "/create"
     || pathname.startsWith("/solve/")
     || pathname.startsWith("/teacher/exam/")

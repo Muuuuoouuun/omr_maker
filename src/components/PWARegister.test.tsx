@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { useState } from "react";
+import { lazy, Suspense, useState, type ReactElement, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PWARegister from "./PWARegister";
@@ -53,7 +53,7 @@ class ServiceWorkerHarness extends EventTarget {
   }
 }
 
-function EntryHarness() {
+function EntryHarness({ children }: { children?: ReactNode }) {
   const [id, setId] = useState("");
   const [secret, setSecret] = useState("");
   return <>
@@ -62,6 +62,7 @@ function EntryHarness() {
       <label>Entry ID<input value={id} onChange={event => setId(event.target.value)} /></label>
       <label>Entry secret<input type="password" value={secret} onChange={event => setSecret(event.target.value)} /></label>
     </form>
+    {children}
   </>;
 }
 
@@ -179,10 +180,13 @@ describe("PWARegister update lifecycle", () => {
     navigate(view, "/?role=teacher&teacherRecovery=legacy_link");
     navigate(view, "/create");
     navigate(view, "/teacher/live");
+    navigate(view, "/teacher/dashboard");
+    navigate(view, "/student/dashboard");
+    navigate(view, "/teacher/settings");
     expectEntryPreserved();
     expect(browserWindow.sessionStorage.getItem(DEFERRED_UPDATE_KEY)).toBe("1");
 
-    navigate(view, "/teacher/dashboard");
+    navigate(view, "/pwa-check");
     expect(reload).toHaveBeenCalledOnce();
     expect(browserWindow.sessionStorage.getItem(DEFERRED_UPDATE_KEY)).toBeNull();
     navigate(view, "/student/dashboard");
@@ -199,10 +203,15 @@ describe("PWARegister update lifecycle", () => {
     expectEntryPreserved();
     expect(browserWindow.sessionStorage.getItem(DEFERRED_UPDATE_KEY)).toBe("1");
     navigate(view, "/teacher/dashboard");
+    expectEntryPreserved();
+    navigate(view, "/pwa-check");
     expect(reload).toHaveBeenCalledOnce();
   });
 
-  it.each(["/", "/create", "/solve/exam-fixture"])(
+  it.each([
+    "/", "/create", "/solve/exam-fixture",
+    "/teacher/dashboard", "/student/dashboard", "/teacher/settings",
+  ])(
     "rechecks %s before a controller change after activation began on a safe route",
     async pathname => {
       const view = await mountEntry("/pwa-check");
@@ -212,12 +221,15 @@ describe("PWARegister update lifecycle", () => {
 
       expectEntryPreserved();
       expect(browserWindow.sessionStorage.getItem(DEFERRED_UPDATE_KEY)).toBe("1");
-      navigate(view, "/teacher/dashboard");
+      navigate(view, "/pwa-check");
       expect(reload).toHaveBeenCalledOnce();
     },
   );
 
   it.each([
+    "/teacher/dashboard",
+    "/student/dashboard",
+    "/teacher/settings",
     "/create",
     "/solve/exam-fixture",
     "/teacher/exam/exam-fixture",
@@ -230,6 +242,59 @@ describe("PWARegister update lifecycle", () => {
 
     expectEntryPreserved();
     expect(browserWindow.sessionStorage.getItem(DEFERRED_UPDATE_KEY)).toBe("1");
+  });
+
+  it.each([
+    "/teacher/dashboard",
+    "/teacher/dashboard?showcase=1",
+    "/student/dashboard",
+    "/teacher/settings",
+  ])("does not reload first-entry work when home transitions to %s", async url => {
+    const view = await mountEntry();
+    fillEntry();
+    act(() => serviceWorkers.takeControl());
+    navigate(view, url);
+
+    expectEntryPreserved();
+    expect(browserWindow.sessionStorage.getItem(DEFERRED_UPDATE_KEY)).toBe("1");
+    expect(serviceWorkers.registration.waiting?.postMessage)
+      .toHaveBeenCalledWith({ type: "OMR_SKIP_WAITING" });
+    navigate(view, "/pwa-check");
+    expect(reload).toHaveBeenCalledOnce();
+    expect(browserWindow.sessionStorage.getItem(DEFERRED_UPDATE_KEY)).toBeNull();
+    navigate(view, "/pwa-check?verified=1");
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("lets a first-entry lazy overview finish before applying an update on pwa-check", async () => {
+    const view = await mountEntry();
+    fillEntry();
+    act(() => serviceWorkers.takeControl());
+    let completeOverview!: (module: { default: () => ReactElement }) => void;
+    const LazyOverview = lazy(() => new Promise<{ default: () => ReactElement }>(resolve => {
+      completeOverview = resolve;
+    }));
+
+    controls.pathname = "/teacher/dashboard";
+    browserWindow.history.replaceState(null, "", "/teacher/dashboard?showcase=1");
+    view.rerender(<EntryHarness>
+      <Suspense fallback={<p role="status">Loading overview</p>}>
+        <LazyOverview />
+      </Suspense>
+    </EntryHarness>);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading overview");
+    expectEntryPreserved();
+    expect(browserWindow.sessionStorage.getItem(DEFERRED_UPDATE_KEY)).toBe("1");
+
+    await act(async () => {
+      completeOverview({ default: () => <section aria-label="Synthetic overview">Overview ready</section> });
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("region", { name: "Synthetic overview" })).toBeVisible();
+    expectEntryPreserved();
+    navigate(view, "/pwa-check");
+    expect(reload).toHaveBeenCalledOnce();
+    expect(browserWindow.sessionStorage.getItem(DEFERRED_UPDATE_KEY)).toBeNull();
   });
 
   it("lets a first-install worker take control of home without a reload or update notice", async () => {

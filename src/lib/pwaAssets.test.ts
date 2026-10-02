@@ -762,6 +762,9 @@ describe("PWA assets", () => {
         expect(source).toContain("updatefound");
         expect(source).toContain("getRegistration(\"/sw.js\")");
         expect(source).toContain('pathname === "/"');
+        expect(source).toContain('pathname === "/teacher/dashboard"');
+        expect(source).toContain('pathname === "/student/dashboard"');
+        expect(source).toContain('pathname === "/teacher/settings"');
         expect(source).toContain('pathname === "/create"');
         expect(source).toContain('pathname.startsWith("/solve/")');
         expect(source).toContain('pathname.startsWith("/teacher/exam/")');

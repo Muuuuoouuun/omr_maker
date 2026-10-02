@@ -166,7 +166,7 @@ jobs:
       - name: PWA smoke
         run: npm run pwa:smoke
       - name: Production security E2E
-        run: npx playwright test --config=playwright.production.config.ts
+        run: npx playwright test --config=playwright.production.ci.config.ts
       - name: Upload production Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
