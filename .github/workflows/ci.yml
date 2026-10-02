@@ -130,6 +130,12 @@ jobs:
         run: npm ci
       - name: Install Playwright WebKit
         run: npx playwright install --with-deps webkit
+      - name: Verify desktop keyboard context overrides without retries
+        if: ${{ !cancelled() && matrix.shard == 3 }}
+        run: npx playwright test e2e/teacher-mobile.spec.ts --project=mobile-ios-webkit-teacher --project=tablet-ios-webkit-teacher --project=tablet-ios-webkit-landscape-teacher --grep="moves focus across result tabs before keyboard activation" --retries=0 --trace=off --output=keyboard-context-results
+        env:
+          CI: "true"
+          PLAYWRIGHT_ENABLE_WEBKIT: "1"
       - name: Run iOS WebKit PWA E2E
         run: npm run test:e2e:ios-webkit -- --shard=${{ matrix.shard }}/3
         env:

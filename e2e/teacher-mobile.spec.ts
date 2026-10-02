@@ -340,9 +340,9 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("keeps dashboard navigation touch friendly", async ({ page }) => {
+    test("keeps dashboard navigation touch friendly", async ({ page, hasTouch }) => {
         test.info().annotations.push({ type: "release-proof", description: "ux_accessibility_responsiveness_teacher_mobile" });
-        await loginAsTeacher(page, "/teacher/dashboard");
+        await loginAsTeacher(page, "/teacher/dashboard", hasTouch);
 
         await expect(page.getByRole("main", { name: "분석 센터" })).toBeVisible();
         if (await page.evaluate(() => window.matchMedia("(min-width: 1121px)").matches)) {
@@ -399,28 +399,28 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("connects dashboard metrics to the next analysis action", async ({ page }) => {
+    test("connects dashboard metrics to the next analysis action", async ({ page, hasTouch }) => {
         test.setTimeout(Math.max(test.info().timeout, 60_000));
-        await loginAsShowcaseTeacher(page);
+        await loginAsShowcaseTeacher(page, hasTouch);
 
         await expect(page.getByRole("heading", { name: "대시보드", exact: true })).toBeVisible();
         const scoreMetric = page.getByRole("button", { name: /전체 평균 점수.*점수 원인 보기/ });
         await expectTouchTarget(scoreMetric);
         await expect(scoreMetric).toContainText(/직전 시험보다 .*점 (상승|하락)/);
-        await activateControl(scoreMetric);
+        await activateControl(scoreMetric, hasTouch);
         await expect(page).toHaveURL(/tab=exam/, { timeout: 25_000 });
         const usesSidebar = await page.evaluate(() => window.matchMedia("(min-width: 1121px)").matches);
         const sidebar = page.getByRole("complementary", { name: "교사 대시보드 내비게이션" });
         if (usesSidebar) {
             await expect(sidebar.getByRole("button", { name: "결과 분석" })).toHaveAttribute("aria-current", "page");
-            await activateControl(sidebar.getByRole("button", { name: "대시보드", exact: true }));
+            await activateControl(sidebar.getByRole("button", { name: "대시보드", exact: true }), hasTouch);
         } else {
             await expect(page.getByRole("button", { name: "시험별 분석" })).toHaveAttribute("aria-pressed", "true");
-            await activateControl(page.getByRole("button", { name: "개요", exact: true }));
+            await activateControl(page.getByRole("button", { name: "개요", exact: true }), hasTouch);
         }
         const studentMetric = page.getByRole("button", { name: /명단 학생.*학생별 성취 보기/ });
         await expectTouchTarget(studentMetric);
-        await activateControl(studentMetric);
+        await activateControl(studentMetric, hasTouch);
         await expect(page).toHaveURL(/tab=student/, { timeout: 25_000 });
         if (usesSidebar) {
             await expect(sidebar.getByRole("button", { name: "학생 성취도" })).toHaveAttribute("aria-current", "page");
@@ -430,10 +430,10 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("progressively reveals showcase exam results on a 390px phone", async ({ page }) => {
+    test("progressively reveals showcase exam results on a 390px phone", async ({ page, hasTouch }) => {
         test.setTimeout(Math.max(test.info().timeout, 60_000));
         await page.setViewportSize({ width: 390, height: 844 });
-        await loginAsShowcaseTeacher(page);
+        await loginAsShowcaseTeacher(page, hasTouch);
         await page.goto("/teacher/exam/mock-final-comprehensive");
 
         await expect(page.getByRole("heading", { name: "[예시] 기말고사 대비 종합평가" })).toBeVisible({ timeout: 30_000 });
@@ -445,7 +445,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
 
         const moreButton = page.getByRole("button", { name: /다음 6명 보기/ });
         await expect(moreButton).toContainText("다음 6명 보기");
-        await activateControl(moreButton);
+        await activateControl(moreButton, hasTouch);
         await expect(cards).toHaveCount(12);
 
         await page.getByLabel("결과 정렬").selectOption("name");
@@ -453,14 +453,14 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expect(cards.first()).toContainText("강다은");
         const sortedMoreButton = page.getByRole("button", { name: /다음 6명 보기/ });
         await expect(sortedMoreButton).toBeVisible();
-        await activateControl(sortedMoreButton);
+        await activateControl(sortedMoreButton, hasTouch);
         await expect(cards).toHaveCount(12);
         await expectNoHorizontalOverflow(page);
     });
 
-    test("replaces the student roster table with compact cards on a 390px phone", async ({ page }) => {
+    test("replaces the student roster table with compact cards on a 390px phone", async ({ page, hasTouch }) => {
         await page.setViewportSize({ width: 390, height: 844 });
-        await loginAsShowcaseTeacher(page);
+        await loginAsShowcaseTeacher(page, hasTouch);
         await page.goto("/teacher/users");
 
         await expect(page.getByRole("heading", { name: "사용자 관리" })).toBeVisible();
@@ -494,10 +494,10 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("keeps mobile roster search and detail actions clear of data-source toasts", async ({ page }) => {
+    test("keeps mobile roster search and detail actions clear of data-source toasts", async ({ page, hasTouch }) => {
         test.setTimeout(Math.max(test.info().timeout, 45_000));
         await page.setViewportSize({ width: 390, height: 844 });
-        await loginAsShowcaseTeacher(page);
+        await loginAsShowcaseTeacher(page, hasTouch);
         await page.goto("/teacher/users");
 
         const search = page.getByPlaceholder("이름, 이메일, 반, 지역 검색");
@@ -505,7 +505,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         const cards = page.getByTestId("teacher-users-mobile-card");
         await expect(cards).toHaveCount(1);
         await expect(cards.first()).toContainText("이서연");
-        await activateControl(cards.first().getByRole("button", { name: "이서연 상세 보기" }));
+        await activateControl(cards.first().getByRole("button", { name: "이서연 상세 보기" }), hasTouch);
         await expect(page.getByRole("heading", { name: "학생 상세" })).toBeVisible({ timeout: 15_000 });
 
         // Showcase/demo already has a persistent inline source notice. Startup
@@ -514,20 +514,20 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("keeps operational teacher headers touch friendly", async ({ page }) => {
+    test("keeps operational teacher headers touch friendly", async ({ page, hasTouch }) => {
         for (const route of [
             { path: "/teacher/live", heading: "응시 결과 확인" },
             { path: "/teacher/settings", heading: "설정" },
             { path: "/teacher/billing", heading: "결제 및 플랜" },
         ]) {
-            await loginAsTeacher(page, route.path);
+            await loginAsTeacher(page, route.path, hasTouch);
 
             await expect(page.getByRole("heading", { name: route.heading })).toBeVisible();
             await expectTeacherHeaderTouchFriendly(page, { hasDashboardShortcut: true });
         }
     });
 
-    test("keeps billing secondary content expanded on desktop and collapsed on phones", async ({ page }) => {
+    test("keeps billing secondary content expanded on desktop and collapsed on phones", async ({ page, hasTouch }) => {
         await page.addInitScript(() => {
             window.localStorage.setItem("omr_plan_invoices", JSON.stringify([{
                 id: "LOCAL-2026-08-0001",
@@ -538,7 +538,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
             }]));
         });
         await page.setViewportSize({ width: 1280, height: 900 });
-        await loginAsTeacher(page, "/teacher/billing");
+        await loginAsTeacher(page, "/teacher/billing", hasTouch);
 
         const desktopAcademy = page.locator(".billing-academy-desktop");
         const desktopHistory = page.locator(".billing-history-desktop");
@@ -565,8 +565,8 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expect(mobileHistory.getByRole("button", { name: "전체 기록 다운로드" })).toBeVisible();
     });
 
-    test("keeps the exam creation toolbar touch friendly", async ({ page }) => {
-        await loginAsTeacher(page, "/create");
+    test("keeps the exam creation toolbar touch friendly", async ({ page, hasTouch }) => {
+        await loginAsTeacher(page, "/create", hasTouch);
 
         const workspaceTabs = page.getByRole("tablist", { name: "출제 작업 화면" });
         if ((await workspaceTabs.count()) > 0) {
@@ -672,9 +672,9 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("uses the tabbed create workspace at the 1180px intermediate width", async ({ page }) => {
+    test("uses the tabbed create workspace at the 1180px intermediate width", async ({ page, hasTouch }) => {
         await page.setViewportSize({ width: 1180, height: 820 });
-        await loginAsTeacher(page, "/create");
+        await loginAsTeacher(page, "/create", hasTouch);
 
         const tabs = page.getByRole("tablist", { name: "출제 작업 화면" });
         await expect(tabs).toBeVisible();
@@ -730,9 +730,9 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("keeps the primary create action visible above mobile content", async ({ page }) => {
+    test("keeps the primary create action visible above mobile content", async ({ page, hasTouch }) => {
         await page.setViewportSize({ width: 390, height: 844 });
-        await loginAsTeacher(page, "/create");
+        await loginAsTeacher(page, "/create", hasTouch);
 
         const workspaceTabs = page.getByRole("tablist", { name: "출제 작업 화면" });
         await workspaceTabs.getByRole("tab", { name: /설정/ }).click();
@@ -790,9 +790,9 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("keeps returned handwriting readable without a collapsed detail pane after downgrade", async ({ page }) => {
+    test("keeps returned handwriting readable without a collapsed detail pane after downgrade", async ({ page, hasTouch }) => {
         await seedTeacherAttemptReview(page);
-        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
+        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt", hasTouch);
 
         await expect(page.getByRole("heading", { name: "모바일 학생" })).toBeVisible();
         await expect(page.getByText("2번 오답 근거를 알려주세요.")).toBeVisible();
@@ -823,10 +823,10 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         }
     });
 
-    test("keeps the student result tab open through tablet rotation", async ({ page }) => {
+    test("keeps the student result tab open through tablet rotation", async ({ page, hasTouch }) => {
         await page.setViewportSize({ width: 820, height: 1180 });
         await seedTeacherAttemptReview(page);
-        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
+        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt", hasTouch);
 
         await expect(page.getByRole("heading", { name: "모바일 학생" })).toBeVisible();
         const handwritingTab = page.getByRole("tab", { name: "필기" });
@@ -844,10 +844,10 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expectNoHorizontalOverflow(page);
     });
 
-    test("lays out the mobile student result tabs as touch-friendly rows", async ({ page }) => {
+    test("lays out the mobile student result tabs as touch-friendly rows", async ({ page, hasTouch }) => {
         await page.setViewportSize({ width: 390, height: 844 });
         await seedTeacherAttemptReview(page);
-        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
+        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt", hasTouch);
 
         const tabs = page.getByRole("tablist", { name: "학생 결과 보기" });
         const boxes = await Promise.all(["답안", "필기", "리포트", "분석"].map(
@@ -877,10 +877,10 @@ test.describe("Teacher desktop Chromium result tab accessibility", () => {
         test.skip(!isLocalBaseURL(baseURL), "Authenticated teacher checks require local teacher login.");
     });
 
-    test("moves focus across result tabs before keyboard activation", async ({ page }) => {
+    test("moves focus across result tabs before keyboard activation", async ({ page, hasTouch }) => {
         test.setTimeout(Math.max(test.info().timeout, 60_000));
         await seedTeacherAttemptReview(page);
-        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
+        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt", hasTouch);
 
         const tabs = page.getByRole("tablist", { name: "학생 결과 보기" });
         const answersTab = tabs.getByRole("tab", { name: "답안" });

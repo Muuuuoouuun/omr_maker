@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { startShowcaseEntryDiagnostics } from "./showcaseEntryDiagnostics";
 import { activateByInput } from "./inputActivation";
 
-export async function activateControl(control: Locator) {
-    // Emulated phone/tablet contexts must exercise native touch events rather
-    // than a mouse-only click. One action; failures are never retried here.
-    await activateByInput(control, test.info().project.use.hasTouch === true);
+export async function activateControl(control: Locator, hasTouch = false) {
+    // Callers pass the effective fixture so per-test desktop overrides win.
+    // Existing desktop callers retain their original mouse input. One action.
+    await activateByInput(control, hasTouch);
 }
 
 export function exactNextActionId(filename: string, exportedName: string, worker: string): string {
@@ -68,7 +68,7 @@ export function teacherLoginFixture() {
     return { identifier, password };
 }
 
-export async function loginAsTeacher(page: Page, nextPath = "/teacher/dashboard") {
+export async function loginAsTeacher(page: Page, nextPath = "/teacher/dashboard", hasTouch = false) {
     const { identifier, password } = teacherLoginFixture();
     await page.goto(`/?role=teacher&next=${encodeURIComponent(nextPath)}`);
     // The server-rendered form is inert until React hydration completes. Wait
@@ -77,7 +77,7 @@ export async function loginAsTeacher(page: Page, nextPath = "/teacher/dashboard"
     await expect(submitButton).toBeEnabled({ timeout: 30_000 });
     await page.locator("#teacher-identifier").fill(identifier);
     await page.getByPlaceholder("비밀번호 입력").fill(password);
-    await activateControl(submitButton);
+    await activateControl(submitButton, hasTouch);
     await expect(page).toHaveURL(new RegExp(`${escapeRegExp(nextPath)}(?:[?#].*)?$`), { timeout: 25_000 });
 }
 
@@ -96,7 +96,7 @@ function showcaseDiagnosticScenario(title: string): string {
     return "other";
 }
 
-export async function loginAsShowcaseTeacher(page: Page) {
+export async function loginAsShowcaseTeacher(page: Page, hasTouch = false) {
     const diagnostics = process.env.OMR_SHOWCASE_ENTRY_DIAGNOSTICS === "1"
         ? startShowcaseEntryDiagnostics(page) : null;
     let outcome: "passed" | "failed" = "failed";
@@ -124,7 +124,7 @@ export async function loginAsShowcaseTeacher(page: Page) {
                 console.warn("Showcase input delivery could not be observed.");
             }
         }
-        await activateControl(showcaseButton);
+        await activateControl(showcaseButton, hasTouch);
         diagnostics?.stage("clicked");
         await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1(?:#.*)?$/, { timeout: 25_000 });
         diagnostics?.stage("dashboard-url");
@@ -155,7 +155,7 @@ export async function loginAsShowcaseTeacher(page: Page) {
                     phase,
                     project: showcaseDiagnosticProjects.has(info.project.name) ? info.project.name : "other",
                     scenario: showcaseDiagnosticScenario(info.title),
-                    inputMethod: info.project.use.hasTouch === true ? "touch" : "mouse",
+                    inputMethod: hasTouch ? "touch" : "mouse",
                     repeatEachIndex: info.repeatEachIndex,
                     retry: info.retry,
                     report,

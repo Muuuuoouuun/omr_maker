@@ -102,6 +102,27 @@ describe("showcase readiness CI regression coverage", () => {
         for (const field of credentialFields) expect(field).not.toMatch(/\.fill\(["']/);
     });
 
+    it("binds effective touch fixtures and keeps all three desktop keyboard overrides covered", () => {
+        const helper = helpers();
+        expect(helper).toContain("activateControl(control: Locator, hasTouch = false)");
+        expect(helper).toContain("await activateByInput(control, hasTouch)");
+        expect(helper).not.toContain("project.use.hasTouch");
+        expect(helper).not.toContain("navigator.maxTouchPoints");
+        const mobile = readFileSync(join(process.cwd(), "e2e/teacher-mobile.spec.ts"), "utf8");
+        const keyboard = mobile.split('test.describe("Teacher desktop Chromium result tab accessibility"')[1];
+        expect(keyboard).toContain("hasTouch: desktopChrome.hasTouch");
+        expect(keyboard).toContain("async ({ page, hasTouch })");
+        expect(keyboard).toContain('loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt", hasTouch)');
+        expect(keyboard).toContain('await answersTab.press("ArrowRight")');
+        expect(keyboard).toContain('await page.keyboard.press("Enter")');
+        const focused = workflow.split("- name: Verify desktop keyboard context overrides without retries")[1]
+            .split("- name: Upload sanitized showcase entry diagnostics")[0];
+        for (const project of ["mobile-ios-webkit-teacher", "tablet-ios-webkit-teacher", "tablet-ios-webkit-landscape-teacher"]) {
+            expect(focused).toContain(`--project=${project}`);
+        }
+        expect(focused).toContain("--retries=0 --trace=off");
+    });
+
     it("validates all five cases per scenario and excludes full-suite observations", () => {
         for (const [shard, scenarios, project] of [
             ["1", ["live-pause"], "ios-se-webkit"],
