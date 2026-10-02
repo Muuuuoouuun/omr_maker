@@ -6,6 +6,7 @@ import OMRPreview from "@/components/OMRPreview";
 import dynamic from "next/dynamic";
 import { createPortal } from "react-dom";
 import type { PDFDocumentLoadingTask } from "pdfjs-dist";
+import { loadPdfJs } from "@/lib/pdfjsRuntime";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -2108,11 +2109,8 @@ function CreateOMRPageInner() {
         setIsDetectingLocation(true);
         let pdfLoadingTask: PDFDocumentLoadingTask | null = null;
         try {
-            const pdfjsLib = await import('pdfjs-dist');
+            const pdfjsLib = await loadPdfJs();
             if (!isCurrentRun()) return;
-            if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
-                pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-            }
             const arrayBuffer = await pdfFile.arrayBuffer();
             if (!isCurrentRun()) return;
             pdfLoadingTask = pdfjsLib.getDocument({ data: arrayBuffer });

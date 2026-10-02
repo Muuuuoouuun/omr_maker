@@ -8,6 +8,7 @@ import OMRCardView from "@/components/OMRCardView";
 import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
 import { toast } from "@/components/Toast";
+import PdfPaneBoundary, { PdfPaneErrorCard } from "@/components/PdfPaneBoundary";
 import { AlertTriangle, Clock, LoaderCircle, PanelRightClose, PanelRightOpen, PenLine, RotateCcw, Save } from "lucide-react";
 import { deleteStoredData, storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
 import { resolveDraftDrawings } from "@/lib/draftRecovery";
@@ -1151,6 +1152,10 @@ export default function SolvePage() {
     const [isTeacherMode, setIsTeacherMode] = useState(false);
     const [activeTab, setActiveTab] = useState<'problem' | 'answer'>('problem');
     const [answerFile, setAnswerFile] = useState<File | null>(null);
+    // The PDF pane fails on its own: the OMR sheet stays usable. Keyed to the
+    // failed file so a new upload or tab switch shows the viewer again.
+    const [failedPdfFile, setFailedPdfFile] = useState<File | null>(null);
+    const [pdfPaneAttempt, setPdfPaneAttempt] = useState(0);
     const [teacherAuthOpen, setTeacherAuthOpen] = useState(false);
     const [teacherIdentifier, setTeacherIdentifier] = useState("");
     const [teacherPassword, setTeacherPassword] = useState("");
@@ -3811,6 +3816,12 @@ export default function SolvePage() {
         ? nextUnansweredQuestion
         : null;
 
+    const viewerPdfFile = activeTab === 'problem' ? pdfFile : answerFile;
+    const retryPdfPane = () => {
+        setFailedPdfFile(null);
+        setPdfPaneAttempt(attempt => attempt + 1);
+    };
+
     return (
         <div className="layout-main solve-page" data-away-count={tabFociLostCount} style={{
             background: 'var(--background)',
@@ -4190,39 +4201,48 @@ export default function SolvePage() {
                         </div>
                     )}
 
-                    <PDFViewer
-                        file={activeTab === 'problem' ? pdfFile : answerFile}
-                        onLoadSuccess={() => { }}
-                        onFileDrop={activeTab === 'problem' ? handleStudentPdfUpload : setAnswerFile}
-                        enableDrawing={activeTab === 'problem'}
-                        drawings={drawings}
-                        onDrawingsChange={handleDrawingsChange}
-                        forcePage={activeTab === 'problem' ? pdfCurrentPage : undefined}
-                        focusTarget={activeTab === 'problem' ? pdfFocusTarget : null}
-                        markers={(activeTab === 'problem' && examData.questions)
-                            ? activeExamQuestions
-                                .filter((q: Question) => q.pdfLocation || q.pdfRegion)
-                                .map((q: Question) => {
-                                    const anchor = q.pdfLocation || q.pdfRegion!;
-                                    return {
-                                        page: anchor.page,
-                                        x: anchor.x,
-                                        y: anchor.y,
-                                        label: q.number,
-                                        color: currentQuestionId === q.id ? '#6366f1' : '#ef4444',
-                                        onClick: () => handleQuestionClick(q.id),
-                                        questionId: q.id,
-                                        currentAnswer: studentAnswers[q.id],
-                                        onAnswer: (opt: number) => handleAnswerClick(
-                                            q.id,
-                                            opt,
-                                            performance.timeOrigin + performance.now(),
-                                        ),
-                                        optionsCount: questionChoiceCount(q, DEFAULT_CHOICE_COUNT),
-                                    };
-                                })
-                            : []}
-                    />
+                    {viewerPdfFile && failedPdfFile === viewerPdfFile ? (
+                        <PdfPaneErrorCard onRetry={retryPdfPane} />
+                    ) : (
+                        <PdfPaneBoundary onRetry={retryPdfPane}>
+                            <PDFViewer
+                                key={pdfPaneAttempt}
+                                file={viewerPdfFile}
+                                onLoadSuccess={() => { }}
+                                onLoadError={() => setFailedPdfFile(viewerPdfFile)}
+                                onRenderError={() => setFailedPdfFile(viewerPdfFile)}
+                                onFileDrop={activeTab === 'problem' ? handleStudentPdfUpload : setAnswerFile}
+                                enableDrawing={activeTab === 'problem'}
+                                drawings={drawings}
+                                onDrawingsChange={handleDrawingsChange}
+                                forcePage={activeTab === 'problem' ? pdfCurrentPage : undefined}
+                                focusTarget={activeTab === 'problem' ? pdfFocusTarget : null}
+                                markers={(activeTab === 'problem' && examData.questions)
+                                    ? activeExamQuestions
+                                        .filter((q: Question) => q.pdfLocation || q.pdfRegion)
+                                        .map((q: Question) => {
+                                            const anchor = q.pdfLocation || q.pdfRegion!;
+                                            return {
+                                                page: anchor.page,
+                                                x: anchor.x,
+                                                y: anchor.y,
+                                                label: q.number,
+                                                color: currentQuestionId === q.id ? '#6366f1' : '#ef4444',
+                                                onClick: () => handleQuestionClick(q.id),
+                                                questionId: q.id,
+                                                currentAnswer: studentAnswers[q.id],
+                                                onAnswer: (opt: number) => handleAnswerClick(
+                                                    q.id,
+                                                    opt,
+                                                    performance.timeOrigin + performance.now(),
+                                                ),
+                                                optionsCount: questionChoiceCount(q, DEFAULT_CHOICE_COUNT),
+                                            };
+                                        })
+                                    : []}
+                            />
+                        </PdfPaneBoundary>
+                    )}
                 </div>
 
                 <div

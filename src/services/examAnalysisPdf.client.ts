@@ -1,10 +1,11 @@
+import { loadPdfJs } from '@/lib/pdfjsRuntime';
+
 /** Render only the teacher-selected range; never silently truncate an uploaded exam. */
 export async function renderExamAnalysisPages(file: File, start: number, end: number, isCurrent: () => boolean): Promise<string[]> {
     if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end - start >= 4) {
         throw new Error('한 번에 최대 4쪽까지 분석할 수 있습니다. 페이지 범위를 확인해 주세요.');
     }
-    const pdfjs = await import('pdfjs-dist');
-    if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+    const pdfjs = await loadPdfJs();
     const task = pdfjs.getDocument({ data: await file.arrayBuffer() });
     try {
         const pdf = await task.promise;

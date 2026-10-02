@@ -1,5 +1,6 @@
 import type { PdfDrawings } from "@/types/omr";
 import { parseStoredDrawingPath } from "@/lib/drawingPath";
+import { loadPdfJs } from "@/lib/pdfjsRuntime";
 
 type DrawPoint = { x: number; y: number };
 
@@ -171,8 +172,7 @@ export async function buildAnnotatedPdfBlob(
         throw new Error("Annotated PDF export requires a browser environment");
     }
 
-    const pdfjs = await import("pdfjs-dist");
-    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+    const pdfjs = await loadPdfJs();
     const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
     const pages: RasterPdfPage[] = [];
     const baseScale = options.scale || 1.5;

@@ -2,6 +2,7 @@
 import { analyzeAnswerImages } from '@/app/actions/analyzeKey';
 import { safeAiAnswerErrorMessage, safeAiAnswerLogMeta } from '@/lib/aiAnswerSafety';
 import type { AiAnswerModelRoutingOptions } from '@/lib/aiAnswerModelRouting';
+import { loadPdfJs } from '@/lib/pdfjsRuntime';
 
 export interface ParsedAnswer {
     questionNum: number;
@@ -72,18 +73,9 @@ const ANSWER_MAP: Record<string, number> = {
     "ㅁ": 5,
 };
 
-async function getPdfJs() {
-    const pdfjsLib = await import('pdfjs-dist');
-    // Ensure worker is set up
-    if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-    }
-    return pdfjsLib;
-}
-
 export async function parseAnswerKeyPdf(file: File): Promise<ParsedAnswer[]> {
     assertUsableAnswerPdf(file);
-    const pdfjsLib = await getPdfJs();
+    const pdfjsLib = await loadPdfJs();
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
@@ -314,7 +306,7 @@ export async function parseAnswerKeyWithGemini(
     options: AiAnswerModelRoutingOptions = {},
 ): Promise<ParsedAnswer[]> {
     assertUsableAnswerPdf(file);
-    const pdfjsLib = await getPdfJs();
+    const pdfjsLib = await loadPdfJs();
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 

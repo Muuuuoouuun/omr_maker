@@ -49,26 +49,28 @@
 - `solve/[id]/page.tsx:126`의 dynamic PDFViewer 주변에 오류 경계가 없습니다. 그래서 PDF 오류가 OMR 마킹 화면까지 함께 죽입니다.
 
 **변경**
-- [ ] `next.config.ts` turbopack에 `resolveAlias: { 'pdfjs-dist': { browser: 'pdfjs-dist/legacy/build/pdf.mjs' } }`를 추가합니다. react-pdf 내부 import까지 legacy로 바뀝니다.
+- [x] `next.config.ts` turbopack에 `resolveAlias: { 'pdfjs-dist': { browser: 'pdfjs-dist/legacy/build/pdf.mjs' } }`를 추가합니다. react-pdf 내부 import까지 legacy로 바뀝니다.
   - 빌드 후 chunk에서 `getOrInsertComputed:function` 마커를 확인합니다.
   - 별칭이 서브패스까지 재귀 적용되면 react-pdf 패치(patch-package)로 대체합니다.
-- [ ] 신규 `src/lib/pdfjsRuntime.ts`(`loadPdfJs()`, `pdfWorkerSrc(version)`)를 만들고, 수동 workerSrc를 설정하던 4곳을 교체합니다.
+- [x] 신규 `src/lib/pdfjsRuntime.ts`(`loadPdfJs()`, `pdfWorkerSrc(version)`)를 만들고, 수동 workerSrc를 설정하던 4곳을 교체합니다.
   - `answerParser.ts:76`, `examAnalysisPdf.client.ts:6`, `create/page.tsx:2111`, `annotatedPdfExport.ts:174`, `PDFViewer.tsx:38`
-- [ ] `public/pdf.worker.min.mjs`와 `public/react-pdf.worker.min.mjs`의 내용을 legacy 워커로 교체합니다. 파일명은 유지합니다.
+- [x] `public/pdf.worker.min.mjs`와 `public/react-pdf.worker.min.mjs`의 내용을 legacy 워커로 교체합니다. 파일명은 유지합니다.
   - 워커 URL에 `?v=<ver>-legacy`를 붙입니다.
   - `public/sw.js`의 `CACHE_VERSION`을 v16에서 v17로 올립니다. (PO 결정 A-6)
-- [ ] 신규 `src/components/PdfPaneBoundary.tsx`를 만듭니다. Next 16.3 `catchError`를 쓰며, 경계를 쓰기 전에 `node_modules/next/dist/docs`에서 API를 확인합니다.
+- [x] 신규 `src/components/PdfPaneBoundary.tsx`를 만듭니다. Next 16.3 `catchError`를 쓰며, 경계를 쓰기 전에 `node_modules/next/dist/docs`에서 API를 확인합니다.
   - 대체 화면 문구: "문제지를 표시하지 못했습니다. 답안 마킹과 제출은 계속할 수 있습니다." + [다시 시도]
   - PDFViewer에 `onLoadError`와 `onRenderError` prop을 추가해 비동기 실패도 같은 카드로 표시합니다.
 
 **테스트**
-- [ ] `PDFViewer.workerVersion.test.ts`: public 워커의 sha256이 legacy 워커와 같은지 확인합니다.
-- [ ] `pdfSupplyChainSecurity.test.ts`: `import('pdfjs-dist')`를 직접 쓰거나 워커 경로를 하드코딩한 곳이 없는지 확인합니다.
-- [ ] `pwaAssets.test.ts`: `omr-maker-v16`을 v17로 갱신합니다.
-- [ ] 신규 `e2e/pdf-legacy-runtime.spec.ts`: init script와 워커 route에서 `getOrInsert*`를 삭제한 상태로 `/solve`를 열어, canvas가 렌더링되고 pageerror가 0건인지 확인합니다.
-- [ ] 신규 e2e: 워커가 404일 때도 OMR 마킹과 제출이 되는지 확인합니다.
+- [x] `PDFViewer.workerVersion.test.ts`: public 워커의 sha256이 legacy 워커와 같은지 확인합니다.
+- [x] `pdfSupplyChainSecurity.test.ts`: `import('pdfjs-dist')`를 직접 쓰거나 워커 경로를 하드코딩한 곳이 없는지 확인합니다.
+- [x] `pwaAssets.test.ts`: `omr-maker-v16`을 v17로 갱신합니다.
+- [x] 신규 `e2e/pdf-legacy-runtime.spec.ts`: init script와 워커 route에서 `getOrInsert*`를 삭제한 상태로 `/solve`를 열어, canvas가 렌더링되고 pageerror가 0건인지 확인합니다.
+- [x] 신규 e2e: 워커가 404일 때도 OMR 마킹과 제출이 되는지 확인합니다.
 
 **위험:** legacy 번들이 약 +58KB 커집니다. dynamic chunk이므로 `npm run build`의 라우트 예산을 확인합니다.
+
+**결과(2026-10-02):** 클라이언트 PDF chunk는 legacy 1벌만 남았습니다(+54.9KB raw / +18.5KB gzip, lazy). `/solve` first-load는 +2.3KB gzip(`next/error`가 Pages `_error`를 함께 가져옴)이며 라우트 예산을 통과합니다. PDF.js는 워커 실패 뒤 같은 페이지 세션에서 워커를 끄므로, 워커 404는 [다시 시도]로 복구되지 않고 카드가 유지됩니다(새로고침 필요).
 
 ### A3. 학생 풀이 화면의 "선생님 모드"·"PDF 열기" 노출 정리 (S~M)
 **원인:** 교사 미리보기용 토글과 PDF 업로드가 학생에게 항상 보입니다(`solve/[id]/page.tsx:4032-4071`). 교사 인증 다이얼로그를 거치므로 보안 문제는 아니고 UX 노출 문제입니다.

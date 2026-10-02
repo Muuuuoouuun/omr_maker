@@ -43,6 +43,16 @@ const nextConfig = {
     : {}),
   turbopack: {
     root: process.cwd(),
+    resolveAlias: {
+      // The modern PDF.js build calls brand-new built-ins such as
+      // Map.prototype.getOrInsertComputed and crashes the solve/create pages on
+      // browsers without them (e.g. Chromium 141, older iOS/Android WebViews).
+      // The legacy build ships core-js polyfills. An exact-key alias rewrites
+      // react-pdf's internal `import * as pdfjs from 'pdfjs-dist'` as well;
+      // subpaths (`pdfjs-dist/legacy/...`) and server bundles are untouched.
+      // Keep public/*.worker.min.mjs on the same legacy build (src/lib/pdfjsRuntime.ts).
+      "pdfjs-dist": { browser: "pdfjs-dist/legacy/build/pdf.mjs" },
+    },
   },
   allowedDevOrigins: ["127.0.0.1"],
   experimental: {

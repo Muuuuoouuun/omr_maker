@@ -1,18 +1,33 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { pdfWorkerSrc } from "@/lib/pdfjsRuntime";
 
-// Guards the versioned worker URL fix in PDFViewer.tsx:
-//   pdfjs.GlobalWorkerOptions.workerSrc = `/react-pdf.worker.min.mjs?v=${pdfjs.version}`
-// The `?v=` query only busts the service-worker cache correctly if the worker
-// shipped in public/ actually corresponds to the installed pdfjs-dist version.
-// pdf.js throws "The API version X does not match the Worker version Y" when the
-// page code and worker drift apart, so keep them locked together here.
-describe("public/react-pdf.worker.min.mjs version", () => {
-  const repoRoot = path.resolve(__dirname, "..", "..");
-  const worker = readFileSync(path.join(repoRoot, "public", "react-pdf.worker.min.mjs"), "utf8");
+// Guards the versioned legacy worker URLs (src/lib/pdfjsRuntime.ts):
+//   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc(pdfjs.version, ...)
+// The `?v=<version>-legacy` query only busts the service-worker cache correctly
+// if the workers shipped in public/ are exactly the installed pdfjs-dist LEGACY
+// worker. The worker runs in its own global, so the main-thread legacy alias
+// (next.config.ts) cannot polyfill it: a modern worker still crashes on browsers
+// without Map.prototype.getOrInsertComputed. pdf.js also throws "The API version
+// X does not match the Worker version Y" when page code and worker drift apart.
+const repoRoot = path.resolve(__dirname, "..", "..");
+const sha256 = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
+const legacyWorker = path.join(repoRoot, "node_modules", "pdfjs-dist", "legacy", "build", "pdf.worker.min.mjs");
+const modernWorker = path.join(repoRoot, "node_modules", "pdfjs-dist", "build", "pdf.worker.min.mjs");
+const publicWorkers = ["pdf.worker.min.mjs", "react-pdf.worker.min.mjs"].map(name => path.join(repoRoot, "public", name));
 
-  it("uses the patched react-pdf runtime floor and ships its exact worker", async () => {
+describe("public PDF.js workers", () => {
+  it.each(publicWorkers)("%s is byte-identical to the installed legacy worker", workerPath => {
+    expect(sha256(workerPath)).toBe(sha256(legacyWorker));
+    expect(sha256(workerPath)).not.toBe(sha256(modernWorker));
+    // The legacy worker carries the core-js polyfill for the API that crashed
+    // the modern worker on Chromium 141.
+    expect(readFileSync(workerPath, "utf8")).toContain("getOrInsertComputed:function");
+  });
+
+  it("uses the patched react-pdf runtime floor and a versioned legacy worker URL", async () => {
     // pdf.js only needs the constructor to initialize its Node-side display
     // module; the assertion below still reads the actual react-pdf export.
     const previousDOMMatrix = Object.getOwnPropertyDescriptor(globalThis, "DOMMatrix");
@@ -34,6 +49,12 @@ describe("public/react-pdf.worker.min.mjs version", () => {
     expect(numericVersion[0] > 6 || (numericVersion[0] === 6 && (
       numericVersion[1] > 2 || (numericVersion[1] === 2 && numericVersion[2] >= 108)
     ))).toBe(true);
-    expect(worker).toContain(`"${runtimeVersion}"`);
+    for (const workerPath of publicWorkers) {
+      expect(readFileSync(workerPath, "utf8")).toContain(`"${runtimeVersion}"`);
+    }
+    expect(pdfWorkerSrc(runtimeVersion, "reactPdf")).toBe(`/react-pdf.worker.min.mjs?v=${runtimeVersion}-legacy`);
+
+    const viewer = readFileSync(path.join(repoRoot, "src", "components", "PDFViewer.tsx"), "utf8");
+    expect(viewer).toContain("pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc(pdfjs.version, 'reactPdf');");
   });
 });

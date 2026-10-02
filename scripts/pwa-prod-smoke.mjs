@@ -7,7 +7,7 @@ const port = Number(process.env.PWA_SMOKE_PORT || 3004);
 const externalBaseUrl = process.env.PWA_SMOKE_BASE_URL?.replace(/\/$/, "");
 const baseUrl = externalBaseUrl || `http://localhost:${port}`;
 const ownsServer = !externalBaseUrl;
-const expectedCachePrefix = "omr-maker-v16";
+const expectedCachePrefix = "omr-maker-v17";
 // Mirrors studentAssignmentDraftStorageKey's immutable v2 tuple. Legacy
 // underscore-delimited keys are migration inputs, not current draft writes.
 const mobileSolveDraftKey = `omr_draft:v2:${encodeURIComponent(JSON.stringify([

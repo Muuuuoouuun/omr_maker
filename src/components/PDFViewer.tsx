@@ -22,6 +22,7 @@ import {
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { buildPenCursor, buildHighlighterCursor } from '@/lib/drawingCursors';
+import { pdfWorkerSrc } from '@/lib/pdfjsRuntime';
 import { parseStoredDrawingPath } from '@/lib/drawingPath';
 import { strokeHitTest } from '@/lib/strokeGeometry';
 import {
@@ -32,10 +33,11 @@ import {
     type PdfRenderIdentity,
 } from './pdfRenderReadiness';
 
-// Worker setup for Next.js — version the URL so a pdfjs-dist upgrade is a cache
-// miss (avoids the "API version X does not match Worker version Y" hard-fail for
-// returning PWA users still holding the old cache-first worker).
-pdfjs.GlobalWorkerOptions.workerSrc = `/react-pdf.worker.min.mjs?v=${pdfjs.version}`;
+// Worker setup for Next.js — the versioned legacy URL makes a pdfjs-dist upgrade
+// (or the modern → legacy switch) a cache miss, avoiding the "API version X does
+// not match Worker version Y" hard-fail for returning PWA users still holding the
+// old cache-first worker. See src/lib/pdfjsRuntime.ts.
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc(pdfjs.version, 'reactPdf');
 
 interface MarkerData {
     page: number;
@@ -70,6 +72,9 @@ interface PdfFocusTarget {
 interface PDFViewerProps {
     file: File | null;
     onLoadSuccess: (numPages: number) => void;
+    /** When provided, the parent shows its own failure UI instead of the default toast. */
+    onLoadError?: (error: Error) => void;
+    onRenderError?: (error: Error) => void;
     onPageClick?: (page: number, x: number, y: number) => void;
     onFileDrop?: (file: File) => void;
     // Drawing Props
@@ -133,6 +138,8 @@ function formatMarkerLabel(label: string | number): string {
 export default function PDFViewer({
     file,
     onLoadSuccess,
+    onLoadError,
+    onRenderError,
     onPageClick,
     onFileDrop,
     enableDrawing = false,
@@ -1018,7 +1025,16 @@ export default function PDFViewer({
 
     const handleDocumentLoadError = (error: Error) => {
         console.error("PDF load failed", error);
+        if (onLoadError) {
+            onLoadError(error);
+            return;
+        }
         toast.error("PDF 열기 실패", "파일이 손상되었거나 브라우저에서 읽을 수 없는 PDF입니다.");
+    };
+
+    const handlePageRenderError = (error: Error) => {
+        console.error("PDF page render failed", error);
+        onRenderError?.(error);
     };
 
     return (
@@ -1326,6 +1342,7 @@ export default function PDFViewer({
                                     renderTextLayer={true}
                                     renderAnnotationLayer={false}
                                     onRenderSuccess={handlePageRenderSuccess}
+                                    onRenderError={handlePageRenderError}
                                 />{/* Canvas Overlay */}
                                 {shouldRenderDrawingLayer && (
                                     <canvas
