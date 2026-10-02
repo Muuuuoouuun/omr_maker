@@ -64,8 +64,10 @@ test.describe("live Korean exam Supabase fixture", () => {
 
         await expect(page.getByText("미완료 과제").first()).toContainText("3", { timeout: 20_000 });
         await page.getByRole("link", { name: "시작", exact: true }).first().click();
-        await page.getByRole("button", { name: "학생으로 시험 보기", exact: true }).click();
+        // The dashboard "시작" already confirmed who is entering, so the solve
+        // page opens directly without the "시험 입장 확인" dialog.
         await expect(page.getByText("problem.pdf", { exact: true })).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByRole("dialog", { name: "시험 입장 확인" })).toHaveCount(0);
         await expect(page.getByRole("toolbar", { name: "PDF 필기 도구" })).toBeVisible();
         await page.getByRole("button", { name: "답안지 펼치기", exact: true }).click();
         await page.getByRole("radio", { name: "문제 1번 보기 3", exact: true }).click();

@@ -168,15 +168,15 @@
 **깨지는 테스트:** `uiSurface.test.ts:965`, `textEncodingSurface.test.ts:117`, `e2e/full-journey.spec.ts:585,669,673,716`
 
 ### B2. 시험 입장 확인 팝업 축소 (M)
-- [ ] 신규 `src/lib/solveEntryIntent.ts`: sessionStorage에 한 번용 진입 의도를 저장합니다. 120초 TTL이고 examId와 studentId에 묶입니다.
+- [x] 신규 `src/lib/solveEntryIntent.ts`: sessionStorage에 한 번용 진입 의도를 저장합니다. 120초 TTL이고 examId와 studentId에 묶입니다.
   - 기록 시점: 대시보드의 "시작", 로그인 직후 `next=/solve/…`로 이동할 때
-- [ ] 자동 입장: 기존 재시험 skip effect(`solve/[id]/page.tsx:2516-2535`)를 일반화합니다. 서버 재검증(`continueEntryAsStudent` → `openStudentExam`)은 그대로 거칩니다. PIN 시험은 PIN 화면이 우선합니다.
-- [ ] 링크로 직접 열면 팝업을 유지하되 정리합니다.
+- [x] 자동 입장: 기존 재시험 skip effect(`solve/[id]/page.tsx:2516-2535`)를 일반화합니다. 서버 재검증(`continueEntryAsStudent` → `openStudentExam`)은 그대로 거칩니다. PIN 시험은 PIN 화면이 우선합니다.
+- [x] 링크로 직접 열면 팝업을 유지하되 정리합니다.
   - "현재 로그인: OOO · A반" + [학생으로 시험 보기]
   - "내가 아니에요"를 누르면 서버 쿠키와 로컬 세션을 먼저 지운 뒤 로그인 화면으로 이동합니다.
   - 게스트 입력은 `<details>` 안으로 접습니다.
-- [ ] 게스트 기본 이름을 `DEFAULT_GUEST_NAME = "게스트"`로 바꿉니다. 과거 "Guest Student"는 표시할 때만 매핑합니다.
-- [ ] × 버튼: 로그인 상태면 `/student/dashboard`, 아니면 `/?role=student`로 보냅니다.
+- [x] 게스트 기본 이름을 `DEFAULT_GUEST_NAME = "게스트"`로 바꿉니다. 과거 "Guest Student"는 표시할 때만 매핑합니다.
+- [x] × 버튼: 로그인 상태면 `/student/dashboard`, 아니면 `/?role=student`로 보냅니다.
 
 **깨지는 테스트:** `e2e/korean-exam-fixture.spec.ts:67`, `e2e/student-dashboard-load-state.spec.ts:66`
 

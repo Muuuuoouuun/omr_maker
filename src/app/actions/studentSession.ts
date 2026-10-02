@@ -2,6 +2,7 @@
 
 import { cookies, headers } from "next/headers";
 import { randomUUID } from "node:crypto";
+import { DEFAULT_GUEST_NAME } from "@/lib/guestIdentity";
 import {
     createSignedStudentSessionCookie,
     resolveAuthorizedStudentSessionCookie,
@@ -605,7 +606,7 @@ export async function retryGuestServerClaims(attemptIds: string[]): Promise<Gues
         kind: "guest",
         guestId: proof.guestId,
         studentId: `guest:${proof.guestId}`,
-        name: "Guest Student",
+        name: DEFAULT_GUEST_NAME,
         identityType: "guest",
         issuedAt: proof.issuedAt,
         expiresAt: proof.expiresAt,
@@ -740,7 +741,7 @@ export async function issueGuestSession(name?: string): Promise<{ ok: boolean; g
     }
     const guestId = randomUUID();
     const result = await setSessionCookie({
-        kind: "guest", guestId, name: trimmedName || "Guest Student", identityType: "guest",
+        kind: "guest", guestId, name: trimmedName || DEFAULT_GUEST_NAME, identityType: "guest",
     });
     return { ok: result.ok, guestId: result.ok ? guestId : undefined };
 }

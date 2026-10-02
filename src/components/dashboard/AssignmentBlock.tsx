@@ -28,6 +28,8 @@ interface AssignmentBlockProps {
     receivedMonotonicMs: number;
   };
   onClockRefresh?: () => void;
+  /** Called with the solve href when the student presses "시작"/"계속 풀기", before navigation. */
+  onStartAssignment?: (solveHref: string) => void;
 }
 
 const KOREAN_ASSIGNMENT_TIME = new Intl.DateTimeFormat("ko-KR", {
@@ -289,7 +291,7 @@ function assignmentSolveHref(exam: AssignmentCard): string {
   return `/solve/${exam.id}?${query.toString()}`;
 }
 
-export default function AssignmentBlock({ exams, type, readOnly = false, serverNow, serverClock, onClockRefresh }: AssignmentBlockProps) {
+export default function AssignmentBlock({ exams, type, readOnly = false, serverNow, serverClock, onClockRefresh, onStartAssignment }: AssignmentBlockProps) {
   const isTodo = type === "todo";
   const monotonicNow = useMonotonicAssignmentTime(serverNow, serverClock, exams, onClockRefresh);
 
@@ -377,6 +379,11 @@ export default function AssignmentBlock({ exams, type, readOnly = false, serverN
         ) : (
           exams.map((exam) => {
             const questionCount = "questions" in exam ? exam.questions.length : undefined;
+            // Shown on the card so a timed exam can start directly without an
+            // extra "are you ready" screen (PO decision B-7).
+            const durationMin = isTodo && "durationMin" in exam && typeof exam.durationMin === "number" && exam.durationMin > 0
+              ? exam.durationMin
+              : undefined;
             const reviewOnly = "reviewOnly" in exam && exam.reviewOnly === true;
             const accessType = reviewOnly
               ? undefined
@@ -459,6 +466,7 @@ export default function AssignmentBlock({ exams, type, readOnly = false, serverN
                   }}
                 >
                   {questionCount !== undefined && <span>{questionCount}문항</span>}
+                  {durationMin !== undefined && <span className="student-assignment-duration">제한 시간 {durationMin}분</span>}
                   {questionCount !== undefined && <span
                     style={{
                       width: "3px",
@@ -512,6 +520,7 @@ export default function AssignmentBlock({ exams, type, readOnly = false, serverN
               ) : isTodo && availability.lifecycle === "open" ? (
                 <Link
                   href={assignmentSolveHref(exam)}
+                  onClick={() => onStartAssignment?.(assignmentSolveHref(exam))}
                   className="btn btn-primary student-assignment-action"
                   style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
                 >

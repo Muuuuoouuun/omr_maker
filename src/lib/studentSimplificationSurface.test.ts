@@ -21,7 +21,25 @@ describe("student UI simplification surface", () => {
         expect(dashboard).not.toContain("student-dashboard-role-badge");
         expect(dashboard).not.toContain("상세 보기");
         expect(dashboard).toContain("stats.completedCount > 0");
-        expect(dashboard).toContain('title={`${user.name}님`}');
+        expect(dashboard).toContain('title={`${displayStudentName(user.name)}님`}');
+    });
+
+    it("trims the solve entry dialog to a confirm-or-switch choice for logged-in students", () => {
+        const solve = read("src/app/solve/[id]/page.tsx");
+        const switchHandler = solve.slice(solve.indexOf("const switchToAnotherStudent"));
+
+        expect(solve).toContain("consumeSolveEntryIntent(target)");
+        expect(solve).toContain("현재 로그인: {studentLabel}");
+        expect(solve).toContain("내가 아니에요 · 다른 학생으로 로그인");
+        expect(solve).toContain('className="solve-entry-guest-disclosure"');
+        expect(solve).toContain('placeholder="이름 (선생님 화면에 표시돼요)"');
+        expect(solve).not.toContain("Guest Student");
+        // The signed cookie must be gone before the login page sees the
+        // request, or restoreSignedStudentScope bounces straight back here.
+        expect(switchHandler.indexOf("clearStudentServerSession()")).toBeGreaterThan(-1);
+        expect(switchHandler.indexOf("clearStudentServerSession()")).toBeLessThan(switchHandler.indexOf("clearSession()"));
+        expect(switchHandler.indexOf("clearSession()")).toBeLessThan(switchHandler.indexOf("router.push("));
+        expect(solve).toContain('router.push(user && !user.isGuest ? "/student/dashboard" : "/?role=student")');
     });
 
     it("keeps secondary solve tools behind one disclosure and defines a three-row phone header", () => {

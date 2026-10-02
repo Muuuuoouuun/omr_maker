@@ -63,7 +63,7 @@ test("dashboard data failure is not presented as an empty successful dashboard a
     // The server failure has no verified cache timestamp; it must not claim
     // that an empty dashboard is a successful load or imply trusted local data.
     await expect(errorStatus).toContainText("검증된 저장 시각이 없습니다");
-    await expect(page.locator(".student-dashboard-user")).toContainText("Guest Student");
+    await expect(page.locator(".student-dashboard-user")).toContainText("게스트");
 
     await expect(page.getByText("나의 원시험 평균", { exact: true })).toHaveCount(0);
     await expect(page.getByText("오늘은 예정된 시험이 없습니다", { exact: false })).toHaveCount(0);

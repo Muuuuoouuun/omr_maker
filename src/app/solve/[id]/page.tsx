@@ -25,12 +25,14 @@ import {
     takeoverDurableStudentAttemptSession,
 } from "@/app/actions/studentAttemptSession";
 import { uploadStudentAttemptHandwriting } from "@/app/actions/remoteAssets";
-import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
+import { clearStudentServerSession, issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
+import { consumeSolveEntryIntent, hasSolveEntryIntent } from "@/lib/solveEntryIntent";
+import { DEFAULT_GUEST_NAME, displayStudentName } from "@/lib/guestIdentity";
 import { hasTeacherSession, saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { shouldOfferStudentPdfOpen, shouldOfferTeacherPreview } from "@/lib/solveToolsVisibility";
 import { solveSaveStatusChip, type SolveDraftSaveState } from "@/lib/solveSaveStatus";
 import { readNetworkOnline, useNetworkStatus } from "@/lib/useNetworkStatus";
-import { attemptBelongsToSession, getOrCreateGuestId, getSession, getStudentSessionGeneration, getStudentSharedIdentityEpoch, guestLoginIdFor, saveSession, STORAGE_KEYS, STUDENT_SESSION_CHANGED_EVENT, STUDENT_SESSION_KEY, STUDENT_SHARED_IDENTITY_EPOCH_KEY, type StudentSession } from "@/utils/storage";
+import { attemptBelongsToSession, clearSession, getOrCreateGuestId, getSession, getStudentSessionGeneration, getStudentSharedIdentityEpoch, guestLoginIdFor, saveSession, STORAGE_KEYS, STUDENT_SESSION_CHANGED_EVENT, STUDENT_SESSION_KEY, STUDENT_SHARED_IDENTITY_EPOCH_KEY, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/questionResultBuilder";
@@ -463,8 +465,9 @@ function resolveExamGuestGroup(
 
 function entryIdentityLabel(session: StudentSession | null): string {
     if (!session) return "";
+    const name = displayStudentName(session.name);
     const scope = [session.regionName, session.groupName || session.groupId].filter(Boolean).join(" ");
-    return scope ? `${session.name} · ${scope}` : session.name;
+    return scope ? `${name} · ${scope}` : name;
 }
 
 function ExamPinDialog({
@@ -623,8 +626,26 @@ function ExamAccessBlockedDialog({
     );
 }
 
+const entryInputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '0.8rem 0.95rem',
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border)',
+    background: 'var(--background)',
+    color: 'var(--foreground)',
+    fontSize: '1rem',
+};
+
+const entryFieldLabelStyle: React.CSSProperties = {
+    fontSize: 'var(--type-caption)',
+    fontWeight: 800,
+    color: 'var(--muted)',
+};
+
 function ExamEntryConfirmDialog({
     examTitle,
+    questionCount,
+    durationMin,
     user,
     canUseStudent,
     guestName,
@@ -633,13 +654,17 @@ function ExamEntryConfirmDialog({
     suggestedGroupName,
     error,
     studentLoginHref,
+    switchingStudent,
     onGuestNameChange,
     onGroupCodeChange,
     onContinueStudent,
     onContinueGuest,
+    onSwitchStudent,
     onExit,
 }: {
     examTitle: string;
+    questionCount: number;
+    durationMin?: number;
     user: StudentSession | null;
     canUseStudent: boolean;
     guestName: string;
@@ -648,14 +673,66 @@ function ExamEntryConfirmDialog({
     suggestedGroupName: string;
     error: string;
     studentLoginHref: string;
+    switchingStudent: boolean;
     onGuestNameChange: (value: string) => void;
     onGroupCodeChange: (value: string) => void;
     onContinueStudent: () => void;
     onContinueGuest: () => void;
+    onSwitchStudent: () => void;
     onExit: () => void;
 }) {
     const studentLabel = entryIdentityLabel(user);
     const showStudentPanel = !!user && !user.isGuest;
+    const examMeta = [
+        questionCount > 0 ? `${questionCount}문항` : "",
+        durationMin && durationMin > 0 ? `제한 시간 ${durationMin}분` : "",
+    ].filter(Boolean).join(" · ");
+
+    const guestFields = (
+        <div style={{ display: 'grid', gap: '0.75rem' }}>
+            <p style={{ color: 'var(--text-warning, var(--warning))', fontSize: 'var(--type-caption)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                게스트 응시는 브라우저 쿠키를 지우거나 다른 브라우저를 사용하면 기존 시험을 이어서 볼 수 없습니다. 여러 기기에서 응시하려면 학생 로그인을 권장합니다.
+            </p>
+            {needsGroupCode && (
+                <label style={{ display: 'grid', gap: '0.45rem' }}>
+                    <span style={entryFieldLabelStyle}>반 코드</span>
+                    <input
+                        value={groupCode}
+                        onChange={(event) => onGroupCodeChange(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter') onContinueGuest();
+                        }}
+                        placeholder="선생님이 알려준 코드"
+                        autoCapitalize="characters"
+                        spellCheck={false}
+                        style={entryInputStyle}
+                    />
+                </label>
+            )}
+            <label style={{ display: 'grid', gap: '0.45rem' }}>
+                <span style={entryFieldLabelStyle}>게스트 이름</span>
+                <input
+                    value={guestName}
+                    onChange={(event) => onGuestNameChange(event.target.value)}
+                    onKeyDown={(event) => {
+                        if (event.key === 'Enter') onContinueGuest();
+                    }}
+                    placeholder="이름 (선생님 화면에 표시돼요)"
+                    autoComplete="name"
+                    style={entryInputStyle}
+                />
+            </label>
+            <button
+                type="button"
+                className={showStudentPanel ? "btn btn-secondary" : "btn btn-primary"}
+                onClick={onContinueGuest}
+                style={{ width: '100%', justifyContent: 'center' }}
+            >
+                게스트로 시험 보기
+            </button>
+        </div>
+    );
+
     return (
         <SolveDialogShell title="시험 입장 확인" onClose={onExit}>
             <div style={{ display: 'grid', gap: '1rem' }}>
@@ -665,125 +742,106 @@ function ExamEntryConfirmDialog({
                     border: '1px solid var(--border)',
                     background: 'var(--background)',
                 }}>
-                    <div style={{ fontSize: '0.78rem', fontWeight: 850, color: 'var(--muted)', marginBottom: '0.35rem' }}>
-                        공유 링크
+                    <div style={{ ...entryFieldLabelStyle, marginBottom: '0.35rem' }}>
+                        시험
                     </div>
-                    <div style={{ fontSize: '1rem', fontWeight: 850, lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                    <div style={{ fontSize: '1rem', fontWeight: 800, lineHeight: 1.45, wordBreak: 'keep-all' }}>
                         {examTitle}
                     </div>
+                    {examMeta && (
+                        <div className="solve-entry-exam-meta" style={{ marginTop: '0.3rem', fontSize: 'var(--type-label)', color: 'var(--muted)' }}>
+                            {examMeta}
+                        </div>
+                    )}
                     {suggestedGroupName && (
-                        <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 800 }}>
+                        <div style={{ marginTop: '0.35rem', fontSize: 'var(--type-label)', color: 'var(--primary)', fontWeight: 800 }}>
                             대상 반: {suggestedGroupName}
                         </div>
                     )}
                 </div>
 
-                {showStudentPanel && (
-                    <div style={{
-                        padding: '0.9rem 1rem',
-                        borderRadius: 'var(--radius-md)',
-                        border: canUseStudent ? '1px solid rgba(16,185,129,0.28)' : '1px solid rgba(245,158,11,0.28)',
-                        background: canUseStudent ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.1)',
-                    }}>
-                        <div style={{ fontSize: '0.78rem', fontWeight: 850, color: canUseStudent ? 'var(--success)' : 'var(--warning)', marginBottom: '0.25rem' }}>
-                            현재 앱 로그인
+                {showStudentPanel ? (
+                    <>
+                        <div
+                            className="solve-entry-current-student"
+                            style={{
+                                padding: '0.9rem 1rem',
+                                borderRadius: 'var(--radius-md)',
+                                border: canUseStudent ? '1px solid var(--border)' : '1px solid var(--warning-line)',
+                                background: canUseStudent ? 'var(--surface)' : 'var(--warning-soft)',
+                            }}
+                        >
+                            <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--foreground)', wordBreak: 'keep-all' }}>
+                                현재 로그인: {studentLabel}
+                            </div>
+                            {!canUseStudent && (
+                                <p style={{ marginTop: '0.45rem', fontSize: 'var(--type-caption)', color: 'var(--muted)', lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                                    로그인된 학생 정보가 이 시험의 대상 반과 맞지 않습니다. 다른 학생으로 로그인하거나 게스트로 입장하세요.
+                                </p>
+                            )}
                         </div>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 850, color: 'var(--foreground)', wordBreak: 'keep-all' }}>
-                            {studentLabel}
-                        </div>
-                        {!canUseStudent && (
-                            <p style={{ marginTop: '0.45rem', fontSize: '0.78rem', color: 'var(--muted)', lineHeight: 1.5, wordBreak: 'keep-all' }}>
-                                로그인된 학생 정보가 이 시험의 대상 반과 맞지 않습니다. 학생 홈에서 다시 로그인하거나 게스트로 입장하세요.
-                            </p>
+                        {error && (
+                            <div role="alert" style={{ color: 'var(--error)', fontSize: 'var(--type-label)', fontWeight: 700, lineHeight: 1.45 }}>
+                                {error}
+                            </div>
                         )}
-                    </div>
-                )}
-
-                <div style={{ display: 'grid', gap: '0.75rem' }}>
-                    {!showStudentPanel && (
-                        <p style={{ color: 'var(--muted)', fontSize: '0.9rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
-                            앱에 학생 로그인이 되어 있으면 학생 기록으로 응시할 수 있습니다. 로그인하지 않은 기기에서는 게스트 기록으로 저장됩니다.
-                        </p>
-                    )}
-                    <p style={{ color: 'var(--warning)', fontSize: '0.78rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
-                        게스트 응시는 브라우저 쿠키를 지우거나 다른 브라우저를 사용하면 기존 시험을 이어서 볼 수 없습니다. 여러 기기에서 응시하려면 학생 로그인을 권장합니다.
-                    </p>
-                    {needsGroupCode && (
-                        <label style={{ display: 'grid', gap: '0.45rem' }}>
-                            <span style={{ fontSize: '0.78rem', fontWeight: 850, color: 'var(--muted)' }}>반 코드</span>
-                            <input
-                                value={groupCode}
-                                onChange={(event) => onGroupCodeChange(event.target.value)}
-                                onKeyDown={(event) => {
-                                    if (event.key === 'Enter') onContinueGuest();
-                                }}
-                                placeholder="선생님이 알려준 코드"
-                                autoCapitalize="characters"
-                                spellCheck={false}
+                        <div style={{ display: 'grid', gap: '0.55rem' }}>
+                            {canUseStudent && (
+                                <button type="button" className="btn btn-primary" onClick={onContinueStudent} style={{ width: '100%', justifyContent: 'center' }}>
+                                    학생으로 시험 보기
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                className="btn solve-entry-switch-student"
+                                onClick={onSwitchStudent}
+                                disabled={switchingStudent}
+                                aria-busy={switchingStudent || undefined}
                                 style={{
                                     width: '100%',
-                                    padding: '0.8rem 0.95rem',
-                                    borderRadius: 'var(--radius-md)',
-                                    border: '1px solid var(--border)',
-                                    background: 'var(--background)',
-                                    color: 'var(--foreground)',
-                                    fontSize: '1rem',
+                                    justifyContent: 'center',
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: 'var(--muted)',
+                                    fontSize: 'var(--type-label)',
+                                    textDecoration: 'underline',
+                                    textUnderlineOffset: '0.2em',
                                 }}
-                            />
-                        </label>
-                    )}
-                    <label style={{ display: 'grid', gap: '0.45rem' }}>
-                        <span style={{ fontSize: '0.78rem', fontWeight: 850, color: 'var(--muted)' }}>게스트 이름</span>
-                        <input
-                            value={guestName}
-                            onChange={(event) => onGuestNameChange(event.target.value)}
-                            onKeyDown={(event) => {
-                                if (event.key === 'Enter') onContinueGuest();
-                            }}
-                            placeholder="미입력 시 Guest Student"
-                            autoComplete="name"
-                            style={{
-                                width: '100%',
-                                padding: '0.8rem 0.95rem',
-                                borderRadius: 'var(--radius-md)',
-                                border: '1px solid var(--border)',
-                                background: 'var(--background)',
-                                color: 'var(--foreground)',
-                                fontSize: '1rem',
-                            }}
-                        />
-                    </label>
-                    {error && (
-                        <div role="alert" style={{ color: 'var(--error)', fontSize: '0.82rem', fontWeight: 800, lineHeight: 1.45 }}>
-                            {error}
+                            >
+                                {switchingStudent ? "로그아웃하는 중…" : "내가 아니에요 · 다른 학생으로 로그인"}
+                            </button>
                         </div>
-                    )}
-                </div>
-
-                <div style={{ display: 'grid', gap: '0.55rem' }}>
-                    {canUseStudent && (
-                        <button type="button" className="btn btn-primary" onClick={onContinueStudent} style={{ width: '100%', justifyContent: 'center' }}>
-                            학생으로 시험 보기
-                        </button>
-                    )}
-                    <button
-                        type="button"
-                        className={canUseStudent ? "btn btn-secondary" : "btn btn-primary"}
-                        onClick={onContinueGuest}
-                        style={{ width: '100%', justifyContent: 'center' }}
-                    >
-                        게스트로 시험 보기
-                    </button>
-                    <Link href={studentLoginHref} className="btn" style={{
-                        width: '100%',
-                        justifyContent: 'center',
-                        background: 'transparent',
-                        border: '1px solid var(--border)',
-                        color: 'var(--muted)',
-                    }}>
-                        학생 로그인으로 보기
-                    </Link>
-                </div>
+                        <details className="solve-entry-guest-disclosure" open={!canUseStudent || undefined}>
+                            <summary style={{ cursor: 'pointer', fontSize: 'var(--type-label)', fontWeight: 700, color: 'var(--muted)', minHeight: 44, display: 'flex', alignItems: 'center' }}>
+                                게스트로 보기
+                            </summary>
+                            <div style={{ paddingTop: '0.5rem' }}>
+                                {guestFields}
+                            </div>
+                        </details>
+                    </>
+                ) : (
+                    <>
+                        <p style={{ color: 'var(--muted)', fontSize: '0.9rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
+                            학생 로그인을 하면 내 기록으로 저장돼요. 로그인하지 않으면 이 기기의 게스트 기록으로 저장됩니다.
+                        </p>
+                        {guestFields}
+                        {error && (
+                            <div role="alert" style={{ color: 'var(--error)', fontSize: 'var(--type-label)', fontWeight: 700, lineHeight: 1.45 }}>
+                                {error}
+                            </div>
+                        )}
+                        <Link href={studentLoginHref} className="btn" style={{
+                            width: '100%',
+                            justifyContent: 'center',
+                            background: 'transparent',
+                            border: '1px solid var(--border)',
+                            color: 'var(--muted)',
+                        }}>
+                            학생 로그인으로 보기
+                        </Link>
+                    </>
+                )}
             </div>
         </SolveDialogShell>
     );
@@ -1234,6 +1292,8 @@ export default function SolvePage() {
     const [entryGuestName, setEntryGuestName] = useState("");
     const [entryGroupCode, setEntryGroupCode] = useState("");
     const [entryError, setEntryError] = useState("");
+    const [autoEntryState, setAutoEntryState] = useState<"idle" | "entering" | "settled">("idle");
+    const [switchingStudent, setSwitchingStudent] = useState(false);
     const [linkClassCode, setLinkClassCode] = useState("");
     const [currentSolvePath, setCurrentSolvePath] = useState("");
     const [assignmentId, setAssignmentId] = useState("");
@@ -2055,7 +2115,7 @@ export default function SolvePage() {
                         const guestSession: StudentSession = {
                             studentId: `guest:${issued.guestId}`,
                             loginId: guestLoginIdFor(issued.guestId),
-                            name: session?.name || "Guest Student",
+                            name: session?.name || DEFAULT_GUEST_NAME,
                             isGuest: true,
                             identityType: "guest",
                             guestId: issued.guestId,
@@ -2583,7 +2643,7 @@ export default function SolvePage() {
         const submitter: StudentSession = {
             studentId: `guest:${guestId}`,
             loginId: guestLoginIdFor(guestId),
-            name: name.trim() || "Guest Student",
+            name: name.trim() || DEFAULT_GUEST_NAME,
             isGuest: true,
             identityType: 'guest',
             guestId,
@@ -2606,27 +2666,6 @@ export default function SolvePage() {
         const firstQuestionId = retakeConfig?.questionIds[0] || examData.questions[0]?.id;
         if (firstQuestionId) beginQuestionVisit(firstQuestionId);
     }, [beginQuestionVisit, examData, hasResumed, retakeConfig]);
-
-    // Retake links opened from the student's own review skip the entry-confirm
-    // dialog: identity and access are already established, so re-asking
-    // "학생으로 시험 보기" is pure friction. Guests and secure-remote mode keep
-    // the dialog (remote entry needs the explicit openStudentExam handshake).
-    const autoRetakeEntryRef = useRef(false);
-    useEffect(() => {
-        if (autoRetakeEntryRef.current || entryConfirmed) return;
-        if (!examData || !user || user.isGuest) return;
-        if (secureRemoteMode || solveAccess !== "ok") return;
-        const retakeFrom = new URLSearchParams(window.location.search).get("retakeFrom") || "";
-        if (!retakeFrom || retakeFrom.includes(":")) return;
-        const sourceAttempt = readLocalAttempts().find(candidate => candidate.id === retakeFrom);
-        if (!sourceAttempt || !attemptBelongsToSession(sourceAttempt, user)) return;
-        autoRetakeEntryRef.current = true;
-        let cancelled = false;
-        queueMicrotask(() => {
-            if (!cancelled) beginConfirmedEntry();
-        });
-        return () => { cancelled = true; };
-    }, [beginConfirmedEntry, entryConfirmed, examData, secureRemoteMode, solveAccess, user]);
 
     const applyDurableAttempt = useCallback((
         session: StudentAttemptSessionState,
@@ -2899,6 +2938,69 @@ export default function SolvePage() {
         beginConfirmedEntry();
     };
 
+    // A logged-in student who already chose this exam one screen earlier — the
+    // dashboard "시작" button, a login whose next= was this exam, or a retake
+    // link from their own review — skips the entry-confirm dialog: re-asking
+    // "학생으로 시험 보기" is pure friction. Entry still goes through
+    // continueEntryAsStudent, i.e. openStudentExam on the server or
+    // evaluateExamAccess locally; a failure falls back to the dialog with the
+    // error. PIN exams never reach this point before the PIN screen passes.
+    // A direct link with no recorded intent keeps the dialog, so a shared
+    // device cannot silently attribute the exam to whoever is logged in.
+    const isOwnRetakeEntry = (session: StudentSession): boolean => {
+        const retakeFrom = new URLSearchParams(window.location.search).get("retakeFrom") || "";
+        if (!retakeFrom || retakeFrom.includes(":")) return false;
+        const sourceAttempt = readLocalAttempts().find(candidate => candidate.id === retakeFrom);
+        return !!sourceAttempt && attemptBelongsToSession(sourceAttempt, session);
+    };
+    const autoEntryEligible = !entryConfirmed && !!examData && !!user && !user.isGuest && solveAccess === "ok";
+    const autoEntryTarget = autoEntryEligible && examData && user
+        ? { examId: examData.id, assignmentId: assignmentId || undefined, studentId: user.studentId }
+        : null;
+    const autoEntryCandidate = autoEntryState === "idle" && !!autoEntryTarget && !!user
+        && (isOwnRetakeEntry(user) || hasSolveEntryIntent(autoEntryTarget));
+    const autoEntryAttemptedRef = useRef(false);
+    useEffect(() => {
+        if (autoEntryAttemptedRef.current || !autoEntryCandidate || !autoEntryTarget) return;
+        autoEntryAttemptedRef.current = true;
+        const target = autoEntryTarget;
+        queueMicrotask(() => {
+            setAutoEntryState("entering");
+            void continueEntryAsStudent()
+                .catch(() => {
+                    setEntryError("시험을 여는 중 문제가 생겼습니다. 다시 시도해주세요.");
+                })
+                .finally(() => {
+                    // One-shot: burn the intent only now, so no render in
+                    // between can see "no intent" while entry is still running.
+                    consumeSolveEntryIntent(target);
+                    setAutoEntryState("settled");
+                });
+        });
+    });
+
+    const switchToAnotherStudent = async () => {
+        if (switchingStudent) return;
+        setSwitchingStudent(true);
+        // Clear the signed cookie first: with it still present the login page
+        // restores this student and redirects straight back here.
+        let cleared = false;
+        try {
+            cleared = (await clearStudentServerSession()).ok;
+        } catch {
+            cleared = false;
+        }
+        if (!cleared) {
+            setSwitchingStudent(false);
+            setEntryError("로그아웃하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.");
+            return;
+        }
+        clearSession();
+        router.push(currentSolvePath
+            ? `/?role=student&next=${encodeURIComponent(currentSolvePath)}`
+            : "/?role=student");
+    };
+
     const handleSubmitInternal = async (autoSubmitted = false, overrideSubmitter?: StudentSession) => {
         if (!examData) return;
         if (submittedRef.current) return;
@@ -2917,7 +3019,7 @@ export default function SolvePage() {
 
         if (!submitter) {
             if (autoSubmitted) {
-                submitter = await createGuestSubmitter("Guest Student");
+                submitter = await createGuestSubmitter(DEFAULT_GUEST_NAME);
                 if (!submitter) return;
             } else {
                 setGuestName("");
@@ -3840,6 +3942,25 @@ export default function SolvePage() {
         );
     }
 
+    const exitEntry = () => router.push(user && !user.isGuest ? "/student/dashboard" : "/?role=student");
+
+    if (canShowEntryConfirm && (autoEntryCandidate || autoEntryState === "entering")) {
+        return (
+            <div className="layout-main solve-page" style={{
+                background: 'var(--background)',
+                minHeight: 'var(--app-viewport-height, 100dvh)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1rem',
+            }}>
+                <p role="status" aria-live="polite" className="solve-auto-entry-status" style={{ color: 'var(--muted)', fontSize: 'var(--type-body-sm)' }}>
+                    시험을 여는 중…
+                </p>
+            </div>
+        );
+    }
+
     if (canShowEntryConfirm) {
         return (
             <div className="layout-main solve-page" style={{
@@ -3852,6 +3973,8 @@ export default function SolvePage() {
             }}>
                 <ExamEntryConfirmDialog
                     examTitle={examData.title}
+                    questionCount={examData.questions.length}
+                    durationMin={examData.durationMin}
                     user={user}
                     canUseStudent={canUseStudentEntry}
                     guestName={entryGuestName}
@@ -3868,9 +3991,11 @@ export default function SolvePage() {
                         setEntryGroupCode(next);
                         if (entryError) setEntryError("");
                     }}
+                    switchingStudent={switchingStudent}
                     onContinueStudent={() => { void continueEntryAsStudent(); }}
                     onContinueGuest={() => { void continueEntryAsGuest(); }}
-                    onExit={() => router.push("/")}
+                    onSwitchStudent={() => { void switchToAnotherStudent(); }}
+                    onExit={exitEntry}
                 />
             </div>
         );
