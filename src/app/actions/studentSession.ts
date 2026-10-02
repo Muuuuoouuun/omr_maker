@@ -104,6 +104,12 @@ export interface IssuedStudentIdentity {
     groupName: string;
     regionId?: string;
     regionName?: string;
+    /**
+     * The identity type the server signed into the HttpOnly cookie. Returned
+     * so the browser view model matches the signed session; the server never
+     * reads this back from the client (it re-derives it from the cookie).
+     */
+    identityType: "temporary" | "registered";
 }
 
 /**
@@ -171,6 +177,10 @@ function restoredSessionFromSignedIdentity(identity: StudentServerIdentity): Res
         identityType: identity.identityType,
         ...(isGuest && identity.guestId ? { guestId: identity.guestId } : {}),
     };
+}
+
+function issuedStudentIdentityType(identity: StudentServerIdentity): IssuedStudentIdentity["identityType"] {
+    return identity.identityType === "registered" ? "registered" : "temporary";
 }
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
@@ -367,12 +377,12 @@ export async function issueStudentSession(input: {
             groupName: clean(input.groupName) || "Unknown",
             regionId: clean(input.regionId) || undefined,
             regionName: clean(input.regionName) || undefined,
+            identityType: "temporary",
         };
         const result = await setSessionCookie({
             kind: "student",
             ...identity,
             organizationId: normalizeWorkspaceId(input.workspaceId) || undefined,
-            identityType: "temporary",
         });
         return { ok: result.ok, status: "degraded_local", identity: result.ok ? identity : undefined };
     }
@@ -520,6 +530,7 @@ export async function issueStudentSession(input: {
             groupName: clean(classRow.name),
             regionId: regionName,
             regionName,
+            identityType: "registered",
         };
         const now = Date.now();
         const verifiedStudent: StudentServerIdentity = {
@@ -652,6 +663,7 @@ export async function refreshStudentSession(): Promise<StudentSessionIssueResult
                 groupName: identity.groupName || "Unknown",
                 regionId: identity.regionId,
                 regionName: identity.regionName,
+                identityType: issuedStudentIdentityType(identity),
             },
         } : {}),
     };
@@ -682,6 +694,7 @@ export async function validateStudentSession(): Promise<StudentSessionIssueResul
             groupName: identity.groupName || "Unknown",
             regionId: identity.regionId,
             regionName: identity.regionName,
+            identityType: issuedStudentIdentityType(identity),
         },
     };
 }

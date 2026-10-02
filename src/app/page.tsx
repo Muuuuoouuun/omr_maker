@@ -691,7 +691,9 @@ export default function Home() {
           regionId: identity.regionId,
           regionName: identity.regionName,
           isGuest: false,
-          identityType: "temporary",
+          // Mirror the type the server signed (registered for invite/credential
+          // logins). Display-only: the server re-derives it from the cookie.
+          identityType: identity.identityType,
         };
         await finishStudentLogin(session, next, undefined, result.guestClaim);
       } catch {

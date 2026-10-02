@@ -108,8 +108,8 @@
 **원인:** 서버가 `registered`로 서명한 학생을 `src/app/page.tsx:694`가 `identityType: "temporary"`로 저장합니다. 그래서 로그인 직후 대시보드의 "선생님이 배정한 오답 보강 →" 링크(`dashboard/page.tsx:790`)가 보이지 않습니다.
 
 **변경**
-- [ ] `IssuedStudentIdentity`에 `identityType`을 추가합니다(`actions/studentSession.ts` 약 365, 530행).
-- [ ] `page.tsx:694`에서 그 값을 그대로 씁니다. 서버는 클라이언트가 보낸 identityType을 신뢰하지 않으므로 보안 영향이 없습니다.
+- [x] `IssuedStudentIdentity`에 `identityType`을 추가합니다(`actions/studentSession.ts` 약 365, 530행).
+- [x] `page.tsx:694`에서 그 값을 그대로 씁니다. 서버는 클라이언트가 보낸 identityType을 신뢰하지 않으므로 보안 영향이 없습니다.
 
 ### C-xs. 기타 문구 (XS)
 - [ ] `create/page.tsx:2506`의 충돌 토스트가 존재하지 않는 "복제본으로 저장"을 안내합니다. "새로고침해 서버본과 비교해주세요"로 바꿉니다.
