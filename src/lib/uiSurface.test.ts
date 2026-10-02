@@ -957,8 +957,10 @@ describe("service UI surface", () => {
         expect(homePage).toContain('type="button"');
         expect(homePage).toContain("teacherIdentifier");
         expect(homePage).toContain("saveTeacherSessionWithIdentity");
-        expect(homePage).toContain("shouldShowTeacherDeploymentHelp(error)");
-        expect(authMessages).toContain("Supabase가 아니라");
+        expect(homePage).toContain("teacherLoginHelpFor(error, { production: process.env.NODE_ENV === \"production\" })");
+        expect(homePage).toContain("teacherLoginHelp.operatorHelp");
+        expect(homePage).not.toContain("TEACHER_AUTH_DEPLOYMENT_HELP");
+        expect(authMessages).toContain("OMR_TEACHER_IDENTITY_MODE=self_service");
         expect(authMessages).toContain("TEACHER_ACCOUNTS");
         expect(homePage).toContain("학생번호 또는 이메일");
         expect(homePage).toContain("계정 ID처럼 사용합니다.");
@@ -975,7 +977,7 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("buildTeacherSessionDisplay");
         expect(settingsPage).toContain("getTeacherDeploymentReadiness");
         expect(settingsPage).toContain("DeploymentReadinessSummary");
-        expect(settingsPage).toContain("TEACHER_ACCOUNTS");
+        expect(settingsPage).toContain("학원 관리자에게 요청하세요");
         expect(settingsPage).toContain("clearTeacherAuthSession");
         expect(settingsPage).toContain("SECURITY_POSTURE_ITEMS");
         expect(settingsPage).toContain("SECURITY_INTEGRATION_ITEMS");

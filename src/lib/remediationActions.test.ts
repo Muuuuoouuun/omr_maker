@@ -53,6 +53,20 @@ describe("remediation server boundaries", () => {
         expect((await loadStudentRemediation()).status).toBe("error");
         expect(controls.rpc).not.toHaveBeenCalled();
     });
+    it("returns audience-specific copy without server-configuration wording", async () => {
+        controls.rpc.mockRejectedValue(new Error("down"));
+        const teacher = await manageRemediation(assign);
+        expect(teacher).toMatchObject({ status: "error", code: "service_unavailable" });
+        expect(JSON.stringify(teacher)).not.toMatch(/서버|설정/);
+        const student = await loadStudentRemediation();
+        expect(student).toEqual({ status: "error", code: "service_unavailable",
+            error: "보강 정보를 불러오지 못했어요. 잠시 후 다시 시도하고, 계속되면 선생님께 알려주세요." });
+        controls.student.status = "unauthenticated";
+        expect(await loadStudentRemediation()).toEqual({ status: "error", code: "unauthorized",
+            error: "등록 학생 계정으로 다시 로그인한 뒤 확인해주세요." });
+        controls.session = null;
+        expect(await manageRemediation(assign)).toEqual({ status: "error", code: "unauthorized", error: "담당 반과 계정 권한을 확인해주세요." });
+    });
     it("validates the retake action input, origin, and live cookie before delegation", async () => {
         for (const id of ["", " source ", "x".repeat(257), null]) {
             expect((await resolveStudentRemediationRetake(id as string)).status).toBe("blocked");

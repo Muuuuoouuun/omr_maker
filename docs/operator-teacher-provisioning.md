@@ -61,6 +61,27 @@ teacher through an approved secure channel, confirm successful login, and then s
 under the organization's credential-retention policy or delete it. Never paste it into tickets,
 chat, shell history, CI logs, or application configuration.
 
+## Adding or replacing teacher accounts (operator steps)
+
+The teacher settings screen (`/teacher/settings` → 보안) only tells teachers to ask their academy
+administrator; environment variables and redeploy steps are kept here instead. Which source is
+consulted depends on the identity mode (`src/lib/teacherIdentityModePolicy.ts`,
+`src/app/actions/auth.ts`):
+
+- **Production** is always `provisioned_only`. Teacher login accepts only owner accounts provisioned
+  in Supabase with the command above; `TEACHER_ACCOUNTS` and `TEACHER_LOGIN_ID`/`TEACHER_PASSWORD`
+  are never consulted there, even with `OMR_ALLOW_TEACHER_BOOTSTRAP_LOGIN=true`. To add an account,
+  run a new provisioning request (fresh `idempotencyKey`). `TEACHER_SESSION_SECRET` (or
+  `OMR_TEACHER_SESSION_SECRET`) must be set, otherwise login reports a session-signing error and
+  teachers see "지금은 교사 로그인을 사용할 수 없습니다. 학원 관리자에게 문의해주세요."
+- **Non-production** defaults to `provisioned_only` as well. Setting
+  `OMR_TEACHER_IDENTITY_MODE=self_service` enables self-service accounts (with Supabase) and the
+  environment bootstrap credentials `TEACHER_ACCOUNTS` or `TEACHER_LOGIN_ID`/`TEACHER_PASSWORD`
+  (or `TEACHER_PASSWORD_HASH`).
+  Change those values and restart the server (or redeploy the preview) to replace them. With none
+  set, local development falls back to the demo accounts `admin`/`admin123`, `owner1`/`owner123`
+  and `teacher1`/`teacher123` (see [deployment-test-accounts.md](deployment-test-accounts.md)).
+
 ## Stale lock recovery
 
 Lock creation uses a fully written and fsynced owner-only temporary file, an exclusive hard-link

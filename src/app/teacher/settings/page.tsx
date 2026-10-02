@@ -109,7 +109,7 @@ const SECURITY_POSTURE_ITEMS = [
     {
         key: "credential-source",
         label: "교사 계정 원천",
-        detail: "현재 교사 계정은 서버 환경변수에서만 읽고 브라우저 설정에는 저장하지 않습니다.",
+        detail: "교사 계정은 서버에서만 확인하고 브라우저 설정에는 저장하지 않습니다.",
         tone: "ready",
     },
     {
@@ -1334,11 +1334,10 @@ function SecuritySection({
                         <Shield size={15} color="var(--primary)" />
                         서버 인증으로 관리됨
                     </div>
-                    {/* keep-all keeps Korean words intact; overflowWrap:anywhere lets long
-                        env-var tokens (TEACHER_LOGIN_ID/TEACHER_PASSWORD) break instead of
-                        overflowing the card at narrow widths. */}
-                    <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.65, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
-                        교사 계정 정보는 브라우저 설정에 저장하지 않습니다. 운영 환경에서는 <code style={{ fontWeight: 800 }}>TEACHER_ACCOUNTS</code> 또는 <code style={{ fontWeight: 800 }}>TEACHER_LOGIN_ID</code>/<code style={{ fontWeight: 800 }}>TEACHER_PASSWORD</code> 서버 환경변수를 변경한 뒤 다시 배포해 교체하세요.
+                    {/* User-facing copy only: operator steps (provisioning, env vars) live in
+                        docs/operator-teacher-provisioning.md, never on the teacher's screen. */}
+                    <p style={{ color: 'var(--muted)', fontSize: 'var(--type-label)', lineHeight: 1.65, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
+                        교사 계정 정보는 브라우저 설정에 저장하지 않습니다. 계정을 추가하거나 비밀번호를 바꾸려면 학원 관리자에게 요청하세요.
                     </p>
                 </div>
             </Field>

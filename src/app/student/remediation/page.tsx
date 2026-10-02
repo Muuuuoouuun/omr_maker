@@ -19,7 +19,7 @@ export default function StudentRemediationPage() {
             const result = await loadStudentRemediation();
             if (current !== generation.current) return;
             if (result.status === "loaded") setCases(result.cases);
-            else setError(result.code === "unauthorized" ? "등록 학생 계정으로 로그인해주세요." : result.error);
+            else setError(result.error); // server returns student-facing copy
         } catch { if (current === generation.current) setError("보강 목록을 불러오지 못했습니다. 다시 시도해주세요."); }
         finally { if (current === generation.current) setLoading(false); }
     }, []);

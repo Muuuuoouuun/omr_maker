@@ -82,13 +82,13 @@
 **깨지는 테스트:** `e2e/student-simplification.spec.ts:227-279`, `e2e/ios-mobile-layout.spec.ts:509-518, 633-660`(→ `?preview=teacher`)
 
 ### A6. 사용자 문구와 운영자 문구 분리 (S)
-- [ ] `teacherLoginHelpFor(error, { production })`를 만듭니다.
+- [x] `teacherLoginHelpFor(error, { production })`를 만듭니다.
   - 비밀번호가 틀렸을 때는 환경변수 안내를 붙이지 않습니다.
   - 설정 오류는 프로덕션에서 "지금은 교사 로그인을 사용할 수 없습니다. 학원 관리자에게 문의해주세요."로 보여줍니다.
   - 운영자용 안내는 비프로덕션에서만 보여줍니다.
   - 대상: `src/lib/teacherAuthMessages.ts`, `src/app/page.tsx:1469`
-- [ ] `teacher/settings/page.tsx:1341`의 환경변수·재배포 안내를 "학원 관리자에게 요청하세요"로 바꿉니다. CLI 안내는 `docs/operator-teacher-provisioning.md`로 옮깁니다.
-- [ ] `actions/remediation.ts`를 `fail(code, audience)`로 바꿉니다. 학생용 문구는 "보강 정보를 불러오지 못했어요. 잠시 후 다시 시도하고, 계속되면 선생님께 알려주세요."입니다.
+- [x] `teacher/settings/page.tsx:1341`의 환경변수·재배포 안내를 "학원 관리자에게 요청하세요"로 바꿉니다. CLI 안내는 `docs/operator-teacher-provisioning.md`로 옮깁니다.
+- [x] `actions/remediation.ts`를 `fail(code, audience)`로 바꿉니다. 학생용 문구는 "보강 정보를 불러오지 못했어요. 잠시 후 다시 시도하고, 계속되면 선생님께 알려주세요."입니다.
 
 **깨지는 테스트:** `teacherAuthMessages.test.ts:12-29`, `persistenceIntegration.test.ts:131`
 

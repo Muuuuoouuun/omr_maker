@@ -128,7 +128,11 @@ describe("persistence integration", () => {
         const source = readProjectFile("src/app/teacher/settings/page.tsx");
         const teacherSession = readProjectFile("src/lib/teacherSession.ts");
 
-        expect(source).toContain("TEACHER_ACCOUNTS");
+        // Account changes are requested from the academy admin; operator env/redeploy
+        // steps live in docs/operator-teacher-provisioning.md, not on this screen.
+        expect(source).toContain("학원 관리자에게 요청하세요");
+        expect(source).not.toContain("TEACHER_ACCOUNTS");
+        expect(source).not.toContain("다시 배포");
         expect(source).toContain("clearTeacherAuthSession");
         expect(source).toContain("clearTeacherSession");
         expect(source).toContain("buildTeacherSessionDisplay");

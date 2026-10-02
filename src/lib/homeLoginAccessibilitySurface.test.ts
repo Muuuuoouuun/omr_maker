@@ -32,7 +32,8 @@ describe("home login accessibility and recovery", () => {
 
         expect(teacherLogin).toContain('setError(res.error || "잘못된 비밀번호입니다.");');
         expect(teacherFeedback).toContain('id="teacher-login-feedback"');
-        expect(teacherFeedback).toContain("{error ? (");
+        expect(homeSource).toContain("const teacherLoginHelp = error\n    ? teacherLoginHelpFor(error,");
+        expect(teacherFeedback).toContain("{teacherLoginHelp ? (");
         expect(teacherFeedback).toContain('<p role="alert"');
         expect(homeSource).not.toContain('setTimeout(() => setError(""),');
     });

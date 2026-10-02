@@ -41,7 +41,7 @@ import {
   type RosterGroup,
   type RosterStudent,
 } from "@/lib/rosterStorage";
-import { TEACHER_AUTH_DEPLOYMENT_HELP, shouldShowTeacherDeploymentHelp } from "@/lib/teacherAuthMessages";
+import { teacherLoginHelpFor } from "@/lib/teacherAuthMessages";
 import {
   hasStudentStartCode,
   normalizeStartCodeInput,
@@ -234,6 +234,10 @@ export default function Home() {
   const [studentLoginPending, setStudentLoginPending] = useState(false);
   const [rememberStudentOnDevice, setRememberStudentOnDevice] = useState(false);
   const clearLoginError = () => setError("");
+  // Teacher login copy: config errors never leak env-var guidance in production.
+  const teacherLoginHelp = error
+    ? teacherLoginHelpFor(error, { production: process.env.NODE_ENV === "production" })
+    : null;
   const teacherIdentifierInvalid = Boolean(error && (error.includes("아이디") || error.includes("계정")));
   const teacherPasswordInvalid = Boolean(error && error.includes("비밀번호"));
   const teacherAccountFormLabel = visibleTeacherAccountMode === "signup"
@@ -1464,14 +1468,14 @@ export default function Home() {
                     aria-live="polite"
                     style={{ marginBottom: "1.25rem", display: "grid", gap: "0.35rem" }}
                   >
-                    {error ? (
+                    {teacherLoginHelp ? (
                       <>
                         <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", fontWeight: 600 }}>
-                          {error}
+                          {teacherLoginHelp.message}
                         </p>
-                        {shouldShowTeacherDeploymentHelp(error) && (
+                        {teacherLoginHelp.operatorHelp && (
                           <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", lineHeight: 1.5, wordBreak: "keep-all" }}>
-                            {TEACHER_AUTH_DEPLOYMENT_HELP}
+                            {teacherLoginHelp.operatorHelp}
                           </p>
                         )}
                       </>
