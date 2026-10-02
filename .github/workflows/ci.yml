@@ -135,6 +135,7 @@ jobs:
         env:
           CI: "true"
           OMR_SHOWCASE_ENTRY_DIAGNOSTICS: "1"
+          OMR_SHOWCASE_ENTRY_PHASE: "suite"
       - name: Repeat previous showcase readiness failures without retries
         if: ${{ !cancelled() }}
         shell: bash
@@ -161,6 +162,38 @@ jobs:
           CI: "true"
           PLAYWRIGHT_ENABLE_WEBKIT: "1"
           OMR_SHOWCASE_ENTRY_DIAGNOSTICS: "1"
+          OMR_SHOWCASE_ENTRY_PHASE: "repeat"
+      - name: Verify all five attempts of each prior failure were measured
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          node - "${{ matrix.shard }}" <<'NODE'
+          const assert = require('node:assert/strict');
+          const { readFileSync, readdirSync } = require('node:fs');
+          const { join } = require('node:path');
+          const expected = {
+            1: { project: 'ios-se-webkit', scenarios: ['live-pause'] },
+            2: { project: 'tablet-ios-webkit-teacher', scenarios: ['metrics-next-action', 'progressive-results'] },
+            3: { project: 'tablet-ios-webkit-landscape-teacher', scenarios: ['roster-toast'] },
+          }[process.argv[2]];
+          const directory = 'showcase-entry-diagnostics';
+          const records = readdirSync(directory).filter(file => file.endsWith('.json'))
+            .map(file => JSON.parse(readFileSync(join(directory, file), 'utf8')))
+            .filter(record => record.phase === 'repeat');
+          assert.equal(records.length, 5 * expected.scenarios.length, 'Missing or duplicate measured attempt');
+          for (const scenario of expected.scenarios) {
+            for (let repeat = 0; repeat < 5; repeat++) {
+              const attempts = records.filter(record => record.project === expected.project
+                && record.scenario === scenario && record.repeatEachIndex === repeat && record.retry === 0);
+              assert.equal(attempts.length, 1, 'Each original scenario must have exactly five unretried measurements');
+              const report = attempts[0].report;
+              assert.equal(report.version, 1);
+              assert.ok(report.outcome === 'passed' || report.outcome === 'failed');
+              assert.ok(Array.isArray(report.events) && report.events.length <= 500);
+            }
+          }
+          console.log(JSON.stringify({ measuredAttempts: records.length, retries: 0 }));
+          NODE
       - name: Upload sanitized showcase entry diagnostics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

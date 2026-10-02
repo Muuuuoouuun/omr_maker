@@ -13,6 +13,8 @@ function snapshot() {
         dashboardRoute: true, showcaseFlag: true,
         overviewPresent: true, overviewVisible: true,
         demoButtonPresent: false, demoButtonEnabled: false, demoButtonVisible: false,
+        inputDelivered: { pointerDown: null, pointerUp: null, touchStart: null, touchEnd: null, click: null },
+        focusedTeacherIdentifier: false,
         errorAlertPresent: false, readyState: "complete",
         serviceWorkerSupported: true, serviceWorkerControlled: false,
         performance: { resourceCount: 3, sampledResourceCount: 3,
@@ -70,6 +72,34 @@ afterEach(() => {
 });
 
 describe("showcase entry diagnostics", () => {
+    it("retains only boolean native-delivery flags and never arbitrary event or focus payloads", async () => {
+        const { page, playwrightPage } = mockPage();
+        page.evaluate.mockResolvedValue({ ...snapshot(), focusedTeacherIdentifier: CANARY,
+            inputDelivered: { pointerDown: true, pointerUp: false, touchStart: CANARY, touchEnd: 1, click: true, rawEvent: CANARY },
+        });
+        const report = await startShowcaseEntryDiagnostics(playwrightPage).finish("failed");
+        expect(report.snapshot?.inputDelivered).toEqual({
+            pointerDown: true, pointerUp: false, touchStart: null, touchEnd: null, click: true,
+        });
+        expect(report.snapshot?.focusedTeacherIdentifier).toBe(false);
+        expect(JSON.stringify(report)).not.toContain(CANARY);
+    });
+
+    it("reads fixed native-delivery indicators without exposing the focused input value", async () => {
+        const { page, playwrightPage } = mockPage();
+        document.body.innerHTML = '<input id="teacher-identifier"><button class="mockup-login-button" data-omr-diagnostic-pointerdown="1" data-omr-diagnostic-pointerup="1" data-omr-diagnostic-touchstart="1" data-omr-diagnostic-touchend="1" data-omr-diagnostic-click="0"></button>';
+        const input = document.getElementById("teacher-identifier") as HTMLInputElement;
+        input.value = CANARY;
+        input.focus();
+        page.evaluate.mockImplementation(async callback => callback());
+        const report = await startShowcaseEntryDiagnostics(playwrightPage).finish("failed");
+        expect(report.snapshot?.inputDelivered).toEqual({
+            pointerDown: true, pointerUp: true, touchStart: true, touchEnd: true, click: false,
+        });
+        expect(report.snapshot?.focusedTeacherIdentifier).toBe(true);
+        expect(JSON.stringify(report)).not.toContain(CANARY);
+    });
+
     it("records a compact successful first-attempt timeline and cleans up every listener", async () => {
         const { page, playwrightPage } = mockPage();
         let now = 100;

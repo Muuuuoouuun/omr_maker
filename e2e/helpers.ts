@@ -1,8 +1,15 @@
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { startShowcaseEntryDiagnostics } from "./showcaseEntryDiagnostics";
+import { activateByInput } from "./inputActivation";
+
+export async function activateControl(control: Locator) {
+    // Emulated phone/tablet contexts must exercise native touch events rather
+    // than a mouse-only click. One action; failures are never retried here.
+    await activateByInput(control, test.info().project.use.hasTouch === true);
+}
 
 export function exactNextActionId(filename: string, exportedName: string, worker: string): string {
     const buildDirectory = process.env.OMR_ISOLATED_E2E === "1" ? ".next-e2e" : ".next";
@@ -70,7 +77,7 @@ export async function loginAsTeacher(page: Page, nextPath = "/teacher/dashboard"
     await expect(submitButton).toBeEnabled({ timeout: 30_000 });
     await page.locator("#teacher-identifier").fill(identifier);
     await page.getByPlaceholder("비밀번호 입력").fill(password);
-    await submitButton.click();
+    await activateControl(submitButton);
     await expect(page).toHaveURL(new RegExp(`${escapeRegExp(nextPath)}(?:[?#].*)?$`), { timeout: 25_000 });
 }
 
@@ -102,7 +109,22 @@ export async function loginAsShowcaseTeacher(page: Page) {
         const showcaseButton = page.getByRole("button", { name: "데모 계정으로 둘러보기" });
         await expect(showcaseButton).toBeEnabled({ timeout: 30_000 });
         diagnostics?.stage("button-enabled");
-        await showcaseButton.click();
+        if (diagnostics) {
+            // Observe native delivery without dispatching, replaying, or
+            // preventing any input. Fixed booleans contain no form values.
+            try {
+                await showcaseButton.evaluate(button => {
+                    for (const type of ["pointerdown", "pointerup", "touchstart", "touchend", "click"] as const) {
+                        const key = `data-omr-diagnostic-${type}`;
+                        button.setAttribute(key, "0");
+                        button.addEventListener(type, () => button.setAttribute(key, "1"), { once: true, capture: true, passive: true });
+                    }
+                });
+            } catch {
+                console.warn("Showcase input delivery could not be observed.");
+            }
+        }
+        await activateControl(showcaseButton);
         diagnostics?.stage("clicked");
         await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1(?:#.*)?$/, { timeout: 25_000 });
         diagnostics?.stage("dashboard-url");
@@ -123,14 +145,17 @@ export async function loginAsShowcaseTeacher(page: Page) {
             try {
                 const report = await diagnostics.finish(outcome);
                 const info = test.info();
+                const phase = process.env.OMR_SHOWCASE_ENTRY_PHASE === "repeat" ? "repeat" : "suite";
                 const testKey = createHash("sha256").update(info.testId).digest("hex").slice(0, 16);
                 const directory = join(process.cwd(), "showcase-entry-diagnostics");
                 mkdirSync(directory, { recursive: true });
-                const file = `${testKey}-${info.repeatEachIndex}-${info.retry}-${showcaseDiagnosticSequence++}.json`;
+                const file = `${phase}-${testKey}-${info.repeatEachIndex}-${info.retry}-${showcaseDiagnosticSequence++}.json`;
                 writeFileSync(join(directory, file), JSON.stringify({
                     testKey,
+                    phase,
                     project: showcaseDiagnosticProjects.has(info.project.name) ? info.project.name : "other",
                     scenario: showcaseDiagnosticScenario(info.title),
+                    inputMethod: info.project.use.hasTouch === true ? "touch" : "mouse",
                     repeatEachIndex: info.repeatEachIndex,
                     retry: info.retry,
                     report,

@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { continueSolveEntryIfPresent, loginAsShowcaseTeacher, loginAsTeacher } from "./helpers";
+import { activateControl, continueSolveEntryIfPresent, loginAsShowcaseTeacher, loginAsTeacher, teacherLoginFixture } from "./helpers";
 
 const STUDENT_NAME = "김모바일학생";
 const PENDING_EXAM_TITLE = "여름방학을 앞두고 차근차근 준비하는 국어 독해와 문법 종합 진단 평가";
@@ -694,8 +694,9 @@ test.describe("iPhone WebKit mobile layout", () => {
         await toolsPanel.getByLabel("선생님 모드").click();
         const authDialog = page.getByRole("dialog", { name: "선생님 모드 인증" });
         await expect(authDialog).toBeVisible();
-        await authDialog.getByPlaceholder("아이디 또는 이메일").fill("admin");
-        await authDialog.getByPlaceholder("비밀번호").fill("admin123");
+        const { identifier, password } = teacherLoginFixture();
+        await authDialog.getByPlaceholder("아이디 또는 이메일").fill(identifier);
+        await authDialog.getByPlaceholder("비밀번호").fill(password);
         await authDialog.getByRole("button", { name: "인증" }).click();
         await expect(authDialog).toBeHidden({ timeout: 15_000 });
 
@@ -875,7 +876,7 @@ test.describe("iPhone WebKit mobile layout", () => {
         await expect.poll(() => readCountdownSeconds(timer), { timeout: 5_000 }).toBeGreaterThan(0);
         const beforePause = await readCountdownSeconds(timer);
 
-        await pause.click();
+        await activateControl(pause);
         await expect(actions.getByRole("button", { name: "화면 갱신 재개" })).toHaveAttribute("aria-pressed", "true");
         await expect.poll(() => readCountdownSeconds(timer), {
             message: "countdown froze while only screen data refresh was paused",
@@ -884,7 +885,7 @@ test.describe("iPhone WebKit mobile layout", () => {
 
         const whilePaused = await readCountdownSeconds(timer);
         const resume = actions.getByRole("button", { name: "화면 갱신 재개" });
-        await resume.click();
+        await activateControl(resume);
         expect(await readCountdownSeconds(timer), "resume jumped back to a stale countdown").toBeLessThanOrEqual(whilePaused);
         await expect(actions.getByRole("button", { name: "화면 갱신 일시정지" })).toHaveAttribute("aria-pressed", "false");
     });

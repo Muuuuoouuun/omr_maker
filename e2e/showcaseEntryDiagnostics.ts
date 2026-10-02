@@ -47,6 +47,8 @@ type ReadinessSnapshot = {
     demoButtonPresent: boolean;
     demoButtonEnabled: boolean;
     demoButtonVisible: boolean;
+    inputDelivered: { pointerDown: boolean | null; pointerUp: boolean | null; touchStart: boolean | null; touchEnd: boolean | null; click: boolean | null };
+    focusedTeacherIdentifier: boolean;
     errorAlertPresent: boolean;
     readyState: "loading" | "interactive" | "complete" | "unknown";
     serviceWorkerSupported: boolean;
@@ -153,6 +155,14 @@ function sanitizeSnapshot(value: unknown): ReadinessSnapshot {
         demoButtonPresent: source.demoButtonPresent === true,
         demoButtonEnabled: source.demoButtonEnabled === true,
         demoButtonVisible: source.demoButtonVisible === true,
+        inputDelivered: {
+            pointerDown: typeof source.inputDelivered?.pointerDown === "boolean" ? source.inputDelivered.pointerDown : null,
+            pointerUp: typeof source.inputDelivered?.pointerUp === "boolean" ? source.inputDelivered.pointerUp : null,
+            touchStart: typeof source.inputDelivered?.touchStart === "boolean" ? source.inputDelivered.touchStart : null,
+            touchEnd: typeof source.inputDelivered?.touchEnd === "boolean" ? source.inputDelivered.touchEnd : null,
+            click: typeof source.inputDelivered?.click === "boolean" ? source.inputDelivered.click : null,
+        },
+        focusedTeacherIdentifier: source.focusedTeacherIdentifier === true,
         errorAlertPresent: source.errorAlertPresent === true,
         readyState: allowListed(source.readyState, ["loading", "interactive", "complete", "unknown"], "unknown"),
         serviceWorkerSupported: source.serviceWorkerSupported === true,
@@ -183,6 +193,10 @@ async function readinessSnapshot(page: Page): Promise<Pick<ShowcaseEntryDiagnost
                 };
                 const overview = document.querySelector('[aria-label="데모 계정 대시보드 개요"]');
                 const button = document.querySelector<HTMLButtonElement>("button.mockup-login-button");
+                const delivered = (type: string): boolean | null => {
+                    const value = button?.getAttribute(`data-omr-diagnostic-${type}`);
+                    return value === "1" ? true : value === "0" ? false : null;
+                };
                 const resources = performance.getEntriesByType("resource");
                 const sampledResources = resources.slice(0, 500);
                 const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
@@ -194,6 +208,8 @@ async function readinessSnapshot(page: Page): Promise<Pick<ShowcaseEntryDiagnost
                     demoButtonPresent: button !== null,
                     demoButtonEnabled: button !== null && !button.disabled && button.getAttribute("aria-disabled") !== "true",
                     demoButtonVisible: visible(button),
+                    inputDelivered: { pointerDown: delivered("pointerdown"), pointerUp: delivered("pointerup"), touchStart: delivered("touchstart"), touchEnd: delivered("touchend"), click: delivered("click") },
+                    focusedTeacherIdentifier: document.activeElement?.id === "teacher-identifier",
                     errorAlertPresent: document.querySelector('[role="alert"]') !== null,
                     readyState: document.readyState,
                     serviceWorkerSupported: "serviceWorker" in navigator,

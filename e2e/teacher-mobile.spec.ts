@@ -2,7 +2,7 @@ import { devices, expect, test, type Locator, type Page } from "@playwright/test
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { registerCanonicalRemoteFixture } from "./fixtures/canonical-remote-fixture";
-import { loginAsShowcaseTeacher, loginAsTeacher, teacherLoginFixture } from "./helpers";
+import { activateControl, loginAsShowcaseTeacher, loginAsTeacher, teacherLoginFixture } from "./helpers";
 import { mintTeacherToken } from "../src/lib/teacherAuth";
 import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
 import {
@@ -407,20 +407,20 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         const scoreMetric = page.getByRole("button", { name: /전체 평균 점수.*점수 원인 보기/ });
         await expectTouchTarget(scoreMetric);
         await expect(scoreMetric).toContainText(/직전 시험보다 .*점 (상승|하락)/);
-        await scoreMetric.click();
+        await activateControl(scoreMetric);
         await expect(page).toHaveURL(/tab=exam/, { timeout: 25_000 });
         const usesSidebar = await page.evaluate(() => window.matchMedia("(min-width: 1121px)").matches);
         const sidebar = page.getByRole("complementary", { name: "교사 대시보드 내비게이션" });
         if (usesSidebar) {
             await expect(sidebar.getByRole("button", { name: "결과 분석" })).toHaveAttribute("aria-current", "page");
-            await sidebar.getByRole("button", { name: "대시보드", exact: true }).click();
+            await activateControl(sidebar.getByRole("button", { name: "대시보드", exact: true }));
         } else {
             await expect(page.getByRole("button", { name: "시험별 분석" })).toHaveAttribute("aria-pressed", "true");
-            await page.getByRole("button", { name: "개요", exact: true }).click();
+            await activateControl(page.getByRole("button", { name: "개요", exact: true }));
         }
         const studentMetric = page.getByRole("button", { name: /명단 학생.*학생별 성취 보기/ });
         await expectTouchTarget(studentMetric);
-        await studentMetric.click();
+        await activateControl(studentMetric);
         await expect(page).toHaveURL(/tab=student/, { timeout: 25_000 });
         if (usesSidebar) {
             await expect(sidebar.getByRole("button", { name: "학생 성취도" })).toHaveAttribute("aria-current", "page");
@@ -445,7 +445,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
 
         const moreButton = page.getByRole("button", { name: /다음 6명 보기/ });
         await expect(moreButton).toContainText("다음 6명 보기");
-        await moreButton.click();
+        await activateControl(moreButton);
         await expect(cards).toHaveCount(12);
 
         await page.getByLabel("결과 정렬").selectOption("name");
@@ -453,7 +453,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expect(cards.first()).toContainText("강다은");
         const sortedMoreButton = page.getByRole("button", { name: /다음 6명 보기/ });
         await expect(sortedMoreButton).toBeVisible();
-        await sortedMoreButton.click();
+        await activateControl(sortedMoreButton);
         await expect(cards).toHaveCount(12);
         await expectNoHorizontalOverflow(page);
     });
@@ -505,7 +505,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         const cards = page.getByTestId("teacher-users-mobile-card");
         await expect(cards).toHaveCount(1);
         await expect(cards.first()).toContainText("이서연");
-        await cards.first().getByRole("button", { name: "이서연 상세 보기" }).click();
+        await activateControl(cards.first().getByRole("button", { name: "이서연 상세 보기" }));
         await expect(page.getByRole("heading", { name: "학생 상세" })).toBeVisible({ timeout: 15_000 });
 
         // Showcase/demo already has a persistent inline source notice. Startup
