@@ -136,7 +136,10 @@ const requiredStringsByFile: Record<string, string[]> = {
     ],
     "src/app/student/dashboard/page.tsx": [
         "학생 로그인",
-        "완료한 원시험",
+        "완료한 시험",
+        "내 평균 점수",
+        "지난 기록 보기 →",
+        "지금 풀 수 있는 시험이",
     ],
     "src/components/StudentGuestRecoveryPanel.tsx": [
         "미검증 로컬 기록 복구",
@@ -148,6 +151,9 @@ const requiredStringsByFile: Record<string, string[]> = {
         "미완료 과제",
         "완료 기록",
         "모든 과제를 완료했습니다!",
+        "지금 풀 수 있어요",
+        "마감된 과제",
+        "미응시 마감",
         "시작",
         "복습",
     ],

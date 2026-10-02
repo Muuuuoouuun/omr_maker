@@ -166,7 +166,7 @@ test.describe("student UI simplification regressions", () => {
         await expect(page.getByTestId("student-dashboard-loading")).toBeHidden({ timeout: 15_000 });
         await expect(page.locator(".student-dashboard-brand").getByText(/^(학생|게스트)$/)).toHaveCount(0);
         await expect(page.locator(".student-dashboard-login-id")).toHaveCount(0);
-        await expect(page.getByText("완료한 원시험", { exact: true })).toHaveCount(0);
+        await expect(page.getByText("완료한 시험", { exact: true })).toHaveCount(0);
 
         const welcome = page.locator(".student-dashboard-welcome h1");
         await expect(welcome).toHaveAttribute("title", `${LONG_TOKEN}학생님`);
