@@ -13,6 +13,7 @@ import {
 } from "@/lib/studentAttemptClient";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { baseAttemptsOnly, buildAttemptScoreLookup, retakeAttemptsOnly } from "@/lib/attemptScores";
+import { recentScoreTrend } from "@/lib/recentScoreTrend";
 import { loadStudentReturnedFeedbackWithDevFallback } from "@/lib/studentFeedbackClient";
 import {
     INITIAL_CAPACITY_EXCEEDED_ERROR,
@@ -164,16 +165,14 @@ export default function HistoryPage() {
         const pcts = baseAttempts.map(attempt => scoreByAttemptId.get(attempt.id)?.scorePercent ?? 0);
         const avg = pcts.reduce((s, v) => s + v, 0) / pcts.length;
         const best = Math.max(...pcts);
-        const sortedByDate = [...baseAttempts].sort(
-            (a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime()
-        );
-        const trend = sortedByDate.slice(0, 3).map(attempt => scoreByAttemptId.get(attempt.id)?.scorePercent ?? 0);
+        // Oldest → newest of the latest attempts, matching the "이전 → 최근" label.
+        const trend = recentScoreTrend(baseAttempts, attempt => scoreByAttemptId.get(attempt.id)?.scorePercent ?? 0);
         return {
             total: baseAttempts.length,
             retakeTotal: retakeAttempts.length,
             avgPct: Math.round(avg),
             bestPct: Math.round(best),
-            trend: trend.map(v => Math.round(v)),
+            trend,
         };
     }, [baseAttempts, retakeAttempts.length, scoreByAttemptId]);
 
@@ -209,11 +208,14 @@ export default function HistoryPage() {
 
     return (
         <div className="layout-main" style={{ minHeight: '100vh', background: 'var(--background)' }}>
-            <header className="header" style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
+            <header className="header student-history-header" style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
                 <div className="container header-content">
                     <BrandLogo />
-                    <nav>
-                        <Link href="/student/history" className="nav-link" style={{ fontWeight: 'bold', color: 'var(--primary)' }}>
+                    <nav aria-label="학생 메뉴" className="student-history-nav">
+                        <Link href="/student/dashboard" className="nav-link">
+                            대시보드
+                        </Link>
+                        <Link href="/student/history" className="nav-link" aria-current="page" style={{ fontWeight: 'bold', color: 'var(--primary)' }}>
                             내 시험 기록
                         </Link>
                     </nav>
@@ -374,7 +376,7 @@ export default function HistoryPage() {
                             <div><span>원시험 응시</span><strong>{summary.total}회</strong></div>
                             <div><span>재시험 회복</span><strong>{summary.retakeTotal}회</strong></div>
                             <div>
-                                <span>최근 흐름</span>
+                                <span>최근 흐름 (이전 → 최근)</span>
                                 <strong className="is-trend">{summary.trend.length > 0 ? summary.trend.map(v => `${v}%`).join(' → ') : '-'}</strong>
                             </div>
                         </section>

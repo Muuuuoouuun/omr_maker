@@ -93,8 +93,8 @@
 **깨지는 테스트:** `teacherAuthMessages.test.ts:12-29`, `persistenceIntegration.test.ts:131`
 
 ### A7. 학생 기록 "최근 흐름" 방향과 내비게이션 (S)
-- [ ] `student/history/page.tsx:167-170`: 순수 함수 `recentScoreTrend()`로 과거 → 최신 순을 만들고, 라벨을 "최근 흐름 (이전 → 최근)"으로 바꿉니다.
-- [ ] 헤더(213-221)에 "대시보드" 링크와 `aria-current`를 추가합니다.
+- [x] `student/history/page.tsx:167-170`: 순수 함수 `recentScoreTrend()`로 과거 → 최신 순을 만들고, 라벨을 "최근 흐름 (이전 → 최근)"으로 바꿉니다.
+- [x] 헤더(213-221)에 "대시보드" 링크와 `aria-current`를 추가합니다.
 
 ### A8. 빠른 정답 입력과 문항 수 안내 (S)
 - [ ] 신규 `src/lib/fastAnswerInput.ts`: `-`(필요 시 `0`, `.`)를 빈 답으로 보고 자리를 유지합니다. 지금은 `create/page.tsx:2839-2857`에서 `-`가 지워지면서 뒤 정답이 한 칸씩 당겨집니다. (PO 결정 A-5)

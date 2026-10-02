@@ -3413,6 +3413,25 @@ html[data-motion="off"] :where(
   }
 }
 
+.student-history-nav {
+  display: flex;
+  align-items: center;
+}
+
+/* Two header links (대시보드 · 내 시험 기록) must fit one row on 320px phones:
+   drop the wordmark (the mark keeps the accessible name) and tighten links. */
+@media (max-width: 480px) {
+  .student-history-header .brand-logo__text {
+    display: none;
+  }
+
+  .student-history-nav .nav-link {
+    margin-left: 0;
+    padding: 0.5rem 0.65rem;
+    white-space: nowrap;
+  }
+}
+
 @media (max-width: 640px) {
   .student-history-identity {
     display: grid;
