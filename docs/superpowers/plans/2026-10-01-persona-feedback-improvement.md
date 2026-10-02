@@ -147,12 +147,12 @@
 - [x] `saveDraftSnapshot`의 catch에서 상태를 `failed`로 바꿉니다.
 
 ### A5. 오프라인 배너와 안전한 결과 화면 이동 (M)
-- [ ] 신규 `src/lib/useNetworkStatus.ts`를 `useSyncExternalStore`로 만듭니다.
-- [ ] 오프라인이면 배너를 띄웁니다: "오프라인 · 답안은 이 기기에 저장되고 있어요. 연결되면 자동으로 이어집니다." (`--warning`)
-- [ ] `navigateToReview()` helper를 만들고 6곳의 `router.push('/student/review/…')`(1286, 1306, 2150, 2684, 3133, 3344)를 교체합니다.
+- [x] 신규 `src/lib/useNetworkStatus.ts`를 `useSyncExternalStore`로 만듭니다.
+- [x] 오프라인이면 배너를 띄웁니다: "오프라인 · 답안은 이 기기에 저장되고 있어요. 연결되면 자동으로 이어집니다." (`--warning`)
+- [x] `navigateToReview()` helper를 만들고 6곳의 `router.push('/student/review/…')`(1286, 1306, 2150, 2684, 3133, 3344)를 교체합니다.
   - 오프라인이면 `review_waiting_online` 상태로 두고 온라인이 되면 이동합니다. Chrome 공룡 화면이 뜨지 않게 하려는 것입니다.
   - `submissionProgress.ts`에 문구를 추가합니다.
-- [ ] e2e: `setOffline(true)`면 배너와 오프라인 칩이 뜨고, 제출 후에도 URL이 `/solve/`에 머물러야 합니다. 복귀하면 이동해야 합니다.
+- [x] e2e: `setOffline(true)`면 배너와 오프라인 칩이 뜨고, 제출 후에도 URL이 `/solve/`에 머물러야 합니다. 복귀하면 이동해야 합니다.
 
 ### B1. 학생 로그인 폼 (M)
 - [ ] 이름 → 반 → 학생번호/이메일 → 시작 코드의 4칸을 처음부터 표시합니다. 서버 모드이거나 명단이 있는 반이면 "필수" 표시를 미리 붙입니다.

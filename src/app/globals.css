@@ -25,6 +25,8 @@
   --success: #10b981;
   --error: #ef4444;
   --warning: #f59e0b;
+  --warning-soft: rgba(245, 158, 11, 0.12);
+  --warning-line: rgba(245, 158, 11, 0.28);
   --text-primary: #4338ca;
   --text-secondary: #be185d;
   --text-success: #047857;
@@ -645,8 +647,8 @@
 
 .status-pill.is-warning {
   --status-pill-color: var(--text-warning);
-  --status-pill-background: rgba(245, 158, 11, 0.12);
-  --status-pill-border: rgba(245, 158, 11, 0.28);
+  --status-pill-background: var(--warning-soft);
+  --status-pill-border: var(--warning-line);
 }
 
 .status-pill.is-error {
@@ -9052,6 +9054,30 @@ body:has(.create-workspace.is-resizing) {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
+}
+
+.solve-offline-banner-region {
+  flex-shrink: 0;
+}
+
+.solve-offline-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.5rem 1rem;
+  color: var(--text-warning);
+  font-size: var(--type-caption);
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+  background: var(--warning-soft);
+  border-bottom: 1px solid var(--warning-line);
+}
+
+.solve-offline-banner svg {
+  flex-shrink: 0;
 }
 
 .solve-tools-disclosure {

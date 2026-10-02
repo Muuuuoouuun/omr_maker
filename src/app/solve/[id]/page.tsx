@@ -29,6 +29,7 @@ import { issueGuestSession, validateStudentSession } from "@/app/actions/student
 import { hasTeacherSession, saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { shouldOfferStudentPdfOpen, shouldOfferTeacherPreview } from "@/lib/solveToolsVisibility";
 import { solveSaveStatusChip, type SolveDraftSaveState } from "@/lib/solveSaveStatus";
+import { readNetworkOnline, useNetworkStatus } from "@/lib/useNetworkStatus";
 import { attemptBelongsToSession, getOrCreateGuestId, getSession, getStudentSessionGeneration, getStudentSharedIdentityEpoch, guestLoginIdFor, saveSession, STORAGE_KEYS, STUDENT_SESSION_CHANGED_EVENT, STUDENT_SESSION_KEY, STUDENT_SHARED_IDENTITY_EPOCH_KEY, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
@@ -78,7 +79,9 @@ import {
     type AwaySession,
 } from "@/lib/examAwayTracker";
 import {
+    OFFLINE_SOLVE_BANNER_COPY,
     SUBMISSION_DELAY_NOTICE_MS,
+    studentReviewHref,
     runSubmissionWithConfirmationRetry,
     submissionCompletionNotice,
     submissionProgressCopy,
@@ -885,6 +888,7 @@ function SubmissionProgressOverlay({
     onRetry: () => void;
 }) {
     const copy = submissionProgressCopy(phase, delayed);
+    const waitingForNetwork = phase === "review_waiting_online";
     const requiresConfirmation = phase === "confirmation_required";
     const allowsRetry = requiresConfirmation || phase === "queued" || phase === "blocked";
     const confirmationDialogRef = useRef<HTMLDivElement>(null);
@@ -948,6 +952,8 @@ function SubmissionProgressOverlay({
             >
                 {allowsRetry
                     ? <AlertTriangle size={42} aria-hidden="true" style={{ color: "var(--warning)" }} />
+                    : waitingForNetwork
+                    ? <WifiOff size={42} aria-hidden="true" style={{ color: "var(--warning)" }} />
                     : <LoaderCircle className="solve-submission-spinner" size={42} aria-hidden="true" />}
                 <h2 id="solve-submission-title">{copy.title}</h2>
                 <p>{copy.detail}</p>
@@ -957,6 +963,13 @@ function SubmissionProgressOverlay({
                             {requiresConfirmation ? "같은 답안으로 제출 상태 확인" : "지금 다시 시도"}
                         </button>
                         <span>확인이 끝날 때까지 답안과 필기는 변경할 수 없습니다.</span>
+                    </>
+                ) : waitingForNetwork ? (
+                    <>
+                        <span>이 화면을 닫아도 제출은 유지됩니다.</span>
+                        <Link href="/student/history" className="btn btn-secondary solve-review-fallback-link">
+                            제출 기록에서 보기
+                        </Link>
                     </>
                 ) : (
                     <span>중복 제출을 막기 위해 이 화면에서 잠시 기다려 주세요.</span>
@@ -1266,6 +1279,38 @@ export default function SolvePage() {
         return () => window.clearTimeout(timeout);
     }, [submissionProgress]);
 
+    // Offline, router.push to the review would land on the browser's offline
+    // page. Hold the submitted attempt and open its review once the browser is
+    // back online; the submission itself (and its outbox) is already settled.
+    const isOnline = useNetworkStatus();
+    const [reviewWaitingAttemptId, setReviewWaitingAttemptId] = useState<string | null>(null);
+    const navigateToReview = useCallback((attemptId: string) => {
+        if (!readNetworkOnline()) {
+            setReviewWaitingAttemptId(attemptId);
+            setSubmissionDelayed(false);
+            setSubmissionProgress("review_waiting_online");
+            return;
+        }
+        router.push(studentReviewHref(attemptId));
+    }, [router]);
+
+    useEffect(() => {
+        if (!reviewWaitingAttemptId) return;
+        const openWaitingReview = () => {
+            if (!readNetworkOnline()) return;
+            setReviewWaitingAttemptId(null);
+            setSubmissionProgress("opening_review");
+            router.push(studentReviewHref(reviewWaitingAttemptId));
+        };
+        window.addEventListener("online", openWaitingReview);
+        // The connection may have returned before this listener was attached.
+        const immediate = window.setTimeout(openWaitingReview, 0);
+        return () => {
+            window.clearTimeout(immediate);
+            window.removeEventListener("online", openWaitingReview);
+        };
+    }, [reviewWaitingAttemptId, router]);
+
     const waitForSubmissionConfirmation = useCallback(() => new Promise<void>(resolve => {
         submissionConfirmationRetryRef.current = resolve;
         setSubmissionDelayed(false);
@@ -1309,7 +1354,7 @@ export default function SolvePage() {
                     clearDurableAttemptResumeCredential(window.sessionStorage, durableResumeKeyRef.current);
                     durableResumeKeyRef.current = "";
                 }
-                router.push(`/student/review/${replay.submitted[0].attemptId}`);
+                navigateToReview(replay.submitted[0].attemptId);
                 return;
             }
             setSubmissionProgress(replay.status === "blocked" ? "blocked" : "queued");
@@ -1318,7 +1363,7 @@ export default function SolvePage() {
         } finally {
             secureSubmissionReplayOwnedRef.current = false;
         }
-    }, [router, submissionProgress]);
+    }, [navigateToReview, submissionProgress]);
 
     useEffect(() => {
         const onSecureSubmissionOutbox = (event: Event) => {
@@ -1329,7 +1374,7 @@ export default function SolvePage() {
             if (detail.status === "submitted" && typeof detail.attemptId === "string") {
                 setSubmissionProgress("opening_review");
                 submittedRef.current = true;
-                router.push(`/student/review/${detail.attemptId}`);
+                navigateToReview(detail.attemptId);
             } else if (detail.status === "blocked" || detail.status === "expired") {
                 submittedRef.current = true;
                 setSubmissionProgress("blocked");
@@ -1340,7 +1385,7 @@ export default function SolvePage() {
         };
         window.addEventListener(SECURE_SUBMISSION_OUTBOX_EVENT, onSecureSubmissionOutbox);
         return () => window.removeEventListener(SECURE_SUBMISSION_OUTBOX_EVENT, onSecureSubmissionOutbox);
-    }, [router]);
+    }, [navigateToReview]);
 
     const interactionAllowed = !!examData && entryConfirmed && (
         secureRemoteMode
@@ -2175,11 +2220,11 @@ export default function SolvePage() {
         }
         if (result.status === "submitted") {
             const attemptId = result.session.submittedAttemptId;
-            if (attemptId) router.push(`/student/review/${attemptId}`);
+            if (attemptId) navigateToReview(attemptId);
             return;
         }
         setDurableSyncError("다른 기기의 최신 응시 상태를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.");
-    }, [assignmentId, assignmentRevision, id, retakeConfig, router, secureAttemptTicket]);
+    }, [assignmentId, assignmentRevision, id, navigateToReview, retakeConfig, secureAttemptTicket]);
 
     useEffect(() => {
         if (!durableAttempt || !entryConfirmed || submittedRef.current) return;
@@ -2709,7 +2754,7 @@ export default function SolvePage() {
         if (durable.status === "submitted" && "session" in durable) {
             clearDurableAttemptResumeCredential(window.sessionStorage, resumeKey);
             const attemptId = durable.session.submittedAttemptId;
-            if (attemptId) router.push(`/student/review/${attemptId}`);
+            if (attemptId) navigateToReview(attemptId);
             return false;
         }
         if (durable.status === "lease_conflict" && "session" in durable) {
@@ -3158,7 +3203,7 @@ export default function SolvePage() {
                 durableResumeKeyRef.current = "";
             }
             setSubmissionProgress("opening_review");
-            router.push(`/student/review/${result.receipt.attemptId}`);
+            navigateToReview(result.receipt.attemptId);
             return;
         }
 
@@ -3369,7 +3414,7 @@ export default function SolvePage() {
             toast.info(completionNotice.title, completionNotice.detail);
         }
         setSubmissionProgress("opening_review");
-        router.push(`/student/review/${res.attempt.id}`);
+        navigateToReview(res.attempt.id);
     };
 
     const handleAutoSubmit = useEffectEvent(() => {
@@ -3841,7 +3886,7 @@ export default function SolvePage() {
 
     const viewerPdfFile = activeTab === 'problem' ? pdfFile : answerFile;
     const studentPdfOpenOffered = shouldOfferStudentPdfOpen(examData);
-    const saveStatusChip = solveSaveStatusChip({ saveState: draftSaveState, online: true });
+    const saveStatusChip = solveSaveStatusChip({ saveState: draftSaveState, online: isOnline });
     const retryPdfPane = () => {
         setFailedPdfFile(null);
         setPdfPaneAttempt(attempt => attempt + 1);
@@ -4141,6 +4186,16 @@ export default function SolvePage() {
                     </div>
                 </div>
             </header>
+
+            {/* Offline banner: mounted always so aria-live announces it. */}
+            <div className="solve-offline-banner-region" aria-live="polite" aria-atomic="true">
+                {!isOnline && (
+                    <p className="solve-offline-banner">
+                        <WifiOff size={14} aria-hidden="true" />
+                        <span>{OFFLINE_SOLVE_BANNER_COPY}</span>
+                    </p>
+                )}
+            </div>
 
             {/* Time Milestone Alert (5m / 1m warning) */}
             {timeMilestoneAlert && (

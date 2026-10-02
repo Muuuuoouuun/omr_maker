@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+    OFFLINE_SOLVE_BANNER_COPY,
     SUBMISSION_DELAY_NOTICE_MS,
     runSubmissionWithConfirmationRetry,
+    studentReviewHref,
     submissionCompletionNotice,
     submissionProgressCopy,
     withSubmissionTimeout,
@@ -31,6 +33,12 @@ describe("submission progress", () => {
             title: "제출이 완료되었습니다",
             detail: "채점 결과 화면을 여는 중입니다.",
         });
+    });
+
+    it("tells an offline student the submission is done and the review opens once reconnected", () => {
+        expect(submissionProgressCopy("review_waiting_online", false).title).toBe("제출 완료 · 결과는 연결되면 열립니다");
+        expect(OFFLINE_SOLVE_BANNER_COPY).toBe("오프라인 · 답안은 이 기기에 저장되고 있어요. 연결되면 자동으로 이어집니다.");
+        expect(studentReviewHref("attempt-1")).toBe("/student/review/attempt-1");
     });
 
     it("describes an uncertain submission as confirmation-required, not cancelled", () => {

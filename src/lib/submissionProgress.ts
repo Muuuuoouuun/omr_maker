@@ -38,7 +38,21 @@ export async function runSubmissionWithConfirmationRetry<T>(
     }
 }
 
-export type SubmitProgressPhase = "submitting" | "confirmation_required" | "queued" | "blocked" | "saving_handwriting" | "opening_review";
+export type SubmitProgressPhase =
+    | "submitting"
+    | "confirmation_required"
+    | "queued"
+    | "blocked"
+    | "saving_handwriting"
+    | "opening_review"
+    | "review_waiting_online";
+
+/** Shown in the solve page's offline banner (A5). */
+export const OFFLINE_SOLVE_BANNER_COPY = "오프라인 · 답안은 이 기기에 저장되고 있어요. 연결되면 자동으로 이어집니다.";
+
+export function studentReviewHref(attemptId: string): string {
+    return `/student/review/${attemptId}`;
+}
 
 interface SubmissionProgressCopy {
     title: string;
@@ -125,6 +139,12 @@ export function submissionProgressCopy(
         return {
             title: "채점 완료 · 필기 저장 중",
             detail: "공식 답안은 저장되었습니다. 필기 원본을 안전하게 보관하는 중입니다.",
+        };
+    }
+    if (phase === "review_waiting_online") {
+        return {
+            title: "제출 완료 · 결과는 연결되면 열립니다",
+            detail: "답안은 제출되었습니다. 인터넷에 다시 연결되면 채점 결과 화면이 자동으로 열립니다.",
         };
     }
     if (phase === "opening_review") {

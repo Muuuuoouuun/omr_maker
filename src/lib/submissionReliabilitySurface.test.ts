@@ -65,7 +65,7 @@ describe("solve submission reliability integration", () => {
         expect(source).toContain("shouldDeleteHandwritingUploadRecovery(handwritingUpload.status)");
         expect(source).not.toContain('handwritingUpload.status === "invalid_ticket" || handwritingUpload.status === "invalid_asset"');
         const draftCleanup = source.indexOf('if (!shouldArchiveDrawings || handwritingUpload?.status === "uploaded")', upload);
-        const reviewNavigation = source.indexOf('router.push(`/student/review/${result.receipt.attemptId}`)', draftCleanup);
+        const reviewNavigation = source.indexOf("navigateToReview(result.receipt.attemptId)", draftCleanup);
         expect(draftCleanup).toBeGreaterThan(upload);
         expect(reviewNavigation).toBeGreaterThan(draftCleanup);
     });
