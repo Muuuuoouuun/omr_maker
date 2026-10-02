@@ -162,9 +162,11 @@ describe("create save and publish hierarchy", () => {
         expect(editEffect).toContain('unit: ""');
         expect(editEffect).toContain('concept: ""');
         expect(editEffect).toContain('difficulty: ""');
-        expect(source).toContain('const [fastAnswerState, setFastAnswerState] = useState({ slot: editorDraftSlot, value: "" });');
-        expect(source).toContain('const fastAnswer = fastAnswerState.slot === editorDraftSlot ? fastAnswerState.value : "";');
-        expect(source).toContain("setFastAnswerState({ slot: editorDraftSlot, value });");
+        expect(source).toContain('const [fastAnswerState, setFastAnswerState] = useState({ slot: editorDraftSlot, value: "", rejected: 0 });');
+        expect(source).toContain("const fastAnswerInSlot = fastAnswerState.slot === editorDraftSlot;");
+        expect(source).toContain('const fastAnswer = fastAnswerInSlot ? fastAnswerState.value : "";');
+        expect(source).toContain("const fastAnswerRejected = fastAnswerInSlot ? fastAnswerState.rejected : 0;");
+        expect(source).toContain("setFastAnswerState({ slot: editorDraftSlot, value, rejected });");
     });
 
     it("fences delayed A file, image, draft, and publish completions from B state", () => {

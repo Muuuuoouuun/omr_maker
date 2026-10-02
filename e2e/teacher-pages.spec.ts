@@ -778,6 +778,50 @@ test.describe("Create page label memory", () => {
         await expect(page.getByText("새 시험 · 45문항 · 5지선다")).toBeVisible();
     });
 
+    test("clamps an over-limit question count to 50 with an inline notice", async ({ page }) => {
+        await page.goto("/create");
+        const input = page.getByLabel("문항 수 직접 입력");
+        if (!await input.isVisible()) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
+        await input.fill("60");
+        await input.press("Enter");
+
+        await expect(input).toHaveValue("50");
+        const notice = page.locator("#question-count-notice");
+        await expect(notice).toHaveText("최대 50문항까지 만들 수 있어 50으로 맞췄습니다");
+        await expect(input).toHaveAttribute("aria-describedby", "question-count-notice");
+        await expect(page.getByText("새 시험 · 50문항 · 5지선다")).toBeVisible();
+
+        await input.fill("30");
+        await input.press("Enter");
+        await expect(input).toHaveValue("30");
+        await expect(notice).toHaveCount(0);
+    });
+
+    test("quick answer input keeps blank positions and reports rejected characters", async ({ page }) => {
+        await page.goto("/create");
+        const fastAnswer = page.getByLabel("빠른 정답 입력");
+        if (!await fastAnswer.isVisible()) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
+        await expect(page.locator("#fast-answer-hint")).toContainText("빈 문항은 - 로 입력");
+
+        await fastAnswer.fill("1-3, 4");
+        await expect(fastAnswer).toHaveValue("1-3, 4");
+        await expect(page.locator(".create-section-label .hint", { hasText: "정답" })).toHaveText("3/20 정답");
+        // "-" keeps question 2 blank, so 3 and 4 stay on questions 3 and 4.
+        await expect(page.getByRole("radio", { name: "문제 1번 보기 1" }).first()).toHaveAttribute("aria-checked", "true");
+        await expect(page.locator('[role="radio"][aria-label^="문제 2번 보기"][aria-checked="true"]')).toHaveCount(0);
+        await expect(page.getByRole("radio", { name: "문제 3번 보기 3" }).first()).toHaveAttribute("aria-checked", "true");
+        await expect(page.getByRole("radio", { name: "문제 4번 보기 4" }).first()).toHaveAttribute("aria-checked", "true");
+
+        await fastAnswer.fill("1-39");
+        await expect(fastAnswer).toHaveValue("1-3");
+        await expect(page.locator("#fast-answer-rejected")).toContainText("1개는 반영하지 않았습니다");
+        await expect(page.getByRole("radio", { name: "문제 4번 보기 4" }).first()).toHaveAttribute("aria-checked", "false");
+    });
+
     test("keeps settings view options touch sized without crowding the summary row", async ({ page }) => {
         await page.setViewportSize({ width: 320, height: 800 });
         await page.goto("/create");

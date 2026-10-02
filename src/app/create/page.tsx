@@ -76,8 +76,10 @@ import { readStoredExamDefaults } from "@/lib/appSettings";
 import {
     MAX_QUESTION_COUNT,
     MIN_QUESTION_COUNT,
-    parseQuestionCountInput,
+    QUESTION_COUNT_CLAMPED_NOTICE,
+    resolveQuestionCountInput,
 } from "@/lib/questionCount";
+import { FAST_ANSWER_BLANK, parseFastAnswerInput } from "@/lib/fastAnswerInput";
 import { readLocalExam, saveExam, saveLocalExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
@@ -679,6 +681,8 @@ function CreateOMRPageInner() {
     const [title, setTitle] = useState("기말고사 OMR");
     const [questionsCount, setQuestionsCount] = useState(20);
     const [questionCountInput, setQuestionCountInput] = useState("20");
+    // Inline explanation when an over-limit count was clamped to the maximum.
+    const [questionCountNotice, setQuestionCountNotice] = useState("");
     const [columns, setColumns] = useState(2);
     const [questions, setQuestions] = useState<Question[]>(() => buildDefaultQuestions(20, DEFAULT_CHOICE_COUNT, 5));
     const [initialDefaultsReady, setInitialDefaultsReady] = useState(false);
@@ -699,10 +703,12 @@ function CreateOMRPageInner() {
     const [labelSettingsScopeLabel, setLabelSettingsScopeLabel] = useState("이 브라우저 최근");
 
     // Validation
-    const [fastAnswerState, setFastAnswerState] = useState({ slot: editorDraftSlot, value: "" });
-    const fastAnswer = fastAnswerState.slot === editorDraftSlot ? fastAnswerState.value : "";
-    const setFastAnswer = useCallback((value: string) => {
-        setFastAnswerState({ slot: editorDraftSlot, value });
+    const [fastAnswerState, setFastAnswerState] = useState({ slot: editorDraftSlot, value: "", rejected: 0 });
+    const fastAnswerInSlot = fastAnswerState.slot === editorDraftSlot;
+    const fastAnswer = fastAnswerInSlot ? fastAnswerState.value : "";
+    const fastAnswerRejected = fastAnswerInSlot ? fastAnswerState.rejected : 0;
+    const setFastAnswer = useCallback((value: string, rejected = 0) => {
+        setFastAnswerState({ slot: editorDraftSlot, value, rejected });
     }, [editorDraftSlot]);
 
     // Layout Sizing
@@ -2031,9 +2037,13 @@ function CreateOMRPageInner() {
         setQuestionsCount(newCount);
     };
 
+    // Hide a stale notice once the count moves away from the clamped maximum.
+    const showQuestionCountNotice = Boolean(questionCountNotice) && questionsCount === MAX_QUESTION_COUNT;
+
     const commitQuestionCountInput = () => {
-        const nextCount = parseQuestionCountInput(questionCountInput);
-        if (nextCount === null) {
+        const resolution = resolveQuestionCountInput(questionCountInput);
+        if (resolution.status === "invalid") {
+            setQuestionCountNotice("");
             setQuestionCountInput(String(questionsCount));
             toast.info(
                 "문항 수 확인",
@@ -2041,7 +2051,13 @@ function CreateOMRPageInner() {
             );
             return;
         }
-        handleQuestionCountChange(nextCount);
+        if (resolution.status === "clamped") {
+            setQuestionCountInput(String(resolution.count));
+            setQuestionCountNotice(QUESTION_COUNT_CLAMPED_NOTICE);
+        } else {
+            setQuestionCountNotice("");
+        }
+        handleQuestionCountChange(resolution.count);
     };
 
     // Guard: switching 5→4 may invalidate answers of 5.
@@ -2835,17 +2851,17 @@ function CreateOMRPageInner() {
     };
 
     const handleFastAnswerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        // Accept 1-4 when defaultChoices is 4, else 1-5.
-        const maxDigit = defaultChoices;
-        const digitRegex = new RegExp(`[^1-${maxDigit}]`, 'g');
-        const val = e.target.value.replace(digitRegex, '');
-        const previousLength = fastAnswer.length;
-        const shouldClearTrimmedAnswers = val.length < previousLength;
-        setFastAnswer(val);
+        // Digits 1..defaultChoices set answers in order; "-" is an explicit blank
+        // that keeps its slot so later answers do not shift; spaces/commas only
+        // separate. Anything else is dropped and counted for the inline notice.
+        const { value, answers, rejectedCount } = parseFastAnswerInput(e.target.value, defaultChoices);
+        const previousLength = parseFastAnswerInput(fastAnswer, defaultChoices).answers.length;
+        const shouldClearTrimmedAnswers = answers.length < previousLength;
+        setFastAnswer(value, rejectedCount);
 
         setQuestions(prev => prev.map((q, i) => {
-            if (i < val.length) {
-                return { ...q, answer: parseInt(val[i]) };
+            if (i < answers.length) {
+                return q.answer === answers[i] ? q : { ...q, answer: answers[i] };
             }
             if (shouldClearTrimmedAnswers && i < previousLength && q.answer !== undefined) {
                 return { ...q, answer: undefined };
@@ -3491,6 +3507,7 @@ function CreateOMRPageInner() {
                                         style={{ minWidth: 0, minHeight: 34, padding: '0.28rem 0.12rem', fontSize: '0.72rem' }}
                                         disabled={!initialDefaultsReady}
                                         onClick={() => {
+                                            setQuestionCountNotice("");
                                             setQuestionCountInput(String(count));
                                             handleQuestionCountChange(count);
                                         }}
@@ -3506,10 +3523,14 @@ function CreateOMRPageInner() {
                                 step={1}
                                 inputMode="numeric"
                                 aria-label="문항 수 직접 입력"
+                                aria-describedby={showQuestionCountNotice ? "question-count-notice" : undefined}
                                 title={`${MIN_QUESTION_COUNT}~${MAX_QUESTION_COUNT}문항 직접 입력`}
                                 value={questionCountInput}
                                 disabled={!initialDefaultsReady}
-                                onChange={event => setQuestionCountInput(event.target.value)}
+                                onChange={event => {
+                                    setQuestionCountNotice("");
+                                    setQuestionCountInput(event.target.value);
+                                }}
                                 onBlur={commitQuestionCountInput}
                                 onKeyDown={event => {
                                     if (event.key !== 'Enter') return;
@@ -3520,6 +3541,15 @@ function CreateOMRPageInner() {
                                 style={{ width: '100%', minWidth: 0, minHeight: 44, padding: '0.42rem 0.35rem', textAlign: 'center', fontWeight: 850 }}
                             />
                         </div>
+                        {showQuestionCountNotice && (
+                            <p
+                                id="question-count-notice"
+                                role="status"
+                                style={{ gridColumn: '1 / -1', margin: 0, fontSize: 'var(--type-caption)', color: 'var(--text-warning)', wordBreak: 'keep-all' }}
+                            >
+                                {questionCountNotice}
+                            </p>
+                        )}
                     </div>
 
                     <div className="create-compact-control-row" style={{ marginBottom: '0.9rem' }}>
@@ -3659,6 +3689,7 @@ function CreateOMRPageInner() {
                             <input
                                 type="text"
                                 aria-label="빠른 정답 입력"
+                                aria-describedby={fastAnswerRejected > 0 ? "fast-answer-hint fast-answer-rejected" : "fast-answer-hint"}
                                 placeholder={defaultChoices === 4 ? "예: 3124..." : "예: 31251..."}
                                 value={fastAnswer}
                                 disabled={!initialDefaultsReady}
@@ -3666,9 +3697,14 @@ function CreateOMRPageInner() {
                                 className="input-field"
                                 style={{ width: '100%', padding: '0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', fontSize: '1rem', letterSpacing: '2px' }}
                             />
-                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '0.3rem' }}>
-                                {`1~${defaultChoices}의 숫자를 입력하면 문항 순서대로 정답이 즉시 반영됩니다.`}
+                            <div id="fast-answer-hint" style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', marginTop: '0.3rem' }}>
+                                {`1~${defaultChoices}의 숫자를 입력하면 문항 순서대로 정답이 즉시 반영됩니다. 빈 문항은 ${FAST_ANSWER_BLANK} 로 입력하고, 띄어쓰기와 쉼표는 구분용으로만 씁니다.`}
                             </div>
+                            {fastAnswerRejected > 0 && (
+                                <div id="fast-answer-rejected" role="status" style={{ fontSize: 'var(--type-caption)', color: 'var(--text-warning)', marginTop: '0.2rem' }}>
+                                    {`1~${defaultChoices}, ${FAST_ANSWER_BLANK} 가 아닌 입력 ${fastAnswerRejected}개는 반영하지 않았습니다.`}
+                                </div>
+                            )}
                         </div>
 
                         <div className="create-question-quick-card">
