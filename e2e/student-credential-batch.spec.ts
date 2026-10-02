@@ -361,7 +361,7 @@ if (!hostedMode) {
                 inviteUrl: fixture.inviteUrl!, name: fixture.studentNames[0], studentId: fixture.studentIds[0],
                 groupId: fixture.groupId!, code: oldCode,
             });
-            await expect(page.getByRole("alert")).toHaveText("이름, 반, 학생번호(또는 이메일), 시작 코드를 다시 확인해주세요.");
+            await expect(page.getByRole("alert")).toHaveText("입력한 정보와 일치하는 학생을 찾지 못했어요. 이름 띄어쓰기, 반, 학생번호(또는 이메일), 시작 코드를 다시 확인해주세요.");
             await expect(page).not.toHaveURL(/\/student\/dashboard(?:[?#].*)?$/);
             await submitWithSecret(
                 page.getByLabel("시작 코드"),

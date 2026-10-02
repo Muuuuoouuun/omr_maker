@@ -7,7 +7,7 @@ const homeSource = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8")
 describe("home login accessibility and recovery", () => {
     it("keeps authentication errors available until the user edits or resubmits", () => {
         expect(homeSource).not.toContain('setTimeout(() => setError(""),');
-        expect(homeSource).toContain('const clearLoginError = () => setError("");');
+        expect(homeSource).toContain('const clearLoginError = () => {\n    setError("");\n    setRosterNameGuard(null);');
         expect(homeSource).toContain('setTeacherIdentifier(event.target.value);\n                          clearLoginError();');
         expect(homeSource).toContain('setStudentName(e.target.value);\n                      clearLoginError();');
         expect(homeSource).toContain('id="student-login-feedback"');
@@ -48,11 +48,27 @@ describe("home login accessibility and recovery", () => {
         expect(homeSource).toContain('type="submit"');
     });
 
+    it("always renders name, class, student number/email and start code in that order", () => {
+        const form = homeSource.slice(
+            homeSource.indexOf('className="student-account-login-form"'),
+            homeSource.indexOf("</form>", homeSource.indexOf('className="student-account-login-form"')),
+        );
+        const order = ['htmlFor="student-name"', 'htmlFor="student-group"', 'htmlFor="student-lookup"', 'htmlFor="student-start-code"']
+            .map(marker => form.indexOf(marker));
+        expect(order.every(index => index >= 0)).toBe(true);
+        expect([...order].sort((a, b) => a - b)).toEqual(order);
+        // The start-code field is no longer gated behind an error.
+        expect(form).not.toContain("{(needsCode || requiresServerStudentVerification) && (");
+    });
+
     it("requires explicit consent before retaining a student identity on the device", () => {
         expect(homeSource).toContain("rememberStudentOnDevice");
-        expect(homeSource).toContain("이 기기에서 로그인 유지");
-        expect(homeSource).toContain("공용 기기에서는 선택하지 마세요");
+        expect(homeSource).not.toContain("이 기기에서 로그인 유지");
+        expect(homeSource).toContain("이 기기에서 내 정보 기억하기");
+        expect(homeSource).toContain("다음 로그인 때 이름·반을 채워둬요. 보안을 위해 12시간마다 시작 코드를 다시 확인해요. 공용 기기에서는 선택하지 마세요.");
         expect(homeSource).toContain("saveSession(session, { rememberDevice: rememberStudentOnDevice })");
+        expect(homeSource).toContain("if (rememberStudentOnDevice) saveStudentReturnHint(session);");
+        expect(homeSource).toContain("else clearStudentReturnHint();");
     });
 
     it("preserves the requested exam invite when returning to roles but clears it for explicit home navigation", () => {

@@ -29,6 +29,8 @@ import { safeScorePercent } from "@/lib/scoreUtils";
 import { evaluateExamAccess } from "@/lib/examAccess";
 import { listMyAssignments } from "@/app/actions/studentExam";
 import { clearStudentServerSession, refreshStudentSession } from "@/app/actions/studentSession";
+import { buildStudentLoginHref } from "@/lib/studentRedirect";
+import { clearStudentReturnHint, refreshStudentReturnHint } from "@/lib/studentReturnHint";
 import { listMyAssignmentsClient } from "@/lib/studentExamClient";
 import type { StudentAssignmentPreview, StudentAttemptSummary } from "@/lib/studentExamContract";
 import {
@@ -101,7 +103,11 @@ export default function StudentDashboard() {
         completedCount: 0,
         retakeCount: 0,
     });
-    const [sessionState, setSessionState] = useState<"checking" | "active" | "missing" | "error">("checking");
+    // "expired": this device had a student session but the 12h server cookie
+    // is gone. "missing": there was never a session here (or the student logged out).
+    const [sessionState, setSessionState] = useState<"checking" | "active" | "missing" | "expired" | "error">("checking");
+    const [expiredReturnPath, setExpiredReturnPath] = useState("/student/dashboard");
+    const [expiredRecheckPending, setExpiredRecheckPending] = useState(false);
     const [guestMergePreview, setGuestMergePreview] = useState<GuestMergePreview | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
     const [logoutPending, setLogoutPending] = useState(false);
@@ -126,6 +132,16 @@ export default function StudentDashboard() {
                 now: new Date().toISOString(),
             }, data => data.todoExams.length === 0 && data.doneExams.length === 0));
         };
+        // The server rejected a session this device still remembered: keep the
+        // opt-in return hint in sync, then drop the stale local identity.
+        const endRejectedSession = (session: StudentSession, localSessionExisted: boolean) => {
+            if (cancelled) return;
+            if (localSessionExisted) refreshStudentReturnHint(session);
+            clearSession();
+            setUser(null);
+            setExpiredReturnPath(`${window.location.pathname}${window.location.search}`);
+            setSessionState(localSessionExisted ? "expired" : "missing");
+        };
         const loadStudentData = async () => {
             const loadObservedAt = new Date().toISOString();
             setDataState({ state: "loading" });
@@ -134,6 +150,7 @@ export default function StudentDashboard() {
             // 1. Rebuild the client view from the signed HttpOnly cookie when
             // sessionStorage is empty (new tab, storage eviction, private mode).
             let currentUser = getSession();
+            const localSessionExisted = !!currentUser;
             if (!currentUser) {
                 try {
                     const restored = await refreshStudentSession();
@@ -172,9 +189,7 @@ export default function StudentDashboard() {
             });
             if (cancelled) return;
             if (myAttemptsResult.status === "unauthenticated") {
-                clearSession();
-                setUser(null);
-                setSessionState("missing");
+                endRejectedSession(currentUser, localSessionExisted);
                 return;
             }
             if (myAttemptsResult.status !== "ok") {
@@ -204,9 +219,7 @@ export default function StudentDashboard() {
                 return;
             }
             if (returnedFeedbackResult.status === "unauthorized") {
-                clearSession();
-                setUser(null);
-                setSessionState("missing");
+                endRejectedSession(currentUser, localSessionExisted);
                 return;
             }
             if (returnedFeedbackResult.status === "service_unavailable") {
@@ -456,6 +469,26 @@ export default function StudentDashboard() {
         setRefreshKey(key => key + 1);
     };
 
+    // Production cannot re-login without the invite link; once the student has
+    // reopened it (e.g. in another tab) this re-checks the signed cookie.
+    const handleExpiredRecheck = async () => {
+        if (expiredRecheckPending) return;
+        setExpiredRecheckPending(true);
+        try {
+            const restored = await refreshStudentSession();
+            if (restored.ok && restored.session) {
+                saveSession(restored.session);
+                handleDashboardRetry();
+                return;
+            }
+            toast.info("아직 로그인이 확인되지 않았어요", "초대 링크로 다시 로그인한 뒤 눌러주세요.");
+        } catch {
+            toast.error("로그인 상태를 확인하지 못했어요", "네트워크를 확인한 뒤 다시 시도해주세요.");
+        } finally {
+            setExpiredRecheckPending(false);
+        }
+    };
+
     const handleLogout = async () => {
         if (logoutPending) return;
         setLogoutPending(true);
@@ -473,6 +506,8 @@ export default function StudentDashboard() {
             setLogoutPending(false);
             return;
         }
+        // Explicit logout also forgets the opt-in name/class hint.
+        clearStudentReturnHint();
         clearSession();
         setUser(null);
         setTodoExams([]);
@@ -489,6 +524,8 @@ export default function StudentDashboard() {
     if (!user) {
         const checking = sessionState === "checking";
         const sessionError = sessionState === "error";
+        const sessionExpired = sessionState === "expired";
+        const productionRuntime = process.env.NODE_ENV === "production";
         return (
             <div className="layout-main">
                 <header className="header">
@@ -533,22 +570,53 @@ export default function StudentDashboard() {
                                     ? "학생 정보를 불러오는 중입니다"
                                     : sessionError
                                         ? "학생 정보를 확인하지 못했습니다"
-                                        : "학생 로그인이 필요합니다"}
+                                        : sessionExpired
+                                            ? "로그인 시간이 끝났어요"
+                                            : "학생 로그인이 필요합니다"}
                             </h1>
                             <p className="text-muted" style={{ lineHeight: 1.7, wordBreak: "keep-all" }}>
                                 {checking
                                     ? "잠시만 기다려주세요."
                                     : sessionError
                                         ? "네트워크를 확인한 뒤 다시 시도해주세요."
-                                        : "선생님이 보낸 최신 초대 링크를 열고 이름과 시작 코드로 로그인해주세요."}
+                                        : sessionExpired
+                                            ? "보안을 위해 12시간이 지나면 다시 확인해요. 시작 코드만 다시 입력하면 이어서 할 수 있어요."
+                                            : "선생님이 보낸 최신 초대 링크를 열고 이름과 시작 코드로 로그인해주세요."}
                             </p>
+                            {sessionExpired && productionRuntime && (
+                                <p
+                                    className="student-session-expired-invite-guidance"
+                                    style={{ marginTop: "0.6rem", lineHeight: 1.7, wordBreak: "keep-all", color: "var(--foreground)" }}
+                                >
+                                    선생님이 보낸 초대 링크를 다시 열면 바로 로그인할 수 있어요. 링크를 찾기 어렵다면 선생님에게 재전송을 요청하세요.
+                                </p>
+                            )}
                         </div>
                         {sessionError && (
                             <button type="button" className="btn btn-primary" onClick={handleDashboardRetry}>
                                 다시 시도
                             </button>
                         )}
-                        {!checking && !sessionError && <Link href="/" className="btn btn-primary">홈으로 이동</Link>}
+                        {sessionExpired && !productionRuntime && (
+                            <Link
+                                href={buildStudentLoginHref(expiredReturnPath, { reason: "expired" })}
+                                className="btn btn-primary"
+                            >
+                                다시 로그인
+                            </Link>
+                        )}
+                        {sessionExpired && productionRuntime && (
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                onClick={() => { void handleExpiredRecheck(); }}
+                                disabled={expiredRecheckPending}
+                                aria-busy={expiredRecheckPending}
+                            >
+                                {expiredRecheckPending ? "확인하는 중…" : "다시 확인"}
+                            </button>
+                        )}
+                        {!checking && !sessionError && !sessionExpired && <Link href="/" className="btn btn-primary">홈으로 이동</Link>}
                     </section>
                 </main>
             </div>
@@ -673,7 +741,7 @@ export default function StudentDashboard() {
                             >
                                 다시 시도
                             </button>
-                            <Link href="/" className="btn">
+                            <Link href={buildStudentLoginHref("/student/dashboard")} className="btn">
                                 로그인 안내
                             </Link>
                             <Link href="/" className="btn">

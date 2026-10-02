@@ -45,12 +45,24 @@ import { teacherLoginHelpFor } from "@/lib/teacherAuthMessages";
 import {
   hasStudentStartCode,
   normalizeStartCodeInput,
+  resolveLocalRosterNameGuard,
   resolveStudentIdentity,
   resolveStudentStartCodeLogin,
+  rosterStudentsForGroup,
   writeStudentCodes,
 } from "@/lib/studentCodes";
+import {
+  buildStudentReturnHint,
+  clearStudentReturnHint,
+  readStudentReturnHint,
+  refreshStudentReturnHint,
+  saveStudentReturnHint,
+  type StudentReturnHint,
+} from "@/lib/studentReturnHint";
+import StatusPill from "@/components/dashboard/StatusPill";
 import { loadLocalStudentCodes } from "@/lib/studentCredentialLocalState";
 import {
+  clearSession,
   consumePendingGuestMerge,
   getSession,
   getOrCreateGuestId,
@@ -163,7 +175,8 @@ function studentLoginErrorMessage(status: StudentSessionIssueStatus): string {
   if (status === "rate_limited") return "로그인 시도가 많아 잠시 잠겼습니다. 10분 뒤 다시 시도해주세요.";
   if (status === "code_not_issued") return "시작 코드가 아직 서버에 연결되지 않았습니다. 선생님에게 코드 재발급을 요청해주세요.";
   if (status === "invalid_workspace") return "학생 초대 링크가 올바르지 않습니다. 선생님에게 새 링크를 요청해주세요.";
-  if (status === "invalid_credentials") return "이름, 반, 학생번호(또는 이메일), 시작 코드를 다시 확인해주세요.";
+  // Never reveals which field was wrong (enumeration protection).
+  if (status === "invalid_credentials") return "입력한 정보와 일치하는 학생을 찾지 못했어요. 이름 띄어쓰기, 반, 학생번호(또는 이메일), 시작 코드를 다시 확인해주세요.";
   if (status === "unauthenticated") return "학생 세션을 시작하지 못했습니다. 다시 로그인해주세요.";
   return "학생 계정을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.";
 }
@@ -235,7 +248,19 @@ export default function Home() {
   const [studentDirectoryStatus, setStudentDirectoryStatus] = useState<"local" | "loading" | "remote" | "signed_guest" | "degraded_local" | "error">("local");
   const [studentLoginPending, setStudentLoginPending] = useState(false);
   const [rememberStudentOnDevice, setRememberStudentOnDevice] = useState(false);
-  const clearLoginError = () => setError("");
+  // Opt-in returning-student hint (name + class only) used to pre-fill the form.
+  const [returnHint, setReturnHint] = useState<StudentReturnHint | null>(null);
+  const returnHintAppliedRef = useRef(false);
+  const studentLookupInputRef = useRef<HTMLInputElement>(null);
+  const startCodeInputRef = useRef<HTMLInputElement>(null);
+  // Local-mode typo guard: the typed name is not on the selected class roster.
+  const [rosterNameGuard, setRosterNameGuard] = useState<{ name: string; suggestion?: string } | null>(null);
+  const [confirmUnrosteredStudent, setConfirmUnrosteredStudent] = useState(false);
+  const clearLoginError = () => {
+    setError("");
+    setRosterNameGuard(null);
+    setConfirmUnrosteredStudent(false);
+  };
   // Teacher login copy: config errors never leak env-var guidance in production.
   const teacherLoginHelp = error
     ? teacherLoginHelpFor(error, { production: process.env.NODE_ENV === "production" })
@@ -268,6 +293,13 @@ export default function Home() {
   const productionStudentRecoveryRequired = (
     process.env.NODE_ENV === "production" && !requiresServerStudentVerification
   );
+  const selectedStudentGroup = studentGroupOptions.find(
+    group => group.id === selectedGroupId || group.name === selectedGroupId,
+  );
+  // Student number/email is required up front for server logins and for any
+  // class that has at least one roster student on this device.
+  const studentLookupRequired = requiresServerStudentVerification
+    || rosterStudentsForGroup(selectedStudentGroup, rosterStudents).length > 0;
 
   const studentRedirectPath = () => {
     if (typeof window === "undefined") return "/student/dashboard";
@@ -291,7 +323,8 @@ export default function Home() {
     }
 
     const query = new URLSearchParams(window.location.search);
-    const requestedRole = query.get("role");
+    // An expired-session return link always opens the student form.
+    const requestedRole = query.get("reason") === "expired" ? "student" : query.get("role");
     const teacherOperatorRecovery = query.get("teacherRecovery") === "legacy_link";
     if (teacherOperatorRecovery) {
       setRole("teacher");
@@ -409,6 +442,35 @@ export default function Home() {
     }
     return () => { cancelled = true; };
   }, [router, teacherSelfServiceEnabled]);
+
+  // Pre-fill a returning student's name and class from the opt-in hint, then
+  // move focus to the first credential they still have to type.
+  useEffect(() => {
+    if (role !== "student" || returnHintAppliedRef.current || !isHydrated) return;
+    if (studentDirectoryStatus === "loading") return;
+    returnHintAppliedRef.current = true;
+    const hint = readStudentReturnHint();
+    if (!hint) return;
+    // Derived from client-only localStorage after the role is chosen.
+    setReturnHint(hint);
+    setRememberStudentOnDevice(true);
+    setStudentName(previous => previous.trim() ? previous : hint.name);
+    const hintGroup = studentGroupOptions.find(group => group.id === hint.groupId);
+    if (hintGroup || studentGroupOptions.length === 0) {
+      setSelectedGroupId(previous => previous || hint.groupId);
+    }
+  }, [role, isHydrated, studentDirectoryStatus, studentGroupOptions]);
+
+  useEffect(() => {
+    if (!returnHint || role !== "student") return;
+    const focusTimer = window.setTimeout(() => {
+      const lookupMissing = studentLookupRequired && !studentLookupInputRef.current?.value.trim();
+      (lookupMissing ? studentLookupInputRef.current : startCodeInputRef.current)?.focus();
+    }, 0);
+    return () => window.clearTimeout(focusTimer);
+    // Focus once when the hint is applied, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [returnHint, role]);
 
   // Surface the start-code field proactively for returning students.
   useEffect(() => {
@@ -632,6 +694,9 @@ export default function Home() {
     }
 
     saveSession(session, { rememberDevice: rememberStudentOnDevice });
+    // "내 정보 기억하기" stores name + class only; unchecking forgets them.
+    if (rememberStudentOnDevice) saveStudentReturnHint(session);
+    else clearStudentReturnHint();
     if (issuedCode) {
       setCopiedIssuedCode(false);
       setIssuedCodeModal({ code: issuedCode, next, studentId: session.studentId });
@@ -644,8 +709,10 @@ export default function Home() {
     return true;
   };
 
-  const handleStudentLogin = async () => {
+  const handleStudentLogin = async (options: { allowUnrosteredName?: boolean } = {}) => {
     if (studentLoginPending) return;
+    setRosterNameGuard(null);
+    setConfirmUnrosteredStudent(false);
     const trimmedName = studentName.trim();
     const next = normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
     if (!trimmedName) {
@@ -723,6 +790,17 @@ export default function Home() {
       students,
       studentLookup,
     });
+    // Stop before a start code is issued when the class has a roster and the
+    // typed name is not on it — a typo must not silently create a new student.
+    const nameGuard = resolveLocalRosterNameGuard({
+      name: trimmedName,
+      group: loginGroups.find(group => group.id === selectedGroupId || group.name === selectedGroupId),
+      students,
+    });
+    if (nameGuard.status === "unmatched_in_roster" && !options.allowUnrosteredName) {
+      setRosterNameGuard({ name: trimmedName, suggestion: nameGuard.suggestion });
+      return;
+    }
     if (identity.lookupMismatch) {
       setNeedsStudentLookup(true);
       setError("학생번호 또는 이메일이 명단과 일치하지 않습니다.");
@@ -732,7 +810,7 @@ export default function Home() {
       setNeedsStudentLookup(true);
       setError(identity.rosterMatchCount > 1
         ? "동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요."
-        : "명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
+        : "이 반 명단에 있는 학생이에요. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
       return;
     }
     const regionSnapshot = resolveSessionRegion({
@@ -765,11 +843,12 @@ export default function Home() {
     }
     if (codeDecision.status === "code_required") {
       setNeedsCode(true);
-      setError("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.");
+      setError("이미 시작 코드가 있는 학생이에요. 처음 로그인할 때 받은 6자리 코드를 입력해주세요.");
       return;
     }
     if (codeDecision.status === "code_mismatch") {
-      setError("시작 코드가 일치하지 않습니다.");
+      setNeedsCode(true);
+      setError("시작 코드가 맞지 않아요. 6자리를 다시 확인해주세요(O·I·0·1은 쓰지 않아요). 잊었다면 선생님에게 재발급을 요청하세요.");
       return;
     }
 
@@ -855,14 +934,70 @@ export default function Home() {
     void startGuestSession(guestGroup);
   };
 
-  const handleContinueRecentStudent = () => {
+  const applyReturnHint = (hint: StudentReturnHint, remembered: boolean) => {
+    returnHintAppliedRef.current = true;
+    setReturnHint(hint);
+    setRememberStudentOnDevice(remembered);
+    setStudentName(hint.name);
+    setSelectedGroupId(hint.groupId);
+    setStudentLookup("");
+    setStartCode("");
+  };
+
+  const handleContinueRecentStudent = async () => {
     const restoredSession = getSession();
-    if (restoredSession && !restoredSession.isGuest) {
+    if (!restoredSession || restoredSession.isGuest) {
+      setRecentStudentSession(null);
+      toast.info("최근 학생 정보 없음", "이름과 반으로 다시 로그인해주세요.");
+      return;
+    }
+    // The local card can outlive the 12h server session; confirm it first so
+    // "이어가기" never lands on a dashboard that only says "login required".
+    let restored: Awaited<ReturnType<typeof refreshStudentSession>>;
+    try {
+      restored = await refreshStudentSession();
+    } catch {
+      toast.error("학생 정보를 확인하지 못했어요", "네트워크를 확인한 뒤 다시 시도해주세요.");
+      return;
+    }
+    if (restored.ok && restored.session && !restored.session.isGuest) {
+      saveSession(restored.session);
       router.push(studentRedirectPath());
       return;
     }
+    if (!restored.ok && restored.status !== "unauthenticated") {
+      toast.error("학생 정보를 확인하지 못했어요", "네트워크를 확인한 뒤 다시 시도해주세요.");
+      return;
+    }
+    refreshStudentReturnHint(restoredSession);
+    // Without an opt-in hint, the still-open local session pre-fills this one
+    // login only; nothing new is persisted.
+    const storedHint = readStudentReturnHint();
+    const hint = storedHint || buildStudentReturnHint(restoredSession);
+    clearSession();
     setRecentStudentSession(null);
-    toast.info("최근 학생 정보 없음", "이름과 반으로 다시 로그인해주세요.");
+    setError("");
+    setRole("student");
+    if (hint) applyReturnHint(hint, !!storedHint);
+  };
+
+  const handleNotThisStudent = () => {
+    clearStudentReturnHint();
+    returnHintAppliedRef.current = true;
+    setReturnHint(null);
+    setRememberStudentOnDevice(false);
+    setStudentName("");
+    setSelectedGroupId("");
+    setStudentLookup("");
+    setStartCode("");
+    clearLoginError();
+    studentNameInputRef.current?.focus();
+  };
+
+  const handleUseSuggestedRosterName = (suggestion: string) => {
+    setStudentName(suggestion);
+    clearLoginError();
+    studentNameInputRef.current?.focus();
   };
 
   const handleCopyIssuedCode = async () => {
@@ -1234,7 +1369,7 @@ export default function Home() {
             </div>
             <button
               type="button"
-              onClick={handleContinueRecentStudent}
+              onClick={() => { void handleContinueRecentStudent(); }}
               className="btn btn-primary"
               style={{
                 background: "linear-gradient(135deg, var(--secondary), #c026d3)",
@@ -1610,6 +1745,7 @@ export default function Home() {
                     }}
                   >
                     <strong style={{ display: "block", color: "var(--foreground)", marginBottom: "0.25rem" }}>
+                      {returnHint ? <span style={{ display: "block" }}>{returnHint.name}님, 다시 오셨네요.</span> : null}
                       학생 계정 로그인에는 선생님이 보낸 최신 초대 링크가 필요합니다.
                     </strong>
                     초대 링크를 다시 열어 이름과 시작 코드로 로그인해주세요. 링크나 시작 코드를 잃어버렸다면 선생님에게 재전송 또는 재발급을 요청해주세요.
@@ -1623,6 +1759,41 @@ export default function Home() {
                   }}
                   noValidate
                 >
+                {returnHint && (
+                  <section
+                    className="student-return-hint-banner"
+                    role="status"
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "0.5rem 0.75rem",
+                      marginBottom: "1.25rem",
+                      padding: "0.8rem 0.95rem",
+                      borderRadius: "var(--radius-md)",
+                      border: "1px solid rgba(99,102,241,0.2)",
+                      background: "rgba(99,102,241,0.08)",
+                      color: "var(--foreground)",
+                      fontSize: "var(--type-label)",
+                      lineHeight: 1.55,
+                      wordBreak: "keep-all",
+                    }}
+                  >
+                    <span style={{ flex: "1 1 14rem", minWidth: 0 }}>
+                      {returnHint.name}님, 다시 오셨네요. 시작 코드를 입력하면 이어서 할 수 있어요.
+                    </span>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={handleNotThisStudent}
+                      style={{ minHeight: 44, padding: "0.45rem 0.8rem", fontSize: "var(--type-label)", flexShrink: 0 }}
+                    >
+                      다른 학생이에요
+                    </button>
+                  </section>
+                )}
+
                 <div style={{ marginBottom: "1.1rem" }}>
                   <label
                     htmlFor="student-name"
@@ -1644,15 +1815,15 @@ export default function Home() {
                     type="text"
                     className="input-field"
                     aria-label="이름"
-                    aria-invalid={error === "이름을 입력해주세요."}
-                    aria-describedby={error === "이름을 입력해주세요." ? "student-name-error" : undefined}
+                    aria-invalid={error === "이름을 입력해주세요." || !!rosterNameGuard}
+                    aria-describedby={error === "이름을 입력해주세요." ? "student-name-error" : rosterNameGuard ? "student-roster-name-guard" : undefined}
                     value={studentName}
                     onChange={(e) => {
                       setStudentName(e.target.value);
                       clearLoginError();
                     }}
                     placeholder="이름을 입력하세요"
-                    autoFocus
+                    autoFocus={!returnHint}
                     autoComplete="name"
                   />
                   {error === "이름을 입력해주세요." && (
@@ -1667,53 +1838,6 @@ export default function Home() {
                 </div>
 
                 <div style={{ marginBottom: "1.1rem" }}>
-                  <label
-                    htmlFor="student-lookup"
-                    style={{
-                      display: "block",
-                      marginBottom: "0.55rem",
-                      fontSize: "var(--type-label)",
-                      fontWeight: 700,
-                      color: needsStudentLookup ? "var(--text-warning)" : "var(--muted)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
-                    }}
-                  >
-                    학생번호 또는 이메일
-                  </label>
-                  <input
-                    id="student-lookup"
-                    type="text"
-                    className="input-field"
-                    aria-label="학생번호 또는 이메일"
-                    value={studentLookup}
-                    onChange={(e) => {
-                      setStudentLookup(e.target.value);
-                      clearLoginError();
-                    }}
-                    placeholder="선생님이 알려준 학생번호 또는 이메일"
-                    autoComplete="email"
-                    autoCapitalize="none"
-                    inputMode="email"
-                    spellCheck={false}
-                    style={{
-                      borderColor: needsStudentLookup ? "rgba(245,158,11,0.45)" : undefined,
-                    }}
-                  />
-                  <p style={{
-                    fontSize: "var(--type-label)",
-                    color: needsStudentLookup ? "var(--text-warning)" : "var(--muted)",
-                    marginTop: "0.45rem",
-                    lineHeight: 1.45,
-                    wordBreak: "keep-all",
-                  }}>
-                    {needsStudentLookup
-                      ? "명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다."
-                      : "계정 ID처럼 사용합니다. 입력하면 같은 이름의 학생도 정확히 구분됩니다."}
-                  </p>
-                </div>
-
-                <div style={{ marginBottom: "1.35rem" }}>
                   <label
                     htmlFor="student-group"
                     style={{
@@ -1772,11 +1896,197 @@ export default function Home() {
                   )}
                 </div>
 
+                <div style={{ marginBottom: "1.1rem" }}>
+                  <label
+                    htmlFor="student-lookup"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.45rem",
+                      marginBottom: "0.55rem",
+                      fontSize: "var(--type-label)",
+                      fontWeight: 700,
+                      color: needsStudentLookup ? "var(--text-warning)" : "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    학생번호 또는 이메일
+                    {studentLookupRequired && (
+                      <StatusPill tone="warning" size="sm" label="필수" style={{ letterSpacing: 0 }} />
+                    )}
+                  </label>
+                  <input
+                    ref={studentLookupInputRef}
+                    id="student-lookup"
+                    type="text"
+                    className="input-field"
+                    aria-label="학생번호 또는 이메일"
+                    aria-required={studentLookupRequired || undefined}
+                    value={studentLookup}
+                    onChange={(e) => {
+                      setStudentLookup(e.target.value);
+                      clearLoginError();
+                    }}
+                    placeholder="선생님이 알려준 학생번호 또는 이메일"
+                    autoComplete="email"
+                    autoCapitalize="none"
+                    inputMode="email"
+                    spellCheck={false}
+                    style={{
+                      borderColor: needsStudentLookup ? "var(--warning-line)" : undefined,
+                    }}
+                  />
+                  <p style={{
+                    fontSize: "var(--type-label)",
+                    color: needsStudentLookup ? "var(--text-warning)" : "var(--muted)",
+                    marginTop: "0.45rem",
+                    lineHeight: 1.45,
+                    wordBreak: "keep-all",
+                  }}>
+                    {needsStudentLookup
+                      ? "명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다."
+                      : "계정 ID처럼 사용합니다. 입력하면 같은 이름의 학생도 정확히 구분됩니다."}
+                  </p>
+                </div>
+
+                <div style={{ marginBottom: "1.35rem" }}>
+                  <label
+                    htmlFor="student-start-code"
+                    style={{
+                      display: "block",
+                      marginBottom: "0.55rem",
+                      fontSize: "var(--type-label)",
+                      fontWeight: 700,
+                      color: needsCode ? "var(--text-warning)" : "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    시작 코드
+                  </label>
+                  <input
+                    ref={startCodeInputRef}
+                    id="student-start-code"
+                    type="text"
+                    className="input-field"
+                    aria-label="시작 코드"
+                    aria-describedby="student-start-code-help"
+                    value={startCode}
+                    onChange={(e) => {
+                      setStartCode(normalizeStartCodeInput(e.target.value));
+                      clearLoginError();
+                    }}
+                    placeholder="6자리 코드 입력"
+                    autoComplete="one-time-code"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    maxLength={6}
+                    style={{
+                      letterSpacing: "0.25em",
+                      fontFamily: "monospace",
+                      textTransform: "uppercase",
+                      borderColor: needsCode ? "var(--warning-line)" : undefined,
+                    }}
+                  />
+                  <p
+                    id="student-start-code-help"
+                    style={{
+                      fontSize: "var(--type-label)",
+                      color: needsCode ? "var(--text-warning)" : "var(--muted)",
+                      marginTop: "0.45rem",
+                      lineHeight: 1.5,
+                      wordBreak: "keep-all",
+                    }}
+                  >
+                    {/* Server and local codes share the alphabet in studentCodes.ts START_CODE_ALPHABET (no O, I, 0, 1). */}
+                    {requiresServerStudentVerification
+                      ? "선생님이 알려준 6자리 코드예요. 영문 대문자와 숫자로 되어 있고 O·I·0·1은 쓰지 않아요."
+                      : "처음 로그인한다면 비워두세요. 로그인하면 새 코드를 알려드려요."}
+                  </p>
+                </div>
+
                 <div id="student-login-feedback" aria-live="polite">
                   {error && error !== "이름을 입력해주세요." && (
-                    <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--text-error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 650 }}>
+                    <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--text-error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 650, wordBreak: "keep-all" }}>
                       {error}
                     </p>
+                  )}
+                  {rosterNameGuard && (
+                    <div
+                      id="student-roster-name-guard"
+                      className="student-roster-name-guard"
+                      role="alert"
+                      style={{
+                        marginTop: "-0.35rem",
+                        marginBottom: "1.35rem",
+                        padding: "0.85rem 0.95rem",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--warning-line)",
+                        background: "var(--warning-soft)",
+                        color: "var(--foreground)",
+                        fontSize: "var(--type-label)",
+                        lineHeight: 1.55,
+                        wordBreak: "keep-all",
+                      }}
+                    >
+                      <p style={{ fontWeight: 700, color: "var(--text-warning)" }}>
+                        ‘{rosterNameGuard.name}’을(를) 이 반 명단에서 찾지 못했어요.
+                      </p>
+                      {rosterNameGuard.suggestion ? (
+                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem 0.75rem", marginTop: "0.5rem" }}>
+                          <span>혹시 ‘{rosterNameGuard.suggestion}’인가요?</span>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => handleUseSuggestedRosterName(rosterNameGuard.suggestion!)}
+                            style={{ minHeight: 44, padding: "0.45rem 0.85rem", fontSize: "var(--type-label)" }}
+                          >
+                            이 이름으로 바꾸기
+                          </button>
+                        </div>
+                      ) : (
+                        <p style={{ marginTop: "0.35rem", color: "var(--muted)" }}>
+                          이름 띄어쓰기와 반을 다시 확인해주세요.
+                        </p>
+                      )}
+                      {process.env.NODE_ENV !== "production" && (
+                        confirmUnrosteredStudent ? (
+                          <div style={{ marginTop: "0.65rem", paddingTop: "0.65rem", borderTop: "1px solid var(--warning-line)" }}>
+                            <p style={{ color: "var(--muted)" }}>
+                              명단과 연결되지 않은 새 학생 기록을 만들어요. 계속할까요?
+                            </p>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={studentLoginPending}
+                              onClick={() => { void handleStudentLogin({ allowUnrosteredName: true }); }}
+                              style={{ minHeight: 44, marginTop: "0.45rem", padding: "0.45rem 0.85rem", fontSize: "var(--type-label)" }}
+                            >
+                              새 학생으로 시작하기
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => setConfirmUnrosteredStudent(true)}
+                            style={{
+                              minHeight: 44,
+                              marginTop: "0.55rem",
+                              padding: "0.45rem 0.2rem",
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--muted)",
+                              fontSize: "var(--type-label)",
+                              textDecoration: "underline",
+                            }}
+                          >
+                            명단에 없는 새 학생으로 시작
+                          </button>
+                        )
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -1801,45 +2111,6 @@ export default function Home() {
                   </div>
                 )}
 
-                {(needsCode || requiresServerStudentVerification) && (
-                  <div style={{ marginBottom: "1.75rem" }}>
-                    <label
-                      htmlFor="student-start-code"
-                      style={{
-                        display: "block",
-                        marginBottom: "0.55rem",
-                        fontSize: "var(--type-label)",
-                        fontWeight: 700,
-                        color: needsCode ? "var(--text-warning)" : "var(--muted)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.07em",
-                      }}
-                    >
-                      시작 코드
-                    </label>
-                    <input
-                      id="student-start-code"
-                      type="text"
-                      className="input-field"
-                      aria-label="시작 코드"
-                      value={startCode}
-                      onChange={(e) => {
-                        setStartCode(normalizeStartCodeInput(e.target.value));
-                        clearLoginError();
-                      }}
-                      placeholder="6자리 코드 입력"
-                      autoComplete="one-time-code"
-                      autoCapitalize="characters"
-                      spellCheck={false}
-                      maxLength={6}
-                      style={{ letterSpacing: "0.25em", fontFamily: "monospace", textTransform: "uppercase" }}
-                    />
-                    <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", marginTop: "0.45rem", opacity: 0.9, lineHeight: 1.5 }}>
-                      학생 계정 비밀번호처럼 쓰이는 6자리 코드입니다. 분실 시 선생님에게 재발급을 요청하세요.
-                    </p>
-                  </div>
-                )}
-
                 <button
                   type="submit"
                   disabled={studentLoginPending || studentDirectoryStatus === "loading"}
@@ -1854,33 +2125,38 @@ export default function Home() {
                   {studentLoginPending ? "계정 확인 중…" : "시험 시작하기"}
                 </button>
 
-                <label
-                  htmlFor="remember-student-device"
-                  style={{
-                    minHeight: 44,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.65rem",
-                    margin: "0.35rem 0 0.75rem",
-                    color: "var(--foreground)",
-                    fontSize: "var(--type-label)",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    id="remember-student-device"
-                    type="checkbox"
-                    checked={rememberStudentOnDevice}
-                    onChange={(event) => setRememberStudentOnDevice(event.target.checked)}
-                  />
-                  <span>
-                    이 기기에서 로그인 유지
-                    <small style={{ display: "block", marginTop: "0.15rem", color: "var(--muted)", fontWeight: 550 }}>
-                      공용 기기에서는 선택하지 마세요.
-                    </small>
-                  </span>
-                </label>
+                <div style={{ margin: "0.35rem 0 0.75rem" }}>
+                  <label
+                    htmlFor="remember-student-device"
+                    style={{
+                      minHeight: 44,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.65rem",
+                      color: "var(--foreground)",
+                      fontSize: "var(--type-label)",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      id="remember-student-device"
+                      type="checkbox"
+                      aria-describedby="remember-student-device-help"
+                      checked={rememberStudentOnDevice}
+                      onChange={(event) => setRememberStudentOnDevice(event.target.checked)}
+                    />
+                    이 기기에서 내 정보 기억하기
+                  </label>
+                  {/* Kept outside the <label> so the checkbox's name stays short
+                      (the helper mentions "이름", which would collide with the name field). */}
+                  <small
+                    id="remember-student-device-help"
+                    style={{ display: "block", marginTop: "-0.2rem", paddingLeft: "1.65rem", color: "var(--muted)", fontSize: "var(--type-caption)", fontWeight: 550, lineHeight: 1.5, wordBreak: "keep-all" }}
+                  >
+                    다음 로그인 때 이름·반을 채워둬요. 보안을 위해 12시간마다 시작 코드를 다시 확인해요. 공용 기기에서는 선택하지 마세요.
+                  </small>
+                </div>
 
                 <p style={{ fontSize: "var(--type-caption)", color: "var(--muted)", margin: "0 0 0.75rem", lineHeight: 1.5, wordBreak: "keep-all" }}>
                   {requiresServerStudentVerification

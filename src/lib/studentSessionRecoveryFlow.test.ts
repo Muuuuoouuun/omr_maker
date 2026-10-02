@@ -108,6 +108,62 @@ describe("student session recovery flow", () => {
         expect(dashboard).not.toContain("workspace: currentUser.workspaceId");
     });
 
+    it("tells a student whose remembered session ended that it expired, and returns them after login", () => {
+        const dashboard = source("src/app/student/dashboard/page.tsx");
+        const load = dashboard.slice(
+            dashboard.indexOf("const loadStudentData = async () =>"),
+            dashboard.indexOf("// 2. Load Data"),
+        );
+        const rejected = dashboard.slice(
+            dashboard.indexOf("const endRejectedSession = "),
+            dashboard.indexOf("const loadStudentData = async () =>"),
+        );
+
+        // Only a session this device already had can be "expired".
+        expect(load.indexOf("const localSessionExisted = !!currentUser;"))
+            .toBeLessThan(load.indexOf("await refreshStudentSession()"));
+        expect(dashboard.match(/endRejectedSession\(currentUser, localSessionExisted\)/g)).toHaveLength(2);
+        expect(rejected).toContain('setSessionState(localSessionExisted ? "expired" : "missing")');
+        // The opt-in hint is synced before the stale local identity is cleared.
+        expect(rejected.indexOf("refreshStudentReturnHint(session)")).toBeGreaterThan(-1);
+        expect(rejected.indexOf("refreshStudentReturnHint(session)")).toBeLessThan(rejected.indexOf("clearSession()"));
+
+        expect(dashboard).toContain("로그인 시간이 끝났어요");
+        expect(dashboard).toContain("보안을 위해 12시간이 지나면 다시 확인해요. 시작 코드만 다시 입력하면 이어서 할 수 있어요.");
+        expect(dashboard).toContain('buildStudentLoginHref(expiredReturnPath, { reason: "expired" })');
+        expect(dashboard).toContain("선생님이 보낸 초대 링크를 다시 열면 바로 로그인할 수 있어요. 링크를 찾기 어렵다면 선생님에게 재전송을 요청하세요.");
+        expect(dashboard).toContain("{sessionExpired && productionRuntime && (");
+        expect(dashboard).toContain("{sessionExpired && !productionRuntime && (");
+        expect(dashboard).toContain('buildStudentLoginHref("/student/dashboard")');
+
+        const recheck = dashboard.slice(
+            dashboard.indexOf("const handleExpiredRecheck = async () =>"),
+            dashboard.indexOf("const handleLogout = async () =>"),
+        );
+        expect(recheck).toContain("await refreshStudentSession()");
+        expect(recheck).toContain("saveSession(restored.session)");
+
+        const logout = dashboard.slice(dashboard.indexOf("const handleLogout = async () =>"));
+        expect(logout.indexOf("clearStudentReturnHint()")).toBeGreaterThan(-1);
+        expect(logout.indexOf("clearStudentReturnHint()")).toBeLessThan(logout.indexOf("clearSession()"));
+    });
+
+    it("checks the server session before continuing a recent student from home", () => {
+        const home = source("src/app/page.tsx");
+        const resume = home.slice(
+            home.indexOf("const handleContinueRecentStudent = async () =>"),
+            home.indexOf("const handleNotThisStudent = () =>"),
+        );
+
+        expect(resume.indexOf("await refreshStudentSession()")).toBeGreaterThan(-1);
+        expect(resume.indexOf("await refreshStudentSession()")).toBeLessThan(resume.indexOf("router.push(studentRedirectPath())"));
+        expect(resume).toContain('setRole("student")');
+        expect(resume).toContain("applyReturnHint(hint, !!storedHint)");
+        expect(home).toContain("다시 오셨네요. 시작 코드를 입력하면 이어서 할 수 있어요.");
+        expect(home).toContain("다른 학생이에요");
+        expect(home).toContain('query.get("reason") === "expired" ? "student" : query.get("role")');
+    });
+
     it("hides guest entry for an opaque group invite and explains the restriction", () => {
         const home = source("src/app/page.tsx");
         const alternate = home.slice(
