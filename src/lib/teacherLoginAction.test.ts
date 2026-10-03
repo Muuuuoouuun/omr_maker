@@ -10,6 +10,8 @@ const controls = vi.hoisted(() => ({
     bootstrap: vi.fn(),
     loginFailure: vi.fn(),
     loginSuccess: vi.fn(),
+    durableLimit: vi.fn(),
+    durableSubjects: vi.fn(),
 }));
 
 vi.mock("next/headers", () => ({
@@ -37,6 +39,7 @@ vi.mock("@/lib/teacherAuth", () => ({
 vi.mock("@/lib/teacherAuthMessages", () => ({
     TEACHER_AUTH_SESSION_CONFIG_ERROR: "session_config_error",
     TEACHER_AUTH_SESSION_COOKIE_ERROR: "session_cookie_error",
+    TEACHER_LOGIN_UNAVAILABLE_MESSAGE: "login_unavailable",
 }));
 
 vi.mock("@/lib/supabaseServerAdmin", () => ({
@@ -66,8 +69,8 @@ vi.mock("@/lib/teacherLoginRateLimit", () => ({
 }));
 
 vi.mock("@/lib/durableRateLimit", () => ({
-    applyDurableRateLimit: async () => ({ allowed: true, retryAfterMs: 0 }),
-    applyDurableRateLimitToSubjects: async () => ({ allowed: true, retryAfterMs: 0 }),
+    applyDurableRateLimit: (...args: unknown[]) => controls.durableLimit(...args),
+    applyDurableRateLimitToSubjects: (...args: unknown[]) => controls.durableSubjects(...args),
 }));
 
 vi.mock("@/lib/teacherAccountGateway", () => ({
@@ -125,6 +128,25 @@ describe("teacher login action identity binding", () => {
         controls.bootstrap.mockClear();
         controls.loginFailure.mockClear();
         controls.loginSuccess.mockClear();
+        controls.durableLimit.mockReset().mockResolvedValue({ allowed: true, retryAfterMs: 0 });
+        controls.durableSubjects.mockReset().mockResolvedValue({ allowed: true, retryAfterMs: 0 });
+    });
+
+    it.each(["global", "identifier"])("reports %s limiter outages as unavailable before checking credentials", async stage => {
+        const limiter = stage === "global" ? controls.durableLimit : controls.durableSubjects;
+        limiter.mockResolvedValue({ allowed: false, retryAfterMs: 60_000, reason: "unavailable" });
+        await expect(verifyTeacherPassword("owner@example.com", "correct-password"))
+            .resolves.toEqual({ success: false, error: "login_unavailable" });
+        expect(controls.verifier).not.toHaveBeenCalled();
+        expect(controls.cookieSet).not.toHaveBeenCalled();
+        expect(controls.loginFailure).not.toHaveBeenCalled();
+    });
+
+    it("keeps actual login throttling distinct from an outage", async () => {
+        controls.durableLimit.mockResolvedValue({ allowed: false, retryAfterMs: 60_000 });
+        await expect(verifyTeacherPassword("owner@example.com", "correct-password"))
+            .resolves.toEqual({ success: false, error: "rate_limit_error" });
+        expect(controls.verifier).not.toHaveBeenCalled();
     });
 
     it("returns and persists the exact provisioned account tenant/session without bootstrap", async () => {
