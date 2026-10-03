@@ -2166,6 +2166,16 @@ export default function Home() {
                 </form>
                 )}
 
+                {productionStudentRecoveryRequired && error && (
+                  <p
+                    id="student-login-feedback"
+                    role="alert"
+                    style={{ fontSize: "var(--type-label)", color: "var(--text-error)", marginBottom: "1.35rem", fontWeight: 650, wordBreak: "keep-all" }}
+                  >
+                    {error}
+                  </p>
+                )}
+
                 {requiresServerStudentVerification ? (
                   <section
                     className="student-invite-guest-restriction"

@@ -429,12 +429,16 @@ export async function issueStudentSession(input: {
     if (!checkStudentLoginRateLimit(rateLimitKeys).allowed) {
         return { ok: false, status: "rate_limited", error: STUDENT_LOGIN_RATE_LIMIT_ERROR };
     }
-    if (!(await applyDurableRateLimitToSubjects({
+    const admission = await applyDurableRateLimitToSubjects({
         namespace: "student-login",
         subjects: rateLimitKeys,
         operation: "consume",
         policy: STUDENT_LOGIN_DURABLE_POLICY,
-    })).allowed) {
+    });
+    if (!admission.allowed) {
+        if (admission.reason === "unavailable") {
+            return { ok: false, status: "error", error: "지금은 학생 로그인을 사용할 수 없습니다. 잠시 후 다시 시도해주세요." };
+        }
         return { ok: false, status: "rate_limited", error: STUDENT_LOGIN_RATE_LIMIT_ERROR };
     }
     if (!name || !groupId || !studentLookup) {
