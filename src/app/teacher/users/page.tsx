@@ -362,7 +362,8 @@ function ManageUsersInner() {
         setRosterLoadState(next);
     }, []);
     const [rosterRetryGeneration, setRosterRetryGeneration] = useState(0);
-    const rosterAllowsMutations = rosterLoadState.state === "loaded_empty" || rosterLoadState.state === "loaded_data";
+    const rosterAllowsMutations = (rosterLoadState.state === "loaded_empty" || rosterLoadState.state === "loaded_data")
+        && rosterLoadState.data.forceDemo !== true;
     const rosterMutationsDisabled = !rosterAllowsMutations;
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
     const advancedAnalyticsEnabled = hasPlanEntitlement(currentPlan, "advancedAnalytics");
@@ -769,8 +770,8 @@ function ManageUsersInner() {
     ), [exams]);
 
     const isDemoRoster = rosterDataMode === "demo";
-    const attemptAnalyticsAvailable = !rosterMutationsDisabled
-        && (isDemoRoster || attemptAnalyticsStatus === "ready");
+    const attemptAnalyticsAvailable = isDemoRoster
+        || (!rosterMutationsDisabled && attemptAnalyticsStatus === "ready");
     const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students;
     const rosterGroups = isDemoRoster ? MOCK_GROUPS : groups;
     const rosterInvites = isDemoRoster ? MOCK_INVITES : invites;
@@ -1854,7 +1855,7 @@ function ManageUsersInner() {
                                 데모 명단 모드
                             </div>
                             <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
-                                저장된 학생/반/초대 데이터가 없어 예시 명단을 표시 중입니다. 이 예시 명단은 저장하지 않으며, 학생 추가·반 생성·CSV 업로드를 시작하면 실제 명단으로 전환됩니다.
+                                공개 데모의 예시 명단을 읽기 전용으로 표시 중입니다. 학생 추가·반 생성·CSV 업로드는 실제 교사 계정으로 로그인한 뒤 사용할 수 있습니다.
                             </p>
                         </div>
                     </div>
@@ -2748,7 +2749,16 @@ function ManageUsersInner() {
                 )}
 
                 {tab === "groups" && (
-                    rosterMutationsDisabled ? (
+                    isDemoRoster ? (
+                        <GroupsTab
+                            capability="showcase_read_only"
+                            displayGroups={displayGroups}
+                            displayStudents={displayStudents}
+                            setSelectedRegionKey={setSelectedRegionKey}
+                            setQuery={setQuery}
+                            setTab={setTab}
+                        />
+                    ) : rosterMutationsDisabled ? (
                         <GroupsTab
                             capability="degraded_read_only"
                             displayGroups={displayGroups}
