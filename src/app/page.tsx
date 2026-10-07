@@ -2,9 +2,11 @@
 
 import { useState, useEffect, useMemo, useRef, type MouseEvent } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
+import StudentDirectLoginForm from "@/components/StudentDirectLoginForm";
 import { toast } from "@/components/Toast";
 import { startMockupTeacherSession, verifyTeacherPassword } from "@/app/actions/auth";
 import {
@@ -245,12 +247,13 @@ export default function Home() {
   const [needsStudentLookup, setNeedsStudentLookup] = useState(false);
   const [inviteToken, setInviteToken] = useState("");
   const [inviteExamId, setInviteExamId] = useState("");
-  const [studentDirectoryStatus, setStudentDirectoryStatus] = useState<"local" | "loading" | "remote" | "signed_guest" | "degraded_local" | "error">("local");
+  const [studentDirectoryStatus, setStudentDirectoryStatus] = useState<"local" | "loading" | "remote" | "degraded_local" | "error">("local");
   const [studentLoginPending, setStudentLoginPending] = useState(false);
   const [rememberStudentOnDevice, setRememberStudentOnDevice] = useState(false);
   // Opt-in returning-student hint (name + class only) used to pre-fill the form.
   const [returnHint, setReturnHint] = useState<StudentReturnHint | null>(null);
   const returnHintAppliedRef = useRef(false);
+  const demoIntentAppliedRef = useRef(false);
   const studentLookupInputRef = useRef<HTMLInputElement>(null);
   const startCodeInputRef = useRef<HTMLInputElement>(null);
   // Local-mode typo guard: the typed name is not on the selected class roster.
@@ -288,10 +291,11 @@ export default function Home() {
     [groups, rosterStudents],
   );
   const requiresServerStudentVerification = (
-    (!!inviteToken && !!inviteExamId) || studentDirectoryStatus === "signed_guest"
+    !!inviteToken && !!inviteExamId
   ) && studentDirectoryStatus !== "degraded_local";
-  const productionStudentRecoveryRequired = (
-    process.env.NODE_ENV === "production" && !requiresServerStudentVerification
+  const directStudentLogin = !requiresServerStudentVerification && (
+    process.env.NODE_ENV === "production"
+    || (isHydrated && rosterStudents.length === 0 && groups.length === 0 && studentDirectoryStatus === "local")
   );
   const selectedStudentGroup = studentGroupOptions.find(
     group => group.id === selectedGroupId || group.name === selectedGroupId,
@@ -409,10 +413,8 @@ export default function Home() {
         setStudentDirectoryStatus("error");
       });
     } else if (!teacherOperatorRecovery && requestedRole === "student" && !hasTeacherLifecycleQuery) {
-      // A guest account connection can resume without exposing organization
-      // scope only when the signed HttpOnly cookie already carries both the
-      // organization and class. A signed student cookie can restore the local
-      // view model and continue directly to the requested student page.
+      // A signed student cookie restores student home. Guests retain their
+      // cookie for ownership claims and use the direct credential form.
       const restoreSignedStudentScope = async () => {
         const restored = await refreshStudentSession();
         if (cancelled || !restored.ok || !restored.session) return;
@@ -423,25 +425,24 @@ export default function Home() {
           router.replace(normalizeStudentRedirectPath(query.get("next")));
           return;
         }
-        if (!restored.canLoginWithCurrentScope || !session.groupId || !session.groupName) return;
-        setGroups([{
-          id: session.groupId,
-          name: session.groupName,
-          region: session.regionName,
-          count: 0,
-          avgScore: 0,
-          color: "#4f46e5",
-        }]);
-        setSelectedGroupId(session.groupId);
-        setStudentDirectoryStatus("signed_guest");
+        // Keep the signed guest cookie for account claims. Direct login resolves
+        // the student's own organization and classes after verifying credentials.
       };
       void restoreSignedStudentScope().catch(() => {
-        // Keep the recovery guidance visible. Never fall back to a client-
-        // supplied organization or raw workspace identifier.
+        // Keep credential login available when session restoration fails.
       });
     }
     return () => { cancelled = true; };
   }, [router, teacherSelfServiceEnabled]);
+
+  // /intro's demo CTAs arrive with intent=demo. Bring the existing showcase
+  // card into view once; starting the demo stays an explicit button press.
+  useEffect(() => {
+    if (role !== "teacher" || !isHydrated || demoIntentAppliedRef.current) return;
+    demoIntentAppliedRef.current = true;
+    if (new URLSearchParams(window.location.search).get("intent") !== "demo") return;
+    document.getElementById("teacher-demo-entry")?.scrollIntoView({ block: "center" });
+  }, [role, isHydrated]);
 
   // Pre-fill a returning student's name and class from the opt-in hint, then
   // move focus to the first credential they still have to type.
@@ -1384,6 +1385,15 @@ export default function Home() {
           </div>
         )}
 
+        {role === "none" && (
+          <p className="home-intro-link-row">
+            <Link href="/intro" className="home-intro-link">
+              처음이신가요? 서비스 소개 보기
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </p>
+        )}
+
         {/* ── Login Forms ────────────────────── */}
         {role !== "none" && (
           <div
@@ -1686,7 +1696,7 @@ export default function Home() {
                 </div>
 
                 <div className="mockup-login-divider" aria-hidden="true"><span>또는 바로 체험하기</span></div>
-                <section className="mockup-login-card" aria-label="데모 계정 체험">
+                <section id="teacher-demo-entry" className="mockup-login-card" aria-label="데모 계정 체험">
                   <div className="mockup-login-card-heading">
                     <span className="mockup-login-spark"><Sparkles size={18} /></span>
                     <div>
@@ -1729,27 +1739,29 @@ export default function Home() {
                   </h1>
                 </div>
 
-                {productionStudentRecoveryRequired ? (
-                  <section
-                    className="student-login-recovery-guidance"
-                    role="note"
-                    style={{
-                      padding: "1rem",
-                      marginBottom: "1.25rem",
-                      borderRadius: "var(--radius-md)",
-                      border: "1px solid var(--border)",
-                      background: "var(--surface)",
-                      color: "var(--muted)",
-                      fontSize: "var(--type-label)",
-                      lineHeight: 1.6,
+                {directStudentLogin ? (
+                  <StudentDirectLoginForm
+                    returnHintName={returnHint?.name}
+                    onForgetDevice={handleNotThisStudent}
+                    rememberDevice={rememberStudentOnDevice}
+                    onRememberDeviceChange={setRememberStudentOnDevice}
+                    getGuestAttemptIds={pendingGuestAttemptIds}
+                    onSignedIn={async result => {
+                      if (!result.identity) return;
+                      const identity = result.identity;
+                      await finishStudentLogin({
+                        studentId: identity.studentId,
+                        loginId: identity.studentId,
+                        name: identity.name,
+                        groupId: identity.groupId,
+                        groupName: identity.groupName,
+                        regionId: identity.regionId,
+                        regionName: identity.regionName,
+                        isGuest: false,
+                        identityType: "registered",
+                      }, studentRedirectPath(), undefined, result.guestClaim);
                     }}
-                  >
-                    <strong style={{ display: "block", color: "var(--foreground)", marginBottom: "0.25rem" }}>
-                      {returnHint ? <span style={{ display: "block" }}>{returnHint.name}님, 다시 오셨네요.</span> : null}
-                      학생 계정 로그인에는 선생님이 보낸 최신 초대 링크가 필요합니다.
-                    </strong>
-                    초대 링크를 다시 열어 이름과 시작 코드로 로그인해주세요. 링크나 시작 코드를 잃어버렸다면 선생님에게 재전송 또는 재발급을 요청해주세요.
-                  </section>
+                  />
                 ) : (
                 <form
                   className="student-account-login-form"
@@ -2164,6 +2176,16 @@ export default function Home() {
                     : "* 현재 기기에 저장된 명단과 시작 코드로 로그인합니다."}
                 </p>
                 </form>
+                )}
+
+                {directStudentLogin && error && (
+                  <p
+                    id="student-login-feedback"
+                    role="alert"
+                    style={{ fontSize: "var(--type-label)", color: "var(--text-error)", marginBottom: "1.35rem", fontWeight: 650, wordBreak: "keep-all" }}
+                  >
+                    {error}
+                  </p>
                 )}
 
                 {requiresServerStudentVerification ? (

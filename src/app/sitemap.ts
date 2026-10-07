@@ -6,6 +6,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
 
     return [
         { url: new URL("/", siteOrigin).toString() },
+        { url: new URL("/intro", siteOrigin).toString() },
         { url: new URL("/pwa-check", siteOrigin).toString() },
     ];
 }

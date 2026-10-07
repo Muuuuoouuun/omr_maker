@@ -89,7 +89,7 @@ function parseFixtures(env: Env): ExamEntryInviteE2eFixture[] | null {
             || !hasExactKeys(item, ["organizationId", "examId", "actorUserIds", "groups"])) return null;
         const organizationId = clean(item.organizationId).toLowerCase();
         const examId = clean(item.examId);
-        if (!/^(?:default|teacher_[a-z0-9]{7,16}|pilot_org_[a-f0-9]{24})$/.test(organizationId)
+        if (!/^(?:default|teacher_[a-z0-9]{7,16}|(?:pilot_org_|demo_org_)[a-f0-9]{24})$/.test(organizationId)
             || !/^e2e-invite-exam-[a-z0-9-]{1,48}$/.test(examId)
             || !Array.isArray(item.actorUserIds)
             || item.actorUserIds.length < 1

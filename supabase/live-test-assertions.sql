@@ -144,6 +144,8 @@ begin
                'omr_operational_job_status',
                'omr_pilot_plan_grants',
                'omr_pilot_member_provisions',
+               'omr_demo_organizations',
+               'omr_demo_provisions',
                'omr_remote_assets',
                'omr_remote_asset_upload_intents',
                'omr_remote_asset_cleanup_queue',
@@ -218,6 +220,12 @@ begin
          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
      ) or has_table_privilege(
          'service_role', 'public.omr_pilot_member_provisions',
+         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+     ) or has_table_privilege(
+         'service_role', 'public.omr_demo_organizations',
+         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+     ) or has_table_privilege(
+         'service_role', 'public.omr_demo_provisions',
          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
      ) or has_table_privilege(
          'service_role', 'public.omr_student_credential_epochs',
@@ -316,6 +324,8 @@ begin
                'omr_validate_targeted_attempt_v1()',
                'omr_guard_targeted_exam_access_v1()',
                'omr_lock_provisioned_teacher_identity_v1(text, bigint, text)',
+               'omr_lock_demo_identity_v1(text, bigint, text)',
+               'omr_read_demo_plan_v1(text)',
                'omr_authorize_effective_teacher_plan_v1(text, text)',
                'omr_read_effective_organization_plan_v1(text)',
                'omr_set_effective_plan_transaction_proof_v1(text, jsonb)',

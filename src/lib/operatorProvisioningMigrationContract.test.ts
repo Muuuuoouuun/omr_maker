@@ -116,10 +116,11 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
             "omr_pilot_plan_grants_superseded_check",
             "extensions.digest(pg_catalog.pg_get_functiondef",
             "282a79ed02c1a3cfc927248cf554ff5ae64eb73b18b8b1f658396d466f884a46",
-            "fcd083ee1f40a923e03cc8fd7bfccbdaa70d74d34a2e8dc35e7439760b099b45",
+            "117c3f5df5cc58a3a69116cbc95176fc7d3263aa9a2d1504ccecf346ac908826",
             "9e546425eaa75644fb8ee944062da143dad242f4424061910bee2fab4ea07670",
             "a28a831abf38473c8a7d6989749d298b2de2c6d7629fb08925c146a5c57e0bc1",
-            "e05ecee3e626ee9d15f3143003f5fe0ea9b0a31ffabe9a395fbff7dac1d17fec",
+            "9b6c6c9153157a0f4eef095e5c1bbe3c31103c2322d80e8d306d46e8429f250e",
+            "766fb182e56a451f61553fafd0a0a76ec83f4c30486a51e34e7056f54386c7c6",
         ]) expect(boundary).toContain(readinessProof);
         for (const evidence of [
             "operator provisioning exact replay mutated state",

@@ -196,7 +196,7 @@ describe("initial operations qualification workflow", () => {
             "production root boot scrubs legacy student start codes without reading or displaying them",
         ]) expect(readFileSync(join(process.cwd(), "e2e/production-security.spec.ts"), "utf8")).toContain(title);
         expect(productionPlaywrightSource).not.toContain("grep:");
-        expect(productionPlaywrightSource).toContain("testMatch: /(?:production-security|teacher-provisioned-links)\\.spec\\.ts/");
+        expect(productionPlaywrightSource).toContain("testMatch: /(?:production-security|teacher-provisioned-links|student-direct-login)\\.spec\\.ts/");
     });
 
     it("enforces exact evidence freshness and only seals after an exact-path GO score", () => {

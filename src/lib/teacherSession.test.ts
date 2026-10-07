@@ -194,6 +194,14 @@ describe("teacher session", () => {
         }
     });
 
+    it("keeps permanent demo accounts on the ordinary 12-hour session TTL", () => {
+        const session=createTeacherSession(VALID_TOKEN,1000,{teacherId:"teacher_0123456789abcdef",organizationId:"demo_org_0123456789abcdef01234567",
+            organizationName:"Synthetic demo",memberRole:"teacher",sessionAuthority:"account",accountSessionGeneration:1,plan:"academy"});
+        expect(session.organizationId).toBe("demo_org_0123456789abcdef01234567");
+        expect(session.expiresAt-session.issuedAt).toBe(12*60*60*1000);
+        expect(parseTeacherSession(JSON.stringify(session),session.expiresAt+1)).toBeNull();
+    });
+
     it("rejects malformed and expired sessions", () => {
         expect(parseTeacherSession(JSON.stringify(createTeacherSession("bad-token", 1000)), 1000)).toBeNull();
         expect(saveTeacherSession("tkn_abc123_deadbeef", memoryStorage(), 1000)).toBe(false);

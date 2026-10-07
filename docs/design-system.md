@@ -82,6 +82,7 @@
 | `--type-heading-sm` | `1.02rem` | 카드/섹션 소제목 |
 | `--type-heading-md` | `1.1rem` | 페이지 내 섹션 h3 (카드 제목보다 한 단계 큼) — `--type-heading-sm`과 `--type-heading-lg` 사이가 비어 있어서 다들 `1.1~1.35rem`을 손으로 흩어 쓰고 있었습니다 |
 | `--type-heading-lg` | `clamp(1.8rem, 3vw, 2.45rem)` | 페이지 타이틀 |
+| `--type-display` | `clamp(2.15rem, 5vw, 3.6rem)` | 소개(`/intro`) 히어로 헤드라인 전용, 화면당 1개. 앱 화면의 제목은 `--type-heading-lg`까지만 씁니다 |
 | `--type-metric` | `clamp(1.6rem, 2.2vw, 2.05rem)` | 큰 숫자 강조 (통계 카드 값) |
 
 새 텍스트 크기가 필요하면 위 표에서 가장 가까운 값을 먼저 고르세요. `0.82rem`을 쓰고 싶다면

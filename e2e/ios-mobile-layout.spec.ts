@@ -813,30 +813,29 @@ test.describe("iPhone WebKit mobile layout", () => {
         await page.screenshot({ path: `/tmp/omr-mobile-dashboard-${test.info().project.name}.png` });
     });
 
-    test("teacher users puts roster state and KPI cards before mobile actions and student cards", async ({ page, hasTouch }) => {
+    test("showcase roster keeps read-only state and KPI cards before mobile student details", async ({ page, hasTouch }) => {
         await loginAsShowcaseTeacher(page, hasTouch);
         await page.goto("/teacher/users");
 
         const title = page.getByRole("heading", { name: "사용자 관리" });
         const state = page.getByRole("status", { name: "데모 명단 안내" });
         const summary = page.getByRole("region", { name: "명단 핵심 지표" });
-        const actions = page.getByRole("group", { name: "명단 작업" });
-        const primaryAction = actions.getByRole("button", { name: "학생 추가" });
-        const secondaryAction = actions.getByRole("button", { name: "CSV 업로드" });
         const firstCard = page.getByTestId("teacher-users-mobile-card").first();
+        const detailAction = firstCard.getByRole("button", { name: "김민준 상세 보기" });
 
         await expect(page.locator(".teacher-users-table-scroll")).toBeHidden();
-        for (const element of [title, state, summary, primaryAction, secondaryAction, firstCard]) {
+        await expect(state).toContainText("읽기 전용");
+        await expect(page.getByRole("group", { name: "명단 작업" })).toHaveCount(0);
+        for (const name of ["학생 추가", "CSV 업로드", "새 반 만들기"]) {
+            await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
+        }
+        for (const element of [title, state, summary, firstCard, detailAction]) {
             await expectWithinViewport(element, page);
         }
         await expectPrecedesInDom(title, state);
         await expectPrecedesInDom(state, summary);
-        await expectPrecedesInDom(summary, primaryAction);
-        await expectPrecedesInDom(primaryAction, secondaryAction);
-        await expectPrecedesInDom(secondaryAction, firstCard);
-        await expectMinimumTouchTarget(primaryAction);
-        await expectMinimumTouchTarget(secondaryAction);
-        await expectMinimumTouchTarget(firstCard.getByRole("button", { name: "김민준 상세 보기" }));
+        await expectPrecedesInDom(summary, firstCard);
+        await expectMinimumTouchTarget(detailAction);
         await expectNoDocumentHorizontalOverflow(page);
     });
 

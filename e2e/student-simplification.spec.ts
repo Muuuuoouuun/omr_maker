@@ -145,7 +145,10 @@ test.describe("student UI simplification regressions", () => {
 
             await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
             await expect(page.getByText("학생 포털", { exact: true })).toHaveCount(0);
-            await expect(page.getByRole("button", { name: "시험 시작하기" })).toBeVisible();
+            await expect(page.getByLabel("학생 로그인 ID")).toBeVisible();
+            await expect(page.getByLabel("시작 코드", { exact: true })).toHaveAttribute("type", "password");
+            await expect(page.getByRole("button", { name: "내 시험으로 이동" })).toBeVisible();
+            await expectInsideViewport(page, ".student-direct-login-form");
 
             const disclosure = page.locator("details.student-alternate-entry");
             await expect(disclosure).not.toHaveAttribute("open", "");

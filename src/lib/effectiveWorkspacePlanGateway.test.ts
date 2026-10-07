@@ -28,6 +28,19 @@ describe("effective workspace plan gateway", () => {
             .resolves.toEqual({ authoritative: false, plan: "free" });
     });
 
+    it("accepts only a marked permanent demo envelope in its exact organization", async () => {
+        const organizationId="demo_org_0123456789abcdef01234567";
+        const row={organizationId,plan:"academy",grantId:null,expiresAt:null,entitlementMode:"permanent_demo"};
+        const client=(data:unknown) => ({rpc:vi.fn(async () => ({data,error:null}))});
+        await expect(readEffectiveWorkspacePlan(client(row),organizationId,now)).resolves.toEqual({authoritative:true,plan:"academy",entitlementMode:"permanent_demo"});
+        for (const data of [{...row,entitlementMode:undefined},{...row,plan:"enterprise"},{...row,expiresAt:"9999-01-01T00:00:00Z"},
+            {...row,organizationId:"demo_org_000000000000000000000000"}]) {
+            await expect(readEffectiveWorkspacePlan(client(data),organizationId,now)).resolves.toEqual({authoritative:false,plan:"free"});
+        }
+        const ordinary="pilot_org_0123456789abcdef01234567";
+        await expect(readEffectiveWorkspacePlan(client({...row,organizationId:ordinary}),ordinary,now)).resolves.toEqual({authoritative:false,plan:"free"});
+    });
+
     it("rejects paid grants at and after their expiration", async () => {
         const organizationId = "pilot_org_0123456789abcdef01234567";
         const expiresAt = "2026-08-31T15:00:00.000000Z";
