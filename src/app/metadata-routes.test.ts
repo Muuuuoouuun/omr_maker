@@ -16,7 +16,7 @@ describe("metadata routes", () => {
         expect(robots()).toEqual({
             rules: [{
                 userAgent: "*",
-                allow: ["/", "/pwa-check"],
+                allow: ["/", "/intro", "/pwa-check"],
                 disallow: ["/teacher/", "/student/", "/solve/", "/create", "/settings", "/groups", "/api/"],
             }],
             sitemap: `${productionOrigin}/sitemap.xml`,
@@ -28,6 +28,7 @@ describe("metadata routes", () => {
 
         expect(sitemap()).toEqual([
             { url: "https://preview.example.com/" },
+            { url: "https://preview.example.com/intro" },
             { url: "https://preview.example.com/pwa-check" },
         ]);
     });

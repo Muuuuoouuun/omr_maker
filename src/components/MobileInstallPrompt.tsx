@@ -59,6 +59,7 @@ export default function MobileInstallPrompt() {
   const pathname = usePathname();
   const descriptionId = useId();
   const isSuppressedPath = pathname === "/create"
+    || pathname === "/intro"
     || pathname === "/pwa-check"
     || pathname.startsWith("/solve/")
     || pathname.startsWith("/student/")
