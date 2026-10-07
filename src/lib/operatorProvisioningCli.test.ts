@@ -21,6 +21,7 @@ import {
     OperatorProvisioningCliError,
     createOperatorProvisioningDeadlineFetch,
     executeOperatorProvisioning,
+    executeDemoRevocation,
     parseOperatorSupabaseRootUrl,
     runOperatorProvisioningCli,
 } from "../../scripts/operator-provisioning-cli-core.mjs";
@@ -87,6 +88,115 @@ async function receipt(path: string) {
 }
 
 describe("operator teacher provisioning CLI", () => {
+    it("reviews Free requests without credentials, locks or RPC, and requires the exact approval digest", async () => {
+        const f = await fixture();
+        f.request.plan = "free";
+        f.request.reason = "qa_free_org";
+        await writeFile(f.requestPath, JSON.stringify(f.request), { mode: 0o600 });
+        const generatePassword = vi.fn(() => PASSWORD);
+        const hashPassword = vi.fn(async () => VERIFIER);
+        const deps = { ...f.deps, generatePassword, hashPassword };
+        const review = await executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, "--dry-run"] }, deps);
+        if (!("reviewDigest" in review)) throw new Error("Expected review-only result");
+        expect(review).toMatchObject({ status: "review_only", plan: "free", memberRole: "owner" });
+        expect(review.reviewDigest).toMatch(/^[a-f0-9]{64}$/);
+        expect(generatePassword).not.toHaveBeenCalled();
+        expect(hashPassword).not.toHaveBeenCalled();
+        expect(f.deps.provisionWithVerifier).not.toHaveBeenCalled();
+        expect(await readdir(f.stateDir)).toEqual([]);
+        for (const flag of [undefined, `--approve-qa-free=${"0".repeat(64)}`]) {
+            await expect(executeOperatorProvisioning({
+                argv: [`--request=${f.requestPath}`, ...(flag ? [flag] : [])],
+            }, deps)).rejects.toMatchObject({ code: "invalid_arguments" });
+        }
+        expect(generatePassword).not.toHaveBeenCalled();
+        expect(await readdir(f.stateDir)).toEqual([]);
+        const result = await executeOperatorProvisioning({
+            argv: [`--request=${f.requestPath}`, `--approve-qa-free=${review.reviewDigest}`],
+        }, { ...deps, provisionWithVerifier: vi.fn(async () => ({ ...SUCCESS, plan: "free" })) });
+        expect(result.plan).toBe("free");
+        expect(await receipt(f.statePath)).toMatchObject({ plan: "free" });
+    });
+
+    it("rejects Free requests with other reasons or credential fields before any side effect", async () => {
+        for (const extra of [{ reason: "initial_pilot" }, { initialPassword: "synthetic-rejected-field" }, { email: "" }]) {
+            const f = await fixture();
+            await writeFile(f.requestPath, JSON.stringify({ ...f.request, plan: "free", reason: "qa_free_org", ...extra }));
+            const generatePassword = vi.fn(() => PASSWORD);
+            await expect(executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, "--dry-run"] }, {
+                ...f.deps, generatePassword,
+            })).rejects.toMatchObject({ code: "invalid_request" });
+            expect(generatePassword).not.toHaveBeenCalled();
+            expect(f.deps.provisionWithVerifier).not.toHaveBeenCalled();
+            expect(await readdir(f.stateDir)).toEqual([]);
+        }
+    });
+
+    it("invalidates approval when the reviewed Free target changes", async () => {
+        const f = await fixture();
+        const request = { ...f.request, plan: "free", reason: "qa_free_org" };
+        await writeFile(f.requestPath, JSON.stringify(request));
+        const review = await executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, "--dry-run"] }, f.deps);
+        if (!("reviewDigest" in review)) throw new Error("Expected review-only result");
+        await writeFile(f.requestPath, JSON.stringify({ ...request, displayName: "Different synthetic owner" }));
+        await expect(executeOperatorProvisioning({
+            argv: [`--request=${f.requestPath}`, `--approve-qa-free=${review.reviewDigest}`],
+        }, f.deps)).rejects.toMatchObject({ code: "invalid_arguments" });
+        expect(f.deps.provisionWithVerifier).not.toHaveBeenCalled();
+        expect(await readdir(f.stateDir)).toEqual([]);
+    });
+
+    it.each(["free", "pro", "academy"])("reviews permanent demo %s with no expiry or credential side effects", async (plan) => {
+        const f=await fixture();
+        const { expiresAt: _expiry, ...base }=f.request;
+        const request={...base,plan,entitlementMode:"permanent_demo",reason:"qa_permanent_demo"};
+        await writeFile(f.requestPath,JSON.stringify(request));
+        const generatePassword=vi.fn(() => PASSWORD);
+        const deps={...f.deps,generatePassword};
+        const args=[`--request=${f.requestPath}`];
+        const review=await executeOperatorProvisioning({argv:[...args,"--dry-run"]},deps);
+        if (!("reviewDigest" in review)) throw new Error("Expected review");
+        expect(review).toMatchObject({entitlementMode:"permanent_demo",plan,memberRole:"owner"});
+        expect(generatePassword).not.toHaveBeenCalled(); expect(await readdir(f.stateDir)).toEqual([]);
+        for (const argv of [args,[...args,`--approve-qa-free=${review.reviewDigest}`]]) {
+            await expect(executeOperatorProvisioning({argv},deps)).rejects.toMatchObject({code:"invalid_arguments"});
+        }
+        const result=await executeOperatorProvisioning({argv:[...args,`--approve-qa-demo=${review.reviewDigest}`]}, {
+            ...deps,provisionWithVerifier:vi.fn(async () => ({status:"provisioned",organizationId:`demo_org_${"a".repeat(24)}`,
+                accountId:SUCCESS.accountId,memberRole:"owner",plan,entitlementMode:"permanent_demo",replayed:false})),
+        });
+        expect(result).toMatchObject({plan,entitlementMode:"permanent_demo"});
+        expect(await receipt(f.statePath)).toMatchObject({plan,entitlementMode:"permanent_demo"});
+    });
+
+    it("rejects demo expiry, unsupported mode and unmarked ordinary organization before generating credentials", async () => {
+        for (const extra of [{expiresAt:"9999-01-01T00:00:00.000Z"},{entitlementMode:"permanent"},{plan:"enterprise"}]) {
+            const f=await fixture(); const {expiresAt:_expiry,...base}=f.request;
+            await writeFile(f.requestPath,JSON.stringify({...base,entitlementMode:"permanent_demo",reason:"qa_permanent_demo",...extra}));
+            const generatePassword=vi.fn(() => PASSWORD);
+            await expect(executeOperatorProvisioning({argv:[`--request=${f.requestPath}`,"--dry-run"]},{...f.deps,generatePassword}))
+                .rejects.toMatchObject({code:"invalid_request"});
+            expect(generatePassword).not.toHaveBeenCalled(); expect(await readdir(f.stateDir)).toEqual([]);
+        }
+    });
+
+    it("requires reviewed demo revocation scope and calls no dependency on dry-run or mismatch",async () => {
+        const f=await fixture();
+        const request={organizationId:`demo_org_${"a".repeat(24)}`,entitlementMode:"permanent_demo",actor:"operator:qa",reason:"qa_demo_retired"};
+        await writeFile(f.requestPath,JSON.stringify(request));
+        const revokeDemo=vi.fn(async () => true); const deps={...f.deps,revokeDemo};
+        const args=[`--request=${f.requestPath}`];
+        const review=await executeDemoRevocation({argv:[...args,"--dry-run"]},deps);
+        if (!("reviewDigest" in review)) throw new Error("Expected review");
+        expect(revokeDemo).not.toHaveBeenCalled();
+        await expect(executeDemoRevocation({argv:[...args,`--approve-qa-demo=${"0".repeat(64)}`]},deps)).rejects.toMatchObject({code:"invalid_arguments"});
+        expect(revokeDemo).not.toHaveBeenCalled();
+        await expect(executeDemoRevocation({argv:[...args,`--approve-qa-demo=${review.reviewDigest}`]},deps)).resolves.toMatchObject({status:"revoked"});
+        expect(revokeDemo).toHaveBeenCalledOnce(); expect(await readdir(f.stateDir)).toEqual([]);
+        await writeFile(f.requestPath,JSON.stringify({...request,organizationId:`pilot_org_${"a".repeat(24)}`}));
+        await expect(executeDemoRevocation({argv:[...args,"--dry-run"]},deps)).rejects.toMatchObject({code:"invalid_request"});
+    });
+
     it.each([
         "https://project.supabase.co/path",
         "https://project.supabase.co/?query=1",
@@ -570,7 +680,7 @@ describe("operator teacher provisioning CLI", () => {
         expect(secondCall?.encodedVerifier).toBe(VERIFIER);
         expect(firstCall?.idempotencyKey).toBe(secondCall?.idempotencyKey);
         expect(pending.initialPassword).toBe(PASSWORD);
-        expect(result.replayed).toBe(true);
+        expect("replayed" in result && result.replayed).toBe(true);
         expect((await receipt(current.statePath)).initialPassword).toBe(PASSWORD);
     });
 

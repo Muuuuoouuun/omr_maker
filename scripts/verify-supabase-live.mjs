@@ -451,9 +451,13 @@ async function runSqlMatrix(
     psqlFile("supabase/teacher-force-finish-compact-assertions.sql");
     psqlFile("supabase/teacher-session-revocation-assertions.sql");
     psqlFile("supabase/pilot-org-teacher-assertions.sql");
+    psqlFile("supabase/qa-free-owner-assertions.sql");
+    psqlFile("supabase/permanent-demo-assertions.sql");
     psqlFile("supabase/production-server-boundary.sql");
     psqlFile("supabase/live-test-boundary-assertions.sql");
     psqlFile("supabase/pilot-org-teacher-assertions.sql");
+    psqlFile("supabase/qa-free-owner-assertions.sql");
+    psqlFile("supabase/permanent-demo-assertions.sql");
     releaseProofReports.push(releaseProofReport(psqlFile("supabase/initial-operations-release-proof-assertions.sql", [], {
         capture: true,
         variables: ["release_proof_phase=boundary_asserted"],
@@ -463,6 +467,8 @@ async function runSqlMatrix(
         "set omr.rollback_confirm = 'restore-browser-access'",
     ]);
     psqlFile("supabase/live-test-rollback-assertions.sql");
+    psqlFile("supabase/qa-free-owner-assertions.sql");
+    psqlFile("supabase/permanent-demo-assertions.sql");
     psqlFile("supabase/remediation-assertions.sql");
     releaseProofReports.push(releaseProofReport(psqlFile("supabase/initial-operations-release-proof-assertions.sql", [], {
         capture: true,

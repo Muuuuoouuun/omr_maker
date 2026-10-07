@@ -33,6 +33,7 @@ export interface ProvisionedTeacherLogin {
     memberRole: ProvisionedTeacherMemberRole;
     plan: "free" | "pro" | "academy";
     grantExpiresAt: string | null;
+    entitlementMode?: "permanent_demo";
 }
 
 export interface ProvisionedTeacherSessionValidation {
@@ -43,6 +44,7 @@ export interface ProvisionedTeacherSessionValidation {
     memberRole: ProvisionedTeacherMemberRole;
     plan: "free" | "pro" | "academy";
     grantExpiresAt: string | null;
+    entitlementMode?: "permanent_demo";
 }
 
 function scalarBoolean(data: unknown): boolean {
@@ -177,11 +179,14 @@ export async function findActiveTeacherAccount(
 }
 
 const ACCOUNT_ID_PATTERN = /^teacher_[a-f0-9]{16}$/;
-const PILOT_ORGANIZATION_ID_PATTERN = /^pilot_org_[a-f0-9]{24}$/;
+const PILOT_ORGANIZATION_ID_PATTERN = /^(?:pilot_org_|demo_org_)[a-f0-9]{24}$/;
 const PASSWORD_HASH_PATTERN = /^pbkdf2-sha256:120000:[a-f0-9]{32}:[a-f0-9]{64}$/;
 const UTC_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 
-function validPlanFields(plan: string, expiresAt: unknown, now: number): expiresAt is string | null {
+function validPlanFields(plan: string, expiresAt: unknown, now: number, mode: unknown, organizationId: string): expiresAt is string | null {
+    const demo = /^demo_org_[a-f0-9]{24}$/.test(organizationId);
+    if (demo) return mode === "permanent_demo" && expiresAt === null && ["free", "pro", "academy"].includes(plan);
+    if (mode !== undefined) return false;
     if (plan === "free") return expiresAt === null;
     return (plan === "pro" || plan === "academy")
         && typeof expiresAt === "string"
@@ -207,6 +212,7 @@ export async function lookupProvisionedTeacherLogin(
     const row = exactOwnDataRecord(result.data, [
         "accountId", "email", "displayName", "passwordHash", "sessionGeneration",
         "organizationId", "organizationName", "memberRole", "plan", "grantExpiresAt",
+        ...(result.data && typeof result.data === "object" && Object.prototype.hasOwnProperty.call(result.data, "entitlementMode") ? ["entitlementMode"] : []),
     ]);
     if (!row) return null;
     const accountId = clean(row.accountId);
@@ -221,12 +227,13 @@ export async function lookupProvisionedTeacherLogin(
     if (!ACCOUNT_ID_PATTERN.test(accountId) || !email || !displayName
         || !PASSWORD_HASH_PATTERN.test(passwordHash) || !sessionGeneration
         || !PILOT_ORGANIZATION_ID_PATTERN.test(organizationId) || !organizationName
-        || !isProvisionedTeacherMemberRole(memberRole) || !validPlanFields(plan, row.grantExpiresAt, now)) return null;
+        || !isProvisionedTeacherMemberRole(memberRole) || !validPlanFields(plan, row.grantExpiresAt, now, row.entitlementMode, organizationId)) return null;
     return {
         accountId, email, displayName, passwordHash, sessionGeneration,
         organizationId, organizationName, memberRole,
         plan: plan as ProvisionedTeacherLogin["plan"],
         grantExpiresAt: row.grantExpiresAt,
+        ...(row.entitlementMode === "permanent_demo" ? { entitlementMode: "permanent_demo" as const } : {}),
     };
 }
 
@@ -253,6 +260,7 @@ export async function validateProvisionedTeacherSession(
     const row = exactOwnDataRecord(result.data, [
         "accountId", "sessionGeneration", "organizationId", "organizationName",
         "memberRole", "plan", "grantExpiresAt",
+        ...(result.data && typeof result.data === "object" && Object.prototype.hasOwnProperty.call(result.data, "entitlementMode") ? ["entitlementMode"] : []),
     ]);
     if (!row) return null;
     const returnedAccountId = clean(row.accountId);
@@ -263,11 +271,12 @@ export async function validateProvisionedTeacherSession(
     const plan = clean(row.plan);
     if (returnedAccountId !== accountId || returnedGeneration !== sessionGeneration
         || returnedOrganizationId !== organizationId || !organizationName
-        || !isProvisionedTeacherMemberRole(memberRole) || !validPlanFields(plan, row.grantExpiresAt, now)) return null;
+        || !isProvisionedTeacherMemberRole(memberRole) || !validPlanFields(plan, row.grantExpiresAt, now, row.entitlementMode, organizationId)) return null;
     return {
         accountId, sessionGeneration, organizationId, organizationName,
         memberRole, plan: plan as ProvisionedTeacherSessionValidation["plan"],
         grantExpiresAt: row.grantExpiresAt,
+        ...(row.entitlementMode === "permanent_demo" ? { entitlementMode: "permanent_demo" as const } : {}),
     };
 }
 

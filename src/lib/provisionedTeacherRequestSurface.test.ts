@@ -39,9 +39,9 @@ describe("provisioned teacher request surfaces", () => {
         expect([...gatewayConsumers, remoteAssets].join("\n")).not.toContain('.select("plan")');
     });
 
-    it("allows only the exact lowercase pilot organization shape for student session issuance", () => {
+    it("allows only exact lowercase provisioned pilot/demo organization shapes for student session issuance", () => {
         const action = source("src/app/actions/studentSession.ts");
-        expect(action).toContain("pilot_org_[a-f0-9]{24}");
+        expect(action).toContain("(?:pilot_org_|demo_org_)[a-f0-9]{24}");
         expect(action).toContain("WORKSPACE_ID_PATTERN.test(workspaceId)");
     });
 });
