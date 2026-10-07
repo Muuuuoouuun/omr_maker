@@ -90,7 +90,8 @@
     "jsdom": "29.1.1",
     "typescript": "^5",
     "vitest": "^4.1.11",
-    "wait-on": "^9.0.10"
+    "wait-on": "^9.0.10",
+    "fast-glob": "file:./scripts/next-eslint-glob-adapter"
   },
   "overrides": {
     "pdfjs-dist": "$pdfjs-dist",
@@ -98,7 +99,10 @@
     "sharp": "$sharp",
     "http-cache-semantics": "4.3.0",
     "shell-quote": "1.12.0",
-    "source-map-js": "1.2.2"
+    "source-map-js": "1.2.2",
+    "@next/eslint-plugin-next": {
+      "fast-glob": "$fast-glob"
+    }
   },
   "engines": {
     "node": ">=22.13.0"
