@@ -5,7 +5,11 @@ import { resolve } from "node:path";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/components/BrandLogo", () => ({ default: () => null }));
+vi.mock("@/components/BrandLogo", () => ({ default: () => null, BrandMark: () => null }));
+// Next resolves static image imports to { src, width, height, blurDataURL }; Vite yields a bare URL.
+vi.mock("./_assets/solve-tablet.webp", () => ({
+    default: { src: "/solve-tablet.webp", width: 1600, height: 1118, blurDataURL: "data:image/webp;base64,UklGRg==" },
+}));
 
 import IntroPage from "./page";
 
@@ -90,6 +94,15 @@ describe("/intro storytelling page", () => {
             const id = anchor.getAttribute("href")!.slice(1);
             expect(document.getElementById(id), id).not.toBeNull();
         }
+    });
+
+    it("ships a 1200×630 share image with alt text through the file convention", () => {
+        const png = readFileSync(resolve(process.cwd(), "src/app/intro/opengraph-image.png"));
+        // PNG IHDR: width and height are big-endian uint32s at bytes 16 and 20.
+        expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1200, 630]);
+        const alt = readFileSync(resolve(process.cwd(), "src/app/intro/opengraph-image.alt.txt"), "utf8");
+        expect(alt).toContain("시험이 끝나면");
+        expect(alt).toBe(alt.trim());
     });
 
     it("keeps the teacher portal's demo card addressable for the intent=demo handoff", () => {

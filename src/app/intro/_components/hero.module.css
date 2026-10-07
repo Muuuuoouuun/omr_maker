@@ -1,0 +1,510 @@
+/* Hero visual: the red-pen paper pile (problem) behind a dashboard that
+   finished grading at submission (solution). All figures are examples. */
+
+.stage {
+  position: relative;
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  min-height: 28rem;
+  padding: 3.25rem 0 2.5rem 3.5rem;
+}
+
+/* ── Paper pile ────────────────────────────────────── */
+.paperPile {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 44%;
+  max-width: 15rem;
+  aspect-ratio: 3 / 4;
+}
+
+.paper {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.paperBack {
+  opacity: 0.55;
+  transform: rotate(-13deg) translate(-6%, 6%);
+}
+
+.paperMiddle {
+  opacity: 0.8;
+  transform: rotate(-3deg) translate(4%, 1%);
+}
+
+.paperFront {
+  display: grid;
+  align-content: start;
+  gap: 0.8rem;
+  padding: 1rem 0.95rem;
+  transform: rotate(-8deg);
+}
+
+.paperHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+}
+
+.paperLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Red pen = grading, so --grade-red. */
+.paperScore {
+  display: grid;
+  flex: 0 0 auto;
+  margin-left: auto;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border: 2px solid var(--grade-red);
+  border-radius: var(--radius-full);
+  color: var(--grade-red);
+  font-size: var(--type-body-sm);
+  font-weight: 850;
+  transform: rotate(-10deg);
+}
+
+.paperLine {
+  position: relative;
+  display: block;
+  height: 0.4rem;
+  margin-left: 1.4rem;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+}
+
+.paperLine:nth-child(even) {
+  margin-right: 24%;
+}
+
+.paperLine:nth-child(3n) {
+  margin-right: 40%;
+}
+
+/* Korean red-pen marks: ○ for right, a slash for wrong. */
+.markRight,
+.markWrong {
+  position: absolute;
+  top: 50%;
+  left: -1.3rem;
+  width: 0.78rem;
+  height: 0.78rem;
+  transform: translateY(-50%);
+}
+
+.markRight {
+  border: 2px solid var(--grade-red);
+  border-radius: var(--radius-full);
+}
+
+.markWrong::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -0.1rem;
+  width: 0.95rem;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--grade-red);
+  transform: rotate(-60deg);
+}
+
+/* ── Dashboard in a browser window ─────────────────── */
+.window {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.dash {
+  display: grid;
+  grid-template-columns: 2.9rem minmax(0, 1fr);
+}
+
+.dashSide {
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 0.4rem;
+  padding: 0.75rem 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.dashSide .dashLogo {
+  width: 1.65rem;
+  height: 1.65rem;
+  margin-bottom: 0.4rem;
+  border-radius: 0.5rem;
+  filter: none;
+}
+
+.dashNav {
+  display: grid;
+  place-items: center;
+  width: 1.95rem;
+  height: 1.95rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+
+.dashNavActive {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+}
+
+.dashMain {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.85rem 0.9rem 0.95rem;
+}
+
+.dashHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dashTitle {
+  font-size: var(--type-label);
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.dashSub {
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 600;
+}
+
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.kpi {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.kpi > span {
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+}
+
+.kpi strong {
+  display: flex;
+  align-items: baseline;
+  gap: 0.1rem;
+  font-size: var(--type-heading-md);
+  line-height: 1.1;
+}
+
+.kpi small {
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+}
+
+.kpiGrade strong {
+  color: var(--grade-red);
+}
+
+.chartCard {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.65rem 0.7rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.chartHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: var(--type-micro);
+  font-weight: 800;
+}
+
+.legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.legendKey {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 2px;
+  background: var(--grade-red);
+}
+
+/* One series: the weak questions are the emphasis, the rest recede. */
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 4.6rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 40%, var(--border));
+}
+
+.barSlot {
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+}
+
+.bar {
+  width: min(0.85rem, 70%);
+  border-radius: 3px 3px 0 0;
+  background: color-mix(in srgb, var(--muted) 50%, var(--surface));
+  transform-origin: bottom;
+}
+
+.bar.barWeak {
+  background: var(--grade-red);
+}
+
+.axis {
+  display: flex;
+  gap: 2px;
+}
+
+.axis span {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  text-align: center;
+}
+
+.action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.55rem 0.5rem 0.65rem;
+  border: 1px solid var(--grade-red-line);
+  border-radius: var(--radius-md);
+  background: var(--grade-red-soft);
+}
+
+.actionText {
+  min-width: 0;
+  font-size: var(--type-micro);
+  font-weight: 600;
+}
+
+.actionText strong {
+  font-weight: 850;
+}
+
+.actionChip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: var(--radius-full);
+  color: var(--surface);
+  background: var(--retake);
+  font-size: var(--type-micro);
+  font-weight: 800;
+}
+
+/* Sits on the window's top edge, overlapping only the bar's top sliver so it
+   never covers the address pill at any width. */
+.gradedChip {
+  position: absolute;
+  z-index: 2;
+  right: -0.75rem;
+  bottom: calc(100% - 0.3rem);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.85rem 0.45rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--type-label);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.gradedIcon {
+  display: grid;
+  place-items: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  border-radius: var(--radius-full);
+  color: #fff;
+  background: var(--success);
+}
+
+/* ── Entrance: once, in order (pile → window → bars → chip) ── */
+.paperPile,
+.browser {
+  animation-name: heroRise;
+  animation-duration: 0.7s;
+  animation-timing-function: var(--ease-out-soft);
+  animation-fill-mode: both;
+}
+
+.browser {
+  animation-delay: 120ms;
+}
+
+.bar {
+  animation-name: heroGrow;
+  animation-duration: 0.6s;
+  animation-timing-function: var(--ease-spring-soft);
+  animation-fill-mode: both;
+  animation-delay: calc(380ms + var(--i, 0) * 60ms);
+}
+
+.gradedChip {
+  animation-name: heroPop;
+  animation-duration: 0.45s;
+  animation-timing-function: var(--ease-spring);
+  animation-fill-mode: both;
+  animation-delay: 1s;
+}
+
+@keyframes heroRise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes heroGrow {
+  from {
+    transform: scaleY(0);
+  }
+
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes heroPop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.92);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+:global(html[data-motion="off"]) .stage *,
+:global(html[data-motion="off"]) .browser,
+:global(html[data-motion="off"]) .paperPile {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage *,
+  .browser,
+  .paperPile {
+    animation: none;
+  }
+}
+
+/* ── Responsive ────────────────────────────────────── */
+@media (max-width: 960px) {
+  .stage {
+    min-height: 0;
+    max-width: 34rem;
+    margin-inline: auto;
+    padding: 3rem 0 1.5rem 2.75rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .stage {
+    padding: 2.4rem 0 1rem 1.5rem;
+  }
+
+  .paperPile {
+    width: 38%;
+  }
+
+  /* Too narrow to read beside the score; the marks carry the sheet. */
+  .paperLabel {
+    display: none;
+  }
+
+  .dash {
+    grid-template-columns: 2.3rem minmax(0, 1fr);
+  }
+
+  .dashSide .dashLogo {
+    width: 1.35rem;
+    height: 1.35rem;
+  }
+
+  .dashNav {
+    width: 1.65rem;
+    height: 1.65rem;
+  }
+
+  .dashMain {
+    gap: 0.55rem;
+    padding: 0.7rem;
+  }
+
+  .kpi {
+    padding: 0.45rem 0.5rem;
+  }
+
+  .gradedChip {
+    right: 0;
+    font-size: var(--type-caption);
+  }
+}

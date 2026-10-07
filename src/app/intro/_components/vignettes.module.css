@@ -1,0 +1,1143 @@
+/*
+ * Feature vignettes for /intro. Coded stand-ins for teacher screens (the demo
+ * account's real screens carry demo-data banners) plus one framed real
+ * capture of the student solve screen. Every figure is an example.
+ *
+ * In-view motion is CSS scroll-driven: no JS, and browsers without view
+ * timelines simply show the finished state.
+ */
+
+.mock {
+  display: grid;
+  gap: 0.85rem;
+  max-width: 28rem;
+  margin-inline: auto;
+  padding: 1.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  view-timeline: --vignette block;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.title svg {
+  color: var(--text-primary);
+}
+
+.fieldLabel {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+.chip svg {
+  color: var(--text-primary);
+}
+
+/* ─── STEP 1 · 출제 ─────────────────────────────────── */
+.createBody {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 0.85rem;
+}
+
+/* A miniature of the uploaded problem sheet. */
+.sheet {
+  display: grid;
+  align-content: start;
+  gap: 0.55rem;
+  padding: 0.75rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.sheetTitle {
+  padding-bottom: 0.4rem;
+  border-bottom: 1.5px solid #0f172a;
+  color: #0f172a;
+  font-size: var(--type-micro);
+  font-weight: 850;
+}
+
+.sheetItem {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.3rem;
+}
+
+.sheetNumber {
+  color: #0f172a;
+  font-size: var(--type-micro);
+  font-weight: 850;
+}
+
+.sheetLines {
+  display: grid;
+  gap: 0.25rem;
+  padding-top: 0.2rem;
+}
+
+.sheetLines span {
+  height: 0.28rem;
+  border-radius: var(--radius-full);
+  background: #e2e8f0;
+}
+
+.sheetLines span:last-child {
+  width: 64%;
+}
+
+.sheetFile {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.15rem;
+  color: #64748b;
+  font-size: var(--type-micro);
+  font-weight: 700;
+}
+
+.answers {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.fastField {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 2.6rem;
+  padding: 0 0.85rem;
+  border: 1.5px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+.fastValue {
+  font-size: var(--type-heading-sm);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+
+.caret {
+  width: 2px;
+  height: 1.1rem;
+  background: var(--primary);
+}
+
+.answerGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+.answerCell {
+  display: grid;
+  justify-items: center;
+  gap: 0.2rem;
+  padding: 0.35rem 0.15rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+}
+
+.answerNumber {
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+}
+
+.answerValue {
+  display: grid;
+  place-items: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  font-size: var(--type-caption);
+  font-weight: 850;
+}
+
+/* ─── STEP 2 · 배포 ─────────────────────────────────── */
+.subject {
+  font-size: var(--type-heading-sm);
+  font-weight: 850;
+}
+
+.targets {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.count {
+  color: var(--text-primary);
+  font-weight: 800;
+}
+
+.classChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.classChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+  font-size: var(--type-caption);
+  font-weight: 800;
+}
+
+.shareCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "qr detail"
+    "qr link";
+  align-items: center;
+  gap: 0.6rem 0.9rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+}
+
+/* QR codes scan most reliably dark-on-light, so the tile stays white. */
+.qrTile {
+  grid-area: qr;
+  display: grid;
+  place-items: center;
+  padding: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.qrTile svg {
+  display: block;
+  width: 5.5rem;
+  height: 5.5rem;
+}
+
+.shareDetail {
+  grid-area: detail;
+  align-self: end;
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.shareDetail strong {
+  font-size: var(--type-label);
+  font-weight: 850;
+  text-wrap: balance;
+}
+
+.devices {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+.linkRow {
+  grid-area: link;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.linkLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+.copyButton {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-full);
+  color: #fff;
+  background: var(--primary);
+  font-size: var(--type-micro);
+  font-weight: 800;
+}
+
+/* ─── STEP 3 · 응시: real capture in a tablet ──────── */
+.shot {
+  position: relative;
+  max-width: 34rem;
+  margin-inline: auto;
+  padding: 1rem 0 2rem;
+}
+
+/* A white UI on a dark page reads glaring; ease it slightly in dark mode. */
+:global([data-theme="dark"]) .shotFrame img {
+  filter: brightness(0.94);
+}
+
+.callout {
+  position: absolute;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--type-caption);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.callout svg {
+  color: var(--text-primary);
+}
+
+.calloutSave {
+  top: 0;
+  right: 14%;
+}
+
+.calloutPen {
+  bottom: 22%;
+  left: -1rem;
+}
+
+.calloutOmr {
+  right: -1rem;
+  bottom: 40%;
+}
+
+.calloutOmr strong {
+  color: var(--text-primary);
+}
+
+.shotCaption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+  text-align: center;
+}
+
+/* ─── STEP 4 · 채점: mirrors the live monitor ─────── */
+.timer {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  overflow: hidden;
+  padding: 1rem 1.1rem;
+  border-radius: var(--radius-lg);
+  color: #fff;
+  /* Same gradient as the live monitor's timer card. */
+  background: linear-gradient(135deg, var(--primary), #0ea5e9);
+}
+
+.timer::before {
+  content: "";
+  position: absolute;
+  top: -60%;
+  right: -10%;
+  width: 12rem;
+  height: 12rem;
+  border-radius: var(--radius-full);
+  background: radial-gradient(circle, color-mix(in srgb, white 24%, transparent) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.timerMain {
+  position: relative;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.timerLabel {
+  font-size: var(--type-micro);
+  font-weight: 800;
+  opacity: 0.9;
+}
+
+.timerValue {
+  font-size: var(--type-metric);
+  line-height: 1.05;
+}
+
+.timerExam {
+  font-size: var(--type-micro);
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.timerActions {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.timerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid color-mix(in srgb, white 45%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, white 14%, transparent);
+  font-size: var(--type-caption);
+  font-weight: 800;
+}
+
+/* Ending an exam is destructive; the live monitor shows it in red too. */
+.timerButton.timerStop {
+  border-color: transparent;
+  background: var(--error);
+}
+
+.liveStats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.liveStat {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  padding: 0.5rem 0.65rem;
+  border-left: 1px solid var(--border);
+}
+
+.liveStat:first-child {
+  border-left: 0;
+}
+
+.liveStat > span {
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+}
+
+.liveStat strong {
+  font-size: var(--type-heading-md);
+  line-height: 1.15;
+}
+
+.liveCards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.liveCard {
+  --tone: var(--success);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.25rem 0.55rem;
+  padding: 0.6rem 0.65rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--tone) 22%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--tone) 5%, var(--surface));
+}
+
+.liveCard[data-tone="primary"] {
+  --tone: var(--primary);
+}
+
+.liveCard[data-tone="warning"] {
+  --tone: var(--warning);
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-full);
+  color: #fff;
+  background: var(--tone);
+  font-size: var(--type-caption);
+  font-weight: 850;
+}
+
+.liveWho {
+  display: grid;
+  justify-items: start;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.liveWho strong {
+  font-size: var(--type-caption);
+  font-weight: 800;
+}
+
+.liveScore {
+  font-size: var(--type-label);
+}
+
+.liveTrack {
+  grid-column: 1 / -1;
+  height: 0.3rem;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--tone) 14%, var(--surface));
+}
+
+.liveFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--tone);
+  transform-origin: left;
+}
+
+/* ─── STEP 5 · 분석과 보강 ──────────────────────────── */
+/* One series: the weak questions are the emphasis (--grade-red means
+   correctness here), the rest recede to gray. Scale labels sit in a gutter. */
+.barChart {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1.3rem 0 0 2.2rem;
+}
+
+.barPlot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 7rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 45%, var(--border));
+}
+
+.gridLine {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+.gridTop {
+  top: 0;
+}
+
+.gridMid {
+  top: 50%;
+}
+
+.gridLabel {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  padding-right: 0.45rem;
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  white-space: nowrap;
+  transform: translateY(-50%);
+}
+
+.barSlot {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+}
+
+.bar {
+  position: relative;
+  width: min(1.05rem, 64%);
+  border-radius: 4px 4px 0 0;
+  background: color-mix(in srgb, var(--muted) 55%, var(--surface));
+  transform-origin: bottom;
+}
+
+:global([data-theme="dark"]) .bar {
+  background: color-mix(in srgb, var(--muted) 45%, var(--surface));
+}
+
+.bar.barWeak {
+  background: var(--grade-red);
+}
+
+.barValue {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  margin-bottom: 0.2rem;
+  color: var(--foreground);
+  font-size: var(--type-micro);
+  font-weight: 850;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.barAxis {
+  display: flex;
+  gap: 2px;
+}
+
+.barAxis span {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  text-align: center;
+}
+
+.choices {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+}
+
+.choicesHead {
+  margin-bottom: 0.15rem;
+  font-size: var(--type-caption);
+  font-weight: 600;
+}
+
+.choicesHead strong {
+  font-weight: 850;
+}
+
+.choiceRow {
+  --tone: color-mix(in srgb, var(--muted) 50%, var(--surface));
+  display: grid;
+  grid-template-columns: 1.3rem minmax(0, 1fr) 2.2rem 3.7rem;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.choiceRow[data-kind="correct"] {
+  --tone: var(--success);
+}
+
+.choiceRow[data-kind="wrong"] {
+  --tone: var(--grade-red);
+}
+
+/* Circled digits render small in Pretendard; one step up keeps them legible. */
+.choiceMark {
+  font-size: var(--type-heading-sm);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.choiceTrack {
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 12%, var(--surface));
+}
+
+.choiceFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--tone);
+  transform-origin: left;
+}
+
+.choiceRate {
+  font-size: var(--type-caption);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  text-align: right;
+}
+
+.choiceNote {
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.choiceRow[data-kind="correct"] .choiceNote {
+  color: var(--text-success);
+}
+
+.choiceRow[data-kind="wrong"] .choiceNote {
+  color: var(--grade-red);
+}
+
+.retakeAction {
+  display: inline-flex;
+  justify-self: start;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.95rem;
+  border-radius: var(--radius-full);
+  color: var(--surface);
+  background: var(--retake);
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+/* ─── 05 · 누적 성장 ─────────────────────────────────── */
+.growth {
+  max-width: none;
+}
+
+/* One series: no legend (the title names it). 2px line, ringed end dot,
+   ~10% area wash, hairline grid, endpoints labeled. */
+.lineChart {
+  padding: 1.5rem 1.1rem 0;
+}
+
+.linePlot {
+  position: relative;
+  height: 8rem;
+}
+
+.lineSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.svgGrid,
+.svgBase {
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.svgGrid {
+  stroke: var(--border);
+}
+
+.svgBase {
+  stroke: color-mix(in srgb, var(--muted) 45%, var(--border));
+}
+
+.growthArea {
+  fill: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.growthLine {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.lineDot {
+  position: absolute;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  box-shadow: 0 0 0 2px var(--surface);
+  transform: translate(-50%, -50%);
+}
+
+:global([data-theme="dark"]) .growthLine {
+  stroke: var(--primary-light);
+}
+
+:global([data-theme="dark"]) .growthArea {
+  fill: color-mix(in srgb, var(--primary-light) 12%, transparent);
+}
+
+:global([data-theme="dark"]) .lineDot {
+  background: var(--primary-light);
+}
+
+.lineLabel {
+  position: absolute;
+  color: var(--foreground);
+  font-size: var(--type-caption);
+  font-weight: 850;
+  white-space: nowrap;
+  transform: translate(-0.2rem, calc(-100% - 0.55rem));
+}
+
+.lineLabel.lineLabelEnd {
+  transform: translate(calc(-100% + 0.2rem), calc(-100% - 0.55rem));
+}
+
+.lineAxis {
+  position: relative;
+  height: 1.6rem;
+}
+
+.lineAxis span {
+  position: absolute;
+  top: 0.4rem;
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.mastery {
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.masteryHead {
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+.masteryRow {
+  --tone: var(--primary);
+  display: grid;
+  grid-template-columns: 5.2rem minmax(0, 1fr) 2.4rem;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.masteryRow[data-kind="weak"] {
+  --tone: var(--grade-red);
+}
+
+.masteryName {
+  display: grid;
+  font-size: var(--type-caption);
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.masteryNote {
+  color: var(--text-success);
+  font-size: var(--type-micro);
+  font-weight: 800;
+}
+
+.masteryRow[data-kind="weak"] .masteryNote {
+  color: var(--grade-red);
+}
+
+.masteryTrack {
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 12%, var(--surface));
+}
+
+.masteryFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--tone);
+  transform-origin: left;
+}
+
+.masteryRate {
+  font-size: var(--type-caption);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  text-align: right;
+}
+
+/* ─── In-view motion ─────────────────────────────────── */
+@keyframes typeIn {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes growUp {
+  from {
+    transform: scaleY(0);
+  }
+
+  to {
+    transform: none;
+  }
+}
+
+@keyframes growAcross {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: none;
+  }
+}
+
+@keyframes wipeIn {
+  from {
+    clip-path: inset(-10% 100% -10% 0);
+  }
+
+  to {
+    clip-path: inset(-10% 0 -10% 0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@supports (animation-timeline: view()) {
+  .fastValue,
+  .answerValue,
+  .bar,
+  .liveFill,
+  .choiceFill,
+  .masteryFill,
+  .lineSvg,
+  .lineDot,
+  .lineLabelEnd {
+    animation-duration: auto;
+    animation-fill-mode: both;
+    animation-timeline: --vignette;
+  }
+
+  .fastValue {
+    animation-name: typeIn;
+    animation-timing-function: steps(11, end);
+    animation-range: cover 12% cover 30%;
+  }
+
+  /* --i is set on each cell/row and inherited by the animated child. */
+  .answerValue {
+    animation-name: popIn;
+    animation-timing-function: var(--ease-spring);
+    animation-range:
+      cover calc(18% + var(--i, 0) * 1.6%)
+      cover calc(24% + var(--i, 0) * 1.6%);
+  }
+
+  .shot {
+    view-timeline: --shot block;
+  }
+
+  .callout {
+    animation-name: popIn;
+    animation-duration: auto;
+    animation-timing-function: var(--ease-spring);
+    animation-fill-mode: both;
+    animation-timeline: --shot;
+    animation-range:
+      cover calc(22% + var(--i, 0) * 4%)
+      cover calc(28% + var(--i, 0) * 4%);
+  }
+
+  .bar {
+    animation-name: growUp;
+    animation-timing-function: var(--ease-spring-soft);
+    animation-range:
+      cover calc(10% + var(--i, 0) * 1.4%)
+      cover calc(22% + var(--i, 0) * 1.4%);
+  }
+
+  .liveFill,
+  .choiceFill,
+  .masteryFill {
+    animation-name: growAcross;
+    animation-timing-function: var(--ease-out-soft);
+    animation-range:
+      cover calc(14% + var(--i, 0) * 2%)
+      cover calc(30% + var(--i, 0) * 2%);
+  }
+
+  .lineSvg {
+    animation-name: wipeIn;
+    animation-timing-function: var(--ease-out-soft);
+    animation-range: cover 10% cover 32%;
+  }
+
+  .lineDot,
+  .lineLabelEnd {
+    animation-name: fadeIn;
+    animation-timing-function: linear;
+    animation-range: cover 30% cover 36%;
+  }
+}
+
+:global(html[data-motion="off"]) .mock *,
+:global(html[data-motion="off"]) .shot * {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mock *,
+  .shot * {
+    animation: none;
+  }
+}
+
+@media print {
+  .mock *,
+  .shot * {
+    animation: none;
+  }
+}
+
+/* ─── Responsive ─────────────────────────────────────── */
+@media (max-width: 640px) {
+  .mock {
+    padding: 1rem;
+  }
+
+  .createBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sheet {
+    display: none;
+  }
+
+  .calloutPen {
+    left: 0;
+  }
+
+  .calloutOmr {
+    right: 0;
+  }
+
+  .liveStat {
+    padding: 0.45rem 0.5rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .calloutOmr {
+    display: none;
+  }
+
+  .liveStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .liveStat:nth-child(3) {
+    border-left: 0;
+  }
+
+  .liveStat:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+
+  .liveCards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .shareCard {
+    grid-template-areas:
+      "qr detail"
+      "link link";
+  }
+
+  .qrTile svg {
+    width: 4.5rem;
+    height: 4.5rem;
+  }
+}

@@ -8,38 +8,43 @@ import {
     Building2,
     Check,
     CheckCircle2,
-    ChartColumn,
     Clock3,
-    Copy,
+    CloudSun,
+    Coffee,
     FileText,
     FolderSearch,
     GraduationCap,
     Hourglass,
-    Laptop,
-    Link2,
+    Moon,
     PenLine,
     Presentation,
-    QrCode,
     Repeat2,
     Send,
-    Smartphone,
     Sparkles,
-    Tablet,
-    Timer,
-    TrendingUp,
-    Users,
-    Wand2,
+    Sun,
+    Sunset,
 } from "lucide-react";
-import BrandLogo from "@/components/BrandLogo";
+import BrandLogo, { BrandMark } from "@/components/BrandLogo";
 import SkipToMainContent from "@/components/SkipToMainContent";
-import StatusPill from "@/components/dashboard/StatusPill";
 import { resolveSiteOrigin } from "@/lib/siteOrigin";
+import HeroVisual from "./_components/HeroVisual";
+import { FeatureRow, Nudge, SectionHead } from "./_components/StoryBlocks";
+import {
+    CreateVignette,
+    GrowthVignette,
+    InsightVignette,
+    LiveVignette,
+    ShareVignette,
+    SolveShot,
+} from "./_components/Vignettes";
 import styles from "./intro.module.css";
 
 const PAGE_TITLE = "OMR Maker 소개 · 출제부터 보강까지 한 흐름으로";
 const PAGE_DESCRIPTION =
     "문제지 PDF로 시험을 만들고, 링크 하나로 배포하고, 제출과 동시에 채점과 분석까지. 채점하던 시간을 가르치는 시간으로 돌려드리는 OMR Maker를 소개합니다.";
 
+// The share image comes from ./opengraph-image.png and its .alt.txt (file
+// convention); `npm run intro:images -- share` regenerates it.
 export const metadata: Metadata = {
     metadataBase: new URL(resolveSiteOrigin()),
     title: PAGE_TITLE,
@@ -52,7 +57,6 @@ export const metadata: Metadata = {
         url: "/intro",
         title: PAGE_TITLE,
         description: PAGE_DESCRIPTION,
-        images: [{ url: "/screenshots/omr-wide-home.jpg", width: 1269, height: 720, alt: "OMR Maker 시작 화면" }],
     },
 };
 
@@ -90,6 +94,8 @@ const COSTS: Record<CostKey, { index: string; label: string; title: string; body
     },
 };
 
+const solves = (key: CostKey) => `${COSTS[key].index} ${COSTS[key].label}`;
+
 const NAV_ITEMS = [
     { href: "#problem", label: "문제" },
     { href: "#vision", label: "비전" },
@@ -98,11 +104,12 @@ const NAV_ITEMS = [
     { href: "#future", label: "미래" },
 ] as const;
 
+// The sky icons carry the afternoon-into-night arc of the story.
 const EXAM_DAY = [
-    { time: "14:50", title: "시험 종료", body: "세 반에서 답안지 90장을 걷습니다." },
-    { time: "16:00", title: "채점 시작", body: "반마다 30명 × 25문항, 750개의 답을 눈으로 대조합니다." },
-    { time: "19:30", title: "점수 정리", body: "빨간 펜으로 매긴 점수를 엑셀에 한 칸씩 옮겨 적습니다." },
-    { time: "22:10", title: "분석은 내일로", body: "몇 번 문제를 왜 많이 틀렸는지는 결국 다음 주의 숙제가 됩니다." },
+    { time: "14:50", title: "시험 종료", body: "세 반에서 답안지 90장을 걷습니다.", icon: Sun },
+    { time: "16:00", title: "채점 시작", body: "반마다 30명 × 25문항, 750개의 답을 눈으로 대조합니다.", icon: CloudSun },
+    { time: "19:30", title: "점수 정리", body: "빨간 펜으로 매긴 점수를 엑셀에 한 칸씩 옮겨 적습니다.", icon: Sunset },
+    { time: "22:10", title: "분석은 내일로", body: "몇 번 문제를 왜 많이 틀렸는지는 결국 다음 주의 숙제가 됩니다.", icon: Moon },
 ] as const;
 
 const LOOP_STEPS = [
@@ -155,352 +162,23 @@ const AUDIENCES = [
     },
 ] as const;
 
-/* ─── Illustration data (all values are examples) ─────────────────────── */
-
-const FAST_ANSWERS = "31524 25143 32";
-const FAST_ANSWER_DIGITS = FAST_ANSWERS.replace(/\s/g, "").split("");
-
-// Charts are HTML (bars, labels) over a stretched SVG (line only), so their
-// text stays on the --type-* scale at every width instead of shrinking with
-// a viewBox.
-const HERO_RATES = [88, 79, 92, 74, 85, 45, 81, 39, 90, 77];
-const QUESTION_RATES = [92, 85, 78, 88, 41, 90, 73, 38, 81, 86];
-const WEAK_RATE = 50;
-const GROWTH_SCORES = [62, 68, 66, 74, 79, 85];
-const GROWTH_RANGE = { min: 50, max: 100 };
-
-const growthX = (index: number) => (index / (GROWTH_SCORES.length - 1)) * 100;
-const growthY = (score: number) => ((GROWTH_RANGE.max - score) / (GROWTH_RANGE.max - GROWTH_RANGE.min)) * 100;
-
-function SolvesPill({ cost }: { cost: CostKey }) {
-    const { index, label } = COSTS[cost];
-    return <StatusPill tone="primary" size="sm" variant="outline" label={`해결 ${index} ${label}`} />;
-}
-
-function Nudge({ text, href, label, icon: Icon = ArrowRight }: { text: string; href: string; label: string; icon?: LucideIcon }) {
-    const content = <>{label}<Icon size={16} aria-hidden="true" /></>;
-    return (
-        <div className={styles.nudge}>
-            <p className={styles.nudgeText}>{text}</p>
-            {href.startsWith("#")
-                ? <a href={href} className={styles.nudgeLink}>{content}</a>
-                : <Link href={href} className={styles.nudgeLink}>{content}</Link>}
-        </div>
-    );
-}
-
-function SectionHead({ id, number, chapter, title, lead, center = false }: {
-    id: string;
-    number: string;
-    chapter: string;
-    title: string;
-    lead: string;
-    center?: boolean;
+function DayList({ items, endIcon: EndIcon }: {
+    items: ReadonlyArray<{ time: string; text: string }>;
+    endIcon: LucideIcon;
 }) {
     return (
-        <div className={center ? `${styles.sectionHead} ${styles.sectionHeadCenter}` : styles.sectionHead}>
-            <p className={styles.chapter}>
-                <span className="numeric-emphasis">{number}</span>
-                <span aria-hidden="true" className={styles.chapterRule} />
-                {chapter}
-            </p>
-            <h2 id={id} className={styles.sectionTitle}>{title}</h2>
-            <p className={styles.sectionLead}>{lead}</p>
-        </div>
-    );
-}
-
-function FeatureRow({ id, step, title, body, bullets, solves, reverse = false, children }: {
-    id: string;
-    step: string;
-    title: string;
-    body: React.ReactNode;
-    bullets: ReadonlyArray<{ text: string; pro?: boolean }>;
-    solves: CostKey;
-    reverse?: boolean;
-    children: React.ReactNode;
-}) {
-    return (
-        <article id={id} aria-labelledby={`${id}-title`} className={reverse ? `${styles.feature} ${styles.featureReverse}` : styles.feature}>
-            <div className={styles.featureCopy}>
-                <div className={styles.featureMeta}>
-                    <span className={styles.featureStep}>{step}</span>
-                    <SolvesPill cost={solves} />
-                </div>
-                <h3 id={`${id}-title`} className={styles.featureTitle}>{title}</h3>
-                <p className={styles.featureText}>{body}</p>
-                <ul className={styles.featureBullets}>
-                    {bullets.map(bullet => (
-                        <li key={bullet.text}>
-                            <Check size={16} aria-hidden="true" />
-                            <span>{bullet.text}</span>
-                            {bullet.pro ? <StatusPill tone="primary" size="sm" label="Pro" /> : null}
-                        </li>
-                    ))}
-                </ul>
-            </div>
-            <div className={styles.mockStage}>{children}</div>
-        </article>
-    );
-}
-
-function MockHead({ icon: Icon, title }: { icon: LucideIcon; title: string }) {
-    return (
-        <div className={styles.mockHead}>
-            <span className={styles.mockTitle}>
-                <Icon size={15} aria-hidden="true" />
-                {title}
-            </span>
-            <StatusPill tone="muted" size="sm" label="예시" />
-        </div>
-    );
-}
-
-function CreateMock() {
-    return (
-        <div className={styles.mock} role="img" aria-label="빠른 정답 입력 예시. 숫자 31524 25143 32를 이어 입력하면 1번부터 12번까지 정답이 한 번에 채워집니다.">
-            <MockHead icon={Wand2} title="빠른 정답 입력" />
-            <div className={styles.fastField}>
-                <span className={styles.fastValue}>{FAST_ANSWERS}</span>
-                <span className={styles.caret} />
-            </div>
-            <div className={styles.answerGrid}>
-                {FAST_ANSWER_DIGITS.map((answer, index) => (
-                    <span key={index} className={styles.answerCell}>
-                        <span className={styles.answerNum}>{index + 1}</span>
-                        <span className={styles.answerValue}>{answer}</span>
-                    </span>
-                ))}
-            </div>
-            <div className={styles.mockChips}>
-                <span className={styles.mockChip}><Sparkles size={13} aria-hidden="true" />답지 PDF 정답 인식</span>
-                <span className={styles.mockChip}><FileText size={13} aria-hidden="true" />문항별 배점 · 개념 태그</span>
-            </div>
-        </div>
-    );
-}
-
-function ShareMock() {
-    return (
-        <div className={styles.mock} role="img" aria-label="시험 배포 예시. 세 반을 함께 선택하면 하나의 응시 링크와 QR 코드가 만들어집니다.">
-            <MockHead icon={Send} title="시험 배포" />
-            <p className={styles.mockSubject}>2학년 수학 단원평가</p>
-            <span className={styles.mockLabel}>배포할 반</span>
-            <div className={styles.classChips}>
-                {["2학년 1반", "2학년 2반", "2학년 3반"].map(name => (
-                    <span key={name} className={styles.classChip}>
-                        <Check size={13} aria-hidden="true" />
-                        {name}
-                    </span>
-                ))}
-            </div>
-            <div className={styles.shareLink}>
-                <Link2 size={15} aria-hidden="true" />
-                <span className={styles.shareUrl}>학생용 응시 링크</span>
-                <span className={styles.shareCopy}><Copy size={13} aria-hidden="true" />링크 복사</span>
-            </div>
-            <div className={styles.shareFoot}>
-                <span className={styles.qrBox}><QrCode size={40} strokeWidth={1.6} aria-hidden="true" /></span>
-                <span className={styles.shareFootText}>
-                    <strong>QR 코드로 바로 입장</strong>
-                    <span className={styles.devices}>
-                        <Smartphone size={14} aria-hidden="true" />
-                        <Tablet size={14} aria-hidden="true" />
-                        <Laptop size={14} aria-hidden="true" />
-                        폰 · 태블릿 · PC
-                    </span>
-                </span>
-            </div>
-        </div>
-    );
-}
-
-const OMR_ROWS = [
-    { number: 5, marked: 2 },
-    { number: 6, marked: 4 },
-    { number: 7, marked: 3, active: true },
-    { number: 8, marked: 0 },
-] as const;
-
-function SolveMock() {
-    return (
-        <div className={styles.tablet} role="img" aria-label="태블릿 응시 화면 예시. 문제지 위에 펜으로 풀이를 적고 오른쪽 OMR 답안에 마킹하며, 답안은 자동 저장됩니다.">
-            <div className={styles.tabletBar}>
-                <span className={styles.tabletTitle}>2학년 수학 단원평가</span>
-                <span className={styles.tabletTimer}><Timer size={13} aria-hidden="true" /><span className="numeric-emphasis">12:48</span></span>
-                <StatusPill tone="success" size="sm" label="자동 저장됨" />
-                <StatusPill tone="muted" size="sm" label="예시" />
-            </div>
-            <div className={styles.tabletBody}>
-                <div className={styles.pdfPane}>
-                    <div className={styles.pdfPage}>
-                        <span className={styles.pdfQuestion}>7.</span>
-                        <span className={styles.pdfLine} />
-                        <span className={`${styles.pdfLine} ${styles.pdfLineShort}`} />
-                        <svg className={styles.scribble} viewBox="0 0 160 60" aria-hidden="true">
-                            <path d="M6 38c10-18 18-22 22-8s-4 20 4 10 12-24 20-10M64 34h18M72 26v16M96 40c4-14 10-18 14-6 3 9-6 14-6 14s10-2 16-2M132 24c-6 4-8 16 0 18 6 1 10-8 6-14" />
-                            <path d="M8 52c40-6 90-6 140-2" />
-                        </svg>
-                        <span className={styles.pdfLine} />
-                        <span className={`${styles.pdfLine} ${styles.pdfLineShort}`} />
-                    </div>
-                </div>
-                <div className={styles.omrPane}>
-                    <span className={styles.omrLabel}>OMR 답안 <span className="numeric-emphasis">6/25</span></span>
-                    {OMR_ROWS.map(row => (
-                        <div key={row.number} className={"active" in row ? `${styles.omrRow} ${styles.omrRowActive}` : styles.omrRow}>
-                            <span className={styles.omrNum}>{row.number}</span>
-                            {[1, 2, 3, 4, 5].map(choice => (
-                                <span key={choice} className={choice === row.marked ? `${styles.bubble} ${styles.bubbleOn}` : styles.bubble}>
-                                    {choice}
-                                </span>
-                            ))}
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </div>
-    );
-}
-
-const LIVE_ROWS = [
-    { name: "김민준", tone: "success", status: "제출 완료", detail: "92점" },
-    { name: "최지우", tone: "primary", status: "응시 중", detail: "18/25" },
-    { name: "한지호", tone: "success", status: "제출 완료", detail: "84점" },
-    { name: "이서연", tone: "warning", status: "미응시", detail: "—" },
-] as const;
-
-function GradeMock() {
-    return (
-        <div className={styles.mock} role="img" aria-label="실시간 응시 현황 예시. 30명 중 27명이 제출했고, 제출한 답안은 바로 채점되어 점수가 표시됩니다. 5분 연장과 종료 처리를 할 수 있습니다.">
-            <MockHead icon={Users} title="실시간 응시 현황" />
-            <div className={styles.liveProgress}>
-                <span>제출</span>
-                <span className="numeric-emphasis">27 / 30명</span>
-            </div>
-            <span className={styles.liveTrack}><span className={styles.liveFill} /></span>
-            <div className={styles.liveRows}>
-                {LIVE_ROWS.map(row => (
-                    <div key={row.name} className={styles.liveRow}>
-                        <span className={styles.liveName}>{row.name}</span>
-                        <StatusPill tone={row.tone} size="sm" label={row.status} />
-                        <span className={`${styles.liveDetail} numeric-emphasis`}>{row.detail}</span>
-                    </div>
-                ))}
-            </div>
-            <div className={styles.liveActions}>
-                <span className={styles.liveAction}><Clock3 size={13} aria-hidden="true" />5분 연장</span>
-                <span className={styles.liveAction}>종료 처리</span>
-            </div>
-        </div>
-    );
-}
-
-function InsightMock() {
-    return (
-        <div className={styles.mock} role="img" aria-label="문항별 정답률 예시. 10문항 중 5번이 41%, 8번이 38%로 정답률이 낮고, 8번은 3번 선지를 가장 많이 골랐습니다. 이 문항들로 보강 세트를 만들 수 있습니다.">
-            <MockHead icon={ChartColumn} title="문항별 정답률" />
-            <div className={styles.barChart}>
-                <div className={styles.barPlot}>
-                    <span className={`${styles.barGridLine} ${styles.barGridTop}`}><span className={styles.barGridLabel}>100%</span></span>
-                    <span className={`${styles.barGridLine} ${styles.barGridMid}`}><span className={styles.barGridLabel}>50%</span></span>
-                    {QUESTION_RATES.map((rate, index) => (
-                        <span key={index} className={styles.barSlot}>
-                            <span
-                                className={rate < WEAK_RATE ? `${styles.bar} ${styles.barWeak}` : styles.bar}
-                                style={{ height: `${rate}%` }}
-                            >
-                                {rate < WEAK_RATE ? <span className={styles.barValue}>{rate}%</span> : null}
-                            </span>
-                        </span>
-                    ))}
-                </div>
-                <div className={styles.barAxis}>
-                    {QUESTION_RATES.map((_, index) => <span key={index}>{index + 1}</span>)}
-                </div>
-            </div>
-            <p className={styles.chartCallout}>
-                <span className={styles.weakKey} />
-                <span><strong>8번</strong> 정답률 38% · 가장 많이 고른 오답 ③번</span>
-            </p>
-            <span className={styles.retakeAction}>
-                <Repeat2 size={14} aria-hidden="true" />
-                약한 문항으로 보강 세트 만들기
-            </span>
-        </div>
-    );
-}
-
-function GrowthChart() {
-    const last = GROWTH_SCORES.length - 1;
-    const line = GROWTH_SCORES
-        .map((score, index) => `${index === 0 ? "M" : "L"}${growthX(index).toFixed(2)} ${growthY(score).toFixed(2)}`)
-        .join("");
-    const area = `${line}L100 100L0 100Z`;
-    const point = (index: number) => ({ left: `${growthX(index)}%`, top: `${growthY(GROWTH_SCORES[index])}%` });
-    return (
-        <div className={styles.lineChart}>
-            <div className={styles.linePlot}>
-                <svg className={styles.lineSvg} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                    <line className={styles.gridLine} x1="0" x2="100" y1="0" y2="0" />
-                    <line className={styles.gridLine} x1="0" x2="100" y1="50" y2="50" />
-                    <line className={styles.baseLine} x1="0" x2="100" y1="100" y2="100" />
-                    <path className={styles.growthArea} d={area} />
-                    <path className={styles.growthLine} d={line} />
-                </svg>
-                <span className={styles.lineDot} style={point(last)} />
-                <span className={styles.lineLabel} style={point(0)}>{GROWTH_SCORES[0]}점</span>
-                <span className={`${styles.lineLabel} ${styles.lineLabelEnd}`} style={point(last)}>{GROWTH_SCORES[last]}점</span>
-            </div>
-            <div className={styles.lineAxis}>
-                {GROWTH_SCORES.map((_, index) => (
-                    <span key={index} style={{ left: `${growthX(index)}%` }}>{index + 1}회</span>
-                ))}
-            </div>
-        </div>
-    );
-}
-
-function HeroVisual() {
-    return (
-        <div className={styles.heroVisual} role="img" aria-label="빨간 펜으로 채점하던 종이 답안지 더미 위에, 제출과 동시에 채점이 끝난 결과 카드가 놓여 있는 예시 그림.">
-            <div className={styles.paperStack}>
-                <span className={`${styles.paper} ${styles.paperBack}`} />
-                <span className={`${styles.paper} ${styles.paperMiddle}`} />
-                <div className={`${styles.paper} ${styles.paperFront}`}>
-                    <span className={styles.paperHeader}>
-                        <span>2학년 1반 · 수학</span>
-                        <span className={styles.paperScore}>72</span>
-                    </span>
-                    {[0, 1, 2, 3, 4, 5].map(line => (
-                        <span key={line} className={styles.paperLine}>
-                            <span className={line % 3 === 1 ? styles.paperMarkWrong : styles.paperMarkRight} />
-                        </span>
-                    ))}
-                </div>
-            </div>
-            <div className={styles.resultCard}>
-                <div className={styles.resultHead}>
-                    <StatusPill tone="success" size="sm" icon={<Check size={12} aria-hidden="true" />} label="자동 채점 완료" />
-                    <StatusPill tone="muted" size="sm" label="예시" />
-                </div>
-                <p className={styles.resultTitle}>2학년 수학 단원평가</p>
-                <div className={styles.resultStats}>
-                    <span><strong className="numeric-emphasis">90</strong>명 제출</span>
-                    <span><strong className="numeric-emphasis">76.4</strong>점 평균</span>
-                </div>
-                <span className={styles.miniBars}>
-                    {HERO_RATES.map((rate, index) => (
-                        <span
-                            key={index}
-                            className={rate < WEAK_RATE ? `${styles.miniBar} ${styles.miniBarWeak}` : styles.miniBar}
-                            style={{ height: `${rate}%` }}
-                        />
-                    ))}
-                </span>
-                <p className={styles.resultFoot}>오답이 많은 문항 · 6번 · 8번</p>
-            </div>
-        </div>
+        <ol className={styles.dayList}>
+            {items.map((item, index) => {
+                const isEnd = index === items.length - 1;
+                return (
+                    <li key={item.time} className={isEnd ? `${styles.dayItem} ${styles.dayItemEnd}` : styles.dayItem}>
+                        <span className={`${styles.dayTime} numeric-emphasis`}>{item.time}</span>
+                        <span className={styles.dayText}>{item.text}</span>
+                        {isEnd ? <EndIcon size={18} aria-hidden="true" className={styles.dayEndIcon} /> : null}
+                    </li>
+                );
+            })}
+        </ol>
     );
 }
 
@@ -578,16 +256,19 @@ export default function IntroPage() {
                                     어느 수학 선생님의 시험 날
                                 </h3>
                                 <ol className={styles.timelineList}>
-                                    {EXAM_DAY.map(item => (
-                                        <li key={item.time} className={styles.timelineItem}>
-                                            <span className={`${styles.timelineTime} numeric-emphasis`}>{item.time}</span>
-                                            <span className={styles.timelineDot} aria-hidden="true" />
-                                            <span className={styles.timelineBody}>
-                                                <strong>{item.title}</strong>
-                                                <span>{item.body}</span>
-                                            </span>
-                                        </li>
-                                    ))}
+                                    {EXAM_DAY.map(item => {
+                                        const Icon = item.icon;
+                                        return (
+                                            <li key={item.time} className={styles.timelineItem}>
+                                                <span className={`${styles.timelineTime} numeric-emphasis`}>{item.time}</span>
+                                                <span className={styles.timelineIcon}><Icon size={15} aria-hidden="true" /></span>
+                                                <span className={styles.timelineBody}>
+                                                    <strong>{item.title}</strong>
+                                                    <span>{item.body}</span>
+                                                </span>
+                                            </li>
+                                        );
+                                    })}
                                 </ol>
                             </div>
                             <ul className={styles.costList}>
@@ -680,9 +361,9 @@ export default function IntroPage() {
                                     { text: "숫자만 이어 치는 빠른 정답 입력" },
                                     { text: "문항별 배점과 단원·개념 태그" },
                                 ]}
-                                solves="time"
+                                solves={solves("time")}
                             >
-                                <CreateMock />
+                                <CreateVignette />
                             </FeatureRow>
                             <FeatureRow
                                 id="feature-share"
@@ -694,10 +375,10 @@ export default function IntroPage() {
                                     { text: "응시 링크 · QR 코드 · 안내 문구 복사" },
                                     { text: "설치 없이 브라우저에서, 원하면 앱처럼 설치" },
                                 ]}
-                                solves="record"
+                                solves={solves("record")}
                                 reverse
                             >
-                                <ShareMock />
+                                <ShareVignette />
                             </FeatureRow>
                             <FeatureRow
                                 id="feature-solve"
@@ -709,9 +390,9 @@ export default function IntroPage() {
                                     { text: "3초 자동 저장 · 새로고침 복원" },
                                     { text: "종료 5분 전 알림 · 시간 종료 자동 제출" },
                                 ]}
-                                solves="record"
+                                solves={solves("record")}
                             >
-                                <SolveMock />
+                                <SolveShot />
                             </FeatureRow>
                             <Nudge
                                 text="학생이신가요? 선생님께 받은 링크로 입장하거나, 여기서 바로 시작하세요."
@@ -728,10 +409,10 @@ export default function IntroPage() {
                                     { text: "실시간 응시 현황 · 미응시 확인" },
                                     { text: "5분 연장 · 종료 처리" },
                                 ]}
-                                solves="time"
+                                solves={solves("time")}
                                 reverse
                             >
-                                <GradeMock />
+                                <LiveVignette />
                             </FeatureRow>
                             <FeatureRow
                                 id="feature-insight"
@@ -743,9 +424,9 @@ export default function IntroPage() {
                                     { text: "반별·개념별 약점 비교", pro: true },
                                     { text: "보강 세트 · 오답 재시험 배정", pro: true },
                                 ]}
-                                solves="timing"
+                                solves={solves("timing")}
                             >
-                                <InsightMock />
+                                <InsightVignette />
                             </FeatureRow>
                         </div>
                         <Nudge
@@ -769,28 +450,14 @@ export default function IntroPage() {
                         <div className={styles.changeGrid}>
                             <div className={`${styles.dayCard} ${styles.dayCardBefore} ${styles.reveal}`}>
                                 <h3 className={styles.dayTitle}>지금까지의 시험 날</h3>
-                                <ol className={styles.dayList}>
-                                    {BEFORE_DAY.map(item => (
-                                        <li key={item.time} className={styles.dayItem}>
-                                            <span className={`${styles.dayTime} numeric-emphasis`}>{item.time}</span>
-                                            <span className={styles.dayText}>{item.text}</span>
-                                        </li>
-                                    ))}
-                                </ol>
+                                <DayList items={BEFORE_DAY} endIcon={Moon} />
                             </div>
                             <div className={`${styles.dayCard} ${styles.dayCardAfter} ${styles.reveal}`}>
                                 <h3 className={styles.dayTitle}>
                                     <Sparkles size={18} aria-hidden="true" />
                                     OMR Maker와 함께라면
                                 </h3>
-                                <ol className={styles.dayList}>
-                                    {AFTER_DAY.map(item => (
-                                        <li key={item.time} className={styles.dayItem}>
-                                            <span className={`${styles.dayTime} numeric-emphasis`}>{item.time}</span>
-                                            <span className={styles.dayText}>{item.text}</span>
-                                        </li>
-                                    ))}
-                                </ol>
+                                <DayList items={AFTER_DAY} endIcon={Coffee} />
                             </div>
                         </div>
                         <ul className={styles.proofGrid}>
@@ -818,19 +485,8 @@ export default function IntroPage() {
                             lead="한 번의 시험은 점수지만, 열 번의 시험은 성장 곡선이 됩니다. 기록이 쌓일수록 OMR Maker가 보여주는 것도 깊어집니다."
                         />
                         <div className={styles.futureGrid}>
-                            <div className={`${styles.growthCard} ${styles.reveal}`} role="img" aria-label="한 학생의 누적 성장 예시. 여섯 번의 시험 동안 점수가 62점에서 85점으로 올랐고, 강점은 이차방정식, 보강이 필요한 개념은 확률입니다.">
-                                <div className={styles.mockHead}>
-                                    <span className={styles.mockTitle}>
-                                        <TrendingUp size={15} aria-hidden="true" />
-                                        한 학생의 누적 성장
-                                    </span>
-                                    <StatusPill tone="muted" size="sm" label="예시" />
-                                </div>
-                                <GrowthChart />
-                                <div className={styles.growthPills}>
-                                    <StatusPill tone="success" size="sm" label="강점 · 이차방정식" />
-                                    <StatusPill tone="grade" size="sm" label="보강 필요 · 확률" />
-                                </div>
+                            <div className={styles.reveal}>
+                                <GrowthVignette />
                             </div>
                             <ul className={styles.audienceList}>
                                 {AUDIENCES.map(audience => {
@@ -855,6 +511,7 @@ export default function IntroPage() {
                 <section id="start" className={styles.finalSection} aria-labelledby="start-title">
                     <div className={styles.inner}>
                         <div className={styles.finalPanel}>
+                            <span className={styles.finalMark} aria-hidden="true"><BrandMark /></span>
                             <h2 id="start-title" className={styles.finalTitle}>
                                 다음 시험부터, 채점은
                                 <br />
