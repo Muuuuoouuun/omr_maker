@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, type MouseEvent } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -252,6 +253,7 @@ export default function Home() {
   // Opt-in returning-student hint (name + class only) used to pre-fill the form.
   const [returnHint, setReturnHint] = useState<StudentReturnHint | null>(null);
   const returnHintAppliedRef = useRef(false);
+  const demoIntentAppliedRef = useRef(false);
   const studentLookupInputRef = useRef<HTMLInputElement>(null);
   const startCodeInputRef = useRef<HTMLInputElement>(null);
   // Local-mode typo guard: the typed name is not on the selected class roster.
@@ -432,6 +434,15 @@ export default function Home() {
     }
     return () => { cancelled = true; };
   }, [router, teacherSelfServiceEnabled]);
+
+  // /intro's demo CTAs arrive with intent=demo. Bring the existing showcase
+  // card into view once; starting the demo stays an explicit button press.
+  useEffect(() => {
+    if (role !== "teacher" || !isHydrated || demoIntentAppliedRef.current) return;
+    demoIntentAppliedRef.current = true;
+    if (new URLSearchParams(window.location.search).get("intent") !== "demo") return;
+    document.getElementById("teacher-demo-entry")?.scrollIntoView({ block: "center" });
+  }, [role, isHydrated]);
 
   // Pre-fill a returning student's name and class from the opt-in hint, then
   // move focus to the first credential they still have to type.
@@ -1374,6 +1385,15 @@ export default function Home() {
           </div>
         )}
 
+        {role === "none" && (
+          <p className="home-intro-link-row">
+            <Link href="/intro" className="home-intro-link">
+              처음이신가요? 서비스 소개 보기
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </p>
+        )}
+
         {/* ── Login Forms ────────────────────── */}
         {role !== "none" && (
           <div
@@ -1676,7 +1696,7 @@ export default function Home() {
                 </div>
 
                 <div className="mockup-login-divider" aria-hidden="true"><span>또는 바로 체험하기</span></div>
-                <section className="mockup-login-card" aria-label="데모 계정 체험">
+                <section id="teacher-demo-entry" className="mockup-login-card" aria-label="데모 계정 체험">
                   <div className="mockup-login-card-heading">
                     <span className="mockup-login-spark"><Sparkles size={18} /></span>
                     <div>
