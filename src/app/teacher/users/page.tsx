@@ -2585,7 +2585,9 @@ function ManageUsersInner() {
                                         </div>
                                     </div>
                                     <p style={{ fontSize: '0.74rem', color: 'var(--muted)', lineHeight: 1.55, marginTop: '0.75rem', wordBreak: 'keep-all' }}>
-                                        시작 코드는 화면·클립보드·브라우저 저장소에 보관하지 않고 일회용 CSV로만 내려받습니다.
+                                        시작 코드는 화면·클립보드·브라우저 저장소에 보관하지 않고 일회용 CSV로만 내려받습니다. 학생에게 학생번호(student_id)와 시작 코드(start_code)를 전달하면{' '}
+                                        <NextLink href="/?role=student" style={{ color: 'var(--primary)', fontWeight: 700 }}>학생 로그인</NextLink>
+                                        {' '}화면에서 내 시험을 볼 수 있습니다.
                                     </p>
                                 </div>
                                 {!rosterMutationsDisabled && <div data-testid="student-start-code-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>

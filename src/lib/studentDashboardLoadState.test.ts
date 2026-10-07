@@ -25,8 +25,8 @@ describe("student dashboard load-state contract", () => {
         expect(dashboardSource).toContain('aria-live="polite"');
         expect(dashboardSource).toContain('data-testid="student-dashboard-error"');
         expect(dashboardSource).toContain('data-testid="student-dashboard-retry"');
-        expect(dashboardSource).not.toContain('href="/?role=student"');
-        expect(dashboardSource).toContain("선생님이 보낸 최신 초대 링크");
+        expect(dashboardSource).toContain('href="/?role=student"');
+        expect(dashboardSource).toContain("학생 로그인 ID와 시작 코드로 로그인");
         expect(dashboardSource).toContain('href="/"');
         expect(dashboardSource).toContain('dataState.state === "loaded_empty"');
         expect(dashboardSource).toContain('dataState.state === "loaded_data"');

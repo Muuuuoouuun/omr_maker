@@ -85,6 +85,10 @@ vi.mock("@/lib/studentCredentialVerifier", () => ({
     verifyStudentCredentials: async () => ({
         status: "verified",
         identity: {
+            organizationId: "default",
+            studentId: "student-1",
+            studentName: "김학생",
+            identityType: "registered",
             accountId: `student_credential_${"a".repeat(32)}`,
             credentialGeneration: 1,
         },
@@ -149,7 +153,7 @@ describe("issued student identity carries the signed identityType (B0)", () => {
 
         expect(result).toMatchObject({ ok: true, status: "ok" });
         expect(result.identity?.identityType).toBe("registered");
-        expect(signedSessionCookie()?.identityType).toBe("registered");
+        expect(signedSessionCookie()).toMatchObject({ identityType: "registered", organizationId: "default" });
     });
 
     it("returns temporary for the degraded local (no Supabase) login, matching the signed cookie", async () => {

@@ -43,15 +43,11 @@ Synthetic dashboard, roster, and live-monitoring examples are restricted to the 
 
 For local account QA, setting `NEXT_PUBLIC_OMR_SEED_TEST_ACCOUNTS=1` in `.env.local` adds four login-ready students (`student1` through `student4`) to the current browser's local roster without replacing user-created rows. This seed is disabled in production and does not create Supabase Auth users. Remove the flag and clear the dedicated QA browser's `omr_*` local/session storage when the fixture is no longer needed. The students use the `테스트반` class; their development start codes are defined in `src/lib/localTestAccounts.ts`.
 
-Student login uses the roster student number or email as the account ID, and a six-character start code as the password-like credential. Import `examples/student-roster.csv` from `/teacher/users`, then students can choose `학생` and enter one of these sample names with the matching class. Share the CSV `id` or `email` value as the student's login ID, especially when names overlap:
+Students can open `/?role=student` and log in without an exam invite using the canonical student ID (`student_id`) and six-character start code (`start_code`) from the teacher-issued credential CSV. Teachers register students and issue or regenerate credentials from `/teacher/users`; students do not need to self-register. The teacher's student-number copy control provides the same canonical ID. Direct login does not accept an organization-local external ID or email, which may overlap between workspaces.
 
-- `김민준` / `3학년 A반` / `서울`
-- `최지우` / `3학년 B반` / `서울`
-- `한지호` / `2학년 A반` / `부산`
+After authentication, a student with one active class opens `/student/dashboard`; a student enrolled in several active classes selects their class first. Student home shows assigned exams and submission history. Existing exam invitation links still support their class-scoped name, student-number/email, and start-code login and return to the invited exam. Public guest exams retain browser-based guest identity and can be connected to a verified student account.
 
-On first student login, the app issues a six-character start code. Returning students with prior attempts must enter that start code; teachers can also issue or regenerate it from `/teacher/users`.
-
-If a class has same-name students, students must enter the roster email or teacher-issued student ID in `학생번호 또는 이메일` so records do not merge into the wrong profile.
+For local-only development, import `examples/student-roster.csv` from `/teacher/users` and use the roster login form. The local first-login flow can issue a start code; production always requires a teacher-issued server credential. Returning local students must enter their existing code. When names overlap, use the roster email or canonical student ID.
 
 For deployment smoke testing with the shared administrator, three teachers, and three roster-backed students, see `docs/deployment-test-accounts.md`.
 

@@ -20,8 +20,12 @@ import {
 import {
     verifyStudentCredentials,
     validateVerifiedStudentCredentialSession,
+    STUDENT_LOGIN_IDENTIFIER_MAX_LENGTH,
+    STUDENT_START_CODE_MAX_LENGTH,
     type StudentCredentialClient,
+    type VerifiedStudentCredentialIdentity,
 } from "@/lib/studentCredentialVerifier";
+import { resolveDirectStudentLogin, type DirectStudentLoginClient } from "@/lib/studentDirectLoginGateway.server";
 import {
     buildStudentLoginRateLimitKeys,
     checkStudentLoginRateLimit,
@@ -150,6 +154,12 @@ export interface StudentSessionIssueResult {
     error?: string;
 }
 
+export type DirectStudentSessionIssueResult = StudentSessionIssueResult | {
+    ok: false;
+    status: "group_required";
+    groups: StudentLoginGroup[];
+};
+
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
@@ -250,6 +260,126 @@ async function setGuestClaimOwnerCookie(
     } catch (error) {
         console.error("Guest DB-owner claim cookie write failed", error);
         return false;
+    }
+}
+
+async function finishVerifiedStudentLogin(
+    client: StudentAuthClient,
+    identity: IssuedStudentIdentity,
+    credential: VerifiedStudentCredentialIdentity,
+    existingGuestSession: StudentServerIdentity | null,
+    guestAttemptIds: string[],
+    rateLimitKeys: string[],
+): Promise<StudentSessionIssueResult> {
+    const now = Date.now();
+    const verifiedStudent: StudentServerIdentity = {
+        version: 2,
+        kind: "student",
+        ...identity,
+        organizationId: credential.organizationId,
+        identityType: "registered",
+        accountId: credential.accountId,
+        credentialGeneration: credential.credentialGeneration,
+        issuedAt: now,
+        expiresAt: now + STUDENT_SERVER_SESSION_MAX_AGE_SECONDS * 1000,
+    };
+    // Preserve server ownership proof before replacing the guest cookie.
+    if (existingGuestSession) {
+        await setGuestClaimOwnerCookie(existingGuestSession, verifiedStudent);
+    }
+    const guestClaim = await claimSignedGuestAttempts(client, {
+        guest: existingGuestSession,
+        student: verifiedStudent,
+        attemptIds: boundGuestClaimAttemptIds(guestAttemptIds).attemptIds,
+    });
+    const cookieResult = await setSessionCookie({
+        kind: "student",
+        ...identity,
+        organizationId: credential.organizationId,
+        identityType: "registered",
+        accountId: credential.accountId,
+        credentialGeneration: credential.credentialGeneration,
+    });
+    if (!cookieResult.ok) return { ok: false, status: "error" };
+    await recordDurableStudentLoginSuccess(rateLimitKeys);
+    return { ok: true, status: "ok", identity, guestClaim };
+}
+
+/** Authenticate a teacher-provisioned canonical student ID without an exam invite. */
+export async function loginStudentWithStartCode(input: {
+    studentId: string;
+    startCode: string;
+    groupId?: string;
+    guestAttemptIds?: string[];
+}): Promise<DirectStudentSessionIssueResult> {
+    const headerStore = await headers();
+    if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) {
+        return { ok: false, status: "unauthenticated" };
+    }
+    const studentId = clean(input?.studentId);
+    const startCode = clean(input?.startCode);
+    const groupId = clean(input?.groupId);
+    if (!studentId || studentId.length > STUDENT_LOGIN_IDENTIFIER_MAX_LENGTH
+        || !startCode || startCode.length > STUDENT_START_CODE_MAX_LENGTH
+        || groupId.length > STUDENT_LOGIN_IDENTIFIER_MAX_LENGTH) {
+        return { ok: false, status: "invalid_credentials" };
+    }
+    const client = adminClient();
+    if (!client) return { ok: false, status: "error" };
+    const rateLimitKeys = buildStudentLoginRateLimitKeys({
+        workspaceId: "direct-student-login",
+        studentLookup: studentId,
+        clientFingerprint: clientFingerprintFromHeaders(headerStore),
+    });
+    try {
+        if (!checkStudentLoginRateLimit(rateLimitKeys).allowed) {
+            return { ok: false, status: "rate_limited", error: STUDENT_LOGIN_RATE_LIMIT_ERROR };
+        }
+        const durableLimit = await applyDurableRateLimitToSubjects({
+            namespace: "student-login",
+            subjects: rateLimitKeys,
+            operation: "consume",
+            policy: STUDENT_LOGIN_DURABLE_POLICY,
+        });
+        if (!durableLimit.allowed && durableLimit.reason === "unavailable") {
+            return { ok: false, status: "error", error: "지금은 학생 로그인을 사용할 수 없습니다. 잠시 후 다시 시도해주세요." };
+        }
+        if (!durableLimit.allowed) {
+            return { ok: false, status: "rate_limited", error: STUDENT_LOGIN_RATE_LIMIT_ERROR };
+        }
+        const resolved = await resolveDirectStudentLogin(client as DirectStudentLoginClient, {
+            studentId, startCode, groupId: groupId || undefined,
+        });
+        if (resolved.status === "group_required") {
+            // Credentials are valid. Class selection is a second step of the
+            // same login and must remain available on the last allowed attempt.
+            await recordDurableStudentLoginSuccess(rateLimitKeys);
+            return { ok: false, status: "group_required", groups: resolved.groups };
+        }
+        if (resolved.status !== "verified") {
+            if (resolved.status === "invalid_credentials") recordDurableStudentLoginFailure(rateLimitKeys);
+            return { ok: false, status: resolved.status === "service_unavailable" ? "error" : "invalid_credentials" };
+        }
+        const cookieStore = await cookies();
+        const existing = await resolveAuthorizedStudentSessionCookie(
+            cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value, client,
+        );
+        if (existing.status === "service_unavailable") return { ok: false, status: "error" };
+        const credential = resolved.credential;
+        const identity: IssuedStudentIdentity = {
+            studentId: credential.studentId,
+            name: credential.studentName,
+            groupId: resolved.group.id,
+            groupName: resolved.group.name,
+            regionId: resolved.group.region,
+            regionName: resolved.group.region,
+            identityType: "registered",
+        };
+        return await finishVerifiedStudentLogin(client, identity, credential,
+            existing.status === "active" && existing.identity.kind === "guest" ? existing.identity : null,
+            input.guestAttemptIds || [], rateLimitKeys);
+    } catch {
+        return { ok: false, status: "error" };
     }
 }
 
@@ -537,41 +667,10 @@ export async function issueStudentSession(input: {
             regionName,
             identityType: "registered",
         };
-        const now = Date.now();
-        const verifiedStudent: StudentServerIdentity = {
-            version: 2,
-            kind: "student",
-            ...identity,
-            organizationId: workspaceId,
-            identityType: "registered",
-            accountId: credential.identity.accountId,
-            credentialGeneration: credential.identity.credentialGeneration,
-            issuedAt: now,
-            expiresAt: now + STUDENT_SERVER_SESSION_MAX_AGE_SECONDS * 1000,
-        };
-        // Preserve retry authority before replacing the guest session cookie.
-        // This proof carries no client attempt/exam/payload data: the claim RPC
-        // remains authoritative by requiring rows actually owned by guest:{id}.
-        if (existingGuestSession) {
-            await setGuestClaimOwnerCookie(existingGuestSession, verifiedStudent);
-        }
-        const requestedGuestAttemptIds = boundGuestClaimAttemptIds(input.guestAttemptIds || []).attemptIds;
-        const guestClaim = await claimSignedGuestAttempts(client, {
-            guest: existingGuestSession,
-            student: verifiedStudent,
-            attemptIds: requestedGuestAttemptIds,
-        });
-        const cookieResult = await setSessionCookie({
-            kind: "student",
-            ...identity,
-            organizationId: workspaceId,
-            identityType: "registered",
-            accountId: credential.identity.accountId,
-            credentialGeneration: credential.identity.credentialGeneration,
-        });
-        if (!cookieResult.ok) return { ok: false, status: "error" };
-        await recordDurableStudentLoginSuccess(rateLimitKeys);
-        return { ok: true, status: "ok", identity, guestClaim };
+        return await finishVerifiedStudentLogin(
+            client, identity, credential.identity, existingGuestSession,
+            input.guestAttemptIds || [], rateLimitKeys,
+        );
     } catch (error) {
         console.error("issueStudentSession failed", error);
         return { ok: false, status: "error" };
