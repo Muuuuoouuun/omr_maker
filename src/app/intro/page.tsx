@@ -395,7 +395,7 @@ export default function IntroPage() {
                                 <SolveShot />
                             </FeatureRow>
                             <Nudge
-                                text="학생이신가요? 선생님께 받은 링크로 입장하거나, 여기서 바로 시작하세요."
+                                text="학생이신가요? 선생님께 받은 초대 링크나 QR 코드로 바로 입장할 수 있어요."
                                 href={STUDENT_HREF}
                                 label="학생으로 입장하기"
                             />

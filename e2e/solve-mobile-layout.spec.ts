@@ -223,3 +223,49 @@ test.describe("solve layout on tablets", () => {
         });
     }
 });
+
+test.describe("solve layout with the answer sheet open", () => {
+    for (const viewport of [
+        { width: 834, height: 1194 },
+        { width: 1194, height: 834 },
+        { width: 1440, height: 900 },
+    ]) {
+        test(`${viewport.width}x${viewport.height} keeps the PDF page/zoom controls and the sheet header usable`, async ({ page }) => {
+            await openSolve(page, viewport);
+            const pane = page.locator("#solve-omr-pane");
+            if (await pane.evaluate(element => element.classList.contains("is-collapsed"))) {
+                await page.locator(".solve-controls").getByRole("button", { name: "답안지 펼치기" }).click();
+            }
+            await expect(pane).not.toHaveClass(/is-collapsed/);
+            await page.waitForTimeout(400);
+
+            // The open sheet floats over the PDF pane's top-right corner, where
+            // the toolbar keeps page and zoom controls: they stay on top of it.
+            const expectControlsClear = async () => {
+                for (const name of ["이전 페이지", "다음 페이지", "축소", "확대"]) {
+                    const control = page.getByRole("button", { name, exact: true });
+                    await expect(control).toBeVisible();
+                    const reachable = await control.evaluate(element => {
+                        const rect = element.getBoundingClientRect();
+                        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                        return Boolean(hit && element.contains(hit));
+                    });
+                    expect(reachable, `${name} must not sit under the open answer sheet`).toBe(true);
+                }
+            };
+            await expectControlsClear();
+
+            // Marking scrolls each card into view; that must scroll the sheet's
+            // list, not the clipped sheet itself, or its header slides out.
+            for (let question = 1; question <= 7; question += 1) {
+                await page.getByRole("radio", { name: `문제 ${question}번 보기 ${((question - 1) % 5) + 1}`, exact: true }).click();
+            }
+            await page.waitForTimeout(600);
+            const paneBox = await box(page, "#solve-omr-pane");
+            const headerBox = await box(page, "#solve-omr-pane .solve-omr-pane-header");
+            expect(headerBox.y).toBeGreaterThanOrEqual(paneBox.y - 1);
+            expect(await pane.evaluate(element => element.scrollTop)).toBe(0);
+            await expectControlsClear();
+        });
+    }
+});
