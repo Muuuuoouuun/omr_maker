@@ -1,0 +1,99 @@
+/* Device frames for /intro product imagery. Theme tokens only. */
+
+.browser {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, var(--muted));
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl), 0 30px 60px -30px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.browserBar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  height: 2rem;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--muted) 7%, var(--surface));
+}
+
+.browserDots {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 0.3rem;
+}
+
+.browserDots span {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 35%, var(--surface));
+}
+
+/* Left-aligned like a real address bar, which also leaves the right end of
+   the bar free for floating callouts. */
+.browserAddress {
+  min-width: 0;
+  max-width: 16rem;
+  margin-left: 0.25rem;
+  padding: 0.15rem 0.75rem;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  background: var(--background);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.browserBody {
+  position: relative;
+  background: var(--background);
+}
+
+/* Hardware, not theme: the bezel stays a dark device in both themes. */
+.tablet {
+  position: relative;
+  padding: 0.7rem;
+  border-radius: calc(var(--radius-xl) + 0.5rem);
+  background: linear-gradient(160deg, #2b3445, #0f172a 60%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, white 14%, transparent),
+    var(--shadow-xl),
+    0 34px 70px -34px color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.tabletCamera {
+  position: absolute;
+  top: 50%;
+  left: 0.3rem;
+  width: 0.25rem;
+  height: 0.25rem;
+  border-radius: var(--radius-full);
+  background: #475569;
+  transform: translateY(-50%);
+}
+
+.tabletScreen {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: #fff;
+}
+
+.tabletScreen img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+@media (max-width: 640px) {
+  .tablet {
+    padding: 0.45rem;
+    border-radius: var(--radius-xl);
+  }
+
+  .tabletScreen {
+    border-radius: var(--radius-md);
+  }
+}

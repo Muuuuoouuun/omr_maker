@@ -4602,7 +4602,6 @@ export default function SolvePage() {
                     maxWidth: isOMRCollapsed ? '0' : '40vw',
                     flexShrink: 0,
                     transition: 'width 0.24s, max-width 0.24s, flex-basis 0.24s',
-                    overflow: 'hidden',
                     background: 'var(--background)',
                     backdropFilter: 'var(--solve-omr-pane-backdrop, none)',
                     WebkitBackdropFilter: 'var(--solve-omr-pane-backdrop, none)',

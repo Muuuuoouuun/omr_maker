@@ -3756,7 +3756,7 @@ function CreateOMRPageInner() {
                                 value={fastAnswer}
                                 disabled={!initialDefaultsReady}
                                 onChange={handleFastAnswerChange}
-                                className="input-field"
+                                className="input-field code-entry-input"
                                 style={{ width: '100%', padding: '0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', fontSize: '1rem', letterSpacing: '2px' }}
                             />
                             <p id="create-fast-answer-help" style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', lineHeight: 1.5, marginTop: '0.4rem' }}>

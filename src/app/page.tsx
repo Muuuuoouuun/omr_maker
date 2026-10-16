@@ -34,6 +34,7 @@ import {
   type StudentSessionIssueStatus,
 } from "@/app/actions/studentSession";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
+import { teacherLifecycleFeedback, TEACHER_LIFECYCLE_SERVICE_UNAVAILABLE, type TeacherLifecycleFeedback } from "@/lib/teacherLifecycleFeedback";
 import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
 import { readLocalAttempts } from "@/lib/omrPersistence";
 import {
@@ -231,6 +232,9 @@ export default function Home() {
   const [teacherLegacyLinkBlocked, setTeacherLegacyLinkBlocked] = useState(false);
   const [teacherLifecyclePending, setTeacherLifecyclePending] = useState(false);
   const [teacherSignupSuccess, setTeacherSignupSuccess] = useState(false);
+  // Sign-up/reset/verify outcomes. Kept apart from `error` (login failures), so a
+  // confirmation is never styled as an error or marks the fields invalid.
+  const [teacherLifecycleResult, setTeacherLifecycleResult] = useState<TeacherLifecycleFeedback | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
   const [mockupLoginPending, setMockupLoginPending] = useState(false);
   const [error, setError] = useState("");
@@ -263,13 +267,15 @@ export default function Home() {
     setError("");
     setRosterNameGuard(null);
     setConfirmUnrosteredStudent(false);
+    setTeacherLifecycleResult(null);
   };
   // Teacher login copy: config errors never leak env-var guidance in production.
   const teacherLoginHelp = error
     ? teacherLoginHelpFor(error, { production: process.env.NODE_ENV === "production" })
     : null;
   const teacherIdentifierInvalid = Boolean(error && (error.includes("아이디") || error.includes("계정")));
-  const teacherPasswordInvalid = Boolean(error && error.includes("비밀번호"));
+  const teacherPasswordInvalid = Boolean(error && error.includes("비밀번호"))
+    || teacherLifecycleResult?.status === "invalid_input";
   const teacherAccountFormLabel = visibleTeacherAccountMode === "signup"
     ? "교사 계정 만들기"
     : visibleTeacherAccountMode === "reset"
@@ -360,11 +366,9 @@ export default function Home() {
       setTeacherLifecyclePending(true);
       const verification = confirmTeacherSignupEmail(verifyToken);
       void verification.then(result => {
-        if (!cancelled) setError(result.status === "verified"
-          ? "이메일 확인이 완료되었습니다. 이제 로그인할 수 있습니다."
-          : "확인 링크가 만료되었거나 이미 사용되었습니다.");
+        if (!cancelled) setTeacherLifecycleResult(teacherLifecycleFeedback(result.status));
       }).catch(() => {
-        if (!cancelled) setError("이메일 확인 서비스를 사용할 수 없습니다.");
+        if (!cancelled) setTeacherLifecycleResult({ status: "service_unavailable", tone: "error", text: "이메일 확인 서비스를 사용할 수 없습니다." });
       }).finally(() => {
         if (!cancelled) setTeacherLifecyclePending(false);
       });
@@ -553,21 +557,11 @@ export default function Home() {
     }
   };
 
-  const teacherLifecycleMessage = (status: string): string => {
-    if (status === "delivery_unavailable") return "이메일 전송 기능이 아직 연결되지 않았습니다. 운영자에게 계정 발급 또는 복구를 요청해주세요.";
-    if (status === "invalid_input") return "이메일, 이름, 비밀번호 형식을 확인해주세요. 비밀번호는 12자 이상이어야 합니다.";
-    if (status === "rate_limited") return "요청이 많습니다. 잠시 후 다시 시도해주세요.";
-    if (status === "accepted") return "요청을 접수했습니다. 계정 존재 여부와 관계없이 같은 안내가 표시됩니다.";
-    if (status === "completed") return "비밀번호를 변경했습니다. 새 비밀번호로 로그인해주세요.";
-    if (status === "verified") return "이메일 확인이 완료되었습니다. 이제 로그인할 수 있습니다.";
-    if (status === "invalid_or_expired") return "링크가 만료되었거나 이미 사용되었습니다. 새 링크를 요청해주세요.";
-    return "계정 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.";
-  };
-
   const handleTeacherSignup = async () => {
     if (teacherLifecyclePending) return;
     setTeacherLifecyclePending(true);
     setError("");
+    setTeacherLifecycleResult(null);
     setTeacherSignupSuccess(false);
     try {
       const result = await requestTeacherSignup({
@@ -578,10 +572,10 @@ export default function Home() {
       if (result.status === "accepted") {
         setTeacherSignupSuccess(true);
       } else {
-        setError(teacherLifecycleMessage(result.status));
+        setTeacherLifecycleResult(teacherLifecycleFeedback(result.status));
       }
     } catch {
-      setError("계정 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
+      setTeacherLifecycleResult({ status: "service_unavailable", tone: "error", text: TEACHER_LIFECYCLE_SERVICE_UNAVAILABLE });
     } finally {
       setTeacherLifecyclePending(false);
     }
@@ -591,11 +585,12 @@ export default function Home() {
     if (teacherLifecyclePending) return;
     setTeacherLifecyclePending(true);
     setError("");
+    setTeacherLifecycleResult(null);
     try {
       const result = await requestTeacherPasswordReset(teacherIdentifier);
-      setError(teacherLifecycleMessage(result.status));
+      setTeacherLifecycleResult(teacherLifecycleFeedback(result.status));
     } catch {
-      setError("계정 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
+      setTeacherLifecycleResult({ status: "service_unavailable", tone: "error", text: TEACHER_LIFECYCLE_SERVICE_UNAVAILABLE });
     } finally {
       setTeacherLifecyclePending(false);
     }
@@ -605,16 +600,17 @@ export default function Home() {
     if (teacherLifecyclePending) return;
     setTeacherLifecyclePending(true);
     setError("");
+    setTeacherLifecycleResult(null);
     try {
       const result = await finishTeacherPasswordReset({ token: teacherResetToken, password });
-      setError(teacherLifecycleMessage(result.status));
+      setTeacherLifecycleResult(teacherLifecycleFeedback(result.status));
       if (result.status === "completed") {
         setTeacherAccountMode("login");
         setTeacherResetToken("");
         setPassword("");
       }
     } catch {
-      setError("비밀번호 재설정 서비스를 사용할 수 없습니다.");
+      setTeacherLifecycleResult({ status: "service_unavailable", tone: "error", text: "비밀번호 재설정 서비스를 사용할 수 없습니다." });
     } finally {
       setTeacherLifecyclePending(false);
     }
@@ -1066,7 +1062,7 @@ export default function Home() {
       ) : null}
 
       {/* Theme toggle */}
-      <div className="home-theme-toggle" style={{ position: "fixed", top: "1.25rem", right: "1.25rem", zIndex: 10 }}>
+      <div className="home-theme-toggle">
         <ThemeToggle />
       </div>
 
@@ -1623,7 +1619,7 @@ export default function Home() {
                   >
                     {teacherLoginHelp ? (
                       <>
-                        <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", fontWeight: 600 }}>
+                        <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--text-error)", fontWeight: 600 }}>
                           {teacherLoginHelp.message}
                         </p>
                         {teacherLoginHelp.recoveryHelp && (
@@ -1637,6 +1633,19 @@ export default function Home() {
                           </p>
                         )}
                       </>
+                    ) : teacherLifecycleResult ? (
+                      <p
+                        role={teacherLifecycleResult.tone === "error" ? "alert" : "status"}
+                        style={{
+                          fontSize: "var(--type-label)",
+                          color: teacherLifecycleResult.tone === "error" ? "var(--text-error)" : "var(--text-success)",
+                          fontWeight: 600,
+                          lineHeight: 1.5,
+                          wordBreak: "keep-all",
+                        }}
+                      >
+                        {teacherLifecycleResult.text}
+                      </p>
                     ) : (
                       <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", opacity: 0.82 }}>
                         {visibleTeacherAccountMode === "login"
@@ -1664,6 +1673,7 @@ export default function Home() {
                             onClick={() => {
                               setTeacherAccountMode(mode => mode === "signup" ? "login" : "signup");
                               setError("");
+                              setTeacherLifecycleResult(null);
                               setTeacherSignupSuccess(false);
                             }}
                           >
@@ -1675,6 +1685,7 @@ export default function Home() {
                             onClick={() => {
                               setTeacherAccountMode(mode => mode === "reset" ? "login" : "reset");
                               setError("");
+                              setTeacherLifecycleResult(null);
                               setTeacherSignupSuccess(false);
                             }}
                           >
@@ -1700,7 +1711,7 @@ export default function Home() {
                   <div className="mockup-login-card-heading">
                     <span className="mockup-login-spark"><Sparkles size={18} /></span>
                     <div>
-                      <strong>MOCKUP 계정</strong>
+                      <strong>데모 계정</strong>
                       <p>입력 없이 완성된 분석 화면을 둘러보세요.</p>
                     </div>
                     <span className="mockup-login-readonly">예시 데이터</span>
@@ -1981,7 +1992,7 @@ export default function Home() {
                     ref={startCodeInputRef}
                     id="student-start-code"
                     type="text"
-                    className="input-field"
+                    className="input-field code-entry-input"
                     aria-label="시작 코드"
                     aria-describedby="student-start-code-help"
                     value={startCode}

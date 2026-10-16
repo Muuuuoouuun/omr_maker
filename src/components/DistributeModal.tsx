@@ -85,6 +85,20 @@ type InviteMetadataLoadState =
     | { status: "found"; metadata: ExamEntryInviteMetadata };
 type DistributionRosterData = { groups: RosterGroup[]; students: RosterStudent[] };
 
+// 배포 체크 reads as three states, matching the editor's design check: blocked,
+// publishable but worth completing, and ready. Status tokens keep it legible in
+// dark mode (the light-only hex fills used to glare there).
+const DISTRIBUTION_CHECK_TONE = {
+    blocked: { soft: 'var(--error-soft)', line: 'var(--error-line)', text: 'var(--text-error)' },
+    review: { soft: 'var(--warning-soft)', line: 'var(--warning-line)', text: 'var(--text-warning)' },
+    ready: { soft: 'var(--success-soft)', line: 'var(--success-line)', text: 'var(--text-success)' },
+} as const;
+
+export function distributionCheckTone(summary: Pick<ExamValidationSummary, 'isPublishable' | 'warnings'>): keyof typeof DISTRIBUTION_CHECK_TONE {
+    if (!summary.isPublishable) return 'blocked';
+    return summary.warnings.length > 0 ? 'review' : 'ready';
+}
+
 function captureTeacherRosterLoadIdentity(requestGeneration: number): TeacherRosterLoadIdentity | null {
     const session = readTeacherSession();
     if (!session?.organizationId
@@ -974,6 +988,8 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
         setFormError("");
     };
 
+    const checkTone = validationSummary ? DISTRIBUTION_CHECK_TONE[distributionCheckTone(validationSummary)] : null;
+
     return (
         <div
             className="distribute-dialog-backdrop"
@@ -1039,7 +1055,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                         </div>
                     )}
                     {distributionRosterState.state === "error_without_cache" && (
-                        <div data-testid="canonical-error-no-cache" role="alert" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                        <div data-testid="canonical-error-no-cache" role="alert" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid var(--error-line)', background: 'var(--error-soft)', color: 'var(--text-error)', fontSize: '0.82rem', lineHeight: 1.5 }}>
                             <strong style={{ display: 'block', marginBottom: '0.25rem' }}>서버 명단을 불러오지 못했습니다.</strong>
                             검증된 저장 명단이 없어 배포와 명단 변경을 비활성화했습니다.
                             <button data-testid="canonical-distribution-roster-retry" type="button" className="btn btn-secondary" onClick={retryCanonicalRoster} style={{ display: 'block', marginTop: '0.65rem' }}>
@@ -1048,7 +1064,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                         </div>
                     )}
                     {distributionRosterState.state === "degraded_with_cache" && (
-                        <div data-testid="canonical-degraded-cache" role="status" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                        <div data-testid="canonical-degraded-cache" role="status" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid var(--warning-line)', background: 'var(--warning-soft)', color: 'var(--text-warning)', fontSize: '0.82rem', lineHeight: 1.5 }}>
                             <strong style={{ display: 'block' }}>저장된 데이터를 읽기 전용으로 표시 중</strong>
                             마지막 저장 {new Date(distributionRosterState.staleAt).toLocaleString('ko-KR')} · 서버 명단을 다시 확인해주세요.
                             <button type="button" className="btn btn-secondary" onClick={retryCanonicalRoster} style={{ display: 'block', marginTop: '0.65rem' }}>다시 시도</button>
@@ -1068,7 +1084,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                             {accessType === "group" && inviteMetadataLoad.status === "dependency_unavailable" && (
                                 <div
                                     role="alert"
-                                    style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', lineHeight: 1.5 }}
+                                    style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid var(--error-line)', background: 'var(--error-soft)', color: 'var(--text-error)', fontSize: '0.82rem', lineHeight: 1.5 }}
                                 >
                                     <strong style={{ display: 'block', marginBottom: '0.25rem' }}>배포 링크 상태를 불러오지 못했습니다.</strong>
                                     없는 링크로 처리하지 않았습니다. 네트워크를 확인한 뒤 다시 시도해주세요.
@@ -1085,7 +1101,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                             {accessType === "group" && inviteMetadataLoad.status === "forbidden" && (
                                 <div
                                     role="alert"
-                                    style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', lineHeight: 1.5 }}
+                                    style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 8, border: '1px solid var(--error-line)', background: 'var(--error-soft)', color: 'var(--text-error)', fontSize: '0.82rem', lineHeight: 1.5 }}
                                 >
                                     현재 계정에는 배포 링크를 조회하거나 변경할 권한이 없습니다.
                                 </div>
@@ -1131,25 +1147,25 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                     marginBottom: '1.25rem',
                                     padding: '0.9rem',
                                     borderRadius: '8px',
-                                    border: validationSummary.isPublishable ? '1px solid #bbf7d0' : '1px solid #fecaca',
-                                    background: validationSummary.isPublishable ? '#f0fdf4' : '#fef2f2',
+                                    border: `1px solid ${checkTone?.line}`,
+                                    background: checkTone?.soft,
                                 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.4rem' }}>
                                         <span style={{
                                             fontSize: '0.85rem',
                                             fontWeight: 800,
-                                            color: validationSummary.isPublishable ? '#15803d' : '#dc2626',
+                                            color: checkTone?.text,
                                         }}>
                                             배포 체크
                                         </span>
-                                        <span style={{ fontSize: '0.76rem', color: '#64748b', fontWeight: 700 }}>
+                                        <span style={{ fontSize: '0.76rem', color: 'var(--muted)', fontWeight: 700 }}>
                                             {validationSummary.answeredCount}/{validationSummary.totalQuestions} 정답 · 총점 {validationSummary.totalScore}점
                                         </span>
                                     </div>
                                     {[...validationSummary.errors, ...validationSummary.warnings].slice(0, 3).map(item => (
                                         <div key={item.code} style={{
                                             fontSize: '0.78rem',
-                                            color: item.severity === 'error' ? '#dc2626' : '#b45309',
+                                            color: item.severity === 'error' ? 'var(--text-error)' : 'var(--text-warning)',
                                             lineHeight: 1.45,
                                             fontWeight: 700,
                                         }}>
@@ -1166,9 +1182,9 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                                 fontSize: '0.74rem',
                                                 fontWeight: 800,
                                                 borderRadius: '6px',
-                                                border: '1px solid #fcd34d',
-                                                background: '#fffbeb',
-                                                color: '#b45309',
+                                                border: '1px solid var(--warning-line)',
+                                                background: 'var(--warning-soft)',
+                                                color: 'var(--text-warning)',
                                                 cursor: 'pointer',
                                             }}
                                         >
@@ -1176,7 +1192,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                         </button>
                                     )}
                                     {validationSummary.errors.length === 0 && validationSummary.warnings.length === 0 && (
-                                        <div style={{ fontSize: '0.78rem', color: '#15803d', lineHeight: 1.45, fontWeight: 700 }}>
+                                        <div style={{ fontSize: '0.78rem', color: 'var(--text-success)', lineHeight: 1.45, fontWeight: 700 }}>
                                             필수 항목이 모두 준비됐습니다.
                                         </div>
                                     )}
@@ -1209,6 +1225,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                     </label>
                                     <input
                                         id="distribute-pin"
+                                        className="code-entry-input"
                                         type="text"
                                         inputMode="numeric"
                                         pattern="[0-9]{4,6}"
@@ -1221,12 +1238,12 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                             width: '100%',
                                             padding: '0.6rem 0.8rem',
                                             borderRadius: '6px',
-                                            border: '1px solid #e5e7eb',
+                                            border: '1px solid var(--border)',
                                             fontSize: '0.95rem',
                                             letterSpacing: '2px',
                                         }}
                                     />
-                                    <p style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.4rem' }}>
+                                    <p style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: '0.4rem' }}>
                                         응시자가 PIN을 입력해야 시험에 접근할 수 있습니다.
                                     </p>
                                 </div>
@@ -1235,7 +1252,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                             {accessType === 'group' && (
                                 <div style={{ marginBottom: '1.5rem', background: 'var(--background)', border: '1px solid var(--border)', padding: '1rem', borderRadius: '8px' }}>
                                     {isRotatingExistingGroupInvite && (
-                                        <div role="status" style={{ marginBottom: '0.85rem', padding: '0.75rem', borderRadius: '8px', border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e', fontSize: '0.8rem', fontWeight: 750, lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                                        <div role="status" style={{ marginBottom: '0.85rem', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--warning-line)', background: 'var(--warning-soft)', color: 'var(--text-warning)', fontSize: '0.8rem', fontWeight: 750, lineHeight: 1.5, wordBreak: 'keep-all' }}>
                                             새 링크를 발급하면 기존 링크와 QR은 즉시 무효화됩니다. 학생에게 새 링크와 QR을 다시 전달해야 합니다.
                                         </div>
                                     )}
@@ -1494,9 +1511,9 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                         marginTop: '0.8rem',
                                         padding: '0.75rem 0.9rem',
                                         borderRadius: '8px',
-                                        background: '#fef2f2',
-                                        border: '1px solid #fecaca',
-                                        color: '#dc2626',
+                                        background: 'var(--error-soft)',
+                                        border: '1px solid var(--error-line)',
+                                        color: 'var(--text-error)',
                                         fontSize: '0.85rem',
                                         fontWeight: 700,
                                         lineHeight: 1.5,
@@ -1537,7 +1554,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                             </p>
 
                             {!isShareUrlReachableByStudents(visibleShareUrl) && (
-                                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5, marginBottom: '1.25rem', textAlign: 'left' }}>
+                                <div style={{ background: 'var(--error-soft)', border: '1px solid var(--error-line)', color: 'var(--text-error)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5, marginBottom: '1.25rem', textAlign: 'left' }}>
                                     ⚠️ 이 링크는 이 컴퓨터에서만 열립니다. 학생들이 다른 기기에서 접속하려면 공개 주소(NEXT_PUBLIC_SHARE_BASE_URL)를 설정해야 합니다.
                                 </div>
                             )}
@@ -1596,7 +1613,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                             </div>
 
                             {shareExpiresAt && (
-                                <div role="status" style={{ background: '#fffbeb', border: '1px solid #fcd34d', padding: '0.7rem 0.85rem', borderRadius: '6px', color: '#92400e', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5, marginBottom: '1.25rem' }}>
+                                <div role="status" style={{ background: 'var(--warning-soft)', border: '1px solid var(--warning-line)', padding: '0.7rem 0.85rem', borderRadius: '6px', color: 'var(--text-warning)', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5, marginBottom: '1.25rem' }}>
                                     링크 만료 시각: {new Date(shareExpiresAt).toLocaleString('ko-KR')}
                                 </div>
                             )}

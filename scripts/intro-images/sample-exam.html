@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>2학년 수학 단원평가</title>
+<!-- Sample exam printed to PDF by scripts/capture-intro-images.mjs. Answers:
+     1④ 2④ 3② 4② 5③ 6③ 7④ 8② 9① 10③ 11② 12④ 13③ 14③ 15⑤ 16② 17③ 18① 19③ 20⑤ -->
+<style>
+  @font-face { font-family: "Exam"; font-weight: 400; src: url("../../node_modules/pretendard/dist/public/static/Pretendard-Regular.otf"); }
+  @font-face { font-family: "Exam"; font-weight: 600; src: url("../../node_modules/pretendard/dist/public/static/Pretendard-SemiBold.otf"); }
+  @font-face { font-family: "Exam"; font-weight: 800; src: url("../../node_modules/pretendard/dist/public/static/Pretendard-ExtraBold.otf"); }
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font-family: "Exam", sans-serif; color: #16181d; }
+  .page { position: relative; width: 210mm; height: 297mm; padding: 13mm 14mm 14mm; page-break-after: always; }
+  .page:last-child { page-break-after: auto; }
+  .head { display: grid; grid-template-columns: 1fr auto; align-items: stretch; border: 1.6px solid #16181d; }
+  .head-main { padding: 4mm 5mm; border-right: 1.6px solid #16181d; }
+  .term { font-size: 9pt; font-weight: 600; letter-spacing: 0.02em; color: #3d4250; }
+  .title { margin-top: 1mm; font-size: 19pt; font-weight: 800; }
+  .unit { margin-top: 1mm; font-size: 10pt; font-weight: 600; color: #3d4250; }
+  .who { display: grid; grid-template-columns: auto 15mm; grid-auto-rows: 1fr; font-size: 9pt; }
+  .who span { display: flex; align-items: center; padding: 0 3mm; border-bottom: 1px solid #16181d; }
+  .who span:nth-child(odd) { font-weight: 600; background: #f1f2f5; border-right: 1px solid #16181d; }
+  .who span:nth-last-child(-n+2) { border-bottom: 0; }
+  .notice { display: flex; justify-content: space-between; margin: 3.5mm 0 2.5mm; font-size: 9pt; color: #3d4250; }
+  .cols { position: relative; display: grid; grid-template-columns: 1fr 1fr; column-gap: 9mm; border-top: 1.6px solid #16181d; }
+  .cols::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1px solid #b9bdc7; }
+  .q { padding: 4.2mm 0 3.6mm; break-inside: avoid; }
+  .stem { font-size: 10.3pt; line-height: 1.75; }
+  .num { margin-right: 1.4mm; font-weight: 800; }
+  .pts { color: #6b7180; font-size: 8.6pt; }
+  i { font-family: "Times New Roman", serif; font-size: 1.08em; }
+  .choices { display: grid; grid-template-columns: repeat(5, auto); justify-content: start; gap: 1.2mm 4.6mm; margin-top: 2.2mm; font-size: 10pt; }
+  .choices.wide { grid-template-columns: repeat(3, auto); }
+  .choices.two { grid-template-columns: repeat(2, auto); }
+  .fig { display: block; width: 30mm; height: 26mm; margin: 2mm 0 0 auto; }
+  .foot { position: absolute; right: 0; bottom: 7mm; left: 0; text-align: center; font-size: 8.6pt; color: #6b7180; }
+</style>
+</head>
+<body>
+<section class="page">
+  <header class="head">
+    <div class="head-main">
+      <div class="term">2026학년도 2학기</div>
+      <div class="title">2학년 수학 단원평가</div>
+      <div class="unit">Ⅲ. 일차함수와 그 그래프</div>
+    </div>
+    <div class="who"><span>반</span><span></span><span>번호</span><span></span><span>이름</span><span></span></div>
+  </header>
+  <div class="notice"><span>※ 각 문항에 알맞은 답을 하나만 고르시오.</span><span>문항당 5점</span></div>
+  <div class="cols">
+    <div>
+      <div class="q"><div class="stem"><span class="num">1.</span>일차함수 <i>y</i> = 2<i>x</i> − 3의 그래프의 기울기는?</div>
+        <div class="choices"><span>① −3</span><span>② −2</span><span>③ ½</span><span>④ 2</span><span>⑤ 3</span></div></div>
+      <div class="q"><div class="stem"><span class="num">2.</span>일차함수 <i>y</i> = −<i>x</i> + 4의 그래프의 <i>y</i>절편은?</div>
+        <div class="choices"><span>① −4</span><span>② −1</span><span>③ 1</span><span>④ 4</span><span>⑤ 5</span></div></div>
+      <div class="q"><div class="stem"><span class="num">3.</span>두 점 (1, 3), (3, 7)을 지나는 직선의 기울기는?</div>
+        <div class="choices"><span>① 1</span><span>② 2</span><span>③ 3</span><span>④ 4</span><span>⑤ 5</span></div></div>
+      <div class="q"><div class="stem"><span class="num">4.</span>일차함수 <i>y</i> = 3<i>x</i> + 1의 그래프를 <i>y</i>축의 방향으로 −4만큼 평행이동한 그래프의 식은?</div>
+        <div class="choices wide"><span>① <i>y</i> = 3<i>x</i> − 4</span><span>② <i>y</i> = 3<i>x</i> − 3</span><span>③ <i>y</i> = 3<i>x</i> + 5</span><span>④ <i>y</i> = −<i>x</i> + 1</span><span>⑤ <i>y</i> = 7<i>x</i> + 1</span></div></div>
+      <div class="q"><div class="stem"><span class="num">5.</span>일차함수 <i>y</i> = <i>ax</i> + 2의 그래프가 점 (2, 8)을 지날 때, 상수 <i>a</i>의 값은?</div>
+        <div class="choices"><span>① 1</span><span>② 2</span><span>③ 3</span><span>④ 4</span><span>⑤ 5</span></div></div>
+    </div>
+    <div>
+      <div class="q"><div class="stem"><span class="num">6.</span>연립방정식 <i>x</i> + <i>y</i> = 5, <i>x</i> − <i>y</i> = 1의 해는?</div>
+        <div class="choices wide"><span>① <i>x</i>=1, <i>y</i>=4</span><span>② <i>x</i>=2, <i>y</i>=3</span><span>③ <i>x</i>=3, <i>y</i>=2</span><span>④ <i>x</i>=4, <i>y</i>=1</span><span>⑤ <i>x</i>=5, <i>y</i>=0</span></div></div>
+      <div class="q"><div class="stem"><span class="num">7.</span>일차함수 <i>y</i> = −2<i>x</i> + 6의 그래프의 <i>x</i>절편은?</div>
+        <div class="choices"><span>① −3</span><span>② −2</span><span>③ 2</span><span>④ 3</span><span>⑤ 6</span></div></div>
+      <div class="q"><div class="stem"><span class="num">8.</span>다음 중 일차함수 <i>y</i> = ½<i>x</i> − 1의 그래프 위의 점은?</div>
+        <div class="choices"><span>① (0, 1)</span><span>② (2, 0)</span><span>③ (4, 2)</span><span>④ (−2, 0)</span><span>⑤ (6, 1)</span></div></div>
+      <div class="q"><div class="stem"><span class="num">9.</span>기울기가 −3이고 점 (1, 2)를 지나는 직선의 식은?</div>
+        <div class="choices wide"><span>① <i>y</i> = −3<i>x</i> + 5</span><span>② <i>y</i> = −3<i>x</i> − 1</span><span>③ <i>y</i> = 3<i>x</i> − 1</span><span>④ <i>y</i> = −3<i>x</i> + 2</span><span>⑤ <i>y</i> = −3<i>x</i> − 5</span></div></div>
+      <div class="q"><div class="stem"><span class="num">10.</span>일차함수 <i>y</i> = <i>ax</i> + <i>b</i>의 그래프가 오른쪽 그림과 같을 때, 상수 <i>a</i>, <i>b</i>의 부호는?</div>
+        <svg class="fig" viewBox="0 0 120 104" aria-hidden="true">
+          <line x1="8" y1="70" x2="116" y2="70" stroke="#16181d" stroke-width="1.2"/>
+          <line x1="40" y1="100" x2="40" y2="4" stroke="#16181d" stroke-width="1.2"/>
+          <path d="M112 70 l-6 -3 v6 z M40 4 l-3 6 h6 z" fill="#16181d"/>
+          <line x1="14" y1="14" x2="104" y2="96" stroke="#16181d" stroke-width="1.8"/>
+          <text x="31" y="82" font-size="10" font-family="Times New Roman" font-style="italic">O</text>
+          <text x="108" y="84" font-size="10" font-family="Times New Roman" font-style="italic">x</text>
+          <text x="45" y="12" font-size="10" font-family="Times New Roman" font-style="italic">y</text>
+        </svg>
+        <div class="choices two"><span>① <i>a</i> &gt; 0, <i>b</i> &gt; 0</span><span>② <i>a</i> &gt; 0, <i>b</i> &lt; 0</span><span>③ <i>a</i> &lt; 0, <i>b</i> &gt; 0</span><span>④ <i>a</i> &lt; 0, <i>b</i> &lt; 0</span><span>⑤ <i>a</i> = 0, <i>b</i> &gt; 0</span></div></div>
+    </div>
+  </div>
+  <div class="foot">1 / 2</div>
+</section>
+<section class="page">
+  <div class="notice"><span>2학년 수학 단원평가</span><span>문항당 5점</span></div>
+  <div class="cols">
+    <div>
+      <div class="q"><div class="stem"><span class="num">11.</span>일차함수 <i>y</i> = 4<i>x</i> − 8의 그래프의 <i>x</i>절편은?</div>
+        <div class="choices"><span>① −2</span><span>② 2</span><span>③ 4</span><span>④ −8</span><span>⑤ 8</span></div></div>
+      <div class="q"><div class="stem"><span class="num">12.</span>두 일차함수 <i>y</i> = <i>ax</i> + 1, <i>y</i> = 3<i>x</i> − 2의 그래프가 서로 평행할 때, 상수 <i>a</i>의 값은?</div>
+        <div class="choices"><span>① −3</span><span>② −1</span><span>③ 1</span><span>④ 3</span><span>⑤ 5</span></div></div>
+      <div class="q"><div class="stem"><span class="num">13.</span>일차함수 <i>y</i> = −<i>x</i> + 2의 그래프가 지나지 않는 사분면은?</div>
+        <div class="choices wide"><span>① 제1사분면</span><span>② 제2사분면</span><span>③ 제3사분면</span><span>④ 제4사분면</span><span>⑤ 없다</span></div></div>
+      <div class="q"><div class="stem"><span class="num">14.</span>기울기가 2이고 <i>y</i>절편이 −5인 직선의 식은?</div>
+        <div class="choices wide"><span>① <i>y</i> = −5<i>x</i> + 2</span><span>② <i>y</i> = 2<i>x</i> + 5</span><span>③ <i>y</i> = 2<i>x</i> − 5</span><span>④ <i>y</i> = −2<i>x</i> − 5</span><span>⑤ <i>y</i> = 5<i>x</i> − 2</span></div></div>
+      <div class="q"><div class="stem"><span class="num">15.</span>일차방정식 2<i>x</i> + <i>y</i> − 6 = 0의 그래프의 기울기와 <i>y</i>절편의 합은?</div>
+        <div class="choices"><span>① −4</span><span>② −2</span><span>③ 0</span><span>④ 2</span><span>⑤ 4</span></div></div>
+    </div>
+    <div>
+      <div class="q"><div class="stem"><span class="num">16.</span>두 점 (0, −1), (2, 3)을 지나는 직선의 식은?</div>
+        <div class="choices wide"><span>① <i>y</i> = <i>x</i> − 1</span><span>② <i>y</i> = 2<i>x</i> − 1</span><span>③ <i>y</i> = 2<i>x</i> + 3</span><span>④ <i>y</i> = 3<i>x</i> − 1</span><span>⑤ <i>y</i> = −2<i>x</i> − 1</span></div></div>
+      <div class="q"><div class="stem"><span class="num">17.</span>연립방정식 2<i>x</i> + <i>y</i> = 7, <i>x</i> + <i>y</i> = 4의 해를 (<i>p</i>, <i>q</i>)라 할 때, <i>p</i> + 2<i>q</i>의 값은?</div>
+        <div class="choices"><span>① 3</span><span>② 4</span><span>③ 5</span><span>④ 6</span><span>⑤ 7</span></div></div>
+      <div class="q"><div class="stem"><span class="num">18.</span>일차함수 <i>y</i> = <i>ax</i> − 3의 그래프가 점 (−1, −5)를 지날 때, 상수 <i>a</i>의 값은?</div>
+        <div class="choices"><span>① 2</span><span>② −2</span><span>③ 3</span><span>④ −8</span><span>⑤ 8</span></div></div>
+      <div class="q"><div class="stem"><span class="num">19.</span>직선 <i>y</i> = 3과 <i>x</i>축, <i>y</i>축, 직선 <i>x</i> = 4로 둘러싸인 도형의 넓이는?</div>
+        <div class="choices"><span>① 7</span><span>② 9</span><span>③ 12</span><span>④ 14</span><span>⑤ 16</span></div></div>
+      <div class="q"><div class="stem"><span class="num">20.</span>일차함수 <i>y</i> = −3<i>x</i> + 9의 그래프와 <i>x</i>축, <i>y</i>축으로 둘러싸인 삼각형의 넓이는?</div>
+        <div class="choices"><span>① 9</span><span>② 12</span><span>③ 18</span><span>④ 24</span><span>⑤ 27/2</span></div></div>
+    </div>
+  </div>
+  <div class="foot">2 / 2</div>
+</section>
+</body>
+</html>

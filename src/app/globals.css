@@ -23,7 +23,11 @@
 
   /* Status */
   --success: #10b981;
+  --success-soft: rgba(16, 185, 129, 0.1);
+  --success-line: rgba(16, 185, 129, 0.28);
   --error: #ef4444;
+  --error-soft: rgba(239, 68, 68, 0.1);
+  --error-line: rgba(239, 68, 68, 0.28);
   --warning: #f59e0b;
   --warning-soft: rgba(245, 158, 11, 0.12);
   --warning-line: rgba(245, 158, 11, 0.28);
@@ -1944,9 +1948,12 @@ html[data-motion="off"] .mockup-dashboard-tabs button::after {
   overscroll-behavior: contain;
 }
 
+/* Options wrap whole onto the next line on phones instead of shrinking until
+   their labels break mid-word ("링크 공 / 유", "학 / 생"). */
 .distribute-access-options {
   display: flex;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
 }
 
 .distribute-access-option {
@@ -1954,6 +1961,7 @@ html[data-motion="off"] .mockup-dashboard-tabs button::after {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -2515,6 +2523,15 @@ html[data-motion="off"] :where(
   opacity: 0.7;
 }
 
+/* Code fields (start code, PIN, fast answers) space their typed characters
+   apart, sometimes in a code font. The Korean placeholder is a sentence, not a
+   code: keep it in the body face without the spacing ("6 자 리   코 드"). */
+.code-entry-input::placeholder {
+  font-family: var(--font-pretendard), var(--font-geist-sans), system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .input-field:focus {
   outline: none;
   border-color: var(--primary);
@@ -2562,8 +2579,17 @@ html[data-motion="off"] :where(
   text-align: center;
 }
 
-.home-role-home-link {
+.home-theme-toggle {
   position: fixed;
+  top: 1.25rem;
+  right: 1.25rem;
+  z-index: 10;
+}
+
+/* Absolute, not fixed: the badge sits on the card's top edge, and a fixed one
+   stayed over the form's labels and inputs once a long card scrolled. */
+.home-role-home-link {
+  position: absolute;
   top: max(1rem, env(safe-area-inset-top));
   left: 50%;
   z-index: 12;
@@ -9113,6 +9139,19 @@ body:has(.create-workspace.is-resizing) {
   color: var(--muted);
 }
 
+/* clip, not hidden (same trap as .solve-body below): OMRCardView scrolls the
+   selected question into view, and an overflow:hidden pane is itself still
+   programmatically scrollable — marking answers slid the pane's own header
+   (title, 다음 미답, 접기) up past its top edge. `hidden` is the fallback where
+   clip is unsupported; clip is not a scroll container, so the flex minimums
+   are pinned explicitly. */
+.solve-omr-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  overflow: clip;
+}
+
 .solve-omr-pane-header {
   flex: 0 0 auto;
   min-height: 54px;
@@ -9831,6 +9870,13 @@ body:has(.create-workspace.is-resizing) {
     box-shadow: none;
   }
 
+  /* The open sheet floats over the PDF pane's top-right corner, which is
+     where the toolbar keeps page and zoom controls. Pull the toolbar's
+     content out from under it instead of covering them. */
+  .solve-body:has(.solve-omr-pane:not(.is-collapsed)) .pdf-viewer-toolbar {
+    padding-right: calc(clamp(280px, 32vw, 320px) + 1.5rem) !important;
+  }
+
   .solve-omr-pane .solve-omr-pane-header,
   .solve-omr-pane .omr-cardview-header,
   .solve-omr-pane .q-card {
@@ -9947,6 +9993,10 @@ body:has(.create-workspace.is-resizing) {
     pointer-events: none;
     border: 0 !important;
     box-shadow: none;
+  }
+
+  .solve-body:has(.solve-omr-pane:not(.is-collapsed)) .pdf-viewer-toolbar {
+    padding-right: calc(clamp(300px, 28vw, 380px) + 2rem) !important;
   }
 
   .solve-omr-pane .solve-omr-pane-header,
@@ -12496,9 +12546,16 @@ body:has(.create-workspace.is-resizing) {
 
   .home-page[data-home-role="none"] .home-role-action {
     width: 100%;
+    /* The desktop pill's 10.35rem minimum is wider than a phone card's
+       content box, so it poked out past the card edge. */
+    min-width: 0;
     min-height: 2.4rem;
     padding: 0.48rem 0.6rem;
     font-size: 0.78rem !important;
+  }
+
+  .home-theme-toggle {
+    position: absolute;
   }
 
   .teacher-dashboard-shell .dashboard-main {

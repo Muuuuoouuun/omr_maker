@@ -30,8 +30,13 @@ describe("teacher account lifecycle surface", () => {
         expect(page).toContain("teacherVerifyToken");
         expect(page).toContain("교사 계정 만들기");
         expect(page).toContain("비밀번호 재설정");
-        expect(page).toContain("이메일 전송 기능이 아직 연결되지 않았습니다");
         expect(page).toContain("부트스트랩 계정");
+        // Outcome copy lives in one module; the page renders it by tone, so a
+        // confirmation never lands in the red error slot that marks fields invalid.
+        const feedback = source("src/lib/teacherLifecycleFeedback.ts");
+        expect(feedback).toContain("이메일 전송 기능이 아직 연결되지 않았습니다");
+        expect(page).toContain("setTeacherLifecycleResult(teacherLifecycleFeedback(result.status))");
+        expect(page).not.toContain("setError(teacherLifecycleMessage(");
     });
 
     it("submits the visible teacher account mode with matching fields and browser semantics", () => {

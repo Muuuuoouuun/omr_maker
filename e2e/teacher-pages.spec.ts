@@ -902,8 +902,12 @@ test.describe("Create page label memory", () => {
         await page.goto("/create");
 
         const input = page.getByLabel("문항 수 직접 입력");
+        const settingsTab = page.getByRole("tab", { name: /^설정/ });
+        // Wait for the editor to mount before deciding the layout hides settings
+        // behind a tab; desktop has no settings tab to click.
+        await expect(input.or(settingsTab).filter({ visible: true }).first()).toBeVisible();
         if (!await input.isVisible()) {
-            await page.getByRole("tab", { name: /^설정/ }).click();
+            await settingsTab.click();
         }
         await input.fill("45");
         await input.press("Enter");
