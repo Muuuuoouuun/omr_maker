@@ -802,8 +802,10 @@ test.describe("Create page label memory", () => {
     test("quick answer input keeps blank positions and rejects an invalid input without shifting answers", async ({ page }) => {
         await page.goto("/create");
         const fastAnswer = page.getByLabel("빠른 정답 입력");
+        const settingsTab = page.getByRole("tab", { name: /^설정/ });
+        await expect(fastAnswer.or(settingsTab).filter({ visible: true }).first()).toBeVisible();
         if (!await fastAnswer.isVisible()) {
-            await page.getByRole("tab", { name: /^설정/ }).click();
+            await settingsTab.click();
         }
         await expect(page.locator("#create-fast-answer-help")).toContainText("빈 문항은 0 또는 -");
 
