@@ -116,6 +116,7 @@
   --type-heading-sm: 1.02rem;
   --type-heading-md: 1.1rem; /* fills a real gap: 14+ hand-typed h3s across the app cluster at 1.1-1.35rem with nothing between --type-heading-sm and --type-heading-lg to land on. */
   --type-heading-lg: clamp(1.8rem, 3vw, 2.45rem);
+  --type-display: clamp(2.15rem, 5vw, 3.6rem); /* one per screen: the /intro hero headline. App screens top out at --type-heading-lg. */
   --type-metric: clamp(1.6rem, 2.2vw, 2.05rem);
 
   --app-safe-area-top: env(safe-area-inset-top, 0px);
@@ -2586,6 +2587,44 @@ html[data-motion="off"] :where(
 .home-role-home-link:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--primary), transparent 55%);
   outline-offset: 3px;
+}
+
+/* Quiet path from the role choice to the /intro story page. */
+.home-intro-link-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.5rem;
+}
+
+.home-intro-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 2.75rem;
+  padding: 0 0.85rem 0 1.1rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  font-size: var(--type-label);
+  font-weight: 750;
+  transition: var(--transition-fast);
+}
+
+.home-intro-link:hover {
+  border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
+  background: var(--surface);
+}
+
+.home-intro-link svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+@media (max-width: 640px) {
+  .home-intro-link-row {
+    margin-top: 0.85rem;
+  }
 }
 
 .skip-to-main {

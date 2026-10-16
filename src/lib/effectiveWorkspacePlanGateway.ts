@@ -14,9 +14,10 @@ export interface EffectiveWorkspacePlanRead {
     plan: PlanKey;
     grantId?: string;
     expiresAt?: string;
+    entitlementMode?: "permanent_demo";
 }
 
-const ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16}|pilot_org_[a-f0-9]{24})$/;
+const ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16}|(?:pilot_org_|demo_org_)[a-f0-9]{24})$/;
 const GRANT_ID_PATTERN = /^pilot_grant_[a-f0-9]{24}$/;
 const UTC_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 
@@ -28,7 +29,7 @@ function exactOwnDataRecord(value: unknown): Record<string, unknown> | null {
         if (prototype !== Object.prototype && prototype !== null
             || Object.getOwnPropertySymbols(candidate).length > 0) return null;
         const descriptors = Object.getOwnPropertyDescriptors(candidate);
-        const expected = ["expiresAt", "grantId", "organizationId", "plan"];
+        const expected = ["expiresAt", "grantId", "organizationId", "plan", ...(descriptors.entitlementMode ? ["entitlementMode"] : [])].sort();
         const actual = Object.keys(descriptors).sort();
         if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) return null;
         for (const key of expected) {
@@ -54,6 +55,12 @@ export async function readEffectiveWorkspacePlan(
         if (result.error) return { authoritative: false, plan: "free" };
         const row = exactOwnDataRecord(result.data);
         if (!row || row.organizationId !== organizationId) return { authoritative: false, plan: "free" };
+        if (/^demo_org_[a-f0-9]{24}$/.test(organizationId)) {
+            if (row.entitlementMode !== "permanent_demo" || row.grantId !== null || row.expiresAt !== null
+                || (row.plan !== "free" && row.plan !== "pro" && row.plan !== "academy")) return { authoritative: false, plan: "free" };
+            return { authoritative: true, plan: row.plan, entitlementMode: "permanent_demo" };
+        }
+        if (row.entitlementMode !== undefined) return { authoritative: false, plan: "free" };
         if (row.plan === "free" && row.grantId === null && row.expiresAt === null) {
             return { authoritative: true, plan: "free" };
         }

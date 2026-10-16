@@ -61,7 +61,7 @@ describe("teacher roster server surface", () => {
         expect(users).toContain("setGroupProfileResult(null)");
         expect(groups).toContain('capability: "degraded_read_only"');
         expect(groups).toContain('capability: "fresh_mutable"');
-        expect(groups).toContain('if (props.capability === "degraded_read_only")');
+        expect(groups).toContain('props.capability === "degraded_read_only"');
         expect(invites).toContain('capability: "degraded_read_only"');
         expect(invites).toContain('capability: "fresh_mutable"');
         expect(invites).toContain('if (props.capability === "degraded_read_only")');

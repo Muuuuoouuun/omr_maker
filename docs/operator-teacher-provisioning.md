@@ -169,3 +169,55 @@ lock the exact account/session/topology and resolve the effective plan in the sa
 while retired caller-trusting RPCs and direct service-role state writes are denied. Release approval is
 still withheld until the Phase C PG17 behavior, concurrency, ACL-drift/restore, rollback, and full
 application gate matrix is green; Phase B alone continues to claim request-time freshness only.
+
+## Review-only requests and QA Free owners
+
+All owner/member requests can be inspected with `--dry-run` after `--request=...`.
+This validates the secure request and output directory but does not read credentials,
+create files/locks/passwords, or resolve a database client. The review includes a digest
+binding the normalized request and credential output path; it is a review acknowledgement,
+not an authorization credential.
+
+Free QA owner creation is a separate service-role-only boundary in migration
+`202610030001_qa_free_owner_provisioning.sql`. Use the existing owner request fields with
+`plan: "free"` and `reason: "qa_free_org"`. It requires a finite future expiry within
+366 days, rejects existing emails except exact idempotent replay, and cannot grant a paid plan.
+The CLI refuses Free apply unless the second argument is
+`--approve-qa-free=<digest returned by the same request's dry-run>`.
+Missing fields, extra credential/verifier fields and changed review targets fail closed.
+The existing paid/member apply commands keep their behavior; they are not QA conflict-safe wrappers.
+
+Free provenance expiry does not disable Free login: the effective plan remains Free with
+no paid grant. Paid grant expiry also falls back to Free under the existing lifecycle.
+Account suspension and QA teardown require a separately approved operation.
+For the organization/role review and user handoff boundary see
+[qa-plan-separated-provisioning-review.md](qa-plan-separated-provisioning-review.md).
+
+## Permanent demo organizations
+
+The explicit `permanent_demo` mode is implemented by migration
+`202610030002_permanent_demo_organizations.sql`. It has no expiry and is restricted
+to newly created `demo_org_` organizations registered in the private demo ledger.
+Normal paid expiry and the 12-hour teacher session TTL remain unchanged.
+
+Owner JSON uses organizationName, email, displayName, plan, actor, reason,
+idempotencyKey, credentialStatePath and entitlementMode. Member JSON uses organizationId,
+email, displayName, actor, reason, idempotencyKey, credentialStatePath, memberRole and entitlementMode.
+Set memberRole to teacher for members. Set entitlementMode to permanent_demo and reason to qa_permanent_demo.
+Do not supply expiresAt, password or verifier. Members inherit the organization plan.
+Dry-run does not read or generate credentials or contact the database. Apply requires
+`--approve-qa-demo=<reviewDigest>` matching the exact reviewed target and output path.
+Existing emails and organizations cannot be overwritten or promoted to demo.
+
+Revocation JSON uses only organizationId, entitlementMode, actor and reason, with
+reason qa_demo_retired. Review with:
+
+```sh
+node scripts/revoke-demo-organization.mjs --request=/absolute/private/revoke.json --dry-run
+```
+
+Apply requires the same `--approve-qa-demo=<reviewDigest>`. Revocation is audited and
+blocks subsequent protected requests; it does not delete data or reactivate accounts.
+No live operation is authorized by the digest alone. Confirm exact identities, roles,
+plans and credential handoff separately. See the linked QA review for role assignment
+and remote migration/rollback effects.

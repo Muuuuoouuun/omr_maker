@@ -402,9 +402,10 @@ test.describe("Mobile PWA entry", () => {
         await page.getByRole("button", { name: /학생.*시작하기/ }).click();
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
         await expectTouchTarget(page.locator('button[aria-label$="모드로 전환"]'));
-        // The development-only local entry form differs from the provisioned
-        // production flow, which is checked by teacher-provisioned-links.
-        await page.getByPlaceholder("이름을 입력하세요").fill("모바일 게스트");
+        // Fresh browsers use teacher-issued ID/code entry; guest participation
+        // remains available independently in the alternate-entry disclosure.
+        await expect(page.getByLabel("학생 로그인 ID")).toBeVisible();
+        await expect(page.getByLabel("시작 코드", { exact: true })).toHaveAttribute("type", "password");
         await page.getByText("다른 방법으로 참여", { exact: true }).click();
         const guestEntry = page.getByRole("button", { name: "코드 없이 게스트로 계속하기" });
         await expectTouchTarget(guestEntry);
@@ -970,9 +971,11 @@ test.describe("Mobile PWA entry", () => {
         await page.getByRole("button", { name: /학생.*시작하기/ }).click();
 
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
-        const nameInput = page.getByPlaceholder("이름을 입력하세요");
-        await expect(nameInput).toBeVisible();
-        expect(await nameInput.evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
+        for (const input of [page.getByLabel("학생 로그인 ID"), page.getByLabel("시작 코드", { exact: true })]) {
+            await expect(input).toBeVisible();
+            expect(await input.evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
+            await expectTouchTarget(input);
+        }
         await expectNoHorizontalOverflow(page);
 
         const standaloneState = await page.evaluate(() => {

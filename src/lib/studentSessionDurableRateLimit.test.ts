@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const durableOperations = vi.hoisted(() => [] as string[]);
-const durableReservations = vi.hoisted(() => ({ count: 0 }));
+const durableReservations = vi.hoisted(() => ({ count: 0, unavailable: false }));
 
 vi.mock("next/headers", () => ({
     headers: async () => new Headers({ origin: "http://localhost:3003", host: "localhost:3003" }),
@@ -32,6 +32,7 @@ vi.mock("@/lib/studentLoginRateLimit", async importOriginal => {
 vi.mock("@/lib/durableRateLimit", () => ({
     applyDurableRateLimitToSubjects: async ({ operation }: { operation: string }) => {
         durableOperations.push(operation);
+        if (durableReservations.unavailable) return { allowed: false, retryAfterMs: 60_000, reason: "unavailable" };
         if (operation !== "consume") return { allowed: true, retryAfterMs: 0 };
         durableReservations.count += 1;
         return { allowed: durableReservations.count <= 5, retryAfterMs: 60_000 };
@@ -44,6 +45,15 @@ describe("student login durable rate limit", () => {
     beforeEach(() => {
         durableOperations.length = 0;
         durableReservations.count = 0;
+        durableReservations.unavailable = false;
+    });
+
+    it("reports limiter outages as a retryable service error instead of a ten-minute lockout", async () => {
+        durableReservations.unavailable = true;
+        await expect(issueStudentSession({ workspaceId: "default", name: "학생", groupId: "", studentLookup: "" }))
+            .resolves.toMatchObject({ ok: false, status: "error", error: "지금은 학생 로그인을 사용할 수 없습니다. 잠시 후 다시 시도해주세요." });
+        expect(durableReservations.count).toBe(0);
+        expect(durableOperations).toEqual(["consume"]);
     });
 
     it("allows five credential checks and blocks the sixth before validation without double-counting failures", async () => {

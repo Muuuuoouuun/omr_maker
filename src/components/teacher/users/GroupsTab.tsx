@@ -48,10 +48,17 @@ interface GroupsTabFreshProps extends GroupsTabDisplayProps {
     setShowGroupModal: (open: boolean) => void;
 }
 
-export type GroupsTabProps = GroupsTabReadOnlyProps | GroupsTabFreshProps;
+interface GroupsTabShowcaseProps extends GroupsTabDisplayProps {
+    capability: "showcase_read_only";
+    setSelectedRegionKey: (key: string) => void;
+    setQuery: (query: string) => void;
+    setTab: (tab: "students" | "groups" | "invites") => void;
+}
+
+export type GroupsTabProps = GroupsTabReadOnlyProps | GroupsTabFreshProps | GroupsTabShowcaseProps;
 
 export default function GroupsTab(props: GroupsTabProps) {
-    if (props.capability === "degraded_read_only") {
+    if (props.capability === "degraded_read_only" || props.capability === "showcase_read_only") {
         const { displayGroups, displayStudents } = props;
         if (displayGroups.length === 0) {
             return (
@@ -79,6 +86,24 @@ export default function GroupsTab(props: GroupsTabProps) {
                         </div>
                         <div style={{ marginTop: "1rem" }}>
                             <MiniStat label="학생" value={`${group.count}명`} color={group.color} />
+                            {props.capability === "showcase_read_only" && (
+                                <>
+                                    <MiniStat label="평균" value={`${group.avgScore}점`} color={group.color} />
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary"
+                                        aria-label={`${group.name} 학생 보기`}
+                                        onClick={() => {
+                                            props.setSelectedRegionKey(group.region ? regionKeyFor(group.region) : ALL_REGION_KEY);
+                                            props.setQuery(group.name);
+                                            props.setTab("students");
+                                        }}
+                                        style={{ marginTop: "0.75rem" }}
+                                    >
+                                        <Search size={13} /> 학생 보기
+                                    </button>
+                                </>
+                            )}
                         </div>
                     </article>
                 ))}

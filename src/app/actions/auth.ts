@@ -12,6 +12,7 @@ import {
 import {
     TEACHER_AUTH_SESSION_CONFIG_ERROR,
     TEACHER_AUTH_SESSION_COOKIE_ERROR,
+    TEACHER_LOGIN_UNAVAILABLE_MESSAGE,
 } from "@/lib/teacherAuthMessages";
 import {
     bootstrapWorkspaceWithServiceRole,
@@ -125,21 +126,33 @@ export async function verifyTeacherPassword(
             error: TEACHER_LOGIN_RATE_LIMIT_ERROR,
         };
     }
-    if (!(await applyDurableRateLimit({
+    const globalAdmission = await applyDurableRateLimit({
         namespace: "teacher-login-global-safety",
         subject: safetyRateLimitKey,
         operation: "consume",
         policy: TEACHER_LOGIN_GLOBAL_DURABLE_POLICY,
-    })).allowed) {
-        return { success: false, error: TEACHER_LOGIN_RATE_LIMIT_ERROR };
+    });
+    if (!globalAdmission.allowed) {
+        return {
+            success: false,
+            error: globalAdmission.reason === "unavailable"
+                ? TEACHER_LOGIN_UNAVAILABLE_MESSAGE
+                : TEACHER_LOGIN_RATE_LIMIT_ERROR,
+        };
     }
-    if (!(await applyDurableRateLimitToSubjects({
+    const identifierAdmission = await applyDurableRateLimitToSubjects({
         namespace: "teacher-login",
         subjects: rateLimitKeys,
         operation: "consume",
         policy: TEACHER_LOGIN_DURABLE_POLICY,
-    })).allowed) {
-        return { success: false, error: TEACHER_LOGIN_RATE_LIMIT_ERROR };
+    });
+    if (!identifierAdmission.allowed) {
+        return {
+            success: false,
+            error: identifierAdmission.reason === "unavailable"
+                ? TEACHER_LOGIN_UNAVAILABLE_MESSAGE
+                : TEACHER_LOGIN_RATE_LIMIT_ERROR,
+        };
     }
 
     let result: {

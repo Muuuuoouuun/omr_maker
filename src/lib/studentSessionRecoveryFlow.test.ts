@@ -104,7 +104,7 @@ describe("student session recovery flow", () => {
         expect(load).toContain("saveSession(currentUser)");
         expect(load.indexOf("await refreshStudentSession()"))
             .toBeLessThan(load.indexOf('setSessionState("missing")'));
-        expect(dashboard).not.toContain('href="/?role=student"');
+        expect(dashboard).toContain('href="/?role=student"');
         expect(dashboard).not.toContain("workspace: currentUser.workspaceId");
     });
 
@@ -129,9 +129,10 @@ describe("student session recovery flow", () => {
         expect(rejected.indexOf("refreshStudentReturnHint(session)")).toBeLessThan(rejected.indexOf("clearSession()"));
 
         expect(dashboard).toContain("로그인 시간이 끝났어요");
+        expect(dashboard).toContain("보안을 위해 12시간이 지나면 다시 확인해요. 학생 로그인 ID와 시작 코드로 이어서 할 수 있어요.");
         expect(dashboard).toContain("보안을 위해 12시간이 지나면 다시 확인해요. 시작 코드만 다시 입력하면 이어서 할 수 있어요.");
         expect(dashboard).toContain('buildStudentLoginHref(expiredReturnPath, { reason: "expired" })');
-        expect(dashboard).toContain("선생님이 보낸 초대 링크를 다시 열면 바로 로그인할 수 있어요. 링크를 찾기 어렵다면 선생님에게 재전송을 요청하세요.");
+        expect(dashboard).toContain("학생 로그인 ID와 시작 코드로 다시 로그인할 수 있어요. 선생님이 보낸 초대 링크도 계속 사용할 수 있습니다.");
         expect(dashboard).toContain("{sessionExpired && productionRuntime && (");
         expect(dashboard).toContain("{sessionExpired && !productionRuntime && (");
         expect(dashboard).toContain('buildStudentLoginHref("/student/dashboard")');
@@ -178,21 +179,15 @@ describe("student session recovery flow", () => {
         expect(alternate).toContain(': (\n                  <details className="student-alternate-entry">');
     });
 
-    it("replaces the impossible production bare login form with invite recovery guidance", () => {
+    it("offers teacher-issued credential login without an exam invite", () => {
         const home = source("src/app/page.tsx");
-        const student = home.slice(
-            home.indexOf("{/* Student form */}"),
-            home.indexOf('{requiresServerStudentVerification ? (', home.indexOf("{/* Student form */}")),
-        );
-
-        expect(home).toContain("productionStudentRecoveryRequired");
-        expect(student).toContain("productionStudentRecoveryRequired ? (");
-        expect(student).toContain('className="student-login-recovery-guidance"');
-        expect(student).toContain("학생 계정 로그인에는 선생님이 보낸 최신 초대 링크가 필요합니다.");
-        expect(student).toContain(': (\n                <form');
+        expect(home).toContain("directStudentLogin");
+        expect(home).toContain("<StudentDirectLoginForm");
+        expect(home).not.toContain("student-login-recovery-guidance");
+        expect(home).toContain('identityType: "registered"');
     });
 
-    it("uses only a server-verified scoped guest or opaque invite for account connection", () => {
+    it("keeps invitation scope server verified and uses direct login for bare guest connections", () => {
         const action = source("src/app/actions/studentSession.ts");
         const login = action.slice(
             action.indexOf("export async function issueStudentSession"),
@@ -204,9 +199,9 @@ describe("student session recovery flow", () => {
         expect(login).toContain("existingGuestSession?.organizationId");
         expect(login).toContain("existingGuestSession?.groupId");
         expect(login).not.toContain("organizationId: input.workspaceId");
-        expect(dashboard).toContain("canLoginWithCurrentScope");
-        expect(dashboard).toContain("학생 초대 링크가 필요합니다");
-        expect(home).toContain('studentDirectoryStatus === "signed_guest"');
+        expect(dashboard).toContain('router.push("/?role=student&connectGuest=1")');
+        expect(home).not.toContain('studentDirectoryStatus === "signed_guest"');
+        expect(home).toContain("<StudentDirectLoginForm");
         expect(home).toContain("await refreshStudentSession()");
     });
 });

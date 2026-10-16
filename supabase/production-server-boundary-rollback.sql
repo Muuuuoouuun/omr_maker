@@ -1021,4 +1021,38 @@ grant execute on function public.omr_release_plan_usage_v2(text,text,bigint,text
 revoke all on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) from public, anon, authenticated;
 grant execute on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) to service_role;
 
+-- Free QA creation never becomes a browser/authenticated capability, including on rollback.
+revoke all on function public.omr_provision_qa_free_owner_v1(text,text,text,text,text,timestamptz,text,text,text)
+    from public, anon, authenticated;
+grant execute on function public.omr_provision_qa_free_owner_v1(text,text,text,text,text,timestamptz,text,text,text)
+    to service_role;
+
+-- Demo scope remains RPC-only even after rollback. No automatic org promotion.
+alter table public.omr_demo_organizations enable row level security;
+alter table public.omr_demo_organizations force row level security;
+alter table public.omr_demo_provisions enable row level security;
+alter table public.omr_demo_provisions force row level security;
+revoke all on table public.omr_demo_organizations,public.omr_demo_provisions from public,anon,authenticated,service_role;
+revoke all on function public.omr_lock_demo_identity_v1(text,bigint,text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_read_demo_plan_v1(text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_provision_demo_account_v1(text,text,text,text,text,text,text,text,text,text,text) from public,anon,authenticated;
+grant execute on function public.omr_provision_demo_account_v1(text,text,text,text,text,text,text,text,text,text,text) to service_role;
+revoke all on function public.omr_revoke_demo_organization_v1(text,text,text,text) from public,anon,authenticated;
+grant execute on function public.omr_revoke_demo_organization_v1(text,text,text,text) to service_role;
+revoke all on function public.omr_read_effective_workspace_plan_v1(text) from public,anon,authenticated;
+revoke all on function public.omr_lookup_provisioned_teacher_login_v1(text) from public,anon,authenticated;
+revoke all on function public.omr_validate_provisioned_teacher_session_v1(text,bigint,text) from public,anon,authenticated;
+revoke all on function public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text) from public,anon,authenticated;
+revoke all on function public.omr_authorize_effective_teacher_plan_v1(text,text) from public,anon,authenticated;
+revoke all on function public.omr_read_effective_organization_plan_v1(text) from public,anon,authenticated;
+revoke all on function public.omr_read_teacher_mutation_plan_v1(text,text,text,text) from public,anon,authenticated;
+revoke all on function public.omr_lookup_teacher_account_v1(text) from public,anon,authenticated;
+revoke all on function public.omr_validate_teacher_session_v1(text,bigint) from public,anon,authenticated;
+revoke all on function public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz) from public,anon,authenticated;
+revoke all on function public.omr_complete_teacher_password_reset_v1(text,text) from public,anon,authenticated;
+revoke all on function public.omr_set_effective_plan_transaction_proof_v1(text,jsonb) from public,anon,authenticated;
+revoke all on function public.omr_assert_effective_plan_transaction_proof_v1(text,boolean) from public,anon,authenticated;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb) from public,anon,authenticated;
+revoke all on function public.omr_attach_attempt_handwriting_v2(text,text,text,text,text) from public,anon,authenticated;
+
 commit;

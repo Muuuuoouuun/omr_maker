@@ -12,6 +12,8 @@ export interface DurableRateLimitPolicy {
 export interface DurableRateLimitDecision {
     allowed: boolean;
     retryAfterMs: number;
+    /** A closed admission caused by configuration/backend failure, not quota exhaustion. */
+    reason?: "unavailable";
 }
 
 export interface DurableRateLimitRpcClient {
@@ -206,12 +208,12 @@ export async function applyDurableRateLimit(
     const policy = safePolicy(input.policy);
     const namespace = clean(input.namespace);
     const subject = clean(input.subject);
-    if (!policy || !namespace || !subject) return { allowed: false, retryAfterMs: FAIL_CLOSED_RETRY_MS };
+    if (!policy || !namespace || !subject) return { allowed: false, retryAfterMs: FAIL_CLOSED_RETRY_MS, reason: "unavailable" };
 
     const secret = clean(env.OMR_RATE_LIMIT_HASH_SECRET);
     const production = isProduction(env);
     if (production && Buffer.byteLength(secret, "utf8") < 32) {
-        return { allowed: false, retryAfterMs: FAIL_CLOSED_RETRY_MS };
+        return { allowed: false, retryAfterMs: FAIL_CLOSED_RETRY_MS, reason: "unavailable" };
     }
 
     const bucket = hashRateLimitBucket(secret || LOCAL_HASH_SECRET, namespace, subject);
@@ -233,7 +235,7 @@ export async function applyDurableRateLimit(
         }
     }
 
-    if (production) return { allowed: false, retryAfterMs: FAIL_CLOSED_RETRY_MS };
+    if (production) return { allowed: false, retryAfterMs: FAIL_CLOSED_RETRY_MS, reason: "unavailable" };
     return inMemoryDecision(bucket, input.operation, policy, options.store || defaultLocalStore, options.now ?? Date.now());
 }
 

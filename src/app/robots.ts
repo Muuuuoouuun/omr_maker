@@ -6,7 +6,7 @@ export default function robots(): MetadataRoute.Robots {
         // Explicit crawler deny-list; this is indexing guidance, not access control.
         rules: [{
             userAgent: "*",
-            allow: ["/", "/pwa-check"],
+            allow: ["/", "/intro", "/pwa-check"],
             disallow: ["/teacher/", "/student/", "/solve/", "/create", "/settings", "/groups", "/api/"],
         }],
         sitemap: `${resolveSiteOrigin()}/sitemap.xml`,

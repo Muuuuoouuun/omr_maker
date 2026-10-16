@@ -1,0 +1,2053 @@
+/*
+ * /intro — the public storytelling page:
+ * hook → 01 problem → 02 vision → 03 features → 04 change → 05 future → CTA.
+ *
+ * Values come from the globals.css :root scale (docs/design-system.md).
+ * Tints use the same color-mix() pattern as globals.css, because the scale
+ * has no --primary-soft step. Dark mode re-targets only what the shared
+ * tokens can't express.
+ */
+
+.page {
+  /* Feature-row titles sit one step under the section title. Derived
+     from the scale instead of hand-picked so the two stay in proportion. */
+  --intro-block-title: calc(var(--type-heading-lg) * 0.8);
+  --intro-header-height: 4rem;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
+  color: var(--foreground);
+  background: var(--background);
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+.inner {
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+/* StatusPill's primary tone keeps --primary as its text color in dark mode,
+   which drops under 3:1 on the dark surfaces. Scoped here; app-wide is a
+   separate StatusPill change. */
+:global([data-theme="dark"]) .page :global(.status-pill.is-primary) {
+  --status-pill-color: var(--text-primary);
+}
+
+/* ─── Top bar ─────────────────────────────────────────── */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding-top: var(--app-safe-area-top);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: color-mix(in srgb, var(--background) 84%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+}
+
+.topbarInner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  min-height: var(--intro-header-height);
+}
+
+.nav {
+  grid-column: 2;
+  display: flex;
+  justify-content: center;
+  gap: 0.15rem;
+}
+
+.navLink,
+.topbarLogin {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 0.85rem;
+  border-radius: var(--radius-full);
+  font-size: var(--type-label);
+  font-weight: 700;
+  transition: var(--transition-fast);
+}
+
+.navLink {
+  color: var(--muted);
+}
+
+.navLink:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+
+/* Pinned to the last column so it stays right-aligned when the nav hides. */
+.topbarActions {
+  grid-column: 3;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.topbarLogin {
+  color: var(--foreground);
+}
+
+.topbarLogin:hover {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.topbarCta {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 1.1rem;
+  border-radius: var(--radius-full);
+  color: #fff;
+  background: var(--primary);
+  box-shadow: var(--shadow-action);
+  font-size: var(--type-label);
+  font-weight: 800;
+  white-space: nowrap;
+  transition:
+    transform var(--motion-hover) var(--ease-balanced),
+    background-color var(--motion-hover) var(--ease-balanced);
+}
+
+.topbarCta:hover {
+  background: var(--primary-dark);
+  transform: translateY(calc(-0.5 * var(--motion-distance)));
+}
+
+/* ─── Shared section chrome ───────────────────────────── */
+.main:focus {
+  outline: none;
+}
+
+.section {
+  padding-block: clamp(4rem, 9vw, 7rem);
+  scroll-margin-top: var(--intro-header-height);
+}
+
+.sectionTinted {
+  border-block: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  background: color-mix(in srgb, var(--primary) 3%, var(--surface));
+}
+
+:global([data-theme="dark"]) .sectionTinted {
+  background: color-mix(in srgb, var(--primary) 7%, var(--background));
+}
+
+.sectionHead {
+  max-width: 47rem;
+}
+
+.sectionHeadCenter {
+  margin-inline: auto;
+  text-align: center;
+}
+
+.chapter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--text-primary);
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.chapterRule {
+  width: 1.75rem;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.45;
+}
+
+.sectionTitle {
+  margin-top: 0.9rem;
+  font-size: var(--type-heading-lg);
+  font-weight: 850;
+  line-height: 1.34;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.sectionLead {
+  margin-top: 1rem;
+  color: var(--muted);
+  font-size: var(--type-heading-sm);
+  line-height: 1.85;
+  text-wrap: pretty;
+}
+
+/* Small mid-story CTA: one line of copy and one action. */
+.nudge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem 1.5rem;
+  margin-top: clamp(2.5rem, 6vw, 3.5rem);
+  padding: 1.1rem 1.15rem 1.1rem 1.5rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, var(--border));
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+}
+
+.featureList .nudge {
+  margin-top: 0;
+}
+
+.nudgeText {
+  flex: 1 1 16rem;
+  min-width: 0;
+  font-size: var(--type-heading-sm);
+  font-weight: 750;
+  line-height: 1.6;
+}
+
+.nudgeLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  padding: 0 1.2rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 32%, var(--border));
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  background: var(--surface);
+  font-size: var(--type-label);
+  font-weight: 800;
+  white-space: nowrap;
+  transition: var(--transition-fast);
+}
+
+.nudgeLink:hover {
+  border-color: transparent;
+  color: #fff;
+  background: var(--primary);
+}
+
+/* ─── Hero ────────────────────────────────────────────── */
+.hero {
+  position: relative;
+  isolation: isolate;
+  padding-block: clamp(2.75rem, 7vw, 5.5rem) clamp(3.5rem, 8vw, 6.5rem);
+}
+
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(52% 60% at 82% 22%, color-mix(in srgb, var(--primary) 13%, transparent), transparent 72%),
+    radial-gradient(40% 50% at 8% 88%, color-mix(in srgb, var(--secondary) 7%, transparent), transparent 70%);
+  pointer-events: none;
+}
+
+.heroGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  align-items: center;
+  gap: clamp(2.5rem, 5vw, 4.5rem);
+}
+
+.heroCopy {
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  padding: 0.42rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.eyebrowDot {
+  flex: 0 0 auto;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+.heroTitle {
+  margin-top: 1.35rem;
+  font-size: var(--type-display);
+  font-weight: 850;
+  line-height: 1.24;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.heroTitleAccent {
+  color: var(--primary);
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+:global([data-theme="dark"]) .heroTitleAccent {
+  background-image: linear-gradient(135deg, var(--primary-light), var(--accent));
+}
+
+.heroLead {
+  max-width: 35rem;
+  margin-top: 1.35rem;
+  color: color-mix(in srgb, var(--foreground) 72%, var(--muted));
+  font-size: var(--type-heading-md);
+  line-height: 1.8;
+  text-wrap: pretty;
+}
+
+.ctaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2.1rem;
+}
+
+.ctaButton {
+  gap: 0.5rem;
+}
+
+.ctaButton svg {
+  flex: 0 0 auto;
+}
+
+.heroNotes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 1.25rem;
+  margin-top: 1.15rem;
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 600;
+  list-style: none;
+}
+
+.heroNotes li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.heroNotes svg {
+  color: var(--text-primary);
+}
+
+/* Hero illustration: the paper pile (the problem) under the result card. */
+.heroVisual {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 27rem;
+  padding-bottom: 2rem;
+}
+
+.paperStack {
+  position: relative;
+  width: min(72%, 19rem);
+  aspect-ratio: 3 / 4;
+  margin-right: 20%;
+}
+
+.paper {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.paperBack {
+  opacity: 0.55;
+  transform: rotate(-8deg) translate(-6%, 3%);
+}
+
+.paperMiddle {
+  opacity: 0.8;
+  transform: rotate(5deg) translate(6%, -2%);
+}
+
+.paperFront {
+  display: grid;
+  align-content: start;
+  gap: 0.95rem;
+  padding: 1.25rem 1.2rem;
+  transform: rotate(-2deg);
+}
+
+.paperHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+/* A hand-graded score: red pen, so --grade-red (grading meaning). */
+.paperScore {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border: 2px solid var(--grade-red);
+  border-radius: var(--radius-full);
+  color: var(--grade-red);
+  font-size: var(--type-heading-sm);
+  font-weight: 850;
+  transform: rotate(-10deg);
+}
+
+.paperLine {
+  position: relative;
+  display: block;
+  height: 0.45rem;
+  margin-left: 1.6rem;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+}
+
+.paperLine:nth-child(even) {
+  margin-right: 22%;
+}
+
+.paperLine:nth-child(3n) {
+  margin-right: 38%;
+}
+
+/* Korean red-pen marks: ○ for right, a slash for wrong. */
+.paperMarkRight,
+.paperMarkWrong {
+  position: absolute;
+  top: 50%;
+  left: -1.45rem;
+  width: 0.85rem;
+  height: 0.85rem;
+  transform: translateY(-50%);
+}
+
+.paperMarkRight {
+  border: 2px solid var(--grade-red);
+  border-radius: var(--radius-full);
+}
+
+.paperMarkWrong::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -0.1rem;
+  width: 1.05rem;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--grade-red);
+  transform: rotate(-60deg);
+}
+
+.resultCard {
+  position: absolute;
+  right: 0;
+  bottom: 0.5rem;
+  display: grid;
+  gap: 0.7rem;
+  width: min(68%, 17.5rem);
+  padding: 1.1rem 1.15rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-xl);
+  background: var(--surface-glass-strong);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-xl);
+}
+
+.resultHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.resultTitle {
+  font-size: var(--type-body-sm);
+  font-weight: 800;
+}
+
+.resultStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 600;
+}
+
+.resultStats strong {
+  margin-right: 0.15rem;
+  color: var(--foreground);
+  font-size: var(--type-heading-md);
+}
+
+.miniBars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 3.2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.miniBar {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 1.1rem;
+  border-radius: 3px 3px 0 0;
+  background: color-mix(in srgb, var(--muted) 45%, var(--surface));
+}
+
+.miniBarWeak {
+  background: var(--grade-red);
+}
+
+.resultFoot {
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+/* ─── 01 Problem ──────────────────────────────────────── */
+.problemGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  align-items: start;
+  gap: clamp(1.25rem, 3vw, 2rem);
+  margin-top: clamp(2.25rem, 5vw, 3.25rem);
+}
+
+.timeline {
+  padding: clamp(1.35rem, 3vw, 1.85rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.timelineTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--type-heading-sm);
+  font-weight: 800;
+}
+
+.timelineTitle svg {
+  color: var(--muted);
+}
+
+.timelineList {
+  margin-top: 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.timelineItem {
+  position: relative;
+  display: grid;
+  grid-template-columns: 3.1rem 0.75rem minmax(0, 1fr);
+  gap: 0.85rem;
+  padding-block: 0.8rem;
+}
+
+.timelineItem:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 2rem;
+  bottom: -0.35rem;
+  left: calc(3.1rem + 0.85rem + 0.375rem - 1px);
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border);
+}
+
+.timelineItem .timelineTime {
+  color: var(--muted);
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.timelineItem:last-child .timelineTime {
+  color: var(--text-warning);
+}
+
+.timelineDot {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-top: 0.35rem;
+  border: 2px solid color-mix(in srgb, var(--muted) 60%, var(--border));
+  border-radius: var(--radius-full);
+  background: var(--surface);
+}
+
+.timelineItem:last-child .timelineDot {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.timelineBody {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.timelineBody strong {
+  font-weight: 800;
+}
+
+.timelineBody span {
+  color: var(--muted);
+  font-size: var(--type-body-sm);
+  line-height: 1.65;
+}
+
+.costList,
+.audienceList {
+  display: grid;
+  gap: 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.costCard,
+.audienceCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1rem;
+  padding: 1.3rem 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.costIcon,
+.audienceIcon,
+.loopIcon {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 9%, var(--surface));
+}
+
+.costLabel,
+.audienceWho {
+  color: var(--text-primary);
+  font-size: var(--type-caption);
+  font-weight: 800;
+}
+
+.costTitle,
+.audienceTitle {
+  margin-top: 0.2rem;
+  font-size: var(--type-heading-md);
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.costText,
+.audienceText {
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: var(--type-body-sm);
+  line-height: 1.75;
+}
+
+/* ─── 02 Vision ───────────────────────────────────────── */
+.loop {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: clamp(2.25rem, 5vw, 3.25rem);
+  padding: 0;
+  list-style: none;
+}
+
+.loopItem {
+  position: relative;
+  min-width: 0;
+}
+
+.loopItem:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -0.72rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-top: 2px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  border-right: 2px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.loopLink {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 0.3rem;
+  height: 100%;
+  padding: 1.15rem 1.15rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition-fast);
+}
+
+.loopLink:hover {
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.loopIcon {
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.loopStep {
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 800;
+}
+
+.loopLabel {
+  font-size: var(--type-heading-sm);
+  font-weight: 850;
+}
+
+.loopHint {
+  color: var(--muted);
+  font-size: var(--type-body-sm);
+  line-height: 1.55;
+}
+
+.loopReturn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  margin-top: 1.1rem;
+  color: var(--retake);
+  font-size: var(--type-label);
+  font-weight: 750;
+  text-align: center;
+}
+
+.visionQuote {
+  max-width: 40rem;
+  margin: clamp(2.5rem, 6vw, 3.5rem) auto 0;
+  color: color-mix(in srgb, var(--foreground) 82%, var(--muted));
+  font-size: var(--type-heading-md);
+  font-weight: 750;
+  line-height: 1.75;
+  text-align: center;
+}
+
+.visionQuote::before {
+  content: "\201C";
+  display: block;
+  color: var(--primary);
+  font-size: var(--type-heading-lg);
+  font-weight: 850;
+  line-height: 1;
+}
+
+/* ─── 03 Features ─────────────────────────────────────── */
+.featureList {
+  display: grid;
+  gap: clamp(3.5rem, 8vw, 6rem);
+  margin-top: clamp(2.75rem, 6vw, 4.25rem);
+}
+
+.feature {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  align-items: center;
+  gap: clamp(1.75rem, 5vw, 4.5rem);
+  scroll-margin-top: calc(var(--intro-header-height) + 1.5rem);
+}
+
+.featureReverse {
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+}
+
+.featureReverse .featureCopy {
+  order: 2;
+}
+
+.featureCopy {
+  min-width: 0;
+}
+
+.featureMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.featureStep {
+  color: var(--text-primary);
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.featureTitle {
+  margin-top: 0.85rem;
+  font-size: var(--intro-block-title);
+  font-weight: 850;
+  line-height: 1.36;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.featureText {
+  margin-top: 0.9rem;
+  color: color-mix(in srgb, var(--foreground) 70%, var(--muted));
+  line-height: 1.85;
+  text-wrap: pretty;
+}
+
+.featureBullets {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1.35rem;
+  padding: 0;
+  list-style: none;
+}
+
+.featureBullets li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--type-body-sm);
+  font-weight: 700;
+}
+
+.featureBullets svg {
+  flex: 0 0 auto;
+  width: 1.3rem;
+  height: 1.3rem;
+  padding: 0.2rem;
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+/* Product vignettes. Illustrations only: each is one role="img". */
+.mockStage {
+  position: relative;
+  min-width: 0;
+  padding: clamp(1rem, 3.5vw, 2.25rem);
+  border: 1px solid color-mix(in srgb, var(--primary) 12%, var(--border));
+  border-radius: calc(var(--radius-xl) + 0.5rem);
+  background:
+    radial-gradient(80% 70% at 100% 0%, color-mix(in srgb, var(--primary) 12%, transparent), transparent 70%),
+    color-mix(in srgb, var(--primary) 4%, var(--background));
+}
+
+.mock {
+  display: grid;
+  gap: 0.9rem;
+  max-width: 27rem;
+  margin-inline: auto;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.mockHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mockTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.mockTitle svg {
+  color: var(--text-primary);
+}
+
+.mockChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.mockChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+/* Step 1: fast answer input */
+.fastField {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 2.9rem;
+  padding: 0 1rem;
+  border: 1.5px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+.fastValue {
+  font-size: var(--type-heading-sm);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.12em;
+}
+
+.caret {
+  width: 2px;
+  height: 1.2rem;
+  background: var(--primary);
+}
+
+.answerGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.answerCell {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  padding: 0.45rem 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+}
+
+.answerNum {
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+}
+
+.answerValue {
+  display: grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  font-size: var(--type-body-sm);
+  font-weight: 850;
+}
+
+/* Step 2: distribution */
+.mockSubject {
+  font-size: var(--type-heading-sm);
+  font-weight: 800;
+}
+
+.mockLabel {
+  margin-bottom: -0.45rem;
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+.classChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.classChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+  font-size: var(--type-caption);
+  font-weight: 800;
+}
+
+.shareLink {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.65rem 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  background: var(--background);
+}
+
+.shareUrl {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--type-label);
+  font-weight: 700;
+}
+
+.shareCopy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: var(--radius-full);
+  color: #fff;
+  background: var(--primary);
+  font-size: var(--type-caption);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.shareFoot {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.qrBox {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 4rem;
+  height: 4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--foreground);
+  background: var(--surface);
+}
+
+.shareFootText {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.shareFootText strong {
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.devices {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 700;
+}
+
+/* Step 3: the solve screen. The page's one OMR-marking motif lives here. */
+.tablet {
+  display: grid;
+  max-width: 30rem;
+  margin-inline: auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+}
+
+.tabletBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tabletTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.tabletTimer {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  font-size: var(--type-caption);
+}
+
+.tabletBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+}
+
+.pdfPane {
+  padding: 0.9rem;
+  background: color-mix(in srgb, var(--muted) 14%, var(--background));
+}
+
+.pdfPage {
+  display: grid;
+  align-content: start;
+  gap: 0.55rem;
+  height: 100%;
+  padding: 0.85rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.pdfQuestion {
+  font-size: var(--type-label);
+  font-weight: 850;
+}
+
+.pdfLine {
+  display: block;
+  height: 0.4rem;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+}
+
+.pdfLineShort {
+  width: 62%;
+}
+
+.scribble {
+  width: 100%;
+  height: auto;
+  margin-block: 0.2rem;
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+:global([data-theme="dark"]) .scribble {
+  stroke: var(--primary-light);
+}
+
+.omrPane {
+  display: grid;
+  align-content: start;
+  gap: 0.4rem;
+  padding: 0.9rem 0.75rem;
+  border-left: 1px solid var(--border);
+}
+
+.omrLabel {
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 800;
+}
+
+.omrRow {
+  display: grid;
+  grid-template-columns: 1.1rem repeat(5, minmax(0, 1fr));
+  align-items: center;
+  justify-items: center;
+  gap: 0.2rem;
+  padding: 0.35rem 0.3rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.omrRowActive {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+}
+
+.omrNum {
+  justify-self: start;
+  font-size: var(--type-caption);
+  font-weight: 850;
+}
+
+.bubble {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  max-width: 1.35rem;
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--muted) 45%, var(--border));
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+}
+
+.bubbleOn {
+  border-color: var(--primary);
+  color: #fff;
+  background: var(--primary);
+}
+
+/* Step 4: live monitor */
+.liveProgress {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: var(--type-label);
+  font-weight: 700;
+}
+
+.liveProgress span:last-child {
+  color: var(--foreground);
+}
+
+.liveTrack {
+  display: block;
+  height: 0.5rem;
+  margin-top: -0.4rem;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--success) 14%, var(--surface));
+}
+
+.liveFill {
+  display: block;
+  width: 90%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--success);
+}
+
+.liveRows {
+  display: grid;
+}
+
+.liveRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 3.4rem;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.15rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.liveRow:last-child {
+  border-bottom: 0;
+}
+
+.liveName {
+  font-size: var(--type-label);
+  font-weight: 750;
+}
+
+.liveRow .liveDetail {
+  justify-self: end;
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.liveActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.liveAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--background);
+  font-size: var(--type-caption);
+  font-weight: 800;
+}
+
+/* Step 5: per-question correct rate. One series → no legend; the weak
+   questions are the emphasis (--grade-red = correctness), the rest recede. */
+/* The left gutter holds the two scale labels so no bar can cover them. */
+.barChart {
+  display: grid;
+  gap: 0.4rem;
+  padding: 1.4rem 0 0 2.2rem;
+}
+
+.barPlot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 7.5rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 45%, var(--border));
+}
+
+.barGridLine {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+.barGridTop {
+  top: 0;
+}
+
+.barGridMid {
+  top: 50%;
+}
+
+.barGridLabel {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  padding-right: 0.45rem;
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  white-space: nowrap;
+  transform: translateY(-50%);
+}
+
+.barSlot {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+}
+
+.bar {
+  position: relative;
+  width: min(1.1rem, 64%);
+  border-radius: 4px 4px 0 0;
+  background: color-mix(in srgb, var(--muted) 55%, var(--surface));
+}
+
+:global([data-theme="dark"]) .bar {
+  background: color-mix(in srgb, var(--muted) 45%, var(--surface));
+}
+
+.bar.barWeak {
+  background: var(--grade-red);
+}
+
+.barValue {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  margin-bottom: 0.2rem;
+  color: var(--foreground);
+  font-size: var(--type-micro);
+  font-weight: 850;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.barAxis {
+  display: flex;
+  gap: 2px;
+}
+
+.barAxis span {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  text-align: center;
+}
+
+.chartCallout {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--grade-red-line);
+  border-radius: var(--radius-md);
+  background: var(--grade-red-soft);
+  font-size: var(--type-label);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.chartCallout strong {
+  font-weight: 850;
+}
+
+.weakKey {
+  flex: 0 0 auto;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 2px;
+  background: var(--grade-red);
+}
+
+.retakeAction {
+  display: inline-flex;
+  justify-self: start;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.95rem;
+  border-radius: var(--radius-full);
+  color: var(--surface);
+  background: var(--retake);
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+/* ─── 04 Change ───────────────────────────────────────── */
+.changeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+  margin-top: clamp(2.25rem, 5vw, 3.25rem);
+}
+
+.dayCard {
+  padding: clamp(1.35rem, 3vw, 1.85rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+}
+
+.dayCardBefore {
+  background: color-mix(in srgb, var(--muted) 6%, var(--surface));
+}
+
+.dayCardAfter {
+  border-color: color-mix(in srgb, var(--primary) 38%, var(--border));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 8%, transparent), var(--shadow-lg);
+}
+
+.dayTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: var(--type-heading-md);
+  font-weight: 850;
+}
+
+.dayCardBefore .dayTitle {
+  color: var(--muted);
+}
+
+.dayCardAfter .dayTitle svg {
+  color: var(--primary);
+}
+
+.dayList {
+  display: grid;
+  margin-top: 0.85rem;
+  padding: 0;
+  list-style: none;
+}
+
+.dayItem {
+  display: grid;
+  grid-template-columns: 3.2rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.9rem;
+  padding-block: 0.7rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.dayItem:last-child {
+  border-bottom: 0;
+}
+
+.dayItem .dayTime {
+  color: var(--muted);
+  font-size: var(--type-label);
+  font-weight: 800;
+}
+
+.dayCardAfter .dayItem .dayTime {
+  color: var(--text-primary);
+}
+
+.dayText {
+  font-weight: 650;
+  line-height: 1.55;
+}
+
+.dayCardBefore .dayText {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 55%, transparent);
+  text-decoration-thickness: 1px;
+}
+
+.proofGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding: 0;
+  list-style: none;
+}
+
+.proof {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  padding: 1.35rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.proofValue {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.15rem;
+  font-size: var(--type-metric);
+  line-height: 1.1;
+}
+
+.proofUnit {
+  color: var(--muted);
+  font-size: var(--type-heading-sm);
+  font-weight: 800;
+}
+
+.proofLabel {
+  color: var(--muted);
+  font-size: var(--type-body-sm);
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+/* ─── 05 Future ───────────────────────────────────────── */
+.futureGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  align-items: center;
+  gap: 1.5rem;
+  margin-top: clamp(2.25rem, 5vw, 3.25rem);
+}
+
+.growthCard {
+  display: grid;
+  gap: 1rem;
+  padding: clamp(1.25rem, 3vw, 1.75rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.growthPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+/* One series → no legend; the card title names it. Line 2px, end dot with a
+   2px surface ring, a ~10% area wash, hairline grid, endpoints labeled. */
+.lineChart {
+  padding: 1.6rem 1.1rem 0;
+}
+
+.linePlot {
+  position: relative;
+  height: 8.5rem;
+}
+
+.lineSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.gridLine,
+.baseLine {
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.gridLine {
+  stroke: var(--border);
+}
+
+.baseLine {
+  stroke: color-mix(in srgb, var(--muted) 45%, var(--border));
+}
+
+.growthArea {
+  fill: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.growthLine {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.lineDot {
+  position: absolute;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  box-shadow: 0 0 0 2px var(--surface);
+  transform: translate(-50%, -50%);
+}
+
+:global([data-theme="dark"]) .growthLine {
+  stroke: var(--primary-light);
+}
+
+:global([data-theme="dark"]) .growthArea {
+  fill: color-mix(in srgb, var(--primary-light) 12%, transparent);
+}
+
+:global([data-theme="dark"]) .lineDot {
+  background: var(--primary-light);
+}
+
+.lineLabel {
+  position: absolute;
+  color: var(--foreground);
+  font-size: var(--type-caption);
+  font-weight: 850;
+  white-space: nowrap;
+  transform: translate(-0.2rem, calc(-100% - 0.55rem));
+}
+
+.lineLabelEnd {
+  transform: translate(calc(-100% + 0.2rem), calc(-100% - 0.55rem));
+}
+
+.lineAxis {
+  position: relative;
+  height: 1.6rem;
+}
+
+.lineAxis span {
+  position: absolute;
+  top: 0.4rem;
+  color: var(--muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+/* ─── Final CTA ───────────────────────────────────────── */
+.finalSection {
+  padding-block: clamp(1rem, 3vw, 2rem) clamp(4rem, 9vw, 6.5rem);
+}
+
+.finalPanel {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: clamp(2.5rem, 6vw, 4.25rem) clamp(1.35rem, 5vw, 4rem);
+  border-radius: calc(var(--radius-xl) + 0.5rem);
+  color: #fff;
+  background: linear-gradient(140deg, var(--primary) 0%, var(--primary-dark) 100%);
+  box-shadow: var(--shadow-xl);
+  text-align: center;
+}
+
+.finalPanel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(60% 80% at 88% 0%, color-mix(in srgb, white 16%, transparent), transparent 70%),
+    radial-gradient(50% 70% at 0% 100%, color-mix(in srgb, var(--secondary) 28%, transparent), transparent 70%);
+}
+
+/* The app-wide focus ring is primary-tinted; it would vanish on this panel. */
+.finalPanel :focus-visible {
+  outline-color: #fff;
+}
+
+.finalTitle {
+  font-size: var(--type-heading-lg);
+  font-weight: 850;
+  line-height: 1.36;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.finalLead {
+  max-width: 34rem;
+  margin: 1rem auto 0;
+  color: color-mix(in srgb, white 86%, transparent);
+  font-size: var(--type-heading-sm);
+  line-height: 1.8;
+}
+
+.finalActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.finalPrimary,
+.finalSecondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  padding: 0 1.6rem;
+  border-radius: var(--radius-full);
+  font-weight: 800;
+  transition:
+    transform var(--motion-hover) var(--ease-balanced),
+    box-shadow var(--motion-hover) var(--ease-balanced),
+    background-color var(--motion-hover) var(--ease-balanced);
+}
+
+.finalPrimary {
+  color: var(--primary-dark);
+  background: #fff;
+  box-shadow: 0 10px 26px rgb(15 23 42 / 0.24);
+}
+
+.finalPrimary:hover {
+  box-shadow: 0 14px 32px rgb(15 23 42 / 0.28);
+  transform: translateY(calc(-1 * var(--motion-distance)));
+}
+
+.finalSecondary {
+  border: 1px solid color-mix(in srgb, white 50%, transparent);
+  color: #fff;
+  background: color-mix(in srgb, white 8%, transparent);
+}
+
+.finalSecondary:hover {
+  background: color-mix(in srgb, white 16%, transparent);
+}
+
+.finalNote {
+  max-width: 32rem;
+  margin: 1.35rem auto 0;
+  color: color-mix(in srgb, white 78%, transparent);
+  font-size: var(--type-caption);
+  line-height: 1.7;
+}
+
+/* ─── Footer ──────────────────────────────────────────── */
+.footer {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.footerInner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  padding-block: 1.5rem calc(1.5rem + var(--app-safe-area-bottom));
+}
+
+.footerNote {
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: 600;
+}
+
+.footerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  padding: 0;
+  list-style: none;
+}
+
+.footerLinks a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: var(--type-label);
+  font-weight: 700;
+  transition: var(--transition-fast);
+}
+
+.footerLinks a:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+/* ─── Motion ──────────────────────────────────────────── */
+/* Hero settles in once, staggered ~60ms (the app's stagger step).
+   Longhands, not the shorthand: a var() inside `animation:` can keep the
+   CSS-modules pass from scoping the keyframe name. */
+.rise {
+  animation-name: rise;
+  animation-duration: 0.6s;
+  animation-timing-function: var(--ease-out-soft);
+  animation-fill-mode: both;
+}
+
+.heroCopy > .rise:nth-child(2) { animation-delay: 60ms; }
+.heroCopy > .rise:nth-child(3) { animation-delay: 120ms; }
+.heroCopy > .rise:nth-child(4) { animation-delay: 180ms; }
+.heroCopy > .rise:nth-child(5) { animation-delay: 240ms; }
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Story cards rise as they scroll in. Scroll-driven only, so a browser
+   without view timelines simply shows them; there is no JS and no hidden
+   state to get stuck in. */
+@supports (animation-timeline: view()) {
+  .reveal {
+    animation-name: rise;
+    animation-duration: auto;
+    animation-timing-function: var(--ease-out-soft);
+    animation-fill-mode: both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 60%;
+  }
+}
+
+:global(html[data-motion="off"]) .rise,
+:global(html[data-motion="off"]) .reveal {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .reveal {
+    animation: none;
+  }
+}
+
+@media print {
+  .rise,
+  .reveal {
+    animation: none;
+  }
+}
+
+/* ─── Responsive ──────────────────────────────────────── */
+@media (max-width: 1023px) {
+  .nav {
+    display: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .heroGrid,
+  .problemGrid,
+  .futureGrid,
+  .feature,
+  .featureReverse {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .featureReverse .featureCopy {
+    order: 0;
+  }
+
+  .heroVisual {
+    min-height: 24rem;
+  }
+
+  .loop {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .loopItem::after {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .changeGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .inner {
+    padding-inline: 1rem;
+  }
+
+  .heroVisual {
+    min-height: 21rem;
+    padding-bottom: 1rem;
+  }
+
+  .paperStack {
+    width: min(62%, 15rem);
+  }
+
+  .paperFront {
+    gap: 0.75rem;
+    padding: 1rem;
+  }
+
+  .resultCard {
+    width: min(74%, 16rem);
+    padding: 0.95rem;
+  }
+
+  .timeline {
+    padding: 1.25rem;
+  }
+
+  .costCard,
+  .audienceCard {
+    gap: 0.85rem;
+    padding: 1.1rem;
+  }
+
+  .costIcon,
+  .audienceIcon {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+
+  .nudge {
+    padding: 1.1rem;
+  }
+
+  .mock {
+    padding: 1rem;
+  }
+}
+
+@media (max-width: 560px) {
+  .loop {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .loopItem:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .loopLink {
+    padding: 0.95rem;
+  }
+
+  .proofGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.65rem;
+  }
+
+  .proof {
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 1.15rem;
+  }
+
+  .tabletBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .omrPane {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .ctaRow > *,
+  .nudgeLink,
+  .finalActions > * {
+    width: 100%;
+  }
+}
+
+@media (max-width: 400px) {
+  .answerGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* Logo + 로그인 + 데모 체험 need ~335px; below that keep the demo action. */
+@media (max-width: 359px) {
+  .topbarLogin {
+    display: none;
+  }
+}

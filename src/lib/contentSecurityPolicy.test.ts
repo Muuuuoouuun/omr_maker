@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { browserConnectionSources, contentSecurityPolicy } from "./contentSecurityPolicy";
-import { proxy } from "../proxy";
+import { config as proxyConfig, proxy } from "../proxy";
 
 describe("CSP request and network boundaries", () => {
     it("allows only the selected project and its direct-upload host", () => {
@@ -28,6 +28,12 @@ describe("CSP request and network boundaries", () => {
         });
         expect(sources).toContain("https://active.storage.supabase.co");
         expect(sources).not.toContain("https://old.supabase.co");
+    });
+
+    it("routes the public intro page through the nonce proxy", () => {
+        // Outside the matcher a page gets only the baseline nonce-less policy,
+        // and production then blocks its inline hydration scripts.
+        expect(proxyConfig.matcher).toContain("/intro");
     });
 
     it("overwrites forged nonces and does not share the nonce across requests", () => {

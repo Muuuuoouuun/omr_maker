@@ -100,7 +100,7 @@ export function workspaceContextFromIdentity(
         const organizationId = clean(identity?.organizationId).toLowerCase();
         const actorUserId = clean(identity?.teacherId).toLowerCase();
         const organizationName = clean(identity?.organizationName);
-        if (!/^pilot_org_[a-f0-9]{24}$/.test(organizationId)
+        if (!/^(?:pilot_org_|demo_org_)[a-f0-9]{24}$/.test(organizationId)
             || !/^teacher_[a-f0-9]{16}$/.test(actorUserId)
             || !organizationName || !isProvisionedTeacherMemberRole(identity?.memberRole)) return DEFAULT_CONTEXT;
         return {

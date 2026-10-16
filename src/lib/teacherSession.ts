@@ -13,7 +13,7 @@ export const TEACHER_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 export const TEACHER_SESSION_EXPIRING_SOON_MS = 30 * 60 * 1000;
 const DEFAULT_TEACHER_REDIRECT = "/teacher/dashboard";
 const LEGACY_ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
-const PILOT_ORGANIZATION_ID_PATTERN = /^pilot_org_[a-f0-9]{24}$/;
+const PILOT_ORGANIZATION_ID_PATTERN = /^(?:pilot_org_|demo_org_)[a-f0-9]{24}$/;
 
 export type TeacherMemberRole = "owner" | "admin" | "teacher" | "assistant" | "viewer";
 export type TeacherPlanCeiling = "free" | "pro" | "academy";

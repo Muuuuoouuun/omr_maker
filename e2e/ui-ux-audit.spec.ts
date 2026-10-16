@@ -15,6 +15,8 @@ type AuditTarget = {
 const TARGETS: AuditTarget[] = [
     { name: "teacher-login-desktop", path: "/?role=teacher", expectedText: "교사 포털", viewport: { width: 1440, height: 900 } },
     { name: "student-login-mobile", path: "/?role=student", expectedText: "학습 시작", viewport: { width: 390, height: 844 } },
+    { name: "intro-landing-desktop", path: "/intro", expectedText: "선생님의 시험이 시작됩니다", viewport: { width: 1440, height: 900 } },
+    { name: "intro-landing-mobile", path: "/intro", expectedText: "선생님의 시험이 시작됩니다", viewport: { width: 390, height: 844 } },
     { name: "admin-route-mobile", path: "/admin", expectedText: "관리자 기능은 교사 포털에서 관리합니다", viewport: { width: 390, height: 844 } },
     { name: "teacher-dashboard-desktop", path: "/teacher/dashboard", expectedText: "대시보드", viewport: { width: 1440, height: 900 }, teacher: true },
     { name: "teacher-showcase-mobile-dark-preference", path: "/teacher/dashboard?showcase=1&tab=exam", expectedText: "시험별 통계", viewport: { width: 390, height: 844 }, teacher: true, initialTheme: "dark" },

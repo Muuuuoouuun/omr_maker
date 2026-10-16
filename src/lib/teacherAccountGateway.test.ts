@@ -107,6 +107,17 @@ describe("provisioned teacher account gateway", () => {
         grantExpiresAt: "2026-08-31T15:00:00.000000Z",
     };
 
+    it("allows permanent plans only for a marked demo identity and exact session binding", async () => {
+        const row={...valid,organizationId:"demo_org_0123456789abcdef01234567",entitlementMode:"permanent_demo",grantExpiresAt:null};
+        await expect(lookupProvisionedTeacherLogin(clientWith({omr_lookup_provisioned_teacher_login_v1:row}),"teacher@example.com",now)).resolves.toEqual(row);
+        const {email:_email,displayName:_display,passwordHash:_hash,...session}=row;
+        await expect(validateProvisionedTeacherSession(clientWith({omr_validate_provisioned_teacher_session_v1:session}),row.accountId,3,row.organizationId,now)).resolves.toEqual(session);
+        for (const bad of [{...row,entitlementMode:undefined},{...row,organizationId:valid.organizationId},{...row,grantExpiresAt:"9999-01-01T00:00:00Z"},
+            {...row,memberRole:"admin"}]) {
+            await expect(lookupProvisionedTeacherLogin(clientWith({omr_lookup_provisioned_teacher_login_v1:bad}),"teacher@example.com",now)).resolves.toBeNull();
+        }
+    });
+
     it("accepts only an exact getter-free provisioned login envelope", async () => {
         const client = clientWith({ omr_lookup_provisioned_teacher_login_v1: valid });
         await expect(lookupProvisionedTeacherLogin(client, " Teacher@Example.com ", now)).resolves.toEqual(valid);

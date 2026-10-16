@@ -40,6 +40,11 @@ const MEMBER_RECEIPT_KEYS = [
     "accountId", "idempotencyKeyHash", "initialPassword", "integrity", "memberRole",
     "organizationId", "provisionId", "replayed", "requestFingerprint", "schemaVersion", "status",
 ];
+const DEMO_RECEIPT_KEYS = [
+    "accountId", "entitlementMode", "idempotencyKeyHash", "initialPassword", "integrity", "memberRole",
+    "organizationId", "plan", "replayed", "requestFingerprint", "schemaVersion", "status",
+];
+const DEMO_RECEIPT_DOMAIN = "omr.operator-demo-provisioning-receipt:v1";
 const MEMBER_RECEIPT_DOMAIN = "omr.operator-member-provisioning-receipt:v1";
 const SAFE_CODES = new Set([
     "invalid_arguments", "unsupported_platform", "unsafe_request", "invalid_request",
@@ -746,7 +751,45 @@ function validateMemberRequest(raw) {
     };
 }
 
+function validateDemoRequest(raw) {
+    const teacher = Object.prototype.hasOwnProperty.call(raw, "organizationId");
+    const keys = teacher
+        ? [...MEMBER_REQUEST_KEYS, "entitlementMode"]
+        : [...REQUEST_KEYS.filter(key => key !== "expiresAt"), "entitlementMode"];
+    const value = exactObject(raw, keys, "invalid_request");
+    const input = {
+        kind: teacher ? "teacher" : "owner", entitlementMode: clean(value.entitlementMode),
+        email: clean(value.email).toLowerCase(), displayName: clean(value.displayName),
+        actor: clean(value.actor), reason: clean(value.reason), idempotencyKey: clean(value.idempotencyKey),
+        ...(teacher ? { organizationId: clean(value.organizationId).toLowerCase(), memberRole: clean(value.memberRole) }
+            : { organizationName: clean(value.organizationName), plan: clean(value.plan).toLowerCase() }),
+    };
+    if (input.entitlementMode !== "permanent_demo" || input.reason !== "qa_permanent_demo" || !validateIdentityFields(input)
+        || (teacher ? !/^demo_org_[a-f0-9]{24}$/.test(input.organizationId) || input.memberRole !== "teacher"
+            : !input.organizationName || input.organizationName.length > 120 || Buffer.byteLength(input.organizationName,"utf8")>360
+                || CONTROL_CHARACTER_PATTERN.test(input.organizationName) || !["free","pro","academy"].includes(input.plan))) fail("invalid_request");
+    return { ...input, credentialStatePath: normalizedAbsolutePath(value.credentialStatePath,"invalid_request"),
+        requestFingerprint: sha256(JSON.stringify(canonicalize(input))) };
+}
+
+function validateDemoResult(raw, request, receipt = false) {
+    const keys = receipt ? DEMO_RECEIPT_KEYS : ["status","organizationId","accountId","memberRole","plan","entitlementMode","replayed"];
+    const value = exactObject(raw, keys, receipt ? "unsafe_receipt" : "dependency_unavailable");
+    const code = receipt ? "unsafe_receipt" : "dependency_unavailable";
+    if (!/^demo_org_[a-f0-9]{24}$/.test(value.organizationId) || !ACCOUNT_ID_PATTERN.test(value.accountId)
+        || value.status !== "provisioned" || value.entitlementMode !== "permanent_demo"
+        || value.memberRole !== (request.kind === "owner" ? "owner" : "teacher")
+        || !["free","pro","academy"].includes(value.plan) || typeof value.replayed !== "boolean"
+        || (request.kind === "teacher" && value.organizationId !== request.organizationId)
+        || (request.kind === "owner" && value.plan !== request.plan)) fail(code);
+    if (receipt && (value.schemaVersion !== 1 || value.requestFingerprint !== request.requestFingerprint
+        || value.idempotencyKeyHash !== sha256(request.idempotencyKey) || !PASSWORD_PATTERN.test(value.initialPassword)
+        || value.integrity !== integrity(DEMO_RECEIPT_DOMAIN,value))) fail(code);
+    return value;
+}
+
 function validateRequest(raw, now) {
+    if (raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw,"entitlementMode")) return validateDemoRequest(raw);
     if (raw && typeof raw === "object" && !Array.isArray(raw)
         && Object.prototype.hasOwnProperty.call(raw, "organizationId")) {
         return validateMemberRequest(raw);
@@ -770,11 +813,12 @@ function validateRequest(raw, now) {
         || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
         || displayName.length < 1 || displayName.length > 80
         || Buffer.byteLength(displayName, "utf8") > 240 || /[\u0000-\u001f\u007f]/.test(displayName)
-        || (plan !== "pro" && plan !== "academy")
+        || (plan !== "free" && plan !== "pro" && plan !== "academy")
         || !INPUT_TIMESTAMP_PATTERN.test(expiresAt) || !Number.isFinite(expiresAtMs)
         || new Date(expiresAtMs).toISOString() !== expiresAt
         || expiresAtMs <= now.getTime() || expiresAtMs > now.getTime() + 366 * 24 * 60 * 60 * 1_000
         || actor.length < 10 || actor.length > 73 || !/^operator:[a-z0-9][a-z0-9._-]{0,63}$/.test(actor)
+        || (plan === "free" && reason !== "qa_free_org")
         || reason.length < 1 || reason.length > 64 || !/^[a-z][a-z0-9_]{0,63}$/.test(reason)
         || Buffer.byteLength(idempotencyKey, "utf8") < 37 || Buffer.byteLength(idempotencyKey, "utf8") > 128
         || !/^prov_[A-Za-z0-9_-]{32,123}$/.test(idempotencyKey)
@@ -825,6 +869,7 @@ function validateMemberReceipt(raw, request) {
 }
 
 function validateReceipt(raw, request) {
+    if (request.entitlementMode === "permanent_demo") return validateDemoResult(raw, request, true);
     if (request.kind === "teacher") return validateMemberReceipt(raw, request);
     const value = exactObject(raw, RECEIPT_KEYS, "unsafe_receipt");
     if (
@@ -837,7 +882,7 @@ function validateReceipt(raw, request) {
         || !ORGANIZATION_ID_PATTERN.test(value.organizationId)
         || !ACCOUNT_ID_PATTERN.test(value.accountId)
         || !GRANT_ID_PATTERN.test(value.grantId)
-        || (value.plan !== "pro" && value.plan !== "academy")
+        || (value.plan !== "free" && value.plan !== "pro" && value.plan !== "academy")
         || !RESULT_TIMESTAMP_PATTERN.test(value.expiresAt)
         || !Number.isFinite(Date.parse(value.expiresAt))
         || typeof value.replayed !== "boolean"
@@ -861,6 +906,7 @@ function validateMemberProvisionedResult(value, request) {
 }
 
 function validateProvisionedResult(value, request) {
+    if (request.entitlementMode === "permanent_demo") return validateDemoResult(value, request);
     if (request.kind === "teacher") return validateMemberProvisionedResult(value, request);
     const expectedKeys = ["accountId", "expiresAt", "grantId", "organizationId", "plan", "replayed", "status"];
     if (
@@ -870,7 +916,7 @@ function validateProvisionedResult(value, request) {
         || !ORGANIZATION_ID_PATTERN.test(value.organizationId)
         || !ACCOUNT_ID_PATTERN.test(value.accountId)
         || !GRANT_ID_PATTERN.test(value.grantId)
-        || (value.plan !== "pro" && value.plan !== "academy")
+        || (value.plan !== "free" && value.plan !== "pro" && value.plan !== "academy")
         || !RESULT_TIMESTAMP_PATTERN.test(value.expiresAt)
         || !Number.isFinite(Date.parse(value.expiresAt))
         || value.plan !== request.plan
@@ -881,6 +927,10 @@ function validateProvisionedResult(value, request) {
 }
 
 function publicResult(receiptPath, value) {
+    if (value.entitlementMode === "permanent_demo") return {
+        status: "provisioned", receiptPath, organizationId:value.organizationId, accountId:value.accountId,
+        memberRole:value.memberRole, plan:value.plan, entitlementMode:value.entitlementMode, replayed:value.replayed,
+    };
     if (value.provisionId !== undefined) {
         return {
             status: "provisioned",
@@ -921,7 +971,14 @@ async function defaultProvisionWithVerifier(input, env) {
                 origin,
             ) },
         });
-        const result = input.kind === "teacher"
+        const result = input.entitlementMode === "permanent_demo"
+            ? await client.rpc("omr_provision_demo_account_v1", {
+                p_org_name: input.organizationName ?? null, p_org_id: input.organizationId ?? null,
+                p_email: input.email, p_display: input.displayName, p_verifier: input.encodedVerifier,
+                p_plan: input.plan ?? null, p_role: input.kind === "teacher" ? "teacher" : "owner",
+                p_mode: input.entitlementMode, p_actor:input.actor, p_reason:input.reason, p_key:input.idempotencyKey,
+            })
+            : input.kind === "teacher"
             ? await client.rpc("omr_provision_pilot_org_teacher_v1", {
                 p_organization_id: input.organizationId,
                 p_email: input.email,
@@ -931,7 +988,7 @@ async function defaultProvisionWithVerifier(input, env) {
                 p_reason: input.reason,
                 p_idempotency_key: input.idempotencyKey,
             })
-            : await client.rpc("omr_provision_pilot_teacher_v1", {
+            : await client.rpc(input.plan === "free" ? "omr_provision_qa_free_owner_v1" : "omr_provision_pilot_teacher_v1", {
                 p_organization_name: input.organizationName,
                 p_email: input.email,
                 p_display_name: input.displayName,
@@ -979,7 +1036,10 @@ async function cleanupPendingIfPresent(statePath, request, expectedPassword, sta
 
 export async function executeOperatorProvisioning(input, overrides = {}) {
     const deps = withDependencies(overrides);
-    if (!Array.isArray(input.argv) || input.argv.length !== 1 || !input.argv[0].startsWith("--request=")) {
+    if (!Array.isArray(input.argv) || !input.argv[0]?.startsWith("--request=")
+        || input.argv.length > 2
+        || (input.argv.length === 2 && input.argv[1] !== "--dry-run"
+            && !/^--approve-qa-(?:free|demo)=[a-f0-9]{64}$/.test(input.argv[1]))) {
         fail("invalid_arguments");
     }
     if ((deps.platform !== "darwin" && deps.platform !== "linux") || constants.O_NOFOLLOW === undefined) {
@@ -994,6 +1054,26 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
         fail("invalid_request");
     }
     const stateBoundary = await safeParentBoundary(request.credentialStatePath, deps, "unsafe_state");
+    // Review before reading any credential state, creating locks/passwords or resolving a client.
+    const reviewDigest = sha256(JSON.stringify(canonicalize({
+        requestFingerprint: request.requestFingerprint,
+        credentialStatePath: request.credentialStatePath,
+    })));
+    if (input.argv[1] === "--dry-run") {
+        return {
+            status: "review_only", reviewDigest, kind: request.kind,
+            organizationName: request.organizationName,
+            organizationId: request.organizationId,
+            email: request.email, displayName: request.displayName,
+            memberRole: request.kind === "owner" ? "owner" : "teacher",
+            plan: request.plan, expiresAt: request.expiresAt, entitlementMode: request.entitlementMode,
+        };
+    }
+    if (request.entitlementMode === "permanent_demo") {
+        if (input.argv[1] !== `--approve-qa-demo=${reviewDigest}`) fail("invalid_arguments");
+    } else if (request.plan === "free") {
+        if (input.argv[1] !== `--approve-qa-free=${reviewDigest}`) fail("invalid_arguments");
+    } else if (input.argv.length !== 1) fail("invalid_arguments");
     await deps.checkpoint("after_request_read");
 
     const receiptPath = `${request.credentialStatePath}.receipt`;
@@ -1045,6 +1125,7 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
     try {
         result = await provision(request.kind === "teacher" ? {
             kind: "teacher",
+            entitlementMode: request.entitlementMode,
             organizationId: request.organizationId,
             email: request.email,
             displayName: request.displayName,
@@ -1054,6 +1135,7 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
             idempotencyKey: request.idempotencyKey,
             encodedVerifier: pending.passwordVerifier,
         } : {
+            entitlementMode: request.entitlementMode,
             organizationName: request.organizationName,
             email: request.email,
             displayName: request.displayName,
@@ -1092,13 +1174,24 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
                 finalized.initialPassword !== pending.initialPassword
                 || finalized.organizationId !== result.organizationId
                 || finalized.accountId !== result.accountId
-                || (request.kind === "teacher"
+                || (request.entitlementMode === "permanent_demo"
+                    ? finalized.entitlementMode !== result.entitlementMode || finalized.memberRole !== result.memberRole || finalized.plan !== result.plan
+                    : request.kind === "teacher"
                     ? finalized.provisionId !== result.provisionId
                         || finalized.memberRole !== result.memberRole
                     : finalized.grantId !== result.grantId
                         || finalized.plan !== result.plan
                         || finalized.expiresAt !== result.expiresAt)
             ) fail("unsafe_receipt");
+        } else if (request.entitlementMode === "permanent_demo") {
+            finalized = {
+                schemaVersion:1, status:"provisioned", requestFingerprint:request.requestFingerprint,
+                idempotencyKeyHash:sha256(request.idempotencyKey), organizationId:result.organizationId,
+                accountId:result.accountId, memberRole:result.memberRole, plan:result.plan,
+                entitlementMode:"permanent_demo", replayed:result.replayed, initialPassword:pending.initialPassword,
+            };
+            finalized.integrity=integrity(DEMO_RECEIPT_DOMAIN,finalized);
+            await atomicPublish(receiptPath,finalized,stateBoundary,deps,"unsafe_receipt");
         } else if (request.kind === "teacher") {
             finalized = {
                 schemaVersion: 1,
@@ -1144,10 +1237,16 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
 export async function runOperatorProvisioningCli({ argv, env, deps, stdout = console.log, stderr = console.error }) {
     try {
         const result = await executeOperatorProvisioning({ argv, env }, deps);
+        if (result.status === "review_only") {
+            stdout(JSON.stringify(result));
+            return 0;
+        }
         stdout(`receipt_path=${result.receiptPath}`);
         stdout(`organization_id=${result.organizationId}`);
         stdout(`account_id=${result.accountId}`);
-        if (result.provisionId !== undefined) {
+        if ("entitlementMode" in result && result.entitlementMode === "permanent_demo") {
+            stdout("entitlement_mode=permanent_demo"); stdout(`member_role=${result.memberRole}`); stdout(`plan=${result.plan}`);
+        } else if (result.provisionId !== undefined) {
             stdout(`provision_id=${result.provisionId}`);
             stdout(`member_role=${result.memberRole}`);
         } else {
@@ -1161,5 +1260,50 @@ export async function runOperatorProvisioningCli({ argv, env, deps, stdout = con
             : "internal_failure";
         stderr(`provision_failed: ${code}`);
         return 1;
+    }
+}
+
+/** Demo revocation is a separate review-first operator action, with no credential file. */
+export async function executeDemoRevocation(input, overrides = {}) {
+    const deps = withDependencies(overrides);
+    if (!Array.isArray(input.argv) || input.argv.length !== 2 || !input.argv[0]?.startsWith("--request=")
+        || (input.argv[1] !== "--dry-run" && !/^--approve-qa-demo=[a-f0-9]{64}$/.test(input.argv[1]))) fail("invalid_arguments");
+    if ((deps.platform !== "darwin" && deps.platform !== "linux") || constants.O_NOFOLLOW === undefined) fail("unsupported_platform");
+    const path = normalizedAbsolutePath(input.argv[0].slice("--request=".length),"unsafe_request");
+    const file = await readSecureJson(path,deps,"unsafe_request",REQUEST_MAX_BYTES);
+    const raw = exactObject(file.value,["organizationId","entitlementMode","actor","reason"],"invalid_request");
+    const request = Object.fromEntries(Object.entries(raw).map(([key,value]) => [key,clean(value)]));
+    if (!/^demo_org_[a-f0-9]{24}$/.test(request.organizationId) || request.entitlementMode !== "permanent_demo"
+        || !/^operator:[a-z0-9][a-z0-9._-]{0,63}$/.test(request.actor) || !/^[a-z][a-z0-9_]{0,63}$/.test(request.reason)) fail("invalid_request");
+    const reviewDigest = sha256(JSON.stringify(canonicalize({ action:"revoke_demo",...request })));
+    if (input.argv[1] === "--dry-run") return { status:"review_only",action:"revoke_demo",reviewDigest,...request };
+    if (input.argv[1] !== `--approve-qa-demo=${reviewDigest}`) fail("invalid_arguments");
+    const revoke = overrides.revokeDemo ?? defaultDemoRevocation;
+    let result;
+    try { result = await revoke(request,input.env ?? {}); } catch { fail("dependency_unavailable"); }
+    if (result !== true && result !== false) fail("dependency_unavailable");
+    return { status:result ? "revoked" : "unchanged",organizationId:request.organizationId,entitlementMode:request.entitlementMode };
+}
+
+async function defaultDemoRevocation(request, env) {
+    const origin = parseOperatorSupabaseRootUrl(clean(env.SUPABASE_URL) || clean(env.NEXT_PUBLIC_SUPABASE_URL));
+    const key = clean(env.SUPABASE_SERVICE_ROLE_KEY) || clean(env.OMR_SUPABASE_SERVICE_ROLE_KEY);
+    if (key.length < 32 || /\s/.test(key)) fail("dependency_unavailable");
+    const client = createClient(origin,key,{
+        auth:{persistSession:false,autoRefreshToken:false},
+        global:{fetch:createOperatorProvisioningDeadlineFetch(SUPABASE_TIMEOUT_MS,globalThis.fetch.bind(globalThis),origin)},
+    });
+    const result = await client.rpc("omr_revoke_demo_organization_v1",{
+        p_org:request.organizationId,p_mode:request.entitlementMode,p_actor:request.actor,p_reason:request.reason,
+    });
+    if (result.error) fail("dependency_unavailable");
+    return result.data;
+}
+
+export async function runDemoRevocationCli({argv,env,deps,stdout=console.log,stderr=console.error}) {
+    try { stdout(JSON.stringify(await executeDemoRevocation({argv,env},deps))); return 0; }
+    catch (error) {
+        const code=error instanceof OperatorProvisioningCliError && SAFE_CODES.has(error.code) ? error.code : "internal_failure";
+        stderr(`revocation_failed: ${code}`); return 1;
     }
 }

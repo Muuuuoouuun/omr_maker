@@ -9,7 +9,7 @@ process.env.OMR_PRODUCTION_EXPECTED_BUILD = build;
 
 export default defineConfig({
     testDir: "./e2e",
-    testMatch: /(?:production-security|teacher-provisioned-links)\.spec\.ts/,
+    testMatch: /(?:production-security|teacher-provisioned-links|student-direct-login)\.spec\.ts/,
     fullyParallel: false,
     forbidOnly: !!process.env.CI,
     retries: 0,

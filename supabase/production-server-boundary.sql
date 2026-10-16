@@ -680,7 +680,7 @@ begin
         ('omr_rate_limit_buckets'), ('omr_exam_mutations'), ('omr_feedback_mutations'),
         ('omr_initial_ops_metrics'), ('omr_teacher_accounts'), ('omr_teacher_account_tokens'),
         ('omr_teacher_notification_states'), ('omr_operational_job_status'),
-        ('omr_pilot_plan_grants'), ('omr_pilot_member_provisions'), ('omr_student_credential_epochs'),
+        ('omr_pilot_plan_grants'), ('omr_pilot_member_provisions'), ('omr_demo_organizations'), ('omr_demo_provisions'), ('omr_student_credential_epochs'),
         ('omr_student_credential_batch_receipts'),
         ('omr_kakao_reminder_legacy_quarantine'),
         ('omr_reminder_settings'), ('omr_reminder_contacts'), ('omr_reminder_deliveries'), ('omr_remediation_cases')
@@ -720,7 +720,7 @@ begin
                    'omr_exam_entry_invites',
                    'omr_initial_ops_metrics', 'omr_teacher_accounts', 'omr_teacher_account_tokens',
                    'omr_teacher_notification_states', 'omr_operational_job_status',
-                   'omr_pilot_plan_grants', 'omr_pilot_member_provisions', 'omr_student_credential_batch_receipts',
+                   'omr_pilot_plan_grants', 'omr_pilot_member_provisions', 'omr_demo_organizations', 'omr_demo_provisions', 'omr_student_credential_batch_receipts',
                    'omr_student_credential_epochs', 'omr_student_start_credentials',
                    'omr_remote_assets', 'omr_remote_asset_upload_intents',
                    'omr_remote_asset_cleanup_queue', 'omr_plan_usage',
@@ -1450,7 +1450,7 @@ begin
         ), 'sha256'), 'hex') = '282a79ed02c1a3cfc927248cf554ff5ae64eb73b18b8b1f658396d466f884a46'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = 'fcd083ee1f40a923e03cc8fd7bfccbdaa70d74d34a2e8dc35e7439760b099b45'
+        ), 'sha256'), 'hex') = '117c3f5df5cc58a3a69116cbc95176fc7d3263aa9a2d1504ccecf346ac908826'
         and exists (
             select 1 from pg_catalog.pg_index index_record
              where index_record.indexrelid = pg_catalog.to_regclass(
@@ -1479,7 +1479,7 @@ begin
                    constraint_record.conname || '='
                        || pg_catalog.pg_get_constraintdef(constraint_record.oid, true),
                    E'\n' order by constraint_record.conname
-               ), 'sha256'), 'hex') = 'e05ecee3e626ee9d15f3143003f5fe0ea9b0a31ffabe9a395fbff7dac1d17fec'
+               ), 'sha256'), 'hex') = '9b6c6c9153157a0f4eef095e5c1bbe3c31103c2322d80e8d306d46e8429f250e'
               from pg_catalog.pg_constraint constraint_record
              where constraint_record.conrelid = 'public.omr_pilot_plan_grants'::pg_catalog.regclass
                and constraint_record.conname in (
@@ -1532,6 +1532,56 @@ begin
                    pg_catalog.pg_get_functiondef(routine.oid), 'sha256'
                ), 'hex') = '4be105f115716a0cdc5bad391eee5c4bb1e1c1c12daa81e853ed851004e0a7de'
         );
+
+    -- Pin the QA-only entry point as strictly as the paid provisioning RPC.
+    v_operator_pilot_provisioning_ready := v_operator_pilot_provisioning_ready
+        and exists (
+            select 1 from pg_catalog.pg_proc routine
+             where routine.oid = pg_catalog.to_regprocedure(
+                 'public.omr_provision_qa_free_owner_v1(text,text,text,text,text,timestamptz,text,text,text)'
+             )
+               and routine.prosecdef
+               and pg_catalog.pg_get_userbyid(routine.proowner) = 'postgres'
+               and routine.proconfig @> array['search_path=""', 'statement_timeout=10s', 'lock_timeout=3s']::text[]
+               and pg_catalog.has_function_privilege('service_role', routine.oid, 'EXECUTE')
+               and not pg_catalog.has_function_privilege('anon', routine.oid, 'EXECUTE')
+               and not pg_catalog.has_function_privilege('authenticated', routine.oid, 'EXECUTE')
+               and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(routine.oid), 'sha256'), 'hex')
+                   = '766fb182e56a451f61553fafd0a0a76ec83f4c30486a51e34e7056f54386c7c6'
+        );
+
+    -- Permanent demo creation/validation/revocation are separate, exactly attested operator boundaries.
+    v_operator_pilot_provisioning_ready := v_operator_pilot_provisioning_ready
+        and exists(select 1 from pg_catalog.pg_proc f where f.oid=pg_catalog.to_regprocedure('public.omr_read_demo_plan_v1(text)')
+          and f.prosecdef and pg_catalog.pg_get_userbyid(f.proowner)='postgres'
+          and f.proconfig @> array['search_path=""']::text[]
+          and not pg_catalog.has_function_privilege('anon',f.oid,'EXECUTE')
+          and not pg_catalog.has_function_privilege('authenticated',f.oid,'EXECUTE')
+          and not pg_catalog.has_function_privilege('service_role',f.oid,'EXECUTE')
+          and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(f.oid),'sha256'),'hex')='d4d9948707a7afe13507af781cea7765a6b11bd94fb04f5f5efdc5c4ecd06da5')
+        and exists(select 1 from pg_catalog.pg_proc f where f.oid=pg_catalog.to_regprocedure('public.omr_lock_demo_identity_v1(text,bigint,text)')
+          and f.prosecdef and pg_catalog.pg_get_userbyid(f.proowner)='postgres'
+          and f.proconfig @> array['search_path=""']::text[]
+          and not pg_catalog.has_function_privilege('anon',f.oid,'EXECUTE')
+          and not pg_catalog.has_function_privilege('authenticated',f.oid,'EXECUTE')
+          and not pg_catalog.has_function_privilege('service_role',f.oid,'EXECUTE')
+          and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(f.oid),'sha256'),'hex')='37c358dd0aab50bb0b3569fb17359c0aa9fee69086c1bf0daaf3c26190dc80b2')
+        and exists(select 1 from pg_catalog.pg_proc f where f.oid=pg_catalog.to_regprocedure('public.omr_revoke_demo_organization_v1(text,text,text,text)')
+          and f.prosecdef and pg_catalog.pg_get_userbyid(f.proowner)='postgres'
+          and f.proconfig @> array['search_path=""']::text[]
+          and not pg_catalog.has_function_privilege('anon',f.oid,'EXECUTE')
+          and not pg_catalog.has_function_privilege('authenticated',f.oid,'EXECUTE')
+          and pg_catalog.has_function_privilege('service_role',f.oid,'EXECUTE')
+          and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(f.oid),'sha256'),'hex')='3ea76d1a97f41b3186797b2bdbb83d08a1d4d8b219f8e90f105e8f8336dfa68b')
+        and exists(select 1 from pg_catalog.pg_proc f where f.oid=pg_catalog.to_regprocedure('public.omr_provision_demo_account_v1(text,text,text,text,text,text,text,text,text,text,text)')
+          and f.prosecdef and pg_catalog.pg_get_userbyid(f.proowner)='postgres'
+          and f.proconfig @> array['search_path=""']::text[]
+          and not pg_catalog.has_function_privilege('anon',f.oid,'EXECUTE')
+          and not pg_catalog.has_function_privilege('authenticated',f.oid,'EXECUTE')
+          and pg_catalog.has_function_privilege('service_role',f.oid,'EXECUTE')
+          and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(f.oid),'sha256'),'hex')='8026fbf15b5e0ad6eaa6f39651ec559b69e040b6586b49301a84ba652bfe35be')
+        and not pg_catalog.has_table_privilege('service_role','public.omr_demo_organizations','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+        and not pg_catalog.has_table_privilege('service_role','public.omr_demo_provisions','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN');
 
     v_provisioned_teacher_login_ready :=
         pg_catalog.to_regprocedure('public.omr_lookup_teacher_account_v1(text)') is not null
@@ -1636,22 +1686,22 @@ begin
         ) = 'side-effect-free exact provisioned teacher release canary:202608080007'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_lookup_teacher_account_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = 'fe3169c6a0146ea882781dd50718b5db72060c7169349f0ed47f49e14072237b'
+        ), 'sha256'), 'hex') = '54789f75c1cf21b39bf023cc18bf288e752058f26506f08d9c53e874b89bd464'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_validate_teacher_session_v1(text,bigint)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '214f1a6cd051aa90b24ba36678c0814fb158851e264a4406600e3af539807c09'
+        ), 'sha256'), 'hex') = '9ed7e0dc70f70443703c50a8ae6aea25c6079c76a9b13a22ab7e9349cc242bd1'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '96bd9001d47dbaee16dee36554167283f5659c1cfc7eba649dda3a485e5f0cd4'
+        ), 'sha256'), 'hex') = '56aaf95ed3cfe82c6cbd0375a1f199e94eb3f95f7c2ec1a257b5ce1add83c616'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_complete_teacher_password_reset_v1(text,text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = 'db7999bd381f8b2eee44a869aaa962a0f084ec44debcfd5187cac885521a0a02'
+        ), 'sha256'), 'hex') = '6dab50aa13601fe31e9d15542245b753c952ec45d57fa809436c94aba640c284'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_lookup_provisioned_teacher_login_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = 'e82d5d9ae9bc15ec2291ff38645019ab703ede49f09d9860a88f9b1d939e37cd'
+        ), 'sha256'), 'hex') = '67a31068f1b3094fc39fbb14fed5b4a68665405e827bae7094e1496eea9790a5'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '2f95ff43660f1e645e4c322306fb2a427de2d7f1c5555d22311dfe8afb207358'
+        ), 'sha256'), 'hex') = 'a17a29edc7161ec12477ceeeacf71be9cfe99b57a12edf005b662e3ec7423ff5'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_probe_provisioned_teacher_canary_v1(text)'::pg_catalog.regprocedure
         ), 'sha256'), 'hex') = '0302d984bd9f280d887ff17d7953f1e3346b36631ed0bc40ef2e55be5a61cb4e';
@@ -2372,7 +2422,7 @@ begin
                E'\n-- phase-c-routine --\n' order by name, args
                ), 'sha256'), 'hex')
              from actual
-       ) = 'b28a8a1017a68925b8c6d1acbcf45e95eb1abdd894aa7b4947abcb4ae0a0ce2e'
+       ) = 'e51c72a08857729f474d1cdef45e96a9f28f5e2230f380e96b07495ecb1866cf'
        and not exists (
            select 1 from (values
                ('omr_remote_assets'), ('omr_remote_asset_upload_intents'),
@@ -3405,5 +3455,39 @@ revoke all on function public.omr_manage_remediation_v1(text,text,bigint,text,te
 revoke all on function public.omr_student_remediation_v1(text,text) from public,anon,authenticated;
 grant execute on function public.omr_manage_remediation_v1(text,text,bigint,text,text,jsonb) to service_role;
 grant execute on function public.omr_student_remediation_v1(text,text) to service_role;
+
+-- Free QA creation never becomes a browser/authenticated capability, including on rollback.
+revoke all on function public.omr_provision_qa_free_owner_v1(text,text,text,text,text,timestamptz,text,text,text)
+    from public, anon, authenticated;
+grant execute on function public.omr_provision_qa_free_owner_v1(text,text,text,text,text,timestamptz,text,text,text)
+    to service_role;
+
+-- Demo scope remains RPC-only even after rollback. No automatic org promotion.
+alter table public.omr_demo_organizations enable row level security;
+alter table public.omr_demo_organizations force row level security;
+alter table public.omr_demo_provisions enable row level security;
+alter table public.omr_demo_provisions force row level security;
+revoke all on table public.omr_demo_organizations,public.omr_demo_provisions from public,anon,authenticated,service_role;
+revoke all on function public.omr_lock_demo_identity_v1(text,bigint,text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_read_demo_plan_v1(text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_provision_demo_account_v1(text,text,text,text,text,text,text,text,text,text,text) from public,anon,authenticated;
+grant execute on function public.omr_provision_demo_account_v1(text,text,text,text,text,text,text,text,text,text,text) to service_role;
+revoke all on function public.omr_revoke_demo_organization_v1(text,text,text,text) from public,anon,authenticated;
+grant execute on function public.omr_revoke_demo_organization_v1(text,text,text,text) to service_role;
+revoke all on function public.omr_read_effective_workspace_plan_v1(text) from public,anon,authenticated;
+revoke all on function public.omr_lookup_provisioned_teacher_login_v1(text) from public,anon,authenticated;
+revoke all on function public.omr_validate_provisioned_teacher_session_v1(text,bigint,text) from public,anon,authenticated;
+revoke all on function public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text) from public,anon,authenticated;
+revoke all on function public.omr_authorize_effective_teacher_plan_v1(text,text) from public,anon,authenticated;
+revoke all on function public.omr_read_effective_organization_plan_v1(text) from public,anon,authenticated;
+revoke all on function public.omr_read_teacher_mutation_plan_v1(text,text,text,text) from public,anon,authenticated;
+revoke all on function public.omr_lookup_teacher_account_v1(text) from public,anon,authenticated;
+revoke all on function public.omr_validate_teacher_session_v1(text,bigint) from public,anon,authenticated;
+revoke all on function public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz) from public,anon,authenticated;
+revoke all on function public.omr_complete_teacher_password_reset_v1(text,text) from public,anon,authenticated;
+revoke all on function public.omr_set_effective_plan_transaction_proof_v1(text,jsonb) from public,anon,authenticated;
+revoke all on function public.omr_assert_effective_plan_transaction_proof_v1(text,boolean) from public,anon,authenticated;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb) from public,anon,authenticated;
+revoke all on function public.omr_attach_attempt_handwriting_v2(text,text,text,text,text) from public,anon,authenticated;
 
 commit;

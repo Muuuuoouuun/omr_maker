@@ -47,17 +47,38 @@ describe("durableRateLimit", () => {
         await expect(applyDurableRateLimit({ namespace: "ai-answer", subject: "safe", operation: "consume", policy }, {
             env: { NODE_ENV: "production" },
             client: null,
-        })).resolves.toEqual({ allowed: false, retryAfterMs: 60_000 });
+        })).resolves.toEqual({ allowed: false, retryAfterMs: 60_000, reason: "unavailable" });
+
+        await expect(applyDurableRateLimit({ namespace: "ai-answer", subject: "safe", operation: "consume", policy }, {
+            env: { NODE_ENV: "production", OMR_RATE_LIMIT_HASH_SECRET: "test-rate-limit-secret-at-least-32-bytes" },
+            client: null,
+        })).resolves.toEqual({ allowed: false, retryAfterMs: 60_000, reason: "unavailable" });
 
         await expect(applyDurableRateLimit({ namespace: "ai-answer", subject: "safe", operation: "consume", policy }, {
             env: { NODE_ENV: "production", OMR_RATE_LIMIT_HASH_SECRET: "too-short" },
             client: { rpc: async () => ({ data: { allowed: true, retry_after_ms: 0 }, error: null }) },
-        })).resolves.toEqual({ allowed: false, retryAfterMs: 60_000 });
+        })).resolves.toEqual({ allowed: false, retryAfterMs: 60_000, reason: "unavailable" });
 
         await expect(applyDurableRateLimit({ namespace: "ai-answer", subject: "safe", operation: "consume", policy }, {
             env: { NODE_ENV: "production", OMR_RATE_LIMIT_HASH_SECRET: "test-rate-limit-secret-at-least-32-bytes" },
             client: { rpc: async () => ({ data: null, error: { message: "missing rpc" } }) },
-        })).resolves.toEqual({ allowed: false, retryAfterMs: 60_000 });
+        })).resolves.toEqual({ allowed: false, retryAfterMs: 60_000, reason: "unavailable" });
+    });
+
+    it("distinguishes a backend outage from a real throttled response", async () => {
+        const input = { namespace: "teacher-login", subject: "safe", operation: "consume" as const, policy };
+        const env = { NODE_ENV: "production", OMR_RATE_LIMIT_HASH_SECRET: "test-rate-limit-secret-at-least-32-bytes" };
+        for (const rpc of [
+            async () => { throw new TypeError("fetch failed"); },
+            async () => ({ data: { unexpected: true }, error: null }),
+        ]) {
+            await expect(applyDurableRateLimit(input, { env, client: { rpc } }))
+                .resolves.toEqual({ allowed: false, retryAfterMs: 60_000, reason: "unavailable" });
+        }
+        await expect(applyDurableRateLimit(input, {
+            env,
+            client: { rpc: async () => ({ data: { allowed: false, retry_after_ms: 42_000 }, error: null }) },
+        })).resolves.toEqual({ allowed: false, retryAfterMs: 42_000 });
     });
 
     it("permits a bounded local fallback and preserves consume, failure, and success semantics", async () => {

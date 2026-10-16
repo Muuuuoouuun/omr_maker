@@ -43,6 +43,23 @@ test("production nonce CSP blocks injected inline scripts and preserves page int
     expect(consoleErrors).toEqual([]);
 });
 
+test("production intro page renders under the per-request nonce CSP", async ({ page }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("prod-"), "Production-build security contract.");
+    const violations: string[] = [];
+    page.on("console", message => {
+        if (message.type() === "error" && /Content Security Policy|violates.*script-src|Refused to execute.*script/i.test(message.text())) {
+            violations.push(message.text());
+        }
+    });
+    const response = await page.goto("/intro");
+    expect(response?.status()).toBe(200);
+    const scripts = response!.headers()["content-security-policy"].split(";").find(value => value.trim().startsWith("script-src"))!;
+    expect(scripts).toMatch(/'nonce-[^']+'/);
+    expect(scripts).toContain("'strict-dynamic'");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("선생님의 시험이 시작됩니다");
+    expect(violations).toEqual([]);
+});
+
 test("production readiness rejects unauthenticated callers without exposing configuration", async ({ request }, testInfo) => {
     test.skip(!testInfo.project.name.startsWith("prod-"), "Production-build security contract.");
     const response = await request.get("/api/readyz");

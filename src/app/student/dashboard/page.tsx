@@ -118,7 +118,6 @@ export default function StudentDashboard() {
     const [dataState, setDataState] = useState<CanonicalLoadState<StudentDashboardSnapshot>>({ state: "loading" });
     const [dataError, setDataError] = useState("");
     const [feedbackSyncError, setFeedbackSyncError] = useState("");
-    const [accountConnectionNotice, setAccountConnectionNotice] = useState("");
     const [accountConnectionPending, setAccountConnectionPending] = useState(false);
 
     useEffect(() => {
@@ -441,13 +440,12 @@ export default function StudentDashboard() {
     const handleConnectStudentAccount = async () => {
         if (accountConnectionPending) return;
         setAccountConnectionPending(true);
-        setAccountConnectionNotice("");
         if (user?.guestId) {
             const queued = queueGuestMerge(user.guestId);
             if (queued) {
                 toast.info(
                     "학생 로그인으로 연결",
-                    "이름과 반으로 로그인하면 이 기기의 게스트 기록을 학생 기록에 합칩니다."
+                    "학생 계정으로 로그인하면 이 기기의 확인된 게스트 기록을 학생 기록에 연결합니다."
                 );
             } else {
                 toast.error("연결 준비 실패", "브라우저 저장공간을 확인한 뒤 다시 시도해주세요.");
@@ -455,19 +453,7 @@ export default function StudentDashboard() {
                 return;
             }
         }
-        try {
-            const restored = await refreshStudentSession();
-            if (restored.ok && restored.canLoginWithCurrentScope) {
-                router.push("/?role=student&connectGuest=1");
-                return;
-            }
-        } catch {
-            // The persistent guidance below is safer than falling through to a
-            // login page that cannot establish organization scope.
-        }
-        setAccountConnectionNotice(
-            "학생 초대 링크가 필요합니다. 선생님이 보낸 최신 초대 링크를 이 기기에서 연 뒤 이름과 시작 코드로 로그인해주세요.",
-        );
+        router.push("/?role=student&connectGuest=1");
         setAccountConnectionPending(false);
     };
 
@@ -589,15 +575,17 @@ export default function StudentDashboard() {
                                     : sessionError
                                         ? "네트워크를 확인한 뒤 다시 시도해주세요."
                                         : sessionExpired
-                                            ? "보안을 위해 12시간이 지나면 다시 확인해요. 시작 코드만 다시 입력하면 이어서 할 수 있어요."
-                                            : "선생님이 보낸 최신 초대 링크를 열고 이름과 시작 코드로 로그인해주세요."}
+                                            ? productionRuntime
+                                                ? "보안을 위해 12시간이 지나면 다시 확인해요. 학생 로그인 ID와 시작 코드로 이어서 할 수 있어요."
+                                                : "보안을 위해 12시간이 지나면 다시 확인해요. 시작 코드만 다시 입력하면 이어서 할 수 있어요."
+                                            : "학생 로그인 ID와 시작 코드로 로그인하면 내 시험과 제출 기록을 확인할 수 있습니다."}
                             </p>
                             {sessionExpired && productionRuntime && (
                                 <p
                                     className="student-session-expired-invite-guidance"
                                     style={{ marginTop: "0.6rem", lineHeight: 1.7, wordBreak: "keep-all", color: "var(--foreground)" }}
                                 >
-                                    선생님이 보낸 초대 링크를 다시 열면 바로 로그인할 수 있어요. 링크를 찾기 어렵다면 선생님에게 재전송을 요청하세요.
+                                    학생 로그인 ID와 시작 코드로 다시 로그인할 수 있어요. 선생님이 보낸 초대 링크도 계속 사용할 수 있습니다.
                                 </p>
                             )}
                         </div>
@@ -615,6 +603,9 @@ export default function StudentDashboard() {
                             </Link>
                         )}
                         {sessionExpired && productionRuntime && (
+                            <Link href={buildStudentLoginHref(expiredReturnPath, { reason: "expired" })} className="btn">학생 로그인</Link>
+                        )}
+                        {sessionExpired && productionRuntime && (
                             <button
                                 type="button"
                                 className="btn btn-primary"
@@ -625,7 +616,7 @@ export default function StudentDashboard() {
                                 {expiredRecheckPending ? "확인하는 중…" : "다시 확인"}
                             </button>
                         )}
-                        {!checking && !sessionError && !sessionExpired && <Link href="/" className="btn btn-primary">홈으로 이동</Link>}
+                        {!checking && !sessionError && !sessionExpired && <Link href="/?role=student" className="btn btn-primary">학생 로그인</Link>}
                     </section>
                 </main>
             </div>
@@ -817,7 +808,7 @@ export default function StudentDashboard() {
                             <div>
                                 <h3>게스트 기록을 학생 기록으로 저장</h3>
                                 <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.6, wordBreak: "keep-all" }}>
-                                    이름과 반으로 로그인하면 지금 기기에서 푼 게스트 기록
+                                    학생 계정으로 로그인하면 지금 기기에서 푼 게스트 기록
                                     {guestMergePreview ? ` ${guestMergePreview.mergeableCount}건` : ""}을 같은 학생 기록에 연결합니다.
                                 </p>
                                 {user.loginId ? (
@@ -844,11 +835,7 @@ export default function StudentDashboard() {
                                 {accountConnectionPending ? "연결 확인 중…" : "학생 로그인으로 저장"}
                             </button>
                         </div>
-                        {accountConnectionNotice && (
-                            <p role="status" style={{ margin: "0.75rem 0 0", color: "var(--text-warning)", lineHeight: 1.6 }}>
-                                {accountConnectionNotice}
-                            </p>
-                        )}
+
                     </details>
                 )}
 
