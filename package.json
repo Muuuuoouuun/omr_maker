@@ -23,6 +23,7 @@
     "mobile:apk": "node scripts/build-android-remote-dev.mjs debug",
     "mobile:apk:release": "node scripts/build-android-remote-dev.mjs release",
     "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",

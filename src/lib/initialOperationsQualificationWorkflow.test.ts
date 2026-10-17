@@ -108,7 +108,7 @@ describe("initial operations qualification workflow", () => {
         expect(ordered).toEqual([...ordered].sort((left, right) => left - right));
         expect(String(namedStep("Install locked dependencies").run)).toContain("npm ci");
         expect(String(namedStep("Run static supply-chain gates").run)).toContain("npm run lint");
-        expect(String(namedStep("Run static supply-chain gates").run)).toContain("npx tsc --noEmit");
+        expect(String(namedStep("Run static supply-chain gates").run)).toContain("npm run typecheck");
         expect(String(namedStep("Run unit tests").run)).toContain("npm test");
         expect(String(namedStep("Build immutable application").run)).toContain("npm run build");
         expect(String(namedStep("Run live PostgreSQL contract").run)).toContain("npm run test:supabase:live");

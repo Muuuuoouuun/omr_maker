@@ -301,7 +301,7 @@ jobs:
             > "$PRIVATE_EVIDENCE_DIR/production-audit.json" 2> "$PRIVATE_EVIDENCE_DIR/production-audit.stderr"
           node scripts/verify-desktop-dependency-audit.mjs > "$PRIVATE_EVIDENCE_DIR/desktop-audit.log" 2>&1
           npm run lint > "$PRIVATE_EVIDENCE_DIR/lint.log" 2>&1
-          npx tsc --noEmit > "$PRIVATE_EVIDENCE_DIR/typecheck.log" 2>&1
+          npm run typecheck > "$PRIVATE_EVIDENCE_DIR/typecheck.log" 2>&1
           set +e
           git grep -nEI -- '(BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|eyJ[a-zA-Z0-9_-]{24,}\.eyJ[a-zA-Z0-9_-]{24,}\.)' -- ':!package-lock.json' > "$PRIVATE_EVIDENCE_DIR/secret-scan.log"
           SECRET_SCAN_STATUS=$?
