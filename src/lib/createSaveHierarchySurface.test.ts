@@ -54,13 +54,9 @@ describe("create save and publish hierarchy", () => {
     });
 
     it("fails closed before every restore, autosave, manual save, delete, and publish boundary", () => {
-        const newRestore = source.slice(
-            source.indexOf("Draft restore on mount"),
-            source.indexOf("Draft restore in edit mode"),
-        );
-        const editRestore = source.slice(
-            source.indexOf("Draft restore in edit mode"),
-            source.indexOf("Mark hydration so autosave"),
+        const restore = source.slice(
+            source.indexOf("const restoreScope ="),
+            source.indexOf("// Mark hydration so autosave"),
         );
         const autosave = source.slice(
             source.indexOf("Idle autosave plus synchronous departure metadata recovery"),
@@ -79,11 +75,13 @@ describe("create save and publish hierarchy", () => {
             source.indexOf("const handleOpenDistribution ="),
         );
 
-        expect(newRestore).toContain("if (!draftStorageKey) return;");
-        expect(editRestore).toContain("if (!draftStorageKey) return;");
+        expect(restore).toContain("storedEditorState?.key && (!editId || loadedExam)");
+        expect(restore).toContain("restoreScope !== draftPromptScope && !storedEditorState?.cleanupPending");
+        expect(restore).toContain("isEditDraftNewerThanExam(draft.savedAt, loadedExam.updatedAt)");
+        expect(restore).toContain("draftSignature !== loadedExamSignature");
         expect(autosave).toContain("if (!draftStorageKey) return false;");
         expect(autosave).toContain("scopeKey: draftStorageKey");
-        expect(autosave).toContain("enabled: Boolean(hasHydratedRef.current && draftStorageKey");
+        expect(autosave).toContain("enabled: Boolean(draftStorageKey");
         expect(discard).toContain("if (!draftStorageKey) return;");
         expect(publish).toContain("if (!draftStorageKey) {");
         expect(manualSave).toContain("if (!draftStorageKey) {");
@@ -117,7 +115,7 @@ describe("create save and publish hierarchy", () => {
     it("resets A editor state before loading B and refuses a mismatched loaded exam", () => {
         const editEffect = source.slice(
             source.indexOf("// Load exam from localStorage"),
-            source.indexOf("// Initialize questions when count changes"),
+            source.indexOf("const [previousQuestionsCount,"),
         );
         const load = editEffect.indexOf("loadTeacherCanonicalExam(editId)");
         for (const reset of [
@@ -129,7 +127,7 @@ describe("create save and publish hierarchy", () => {
             "setAnswerKeyPdf(null)",
             "setIsDistributeModalOpen(false)",
             "setAssetHydrationFailures({ problem: false, answer: false })",
-            "editDraftPromptedRef.current = false",
+            'setDraftPromptScope("")',
         ]) {
             expect(editEffect.indexOf(reset)).toBeGreaterThan(-1);
             expect(editEffect.indexOf(reset)).toBeLessThan(load);
@@ -183,7 +181,7 @@ describe("create save and publish hierarchy", () => {
 
         const loadExam = source.slice(
             source.indexOf("const loadExistingExam = async"),
-            source.indexOf("// Initialize questions when count changes"),
+            source.indexOf("const [previousQuestionsCount,"),
         );
         expect(loadExam).toContain("if (!cancelled && isCurrentRoute()) {");
         expect(loadExam).toContain("toast.error('시험을 찾을 수 없습니다', editId);");
@@ -288,7 +286,7 @@ describe("create save and publish hierarchy", () => {
     it("aborts and fences A auto-detection before B editor state is loaded", () => {
         const editEffect = source.slice(
             source.indexOf("// Load exam from localStorage"),
-            source.indexOf("// Initialize questions when count changes"),
+            source.indexOf("const [previousQuestionsCount,"),
         );
         expect(editEffect).toContain("autoDetectGenerationRef.current += 1");
         expect(editEffect).toContain("activeAutoDetect.abortController.abort()");
@@ -297,7 +295,7 @@ describe("create save and publish hierarchy", () => {
             source.indexOf("const handleShareConfig = async"),
         );
         expect(autoDetect).toContain("shouldApplyAutoDetectOutcome({");
-        expect(autoDetect.indexOf("shouldApplyAutoDetectOutcome({")).toBeLessThan(autoDetect.indexOf("setQuestions(matchedQuestions)"));
+        expect(autoDetect.indexOf("shouldApplyAutoDetectOutcome({")).toBeLessThan(autoDetect.indexOf("setQuestions(latest => mergeQuestionPdfPlacements("));
     });
 
     it("retries cleanupPending before a second save and never clears a failed marker", () => {
@@ -317,7 +315,7 @@ describe("create save and publish hierarchy", () => {
     it("unmounts A answer import state before B can receive its answers or PDF", () => {
         const editEffect = source.slice(
             source.indexOf("// Load exam from localStorage"),
-            source.indexOf("// Initialize questions when count changes"),
+            source.indexOf("const [previousQuestionsCount,"),
         );
         expect(editEffect).toContain("setIsImportModalOpen(false)");
         const importModal = source.slice(

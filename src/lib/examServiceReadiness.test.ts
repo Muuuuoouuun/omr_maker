@@ -114,7 +114,7 @@ describe("exam service readiness", () => {
         expect(summary.canPublish).toBe(false);
         expect(summary.items.find(item => item.key === "answers")).toMatchObject({
             status: "blocked",
-            value: "1/2",
+            value: "0/2",
         });
     });
 

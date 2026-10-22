@@ -114,7 +114,7 @@ test.describe("provisioned-only legacy teacher links", () => {
         // Wait before filling so hydration cannot discard the credentials.
         await expect(page.getByRole("button", { name: "대시보드 입장" })).toBeEnabled();
         await page.getByLabel("아이디 또는 이메일").fill("operator-issued-id");
-        await page.getByLabel("비밀번호").fill("not-a-real-password");
+        await page.getByLabel("비밀번호", { exact: true }).fill("not-a-real-password");
         await page.getByRole("button", { name: "대시보드 입장" }).click();
         await expect.poll(() => actionRequests.length).toBeGreaterThan(0);
 
@@ -162,7 +162,7 @@ test.describe("provisioned-only legacy teacher links", () => {
                 && url.hash === "", { waitUntil: "load" });
             await expect(page.getByRole("button", { name: "대시보드 입장" })).toBeEnabled();
             await page.getByLabel("아이디 또는 이메일").fill("operator-issued-id");
-            await page.getByLabel("비밀번호").fill("not-a-real-password");
+            await page.getByLabel("비밀번호", { exact: true }).fill("not-a-real-password");
             await page.getByRole("button", { name: "대시보드 입장" }).click();
             await expect.poll(() => actionRequests.length).toBeGreaterThan(0);
 

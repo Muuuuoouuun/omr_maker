@@ -40,6 +40,16 @@ Local development may use localStorage. Production requires the verified server 
 
 Canonical organization plans are `free`, `pro`, and `academy`. Older `school` rows are migrated to `academy` inside `schema.sql` so app entitlements, billing UI, and database constraints stay aligned.
 
+Existing legacy Academy organization recovery uses the forward migration
+`202610220002_legacy_organization_recovery.sql` and explicit `legacy_recovery`
+mode. It adds a canonical owner while preserving the original organization and
+all historical data. Its private ledger and audit tombstones must be retained;
+revoked or inconsistent provenance never falls back to nominal Academy. Follow
+[the recovery operator procedure](../docs/operator-teacher-provisioning.md#recover-an-existing-legacy-academy-organization)
+for the exact request, dry-run digest and private credential receipt. Verify
+`legacyOrganizationRecoveryReady=true` with the matching app build.
+
+
 `/teacher/users` writes student and class roster snapshots through `src/lib/rosterPersistence.ts`.
 It stores students in `omr_student_profiles`, classes/regions in `omr_classes`, and membership in `omr_class_students` while keeping invite drafts local until the Kakao/provider invite flow is finalized.
 Roster deletions are soft-synced: missing students are marked `withdrawn`, missing classes are marked `archived`, and old class memberships are marked `inactive` so historical attempts can keep their student/class references without making deleted rows reappear in the active roster.
@@ -223,10 +233,14 @@ idempotent, but its preflight is intentionally fail-closed. Use this order:
 The profile covers all canonical 50 tables under `public.omr_*`. Supabase requires entities
 under `storage` to remain owned by `supabase_storage_admin`; see
 [Supabase platform permissions](https://supabase.com/docs/guides/platform/permissions).
-Still in the `postgres` transaction, the profile verifies that `postgres` can
-`SET ROLE supabase_storage_admin`, enters that managed owner for the Storage
-policy phase, and resets to `postgres` before continuing the public-schema
-profile. It never revokes/grants managed table ACLs or changes ownership.
+Still in the `postgres` transaction, the profile enters
+`supabase_storage_admin` for the Storage policy phase when `SET ROLE` is
+available. Otherwise it executes the same policy DDL directly as `postgres`,
+which some hosted projects authorize without managed-role membership. Denied
+policy DDL aborts the transaction. After `RESET ROLE`, it verifies the migration
+actor and unchanged Storage ownership/RLS before continuing the public-schema
+profile. It never grants role membership, changes managed table ACLs, or changes
+ownership to enable either path.
 
 For `omr-private-assets`, exact repository-owned policy names are replaced with
 `AS RESTRICTIVE` policies on `storage.objects` and `storage.buckets`. They deny

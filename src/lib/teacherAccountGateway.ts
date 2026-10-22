@@ -1,3 +1,4 @@
+import { isProvisionedOrganizationShape, isLegacyRecoveryOwner, type ProvisionedTeacherEntitlementMode } from "./provisionedTeacherEntitlement";
 import { normalizeTeacherAccountEmail } from "./teacherAccountLifecycle";
 import { isProvisionedTeacherMemberRole, type ProvisionedTeacherMemberRole } from "./teacherSession";
 
@@ -33,7 +34,7 @@ export interface ProvisionedTeacherLogin {
     memberRole: ProvisionedTeacherMemberRole;
     plan: "free" | "pro" | "academy";
     grantExpiresAt: string | null;
-    entitlementMode?: "permanent_demo";
+    entitlementMode?: ProvisionedTeacherEntitlementMode;
 }
 
 export interface ProvisionedTeacherSessionValidation {
@@ -44,7 +45,7 @@ export interface ProvisionedTeacherSessionValidation {
     memberRole: ProvisionedTeacherMemberRole;
     plan: "free" | "pro" | "academy";
     grantExpiresAt: string | null;
-    entitlementMode?: "permanent_demo";
+    entitlementMode?: ProvisionedTeacherEntitlementMode;
 }
 
 function scalarBoolean(data: unknown): boolean {
@@ -179,11 +180,11 @@ export async function findActiveTeacherAccount(
 }
 
 const ACCOUNT_ID_PATTERN = /^teacher_[a-f0-9]{16}$/;
-const PILOT_ORGANIZATION_ID_PATTERN = /^(?:pilot_org_|demo_org_)[a-f0-9]{24}$/;
 const PASSWORD_HASH_PATTERN = /^pbkdf2-sha256:120000:[a-f0-9]{32}:[a-f0-9]{64}$/;
 const UTC_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 
 function validPlanFields(plan: string, expiresAt: unknown, now: number, mode: unknown, organizationId: string): expiresAt is string | null {
+    if (mode === "legacy_recovery") return isProvisionedOrganizationShape(organizationId, mode) && plan === "academy" && expiresAt === null;
     const demo = /^demo_org_[a-f0-9]{24}$/.test(organizationId);
     if (demo) return mode === "permanent_demo" && expiresAt === null && ["free", "pro", "academy"].includes(plan);
     if (mode !== undefined) return false;
@@ -226,14 +227,15 @@ export async function lookupProvisionedTeacherLogin(
     const plan = clean(row.plan);
     if (!ACCOUNT_ID_PATTERN.test(accountId) || !email || !displayName
         || !PASSWORD_HASH_PATTERN.test(passwordHash) || !sessionGeneration
-        || !PILOT_ORGANIZATION_ID_PATTERN.test(organizationId) || !organizationName
+        || !isProvisionedOrganizationShape(organizationId, row.entitlementMode) || !organizationName
+        || !isLegacyRecoveryOwner(row.entitlementMode, memberRole, plan)
         || !isProvisionedTeacherMemberRole(memberRole) || !validPlanFields(plan, row.grantExpiresAt, now, row.entitlementMode, organizationId)) return null;
     return {
         accountId, email, displayName, passwordHash, sessionGeneration,
         organizationId, organizationName, memberRole,
         plan: plan as ProvisionedTeacherLogin["plan"],
         grantExpiresAt: row.grantExpiresAt,
-        ...(row.entitlementMode === "permanent_demo" ? { entitlementMode: "permanent_demo" as const } : {}),
+        ...(row.entitlementMode === "permanent_demo" || row.entitlementMode === "legacy_recovery" ? { entitlementMode: row.entitlementMode } : {}),
     };
 }
 
@@ -243,9 +245,10 @@ export async function validateProvisionedTeacherSession(
     sessionGeneration: number,
     organizationId: string,
     now = Date.now(),
+    entitlementMode?: ProvisionedTeacherEntitlementMode,
 ): Promise<ProvisionedTeacherSessionValidation | null> {
     if (!ACCOUNT_ID_PATTERN.test(accountId) || !Number.isSafeInteger(sessionGeneration)
-        || sessionGeneration < 1 || !PILOT_ORGANIZATION_ID_PATTERN.test(organizationId)) return null;
+        || sessionGeneration < 1 || !isProvisionedOrganizationShape(organizationId, entitlementMode)) return null;
     let result: Awaited<ReturnType<TeacherAccountGatewayClient["rpc"]>>;
     try {
         result = await client.rpc("omr_validate_provisioned_teacher_session_v1", {
@@ -269,14 +272,16 @@ export async function validateProvisionedTeacherSession(
     const organizationName = clean(row.organizationName);
     const memberRole = clean(row.memberRole);
     const plan = clean(row.plan);
+    if ((entitlementMode === "legacy_recovery" || row.entitlementMode === "legacy_recovery") && row.entitlementMode !== entitlementMode) return null;
     if (returnedAccountId !== accountId || returnedGeneration !== sessionGeneration
         || returnedOrganizationId !== organizationId || !organizationName
+        || !isLegacyRecoveryOwner(row.entitlementMode, memberRole, plan)
         || !isProvisionedTeacherMemberRole(memberRole) || !validPlanFields(plan, row.grantExpiresAt, now, row.entitlementMode, organizationId)) return null;
     return {
         accountId, sessionGeneration, organizationId, organizationName,
         memberRole, plan: plan as ProvisionedTeacherSessionValidation["plan"],
         grantExpiresAt: row.grantExpiresAt,
-        ...(row.entitlementMode === "permanent_demo" ? { entitlementMode: "permanent_demo" as const } : {}),
+        ...(row.entitlementMode === "permanent_demo" || row.entitlementMode === "legacy_recovery" ? { entitlementMode: row.entitlementMode } : {}),
     };
 }
 

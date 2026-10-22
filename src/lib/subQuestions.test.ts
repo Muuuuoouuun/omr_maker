@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { Question } from '@/types/omr';
+import type { Question, SubQuestionAnswers } from '@/types/omr';
 import {
     addSubQuestionToTargets,
     createSubQuestion,
     estimateSubQuestionSeconds,
     findMissingRequiredSubQuestions,
     normalizeQuestionSubQuestions,
+    requiredSubQuestionProgress,
     sanitizeSubQuestionAnswersForQuestions,
 } from './subQuestions';
 
@@ -25,6 +26,34 @@ const questions: Question[] = [{
 }];
 
 describe('sub-question helpers', () => {
+    it.each(['__proto__', 'constructor', 'prototype'])('preserves imported prompt %s through save/restore without prototype mutation', id => {
+        const imported = [{ ...questions[0], subQuestions: [{ ...questions[0].subQuestions![0], id }] }];
+        const payload = JSON.parse(JSON.stringify({ 1: Object.fromEntries([[id, { body: '직접 쓴 근거' }]]) }));
+        const sanitized = sanitizeSubQuestionAnswersForQuestions(imported, payload);
+        expect(Object.getPrototypeOf(sanitized[1])).toBe(Object.prototype);
+        expect(Object.hasOwn(sanitized[1], id)).toBe(true);
+        const restored = JSON.parse(JSON.stringify(sanitized));
+        expect(restored[1][id].body).toBe('직접 쓴 근거');
+        expect(findMissingRequiredSubQuestions(imported, restored)).toEqual([]);
+        expect(requiredSubQuestionProgress(imported, restored)).toEqual({ completed: 1, total: 1 });
+    });
+
+    it('does not accept inherited answers as completed required responses', () => {
+        const inheritedPrompt = { 1: Object.create({ reason: { body: '상속 값' } }) };
+        const inheritedQuestion = Object.create({ 1: { reason: { body: '상속 값' } } });
+        for (const value of [inheritedPrompt, inheritedQuestion]) {
+            expect(sanitizeSubQuestionAnswersForQuestions(questions, value)).toEqual({});
+            expect(findMissingRequiredSubQuestions(questions, value)).toEqual([{ questionId: 1, subQuestionId: 'reason' }]);
+            expect(requiredSubQuestionProgress(questions, value)).toEqual({ completed: 0, total: 1 });
+        }
+    });
+
+    it.each([null, {}, { body: 42 }, { body: ['근거'] }, { body: '   ' }])('keeps damaged saved response incomplete without crashing (%j)', answer => {
+        const restored = { 1: { reason: answer } } as unknown as SubQuestionAnswers;
+        expect(findMissingRequiredSubQuestions(questions, restored)).toEqual([{ questionId: 1, subQuestionId: 'reason' }]);
+        expect(requiredSubQuestionProgress(questions, restored)).toEqual({ completed: 0, total: 1 });
+    });
+
     it('normalizes malformed prompts with deterministic unique ids and caps at two', () => {
         const normalized = normalizeQuestionSubQuestions([
             { prompt: ' 첫 질문 ', id: 'same', maxLength: 900 },

@@ -186,7 +186,7 @@ export function gradeStudentAttemptOnServer(
         organizationId: ticket.organizationId,
         classId: ticket.groupId,
         ...(assignmentId && assignmentRevision ? { assignmentId, assignmentRevision } : {}),
-        studentProfileId: ticket.identityType === "registered" ? ticket.studentId : undefined,
+        studentProfileId: ticket.identityType !== "guest" ? ticket.studentId : undefined,
         studentName: ticket.studentName,
         studentId: ticket.studentId,
         groupId: ticket.groupId,
@@ -304,6 +304,7 @@ export function gradeTeacherForcedAttemptOnServer(
     const graded = gradeAttempt(activeQuestions, attempt.answers || {});
     const completed: Attempt = {
         ...attempt,
+        classId: clean(attempt.classId) || clean(attempt.groupId) || undefined,
         status: "completed",
         finishedAt: new Date(finishMs).toISOString(),
         autoSubmitted: true,

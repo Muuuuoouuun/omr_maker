@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
+import { normalizeQuestionSubQuestions } from "@/lib/subQuestions";
 import {
     attemptMatchesStudentScope,
     attemptFromSupabaseRow,
@@ -187,6 +188,23 @@ describe("Supabase persistence mapping", () => {
         expect(examQuestionRowsForExam(exam, "2026-06-14T09:31:00.000Z", context)[0]).toMatchObject({
             organization_id: row.organization_id,
         });
+    });
+
+    it("preserves the exact canonical exam timestamp for durable attempt admission", () => {
+        const row = examToSupabaseRow(exam);
+        row.updated_at = "2026-06-14T10:00:00.000911+00:00";
+        row.payload = { ...row.payload, updatedAt: "2026-06-14T10:00:00.000Z" };
+
+        const restored = examFromSupabaseRow(row);
+        expect(restored.updatedAt).toBe(row.updated_at);
+        expect(restored.updatedAt).not.toBe(row.payload.updatedAt);
+        expect(examFromSupabaseRow({ payload: row.payload }).updatedAt).toBe(row.payload.updatedAt);
+    });
+
+    it("rejects a malformed canonical timestamp instead of falling back to a stale payload", () => {
+        const row = examToSupabaseRow(exam);
+        row.updated_at = "not-a-timestamp";
+        expect(() => examFromSupabaseRow(row)).toThrow("Invalid canonical exam timestamp");
     });
 
     it("maps exam questions to normalized DB rows without cropped images", () => {
@@ -470,6 +488,57 @@ describe("Supabase persistence mapping", () => {
             reviewStatus: "reviewed",
             reviewedBy: "김선생",
         });
+    });
+
+    it("roundtrips the actual normalizer's deduplicated 102-character response IDs without aliases", () => {
+        const definitions = normalizeQuestionSubQuestions([
+            { id: "x".repeat(100), prompt: "첫 응답", required: true },
+            { id: "x".repeat(100), prompt: "둘째 응답", required: true },
+        ], 1);
+        expect(definitions.map(item => item.id.length)).toEqual([100, 102]);
+        const answers = Object.fromEntries(definitions.map((item, index) => [item.id, {
+            schemaVersion: 1 as const, body: `응답 ${index + 1}`, reviewStatus: "reviewed" as const,
+            reviewedAt: "2026-10-21T12:00:00.000Z", reviewedBy: "검토 교사",
+        }]));
+        const restored = attemptFromSupabaseRow(attemptToSupabaseRow({ ...attempt, subQuestionAnswers: { 1: answers } }));
+        expect(Object.keys(restored.subQuestionAnswers?.[1] || {})).toEqual(definitions.map(item => item.id));
+        expect(restored.subQuestionAnswers?.[1][definitions[1].id]).toMatchObject({ body: "응답 2", reviewStatus: "reviewed", reviewedBy: "검토 교사" });
+
+        const missing = { questionId: 1, subQuestionId: definitions[1].id };
+        const auto = attemptFromSupabaseRow(attemptToSupabaseRow({
+            ...attempt, autoSubmitted: true,
+            subQuestionAnswers: { 1: { [definitions[0].id]: answers[definitions[0].id] } },
+            missingRequiredSubQuestions: [missing],
+        }));
+        expect(auto.missingRequiredSubQuestions).toEqual([missing]);
+    });
+
+    it("preserves own reserved and colon response IDs while ignoring inherited answers", () => {
+        const answer = { schemaVersion: 1 as const, body: "학생 응답", reviewStatus: "needs_review" as const };
+        const ids = ["__proto__", "reason:stage:2", 'a:b,{c}."path"]'];
+        const answers = Object.fromEntries(ids.map(id => [id, { ...answer }]));
+        Object.setPrototypeOf(answers, { inherited: { ...answer, body: "다른 응답" } });
+        const normalized = sanitizeAttemptPayload({ ...attempt, subQuestionAnswers: { 1: answers } });
+        expect(Object.keys(normalized?.subQuestionAnswers?.[1] || {})).toEqual(ids);
+        for (const id of ids) expect(Object.hasOwn(normalized?.subQuestionAnswers?.[1] || {}, id)).toBe(true);
+        expect(normalized?.subQuestionAnswers?.[1]).not.toHaveProperty("inherited");
+        expect(normalized?.subQuestionAnswers?.[1]["__proto__"].body).toBe("학생 응답");
+    });
+
+    it("retains exact 256-character answer and missing IDs and drops oversized IDs without truncating aliases", () => {
+        const accepted = "z".repeat(256);
+        const oversize = accepted + "x";
+        const normalized = sanitizeAttemptPayload({
+            ...attempt,
+            subQuestionAnswers: { 1: {
+                [accepted]: { schemaVersion: 1, body: "정확한 응답", reviewStatus: "needs_review" },
+                [oversize]: { schemaVersion: 1, body: "덮어쓰면 안 되는 응답", reviewStatus: "needs_review" },
+            } },
+            missingRequiredSubQuestions: [{ questionId: 1, subQuestionId: accepted }, { questionId: 1, subQuestionId: oversize }],
+        });
+        expect(Object.keys(normalized?.subQuestionAnswers?.[1] || {})).toEqual([accepted]);
+        expect(normalized?.subQuestionAnswers?.[1][accepted].body).toBe("정확한 응답");
+        expect(normalized?.missingRequiredSubQuestions).toEqual([{ questionId: 1, subQuestionId: accepted }]);
     });
 
     it("scopes attempt and question-result rows to the exam or active workspace", () => {

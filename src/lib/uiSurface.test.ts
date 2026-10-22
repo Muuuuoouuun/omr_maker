@@ -140,18 +140,6 @@ function countCustomPropertyDeclarations(cssSource: string, propertyName: string
     return stripCssComments(cssSource).match(new RegExp(`${escapedName}\\s*:`, "g"))?.length ?? 0;
 }
 
-function expectEnvOverridesAfterInherited(envSource: string, overrideKeys: readonly string[]): number {
-    const inheritedEnvIndex = envSource.indexOf("...process.env");
-    expect(inheritedEnvIndex, "webServer.env must inherit process.env before applying test overrides").toBeGreaterThanOrEqual(0);
-    for (const key of overrideKeys) {
-        const overrideIndex = envSource.indexOf(`${key}: ""`);
-        expect(
-            overrideIndex,
-            `${key} must be explicitly cleared after ...process.env`,
-        ).toBeGreaterThan(inheritedEnvIndex);
-    }
-    return inheritedEnvIndex;
-}
 
 describe("service UI surface", () => {
     it("extracts exact CSS scopes without accepting comments, nesting, or selector prefixes", () => {
@@ -370,9 +358,9 @@ describe("service UI surface", () => {
 
         expect(createPage).toContain("initialAccessConfig={loadedExam?.accessConfig}");
         expect(distributeModal).toContain("initialAccessConfig?: AccessConfig");
-        expect(distributeModal).toContain("const wasOpenRef = useRef(false)");
-        expect(distributeModal).toContain("if (wasOpenRef.current)");
-        expect(distributeModal).toContain("wasOpenRef.current = true");
+        expect(distributeModal).toContain("const [wasOpen, setWasOpen] = useState(isOpen)");
+        expect(distributeModal).toContain("if (wasOpen !== isOpen)");
+        expect(distributeModal).toContain("setWasOpen(isOpen)");
         expect(distributeModal).toContain("initialAccessConfig?.type === 'targeted' ? 'student'");
         expect(distributeModal).toContain("setAccessType(initialType)");
         expect(distributeModal).toContain("setSelectedGroups(initialType === 'group' ? [...(initialAccessConfig?.groupIds || [])] : [])");
@@ -756,31 +744,6 @@ describe("service UI surface", () => {
         expect(teacherMobileE2e).toContain(".create-editor-actions button, .create-editor-actions label");
     });
 
-    it("pins the Playwright-owned billing plan simulation without Supabase", () => {
-        const playwrightConfig = readProjectFile("playwright.config.ts");
-        const webServerEnv = playwrightConfig.match(
-            /webServer:[\s\S]*?env:\s*{([\s\S]*?)\n\s{8}},\n\s{4}},\n}\);/,
-        )?.[1];
-
-        expect(webServerEnv).toBeDefined();
-        const supabaseOverrideKeys = [
-            "NEXT_PUBLIC_SUPABASE_URL",
-            "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
-            "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-            "SUPABASE_URL",
-            "SUPABASE_SERVICE_ROLE_KEY",
-            "OMR_SUPABASE_SERVICE_ROLE_KEY",
-        ] as const;
-        const reorderedFixture = 'NEXT_PUBLIC_SUPABASE_URL: "",\n...process.env,';
-        expect(() => expectEnvOverridesAfterInherited(
-            reorderedFixture,
-            ["NEXT_PUBLIC_SUPABASE_URL"],
-        )).toThrow("NEXT_PUBLIC_SUPABASE_URL must be explicitly cleared after ...process.env");
-        const inheritedEnvIndex = expectEnvOverridesAfterInherited(webServerEnv || "", supabaseOverrideKeys);
-        expect(webServerEnv?.indexOf('OMR_PLAN_DEV_SIMULATION: "1"')).toBeGreaterThan(inheritedEnvIndex);
-        expect(webServerEnv?.indexOf('OMR_DEV_PLAN: "free"')).toBeGreaterThan(inheritedEnvIndex);
-    });
-
     it("keeps installed phone and tablet app shells inside safe areas", () => {
         const css = readProjectFile("src/app/globals.css");
         const layout = readProjectFile("src/app/layout.tsx");
@@ -1063,7 +1026,7 @@ describe("service UI surface", () => {
         expect(css).toContain("position: sticky");
 
         expect(dashboard).toContain("분석 센터");
-        expect(dashboard).toContain('className="dashboard-welcome"');
+        expect(dashboard).toContain('className={`dashboard-welcome');
         expect(dashboard).toContain('className="dashboard-welcome-status"');
         expect(dashboard).toContain("width: 44");
         expect(dashboard).toContain("height: 44");

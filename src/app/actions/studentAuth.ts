@@ -103,6 +103,7 @@ async function issueAuthorizedStudentCredentialBatch(
         const context = workspaceContextFromTeacherSession(teacherSession);
         return await issueStudentCredentialBatchWithGateway({
             sessionAuthority: context.sessionAuthority,
+            entitlementMode: context.entitlementMode,
             accountId: context.accountId,
             accountSessionGeneration: context.accountSessionGeneration,
             organizationId: context.organizationId,

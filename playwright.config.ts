@@ -196,7 +196,8 @@ export default defineConfig({
         reuseExistingServer: process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "1",
         timeout: 60_000,
         env: {
-            ...process.env,
+            // Playwright inherits the parent environment for the child process.
+            // Keep unrelated credentials out of serialized reporter configuration.
             OMR_PLAN_DEV_SIMULATION: "1",
             OMR_DEV_PLAN: "free",
             OMR_TEACHER_IDENTITY_MODE: "self_service",
@@ -222,6 +223,7 @@ export default defineConfig({
             SUPABASE_URL: "",
             SUPABASE_SERVICE_ROLE_KEY: "",
             OMR_SUPABASE_SERVICE_ROLE_KEY: "",
+            GEMINI_API_KEY: "",
             STUDENT_ATTEMPT_SECRET: "",
             OMR_STUDENT_ATTEMPT_SECRET: "",
             STUDENT_SESSION_SECRET: "omr-maker-e2e-student-session-secret-2026",

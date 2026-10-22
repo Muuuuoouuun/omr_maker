@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { retryGuestServerClaims } from "@/app/actions/studentSession";
 import {
     buildGuestRecoveryExport,
@@ -9,16 +9,40 @@ import {
     readGuestRecoveryState,
     type GuestRecoveryState,
 } from "@/lib/studentGuestRecovery";
-import { getSession, mergeGuestAttempts } from "@/utils/storage";
+import { getSession, mergeGuestAttempts, STUDENT_SESSION_CHANGED_EVENT } from "@/utils/storage";
+
+const RECOVERY_CHANGED_EVENT = "omr:guest-recovery-changed";
+let cachedSnapshot: { pending: string | null; attempts: string | null; recovery: GuestRecoveryState | null } | undefined;
+
+function getRecoverySnapshot(): GuestRecoveryState | null {
+    const storage = window.localStorage;
+    const pending = storage.getItem("omr_pending_guest_merge");
+    const attempts = storage.getItem("omr_attempts");
+    if (!cachedSnapshot || cachedSnapshot.pending !== pending || cachedSnapshot.attempts !== attempts) {
+        cachedSnapshot = { pending, attempts, recovery: readGuestRecoveryState(storage) };
+    }
+    return cachedSnapshot.recovery;
+}
+
+function subscribeToRecovery(onChange: () => void) {
+    window.addEventListener("storage", onChange);
+    window.addEventListener(RECOVERY_CHANGED_EVENT, onChange);
+    window.addEventListener(STUDENT_SESSION_CHANGED_EVENT, onChange);
+    return () => {
+        window.removeEventListener("storage", onChange);
+        window.removeEventListener(RECOVERY_CHANGED_EVENT, onChange);
+        window.removeEventListener(STUDENT_SESSION_CHANGED_EVENT, onChange);
+    };
+}
+
+const getServerRecoverySnapshot = () => null;
+const refresh = () => window.dispatchEvent(new Event(RECOVERY_CHANGED_EVENT));
 
 export default function StudentGuestRecoveryPanel() {
-    const [recovery, setRecovery] = useState<GuestRecoveryState | null>(null);
+    const recovery = useSyncExternalStore(subscribeToRecovery, getRecoverySnapshot, getServerRecoverySnapshot);
     const [message, setMessage] = useState("");
     const [retrying, setRetrying] = useState(false);
     const [discarding, setDiscarding] = useState(false);
-
-    const refresh = () => setRecovery(readGuestRecoveryState(window.localStorage));
-    useEffect(() => { refresh(); }, []);
 
     if (!recovery) return null;
 
@@ -60,11 +84,11 @@ export default function StudentGuestRecoveryPanel() {
             const next = readGuestRecoveryState(window.localStorage);
             if (next?.status === "unverified" && next.attemptIds.length === 0) {
                 clearGuestRecoveryMarker(window.localStorage);
-                setRecovery(null);
+                refresh();
                 setMessage("");
                 return;
             }
-            setRecovery(next);
+            refresh();
             setMessage(acknowledgedAttemptIds.length > 0
                 ? `서버가 소유권을 확인한 ${acknowledgedAttemptIds.length}건만 학생 기록으로 연결했습니다.`
                 : "서버가 소유권을 확인한 기록이 없습니다. 로컬 기록은 계속 분리 보관됩니다.");
@@ -89,7 +113,7 @@ export default function StudentGuestRecoveryPanel() {
         );
         setDiscarding(false);
         if (result.status === "discarded" || result.status === "quarantined") {
-            setRecovery(null);
+            refresh();
             setMessage("");
         } else if (result.status === "stale") {
             refresh();

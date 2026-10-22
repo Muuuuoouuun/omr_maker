@@ -11,7 +11,7 @@ import { authorizedTeacherAiRateLimitSubject, authorizeTeacherAiActionRequest } 
 import { resolveAuthorizedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from '@/lib/teacherServerSession';
 import { applyDurableRateLimit } from '@/lib/durableRateLimit';
 import { isTeacherMutationAuthorized } from '@/lib/teacherMutationAuthorization';
-import { validateExamAnalysisQuestions, validateExamContentAnalysis, type ExamAnalysisQuestion, type ExamContentAnalysisRow } from '@/lib/examContentAnalysis';
+import { MAX_EXAM_ANALYSIS_PAGES, validateExamAnalysisQuestions, validateExamContentAnalysis, type ExamAnalysisQuestion, type ExamContentAnalysisRow } from '@/lib/examContentAnalysis';
 
 const AI_ACTION_DURABLE_POLICY = { limit: 6, windowMs: 60 * 1000 };
 
@@ -59,6 +59,9 @@ export async function analyzeExamImages(
     if (!entitlement.ok) throw new Error('시험지 개념 분석은 프리미엄 플랜에서 사용할 수 있습니다.');
     const knownQuestions = validateExamAnalysisQuestions(questions);
     const images = validateAnswerImageParts(imageParts);
+    if (images.length > MAX_EXAM_ANALYSIS_PAGES) {
+        throw new Error(`한 번에 최대 ${MAX_EXAM_ANALYSIS_PAGES}쪽까지 분석할 수 있습니다. 페이지 범위를 줄여 주세요.`);
+    }
     let reservation: string | undefined;
     let started = false;
     try {

@@ -10,7 +10,10 @@ const globalCssSource = readFileSync(join(process.cwd(), "src/app/globals.css"),
 
 describe("settings and billing simplification", () => {
     it("prioritizes editable settings and keeps operational diagnostics in an accessible disclosure", () => {
-        expect(settingsSource).toContain('useState<Section>("exam-defaults")');
+        // The browser editor honors a deep link on its first render, with the
+        // editable exam defaults as the fallback for absent or invalid hashes.
+        expect(settingsSource).toMatch(/sectionFromHash\(window\.location\.hash\)\s*\|\|\s*"exam-defaults"/);
+        expect(settingsSource).toContain("ADVANCED_SECTION_KEYS.has(section)");
         expect(settingsSource).toContain("PRIMARY_SECTIONS");
         expect(settingsSource).toContain("ADVANCED_SECTIONS");
         expect(settingsSource).toContain('className="settings-advanced-disclosure"');

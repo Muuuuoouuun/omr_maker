@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BrainCircuit, ChevronDown, Loader2 } from 'lucide-react';
 import { analyzeExamImages } from '@/app/actions/analyzeExam';
 import { PremiumFeatureCard } from '@/components/PremiumFeatureGate';
-import { applyReviewedExamContentAnalysis, validateExamContentAnalysis, type ExamContentAnalysisRow } from '@/lib/examContentAnalysis';
+import { MAX_EXAM_ANALYSIS_PAGES, examAnalysisQuestionsForRange, validateExamAnalysisPageRange, validateExamContentAnalysis, type ExamContentAnalysisRow } from '@/lib/examContentAnalysis';
 import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 import styles from './ExamContentAnalysisPanel.module.css';
 import type { Question } from '@/types/omr';
@@ -14,6 +14,7 @@ interface Props {
     questions: Question[];
     enabled: boolean;
     onApply: (rows: ExamContentAnalysisRow[]) => void;
+    onDiscardDraftAnalysis?: () => void;
 }
 interface EditableRow {
     questionId: number;
@@ -30,7 +31,7 @@ function editRow(row: ExamContentAnalysisRow): EditableRow {
     return { questionId: row.questionId, questionNumber: row.questionNumber, concepts: row.contentAnalysis.concepts.join('\n'), trapPoints: row.contentAnalysis.trapPoints.join('\n'), summary: row.contentAnalysis.summary, unit: row.tags.unit || '', skill: row.tags.skill || '', selected: true };
 }
 
-export default function ExamContentAnalysisPanel({ file, questions, enabled, onApply }: Props) {
+export default function ExamContentAnalysisPanel({ file, questions, enabled, onApply, onDiscardDraftAnalysis }: Props) {
     const [start, setStart] = useState(1);
     const [end, setEnd] = useState(1);
     const [rows, setRows] = useState<EditableRow[]>([]);
@@ -38,28 +39,65 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
     const [isOpen, setIsOpen] = useState(false);
+    const [confirmDiscard, setConfirmDiscard] = useState(false);
     const generation = useRef(0);
-    const acceptedContext = useRef<{ file: File | null; questions: Question[] } | null>(null);
-    const pendingApply = useRef<{ file: File | null; questions: string } | null>(null);
-    useEffect(() => {
-        const isOwnAppliedUpdate = enabled && pendingApply.current?.file === file
-            && pendingApply.current.questions === JSON.stringify(questions);
-        pendingApply.current = null;
-        generation.current++;
-        acceptedContext.current = null;
-        // A PDF replacement or question edit invalidates pending AI work and its review.
+    // Score/answer/subquestion edits do not change the source being analyzed.
+    const questionContextKey = JSON.stringify(questions.map(question => [
+        question.id, question.number, question.pdfRegion?.page ?? question.pdfLocation?.page ?? null,
+    ]));
+    const acceptedContext = useRef<{ file: File | null; questionContextKey: string } | null>(null);
+    const [context, setContext] = useState({ file, questionContextKey, enabled });
+    if (context.file !== file || context.questionContextKey !== questionContextKey || context.enabled !== enabled) {
+        setContext({ file, questionContextKey, enabled });
+        // Invalidate only changed source identity, including elective page remapping.
         setRows([]);
+        setConfirmDiscard(false);
         setBusy(false);
         setError('');
-        if (!isOwnAppliedUpdate) setMessage('');
+        setMessage(rows.length || busy ? '문제지 또는 문항 번호·연결 페이지가 바뀌어 분석 초안을 닫았습니다. 새 설정으로 다시 분석해 주세요.' : '');
+    }
+    useEffect(() => {
+        generation.current++;
+        acceptedContext.current = null;
         const cancelGeneration = () => { generation.current++; };
         return cancelGeneration;
-    }, [file, questions, enabled]);
+    }, [file, questionContextKey, enabled]);
 
-    if (!enabled) return <PremiumFeatureCard title="시험지 개념·함정 분석" description="문제지 PDF의 문항별 개념과 함정 포인트를 분석하고, 검토한 내용을 학생의 강점·약점 분석에 활용합니다." style={{ marginBottom: '1rem' }} />;
+    const draftCount = questions.filter(question => question.contentAnalysis?.status === 'draft').length;
+    const discardControl = draftCount > 0 && onDiscardDraftAnalysis ? <div className={styles.preparation}>
+        <p className="hint">검토 대기 분석 {draftCount}문항을 제외하고 기본 시험으로 저장·배포할 수 있습니다.</p>
+        {confirmDiscard ? <div role="group" aria-label="검토 대기 분석 제외 확인">
+            <p>검토 대기 분석과 분석에서 적용한 개념·단원·역량을 제외할까요? 직접 바꾼 태그와 정답·배점, 검토 완료 분석은 유지됩니다. 출처 기록이 없는 기존 단원·역량도 유지됩니다.</p>
+            <div className={styles.actions}>
+                <button type="button" className="btn btn-secondary" onClick={() => setConfirmDiscard(false)}>취소</button>
+                <button type="button" className="btn btn-primary" onClick={() => {
+                    generation.current++;
+                    acceptedContext.current = null;
+                    setBusy(false); setRows([]); setError(''); setConfirmDiscard(false);
+                    onDiscardDraftAnalysis();
+                    setMessage(`검토 대기 분석 ${draftCount}문항을 제외했습니다. 시험을 저장하면 반영됩니다.`);
+                }}>확인하고 제외</button>
+            </div>
+        </div> : <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setConfirmDiscard(true)}>검토 대기 분석 제외 ({draftCount}문항)</button>}
+    </div> : null;
+
+    if (!enabled) return <>
+        <PremiumFeatureCard title="시험지 개념·함정 분석" description="문제지 PDF의 문항별 개념과 함정 포인트를 분석하고, 검토한 내용을 학생의 강점·약점 분석에 활용합니다." style={{ marginBottom: '1rem' }} />
+        {discardControl}
+        {message ? <p role="status" className={styles.status}>{message}</p> : null}
+    </>;
 
     async function analyze() {
-        if (!file || busy) return;
+        if (!enabled || !file || busy) return;
+        try { validateExamAnalysisPageRange(start, end); } catch (cause) {
+            setError(cause instanceof Error ? cause.message : '페이지 범위를 확인해 주세요.');
+            return;
+        }
+        const sourceQuestions = examAnalysisQuestionsForRange(questions, start, end);
+        if (!sourceQuestions.length) {
+            setError('선택한 쪽에 연결된 문항이 없습니다. 선택과목과 문항 연결 페이지를 확인해 주세요.');
+            return;
+        }
         const token = ++generation.current;
         const isCurrent = () => generation.current === token;
         setBusy(true); setError(''); setMessage('선택한 PDF 페이지를 준비하고 있습니다.'); setRows([]);
@@ -73,9 +111,9 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
             const images = await renderExamAnalysisPages(file, start, end, isCurrent);
             if (!isCurrent()) return;
             setMessage('문항별 개념과 함정 포인트를 분석하고 있습니다.');
-            const result = await analyzeExamImages(images, questions.map(({ id, number }) => ({ id, number })), personalApiKey);
+            const result = await analyzeExamImages(images, sourceQuestions, personalApiKey);
             if (!isCurrent()) return;
-            acceptedContext.current = { file, questions };
+            acceptedContext.current = { file, questionContextKey };
             setRows(result.map(editRow));
             setMessage(result.length ? `${start}~${end}쪽에서 ${result.length}문항을 찾았습니다. 번호와 내용을 확인한 뒤 적용하세요. 기존 분석은 선택한 문항만 교체합니다.` : '이 범위에서 분석 가능한 문항을 찾지 못했습니다. 페이지와 문항 수를 확인해 주세요.');
         } catch (cause) {
@@ -83,16 +121,18 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
         } finally { if (isCurrent()) setBusy(false); }
     }
     function apply() {
-        if (acceptedContext.current?.file !== file || acceptedContext.current?.questions !== questions) return;
+        if (acceptedContext.current?.file !== file || acceptedContext.current?.questionContextKey !== questionContextKey) {
+            setError('문항 구성이 바뀌었습니다. 새 설정으로 다시 분석해 주세요.');
+            return;
+        }
         try {
             const selected = rows.filter(row => row.selected);
             if (!selected.length) throw new Error('적용할 문항을 선택해 주세요.');
             const validated = validateExamContentAnalysis(selected.map(row => ({ questionId: row.questionId, questionNumber: row.questionNumber, tags: { ...(row.unit.trim() ? { unit: row.unit.trim() } : {}), ...(row.skill.trim() ? { skill: row.skill.trim() } : {}) }, contentAnalysis: { concepts: list(row.concepts), trapPoints: list(row.trapPoints), summary: row.summary.trim(), status: 'draft' } })), questions);
             const reviewed = validated.map(row => ({ ...row, contentAnalysis: { ...row.contentAnalysis, status: 'reviewed' as const } }));
-            pendingApply.current = { file, questions: JSON.stringify(applyReviewedExamContentAnalysis(questions, reviewed)) };
             onApply(reviewed);
             setRows([]); setError(''); setMessage(`${validated.length}문항의 검토한 분석을 적용했습니다. 시험을 저장하면 함께 보관됩니다.`);
-        } catch { pendingApply.current = null; setError('선택한 문항의 개념과 요약을 입력해 주세요. 개념·함정은 각각 최대 8개(각 200자), 요약은 1,000자까지 가능합니다.'); }
+        } catch { setError('선택한 문항의 개념과 요약을 입력해 주세요. 개념·함정은 각각 최대 8개(각 200자), 요약은 1,000자까지 가능합니다.'); }
     }
     function patch(id: number, update: Partial<EditableRow>) { setRows(current => current.map(row => row.questionId === id ? { ...row, ...update } : row)); }
     const saved = questions.filter(question => question.contentAnalysis);
@@ -119,19 +159,21 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
             <li><span>3</span><div><strong>저장</strong><small>시험 저장으로 보관</small></div></li>
         </ol>
         <div className={styles.preparation}>
-        <div className={styles.sectionHeading}><strong>분석할 페이지</strong><span>한 번에 최대 4쪽</span></div>
+        <div className={styles.sectionHeading}><strong>분석할 페이지</strong><span>한 번에 최대 {MAX_EXAM_ANALYSIS_PAGES}쪽</span></div>
         <div className={styles.range}>
             <label>시작 쪽<input aria-label="분석 시작 쪽" className="input-field" type="number" min={1} value={start} disabled={busy} onChange={event => setStart(Number(event.target.value))} /></label>
-            <label>끝 쪽<input aria-label="분석 끝 쪽" className="input-field" type="number" min={start} max={start + 3} value={end} disabled={busy} onChange={event => setEnd(Number(event.target.value))} /></label>
+            <label>끝 쪽<input aria-label="분석 끝 쪽" className="input-field" type="number" min={start} max={start + MAX_EXAM_ANALYSIS_PAGES - 1} value={end} disabled={busy} onChange={event => setEnd(Number(event.target.value))} /></label>
         </div>
         <p className={styles.helper}> 선택한 페이지만 AI 분석 서비스로 전송됩니다. 설정에 저장된 개인 API 키가 있으면 해당 키를 사용하며, 없으면 공용 AI 이용량을 사용합니다.</p>
+        <p className={styles.helper}>문항 위치가 연결되어 있으면 해당 쪽의 문항만 분석합니다. 위치가 없는 문항은 인쇄된 번호로 대조하므로 선택과목과 페이지를 먼저 확인해 주세요.</p>
         <div className={styles.actions}>
         <button type="button" className="btn btn-secondary" onClick={analyze} disabled={!file || busy}>{busy ? <Loader2 size={16} className="animate-spin" /> : <BrainCircuit size={16} />}{busy ? '분석 중' : '선택한 페이지 분석'}</button>
-        {busy ? <button type="button" className="btn btn-secondary" onClick={() => { generation.current++; setBusy(false); setMessage('분석 결과 수신을 취소했습니다.'); }}>취소</button> : null}
+        {busy ? <button type="button" className="btn btn-secondary" onClick={() => { generation.current++; setBusy(false); setMessage('분석 결과 받기를 중단했습니다. 이미 전송한 요청의 AI 이용량은 사용될 수 있습니다.'); }}>결과 받기 중단</button> : null}
         </div></div>
         {!file ? <p className="hint">먼저 문제지 PDF를 업로드해 주세요.</p> : null}
-        {saved.length ? <p className="hint">PDF를 교체해도 저장된 분석은 자동 갱신되지 않습니다. 새 문제지와 일치하는지 검토하거나 다시 분석해 주세요.</p> : null}
-        {saved.length && !busy ? <button type="button" className="btn btn-secondary" style={{ marginTop: 8 }} onClick={() => { acceptedContext.current = { file, questions }; setRows(saved.map(question => editRow({ questionId: question.id, questionNumber: question.number, tags: question.tags || {}, contentAnalysis: question.contentAnalysis! }))); setError(''); setMessage('저장된 분석을 검토하고 수정할 수 있습니다.'); }}>저장된 분석 검토 ({saved.length}문항)</button> : null}
+        {saved.length ? <p className="hint">PDF·선택과목·연결 페이지를 바꾸면 기존 분석도 새 문제지와 일치하는지 검토하거나 다시 분석해 주세요. 검토 대기 분석은 검토하거나 제외한 후 배포할 수 있습니다.</p> : null}
+        {saved.length && !busy ? <button type="button" className="btn btn-secondary" style={{ marginTop: 8 }} onClick={() => { acceptedContext.current = { file, questionContextKey }; setRows(saved.map(question => editRow({ questionId: question.id, questionNumber: question.number, tags: question.tags || {}, contentAnalysis: question.contentAnalysis! }))); setError(''); setMessage('저장된 분석을 검토하고 수정할 수 있습니다.'); }}>저장된 분석 검토 ({saved.length}문항)</button> : null}
+        {discardControl}
         {message ? <p role="status" className={styles.status}>{message}</p> : null}
         {error ? <p role="alert" className={styles.error}>{error}</p> : null}
         {rows.length ? <div className={styles.review}>
@@ -141,6 +183,7 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
                 <summary className={styles.questionHeading}><strong>{row.questionNumber}번</strong><span>{list(row.concepts)[0] || '대표 개념 입력 필요'}</span><small>검토 대기</small></summary>
                 <div className={styles.questionBody}>
                 <label className={styles.include}><input type="checkbox" checked={row.selected} onChange={event => patch(row.questionId, { selected: event.target.checked })} /> 이 문항 적용</label>
+                {questions.find(question => question.id === row.questionId)?.tags?.concept ? <p className="hint">기존 대표 개념: {questions.find(question => question.id === row.questionId)?.tags?.concept}</p> : null}
                 <label className={styles.representative}>대표 개념
                     <select className="input-field" aria-label={`${row.questionNumber}번 대표 개념`} value={list(row.concepts)[0] || ''} onChange={event => chooseRepresentative(row, event.target.value)}>
                         {!list(row.concepts).length ? <option value="" disabled>개념을 입력하거나 기존 개념을 선택하세요</option> : null}
@@ -159,7 +202,7 @@ export default function ExamContentAnalysisPanel({ file, questions, enabled, onA
                 </div></div>
             </details>)}
             <div className={styles.applyArea}>
-            <p>검토한 내용을 시험에 반영합니다. 보관하려면 화면 상단에서 시험을 저장하세요.</p>
+            <p>선택 문항의 대표 개념·단원·평가 역량을 검토한 값으로 교체합니다. 보관하려면 화면 상단에서 시험을 저장하세요.</p>
             <div className={styles.actions}>
             <button type="button" className="btn btn-primary" onClick={apply} disabled={!rows.some(row => row.selected)}>선택한 문항 검토 완료·적용</button>
             <button type="button" className="btn btn-secondary" onClick={() => { setRows([]); setMessage('초안을 닫았습니다.'); }}>초안 닫기</button>

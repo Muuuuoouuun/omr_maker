@@ -221,3 +221,65 @@ blocks subsequent protected requests; it does not delete data or reactivate acco
 No live operation is authorized by the digest alone. Confirm exact identities, roles,
 plans and credential handoff separately. See the linked QA review for role assignment
 and remote migration/rollback effects.
+
+## Recover an existing legacy Academy organization
+
+Migration `202610220002_legacy_organization_recovery.sql` adds the service-role-only
+`omr_recover_legacy_organization_v1` RPC. Use this path only for an explicitly
+approved existing `teacher_*` organization whose current plan is Academy. It
+preserves the organization ID, old identities, exams, student credentials and
+Storage paths, and adds a new canonical owner account with one membership and
+teacher profile. It never rekeys the old admin or resets an existing account.
+
+Review the current target, expected active admin, matching member/user-profile
+email and teacher profile against the protected backup. Existing owners, existing
+account emails, conflicting provisioning provenance and changed idempotent
+requests are rejected. The request must have exactly these fields:
+
+```json
+{
+  "organizationId": "teacher_exampleorg",
+  "expectedAdminUserId": "teacher_exampleadmin",
+  "email": "owner@example.invalid",
+  "displayName": "Recovered owner",
+  "plan": "academy",
+  "entitlementMode": "legacy_recovery",
+  "actor": "operator:recovery",
+  "reason": "legacy_owner_recovery",
+  "idempotencyKey": "prov_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "credentialStatePath": "/absolute/private/recovery.state.json"
+}
+```
+
+These are placeholders; select the reviewed target and a fresh random idempotency
+key. Keep the request at mode `0600` in a private `0700` directory. Do not add a
+password, verifier, expiry, organization name or member role. The CLI generates the
+password and stores its verifier in the protected pending journal before the RPC.
+
+```sh
+node scripts/provision-initial-teacher.mjs --request=/absolute/private/recovery.json --dry-run
+node scripts/provision-initial-teacher.mjs --request=/absolute/private/recovery.json --approve-legacy-recovery=<reviewDigest>
+```
+
+The dry-run makes no database request and generates no credential. Its digest
+binds the normalized request, expected admin and credential output path; it is a
+review acknowledgement, not authorization. Execution requires that exact digest
+and the existing server-only Supabase credentials. Preserve the pending journal
+when the outcome is uncertain and retry the same request: the CLI reuses the
+password/verifier and the RPC enforces exact idempotency. A completed `0600`
+`.receipt` holds the initial password; normal CLI output contains no password or
+verifier. Deliver credentials through the approved private handoff channel.
+
+`legacy_recovery` grants permanent Academy access with no grant expiry; teacher
+sessions still expire after 12 hours and are checked against the database on each
+protected request. The new app and matching migration are both required. Confirm
+login, the original organization and exam inventory, effective Academy access,
+and `legacyOrganizationRecoveryReady=true` before declaring recovery complete.
+
+Preserve both `omr_internal.legacy_organization_recoveries` and its recovery audit
+records as authorization provenance. Revoked, inconsistent or missing registry
+state is denied; retained audit records prevent fallback to nominal Academy or
+legacy self-service identity when a registry row is missing. Never delete these
+records to revoke or retry access. This recovery-only release includes no recovery
+revocation/reset CLI or public RPC; those require a separately reviewed operator
+procedure that retains provenance. The demo revocation command does not apply.

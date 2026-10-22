@@ -1,10 +1,9 @@
 "use client";
 
-// Extracted verbatim from src/app/teacher/users/page.tsx (Phase 2
-// decomposition): the leaf display components, modals, and formatters the
-// page renders. Pure movement — no behaviour change.
+// Shared display components, roster forms, and formatters for the users page.
 
 import { useState } from "react";
+import { useRosterFormSubmission } from "./useRosterFormSubmission";
 import NextLink from "next/link";
 import StudentConceptMasteryPanel from "@/components/teacher/student-results/StudentConceptMasteryPanel";
 import StatusPill from "@/components/dashboard/StatusPill";
@@ -747,12 +746,13 @@ export function StudentProfileModal({
 }
 
 export function ModalShell({
-    title, onClose, children, maxWidth = 420,
+    title, onClose, children, maxWidth = 420, closeDisabled = false,
 }: {
     title: string;
     onClose: () => void;
     children: React.ReactNode;
     maxWidth?: number | string;
+    closeDisabled?: boolean;
 }) {
     return (
         <div
@@ -784,6 +784,7 @@ export function ModalShell({
                     <button
                         type="button"
                         aria-label="모달 닫기"
+                        disabled={closeDisabled}
                         onClick={onClose}
                         style={{
                             width: 44,
@@ -811,8 +812,9 @@ export function StudentModal({
     initial: RosterStudent | null;
     defaultGroupId?: string;
     onClose: () => void;
-    onSubmit: (data: StudentFormData) => void;
+    onSubmit: (data: StudentFormData) => void | Promise<void>;
 }) {
+    const submission = useRosterFormSubmission(onSubmit, onClose);
     const initialGroupIdValue = initial ? initialStudentGroupId(initial, groups) : (groups.some(group => group.id === defaultGroupId) ? defaultGroupId || "" : groups[0]?.id ?? "");
     const initialGroup = groups.find(item => item.id === initialGroupIdValue);
     const [name, setName] = useState(initial?.name ?? "");
@@ -835,10 +837,12 @@ export function StudentModal({
     };
 
     return (
-        <ModalShell title={initial ? "학생 편집" : "학생 추가"} onClose={onClose}>
+        <ModalShell title={initial ? "학생 편집" : "학생 추가"} onClose={submission.close} closeDisabled={submission.pending}>
             <form
+                aria-busy={submission.pending}
                 onSubmit={(e) => {
                     e.preventDefault();
+                    if (submission.pending) return;
                     if (!name.trim()) { setFormError("학생 이름을 입력해주세요."); return; }
                     if (!email.trim()) { setFormError("학생 이메일을 입력해주세요."); return; }
                     if (!selectedGroup) {
@@ -848,7 +852,7 @@ export function StudentModal({
                         return;
                     }
                     setFormError("");
-                    onSubmit({
+                    void submission.submit({
                         name: name.trim(),
                         email: email.trim(),
                         group: selectedGroup.name,
@@ -857,6 +861,7 @@ export function StudentModal({
                     });
                 }}
             >
+                <fieldset disabled={submission.pending} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
                 <div style={{ marginBottom: '1rem' }}>
                     <label style={labelStyle}>이름</label>
                     <input aria-label="학생 이름" value={name} onChange={e => setName(e.target.value)} style={inputStyle} required />
@@ -899,15 +904,15 @@ export function StudentModal({
                         placeholder="예: 서울, 부산, 온라인"
                     />
                 </div>
-                {formError && (
+                {(formError || submission.submitError) && (
                     <p role="alert" style={{ fontSize: '0.8rem', color: 'var(--danger, #dc2626)', marginBottom: '0.75rem', lineHeight: 1.5, wordBreak: 'keep-all' }}>
-                        {formError}
+                        {formError || submission.submitError}
                     </p>
                 )}
                 <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
                     <button
                         type="button"
-                        onClick={onClose}
+                        onClick={submission.close}
                         style={{ padding: '0.65rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', color: 'var(--foreground)' }}
                     >
                         취소
@@ -916,9 +921,11 @@ export function StudentModal({
                         type="submit"
                         style={{ padding: '0.65rem 1.1rem', background: 'linear-gradient(135deg, #22c55e, #10b981)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem' }}
                     >
-                        {initial ? "저장" : "추가"}
+                        {submission.pending ? "저장 중…" : initial ? "저장" : "추가"}
                     </button>
                 </div>
+                </fieldset>
+                {submission.pending && <p role="status">명단을 저장하고 있습니다. 완료될 때까지 기다려주세요.</p>}
             </form>
         </ModalShell>
     );
@@ -929,8 +936,9 @@ export function GroupModal({
 }: {
     initial?: RosterGroup | null;
     onClose: () => void;
-    onSubmit: (data: GroupFormData) => void;
+    onSubmit: (data: GroupFormData) => void | Promise<void>;
 }) {
+    const submission = useRosterFormSubmission(onSubmit, onClose);
     const [name, setName] = useState(initial?.name ?? "");
     const [region, setRegion] = useState(initial?.region ?? "");
     const [color, setColor] = useState(initial?.color ?? GROUP_COLORS[0]);
@@ -947,14 +955,17 @@ export function GroupModal({
     };
 
     return (
-        <ModalShell title={initial ? "반 편집" : "새 반 만들기"} onClose={onClose}>
+        <ModalShell title={initial ? "반 편집" : "새 반 만들기"} onClose={submission.close} closeDisabled={submission.pending}>
             <form
+                aria-busy={submission.pending}
                 onSubmit={(e) => {
                     e.preventDefault();
+                    if (submission.pending) return;
                     if (!name.trim()) return;
-                    onSubmit({ name: name.trim(), region: region.trim(), color });
+                    void submission.submit({ name: name.trim(), region: region.trim(), color });
                 }}
             >
+                <fieldset disabled={submission.pending} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
                 <div style={{ marginBottom: '1rem' }}>
                     <label style={labelStyle}>이름</label>
                     <input
@@ -998,7 +1009,7 @@ export function GroupModal({
                 <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
                     <button
                         type="button"
-                        onClick={onClose}
+                        onClick={submission.close}
                         style={{ padding: '0.65rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', color: 'var(--foreground)' }}
                     >
                         취소
@@ -1007,9 +1018,12 @@ export function GroupModal({
                         type="submit"
                         style={{ padding: '0.65rem 1.1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem' }}
                     >
-                        {initial ? "저장" : "만들기"}
+                        {submission.pending ? "저장 중…" : initial ? "저장" : "만들기"}
                     </button>
                 </div>
+                </fieldset>
+                {submission.pending && <p role="status">명단을 저장하고 있습니다. 완료될 때까지 기다려주세요.</p>}
+                {submission.submitError && <p role="alert">{submission.submitError}</p>}
             </form>
         </ModalShell>
     );

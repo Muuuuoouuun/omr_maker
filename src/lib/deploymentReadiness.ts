@@ -314,6 +314,7 @@ function productionRlsCheck(
             teacherAssetCleanupBacklogHealthy: "원격 자산 정리 backlog",
             studentAttemptSessionsReady: "학생 다중 기기 응시 세션",
             canonicalQuestionResultEvidenceReady: "공식 문항 채점 근거 이중 봉인",
+            legacyOrganizationRecoveryReady: "기존 조직 복구 identity·권한·private provenance 경계",
             kakaoReminderEntitlementReady: "카카오 리마인더 유료 플랜·원자 상태 전이 경계",
             durableRateLimitsReady: "공유 요청 제한 저장소",
             examRevisionReady: "시험 revision 무결성",

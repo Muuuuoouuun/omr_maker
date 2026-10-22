@@ -308,28 +308,65 @@ export async function prepareTeacherRemoteAssetUploadWithGateway(
     };
 }
 
+const PDF_MAGIC_VERIFICATION_TIMEOUT_MS = 10_000;
+const PDF_MAGIC_BYTES = 5;
+type PdfMagicVerification = "valid" | "invalid" | "unavailable";
+
 async function verifyBoundedPdfMagic(
     bucket: RemoteAssetStorageBucket,
     objectPath: string,
     expectedByteSize: number,
     fetchImpl: typeof fetch,
-): Promise<"valid" | "invalid" | "unavailable"> {
+): Promise<PdfMagicVerification> {
     const signed = await bucket.createSignedUrl(objectPath, 60);
     const signedUrl = clean(signed.data?.signedUrl);
     if (signed.error || !signedUrl) return "unavailable";
-    try {
+    const controller = new AbortController();
+    const bodyState: {
+        stream?: ReadableStream<Uint8Array>;
+        reader?: ReadableStreamDefaultReader<Uint8Array>;
+    } = {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<PdfMagicVerification>(resolve => {
+        timer = setTimeout(() => {
+            controller.abort();
+            resolve("unavailable");
+        }, PDF_MAGIC_VERIFICATION_TIMEOUT_MS);
+    });
+    const verify = async (): Promise<PdfMagicVerification> => {
         const response = await fetchImpl(signedUrl, {
             method: "GET",
             headers: { Range: "bytes=0-4" },
             cache: "no-store",
+            signal: controller.signal,
         });
-        const contentRange = clean(response.headers.get("content-range"));
-        const match = /^bytes 0-4\/(\d+)$/.exec(contentRange);
-        if (!response.ok || response.status !== 206 || !match || Number(match[1]) !== expectedByteSize) {
+        // An adapter can resolve after cancellation. Do not consume that body.
+        if (controller.signal.aborted) {
+            void response.body?.cancel().catch(() => undefined);
             return "unavailable";
         }
-        const prefix = new Uint8Array(await response.arrayBuffer());
-        if (prefix.byteLength !== 5) return "unavailable";
+        const responseBody = response.body;
+        if (responseBody) bodyState.stream = responseBody;
+        const contentRange = clean(response.headers.get("content-range"));
+        const match = /^bytes 0-4\/(\d+)$/.exec(contentRange);
+        const contentLength = response.headers.get("content-length");
+        if (!response.ok || response.status !== 206 || !match || Number(match[1]) !== expectedByteSize
+            || (contentLength !== null && Number(contentLength) !== PDF_MAGIC_BYTES)
+            || !responseBody) {
+            return "unavailable";
+        }
+        const reader = responseBody.getReader();
+        bodyState.reader = reader;
+        const prefix = new Uint8Array(PDF_MAGIC_BYTES);
+        let byteLength = 0;
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value.byteLength > PDF_MAGIC_BYTES - byteLength) return "unavailable";
+            prefix.set(value, byteLength);
+            byteLength += value.byteLength;
+        }
+        if (byteLength !== PDF_MAGIC_BYTES) return "unavailable";
         return prefix[0] === 0x25
             && prefix[1] === 0x50
             && prefix[2] === 0x44
@@ -337,8 +374,18 @@ async function verifyBoundedPdfMagic(
             && prefix[4] === 0x2d
             ? "valid"
             : "invalid";
+    };
+    try {
+        // The same deadline bounds headers and body reads, even for an adapter
+        // that fails to reject its promise when the request is aborted.
+        return await Promise.race([verify(), deadline]);
     } catch {
         return "unavailable";
+    } finally {
+        clearTimeout(timer);
+        controller.abort();
+        // Never wait for an untrusted stream's cancellation to settle.
+        void (bodyState.reader ? bodyState.reader.cancel() : bodyState.stream?.cancel())?.catch(() => undefined);
     }
 }
 

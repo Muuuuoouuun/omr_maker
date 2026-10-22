@@ -9,6 +9,23 @@ function source(path: string): string {
 }
 
 describe("teacher attempt scoped mutation contract", () => {
+    it("adds forward-only review identity compatibility without widening authorization", () => {
+        const sql = source("supabase/migrations/202610210001_subquestion_review_identity_compatibility.sql");
+        expect(sql).toContain("length(v_subquestion_id) > 256");
+        expect(sql).toContain("position(':' in coalesce(p_subquestion_id, ''))");
+        expect(sql).not.toContain("position(':' in v_subquestion_id)");
+        expect(sql).toContain("security definer");
+        expect(sql).toContain("set search_path = ''");
+        expect(sql).toContain("for update");
+        expect(sql).toContain("attempt organization mismatch");
+        expect(sql).toContain("attempt class scope mismatch");
+        expect(sql).toContain("omr_teacher_attempt_write_allowed_v1");
+        expect(sql).toContain("array['subQuestionAnswers', v_question_id, v_subquestion_id]");
+        expect(sql).toContain("from public, anon, authenticated");
+        expect(sql).toContain("to service_role");
+        expect(source("scripts/verify-supabase-live.mjs")).toContain('psqlFile("supabase/subquestion-review-identity-assertions.sql")');
+    });
+
     it("defines three service-role-only field-limited RPCs", () => {
         const path = "supabase/migrations/202607280001_teacher_attempt_scoped_mutations.sql";
         expect(existsSync(join(root, path))).toBe(true);

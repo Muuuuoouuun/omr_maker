@@ -102,8 +102,8 @@ export default function StudentDashboard() {
         requestStartedMonotonicMs: number;
         receivedMonotonicMs: number;
     }>();
-    const [stats, setStats] = useState({
-        avgScore: 0,
+    const [stats, setStats] = useState<StudentDashboardStats>({
+        avgScore: null,
         completedCount: 0,
         retakeCount: 0,
     });
@@ -126,7 +126,7 @@ export default function StudentDashboard() {
             if (cancelled) return;
             setTodoExams([]);
             setDoneExams([]);
-            setStats({ avgScore: 0, completedCount: 0, retakeCount: 0 });
+            setStats({ avgScore: null, completedCount: 0, retakeCount: 0 });
             setGuestMergePreview(null);
             setDataError(message);
             setDataState(resolveCanonicalLoad({
@@ -312,15 +312,16 @@ export default function StudentDashboard() {
             });
 
             // 4. Calculate Stats
-            const avg = myBaseAttempts.length === 0
-                ? 0
-                : Math.round(myBaseAttempts.reduce((total, attempt) => (
+            const completedBaseAttempts = myBaseAttempts.filter(attempt => attempt.status === "completed");
+            const avg = completedBaseAttempts.length === 0
+                ? null
+                : Math.round(completedBaseAttempts.reduce((total, attempt) => (
                     total + safeScorePercent(attempt.score, attempt.totalScore)
-                ), 0) / myBaseAttempts.length);
+                ), 0) / completedBaseAttempts.length);
             setStats({
                 avgScore: avg,
-                completedCount: myBaseAttempts.length,
-                retakeCount: myRetakeAttempts.length,
+                completedCount: completedBaseAttempts.length,
+                retakeCount: myRetakeAttempts.filter(attempt => attempt.status === "completed").length,
             });
             setGuestMergePreview(mergePreview && mergePreview.mergeableCount > 0 ? mergePreview : null);
 
@@ -507,7 +508,7 @@ export default function StudentDashboard() {
         setUser(null);
         setTodoExams([]);
         setDoneExams([]);
-        setStats({ avgScore: 0, completedCount: 0, retakeCount: 0 });
+        setStats({ avgScore: null, completedCount: 0, retakeCount: 0 });
         setGuestMergePreview(null);
         setSessionState("missing");
         setDataError("");
@@ -856,7 +857,7 @@ export default function StudentDashboard() {
     );
 }
 
-type StudentDashboardStats = { avgScore: number; completedCount: number; retakeCount: number };
+type StudentDashboardStats = { avgScore: number | null; completedCount: number; retakeCount: number };
 
 /**
  * Headline, quick links, and the assignment grid. Mounted only once the
@@ -941,8 +942,10 @@ function StudentDashboardTaskFlow({
                 display: 'flex', flexDirection: 'column', justifyContent: 'center'
             }}>
                 <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>내 평균 점수</div>
-                <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>
-                    {stats.avgScore}<span style={{ fontSize: '1.5rem', fontWeight: 700, opacity: 0.85 }}>%</span>
+                <div style={{ fontSize: stats.avgScore === null ? '1.15rem' : '3rem', fontWeight: 800, lineHeight: stats.avgScore === null ? 1.5 : 1 }}>
+                    {stats.avgScore === null
+                        ? "아직 제출 기록이 없어요"
+                        : <>{stats.avgScore}<span style={{ fontSize: '1.5rem', fontWeight: 700, opacity: 0.85 }}>%</span></>}
                 </div>
                 {/* Retake attempts are excluded: only first attempts count toward the average. */}
                 <div style={{ marginTop: '0.6rem', fontSize: 'var(--type-caption)', fontWeight: 600, opacity: 0.9 }}>재시험 제외 · 기록 보기 →</div>

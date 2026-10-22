@@ -11,8 +11,10 @@ import { toast } from "@/components/Toast";
 import PdfPaneBoundary, { PdfPaneErrorCard } from "@/components/PdfPaneBoundary";
 import { AlertTriangle, Clock, LoaderCircle, PanelRightClose, PanelRightOpen, PenLine, RotateCcw, Save, WifiOff } from "lucide-react";
 import StatusPill from "@/components/dashboard/StatusPill";
+import noPdfLayout from "./noPdfLayout.module.css";
 import { deleteStoredData, storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
 import { resolveDraftDrawings } from "@/lib/draftRecovery";
+import { saveChangedDraftDrawings } from "@/lib/solveDraftDrawings";
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { loadExamForSolving, submitAttempt } from "@/app/actions/studentExam";
 import { openStudentExam, previewStudentExam } from "@/app/actions/studentAttempt";
@@ -49,6 +51,7 @@ import {
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 import { remainingSecondsWithinWindow } from "@/lib/studentExamCore";
 import { findMissingRequiredSubQuestions, requiredSubQuestionProgress, sanitizeSubQuestionAnswersForQuestions } from "@/lib/subQuestions";
+import { focusMissingSubQuestionInput } from "@/lib/studentSubQuestionFocus";
 import { stripTeacherOnlySubQuestionFields, type SolvableExam } from "@/lib/examSolvePayload";
 import {
     SOLVE_CLASS_CODE_PARAM,
@@ -118,6 +121,7 @@ import {
     SECURE_SUBMISSION_OUTBOX_EVENT,
     queueSecureSubmission,
     readSecureSubmission,
+    recoverIncompleteSecureSubmissionForEditing,
     replaySecureSubmissionsForOwner,
     retryBlockedSecureSubmission,
     secureSubmissionOwnerFingerprint,
@@ -965,15 +969,19 @@ function SubmissionProgressOverlay({
     phase,
     delayed,
     onRetry,
+    onCorrectAnswers,
 }: {
     phase: SubmitProgressPhase;
     delayed: boolean;
     onRetry: () => void;
+    onCorrectAnswers: () => void;
 }) {
     const copy = submissionProgressCopy(phase, delayed);
     const waitingForNetwork = phase === "review_waiting_online";
     const requiresConfirmation = phase === "confirmation_required";
-    const allowsRetry = requiresConfirmation || phase === "queued" || phase === "blocked";
+    const requiresAnswerCorrection = phase === "answers_incomplete";
+    const recoveryBlocked = phase === "answer_recovery_blocked";
+    const allowsRetry = requiresConfirmation || requiresAnswerCorrection || recoveryBlocked || phase === "queued" || phase === "blocked";
     const confirmationDialogRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -1040,12 +1048,19 @@ function SubmissionProgressOverlay({
                     : <LoaderCircle className="solve-submission-spinner" size={42} aria-hidden="true" />}
                 <h2 id="solve-submission-title">{copy.title}</h2>
                 <p>{copy.detail}</p>
-                {allowsRetry ? (
+                {recoveryBlocked ? (
                     <>
-                        <button type="button" className="btn btn-primary" autoFocus onClick={onRetry}>
-                            {requiresConfirmation ? "같은 답안으로 제출 상태 확인" : "지금 다시 시도"}
+                        <button type="button" className="btn btn-primary" autoFocus onClick={() => window.location.reload()}>
+                            응시 상태 다시 불러오기
                         </button>
-                        <span>확인이 끝날 때까지 답안과 필기는 변경할 수 없습니다.</span>
+                        <Link href="/student/dashboard" className="btn btn-secondary">학생 홈으로</Link>
+                    </>
+                ) : allowsRetry ? (
+                    <>
+                        <button type="button" className="btn btn-primary" autoFocus onClick={requiresAnswerCorrection ? onCorrectAnswers : onRetry}>
+                            {requiresAnswerCorrection ? "답안 수정하기" : requiresConfirmation ? "같은 답안으로 제출 상태 확인" : "지금 다시 시도"}
+                        </button>
+                        <span>{requiresAnswerCorrection ? "서버 응시 상태를 확인한 뒤 필수 응답으로 이동합니다." : "확인이 끝날 때까지 답안과 필기는 변경할 수 없습니다."}</span>
                     </>
                 ) : waitingForNetwork ? (
                     <>
@@ -1333,6 +1348,8 @@ export default function SolvePage() {
     const submittedRef = useRef(false);
     const submissionConfirmationRetryRef = useRef<(() => void) | null>(null);
     const secureSubmissionReplayOwnedRef = useRef(false);
+    const submissionRecoveryEpochRef = useRef(0);
+    const submissionRecoveryInFlightRef = useRef(false);
     const submissionIdRef = useRef("");
     const studentAnswersRef = useRef<Record<number, number>>({});
     const subQuestionAnswersRef = useRef<SubQuestionAnswers>({});
@@ -1442,7 +1459,12 @@ export default function SolvePage() {
                 navigateToReview(replay.submitted[0].attemptId);
                 return;
             }
-            setSubmissionProgress(replay.status === "blocked" ? "blocked" : "queued");
+            if (replay.status === "blocked") {
+                const blocked = await readSecureSubmission(current.session.sessionId);
+                setSubmissionProgress(blocked?.blockReason === "answers_incomplete" ? "answers_incomplete" : "blocked");
+            } else {
+                setSubmissionProgress("queued");
+            }
         } catch {
             setSubmissionProgress("queued");
         } finally {
@@ -1462,7 +1484,7 @@ export default function SolvePage() {
                 navigateToReview(detail.attemptId);
             } else if (detail.status === "blocked" || detail.status === "expired") {
                 submittedRef.current = true;
-                setSubmissionProgress("blocked");
+                setSubmissionProgress(detail.reason === "answers_incomplete" ? "answers_incomplete" : "blocked");
             } else if (detail.status === "queued") {
                 submittedRef.current = true;
                 setSubmissionProgress("queued");
@@ -1704,7 +1726,6 @@ export default function SolvePage() {
         if (!solveAllowed) return false;
 
         const savedAt = new Date().toISOString();
-        const draftDrawings = compactDrawings(draftSnapshot.drawings || {});
         const lightweightDraft: SolveDraft = {
             scopeBinding: DRAFT_KEY,
             answers: draftSnapshot.answers,
@@ -1730,16 +1751,15 @@ export default function SolvePage() {
         }
 
         try {
-            let drawingsRef = draftSnapshot.drawingsRef;
-            const drawingsDirty = rawDrawingsRef.current !== lastPersistedDrawingsRef.current;
-            if (hasDrawings(draftDrawings) && drawingsDirty) {
-                // Capture the state reference BEFORE the await: strokes landing
-                // mid-write must still read as dirty on the next tick.
-                const persistedFrom = rawDrawingsRef.current;
-                drawingsRef = await saveJsonRecord(`draft:${encodeURIComponent(DRAFT_KEY)}:drawings`, draftDrawings);
-                if (!drawingsRef) throw new Error("Failed to save draft drawings");
-                lastPersistedDrawingsRef.current = persistedFrom;
-            }
+            const { drawingsRef, persistedDrawings } = await saveChangedDraftDrawings({
+                drawings: draftSnapshot.drawings,
+                lastPersistedDrawings: lastPersistedDrawingsRef.current,
+                drawingsRef: draftSnapshot.drawingsRef,
+                save: draftDrawings => saveJsonRecord(`draft:${encodeURIComponent(DRAFT_KEY)}:drawings`, draftDrawings),
+            });
+            // The helper captures the snapshot before the await, so strokes
+            // landing mid-write remain dirty on the next autosave.
+            lastPersistedDrawingsRef.current = persistedDrawings;
 
             const persistedDraft: SolveDraft = {
                 ...lightweightDraft,
@@ -1764,6 +1784,128 @@ export default function SolvePage() {
             return true;
         }
     }, [DRAFT_KEY, solveAllowed]);
+
+    useEffect(() => () => {
+        submissionRecoveryEpochRef.current += 1;
+    }, [DRAFT_KEY]);
+
+    const recoverIncompleteSubmission = useCallback(async () => {
+        if (submissionRecoveryInFlightRef.current) return;
+        const current = durableAttemptRef.current;
+        const actor = getSession();
+        const ownerId = actor?.studentId || actor?.guestId || "";
+        if (!current || !ownerId || !DRAFT_KEY) return;
+        const generation = getStudentSessionGeneration();
+        const identityEpoch = getStudentSharedIdentityEpoch();
+        const solvePath = `${window.location.pathname}${window.location.search}`;
+        const recoveryEpoch = ++submissionRecoveryEpochRef.current;
+        const isCurrent = () => submissionRecoveryEpochRef.current === recoveryEpoch
+            && (getSession()?.studentId || getSession()?.guestId || "") === ownerId
+            && getStudentSessionGeneration() === generation
+            && getStudentSharedIdentityEpoch() === identityEpoch
+            && `${window.location.pathname}${window.location.search}` === solvePath
+            && durableAttemptRef.current?.session.sessionId === current.session.sessionId
+            && durableAttemptRef.current?.leaseToken === current.leaseToken;
+        submissionRecoveryInFlightRef.current = true;
+        setSubmissionProgress("submitting");
+        setSubmissionDelayed(false);
+        try {
+            const heartbeat = await withSubmissionTimeout(heartbeatDurableStudentAttemptSession({
+                sessionId: current.session.sessionId,
+                examId: current.session.examId,
+                assignmentId: current.session.assignmentId,
+                assignmentRevision: current.session.assignmentRevision,
+                expectedLeaseEpoch: current.session.leaseEpoch,
+                leaseToken: current.leaseToken,
+            }));
+            if (!isCurrent()) return;
+            if (heartbeat.status === "submitted" && heartbeat.submittedAttemptId) {
+                navigateToReview(heartbeat.submittedAttemptId);
+                return;
+            }
+            if (heartbeat.status !== "active" || !heartbeat.revision
+                || heartbeat.leaseEpoch !== current.session.leaseEpoch
+                || !heartbeat.deadlineAt || !heartbeat.serverNow) {
+                setSubmissionProgress(heartbeat.status === "service_unavailable" ? "answers_incomplete" : "answer_recovery_blocked");
+                toast.error("응시 상태 확인 필요", "답안은 유지됩니다. 서버 연결과 응시 시간을 확인한 뒤 다시 시도해주세요.");
+                return;
+            }
+            const ownerFingerprint = await secureSubmissionOwnerFingerprint(ownerId);
+            if (!isCurrent()) return;
+            const remainingSeconds = remainingAttemptSeconds(heartbeat.deadlineAt, heartbeat.serverNow, Date.now(), Date.now());
+            const recovered = await recoverIncompleteSecureSubmissionForEditing(
+                current.session.sessionId,
+                ownerFingerprint,
+                (snapshot, revision) => {
+                    if (!isCurrent() || heartbeat.revision! < revision
+                        || snapshot.examId !== current.session.examId
+                        || snapshot.assignmentId !== current.session.assignmentId
+                        || snapshot.assignmentRevision !== current.session.assignmentRevision) return false;
+                    const draft: SolveDraft = {
+                        scopeBinding: DRAFT_KEY,
+                        answers: snapshot.answers,
+                        subQuestionAnswers: snapshot.subQuestionAnswers,
+                        drawingsRef: latestDraftRef.current?.drawingsRef,
+                        timeRemaining: remainingSeconds,
+                        startedAt: current.session.startedAt,
+                        submissionId: submissionIdRef.current,
+                        savedAt: new Date().toISOString(),
+                    };
+                    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+                    return true;
+                },
+            );
+            if (!isCurrent()) return;
+            if (recovered.status !== "recovered") {
+                setSubmissionProgress("answers_incomplete");
+                toast.error("답안 복구 확인 필요", "기존 답안은 유지됩니다. 이 기기의 저장 공간과 연결을 확인한 뒤 다시 시도해주세요.");
+                return;
+            }
+            const next = {
+                ...current,
+                observedAtClientMs: Date.now(),
+                session: {
+                    ...current.session,
+                    revision: heartbeat.revision,
+                    leaseEpoch: heartbeat.leaseEpoch,
+                    deadlineAt: heartbeat.deadlineAt,
+                    serverNow: heartbeat.serverNow,
+                    answers: recovered.snapshot.answers,
+                    subQuestionAnswers: recovered.snapshot.subQuestionAnswers,
+                },
+            };
+            durableAttemptRef.current = next;
+            setDurableAttempt(next);
+            studentAnswersRef.current = recovered.snapshot.answers;
+            subQuestionAnswersRef.current = recovered.snapshot.subQuestionAnswers;
+            setStudentAnswers(recovered.snapshot.answers);
+            setSubQuestionAnswers(recovered.snapshot.subQuestionAnswers);
+            setTimeRemaining(remainingSeconds);
+            lastCheckpointFingerprintRef.current = checkpointFingerprint(recovered.snapshot.answers, recovered.snapshot.subQuestionAnswers);
+            submissionConfirmationRetryRef.current = null;
+            submittedRef.current = false;
+            setSubmissionProgress(null);
+            setSubmissionDelayed(false);
+            setDraftSaveState("saved");
+            setLastSavedAt(new Date());
+            setIsOMRCollapsed(false);
+            const firstMissing = findMissingRequiredSubQuestions(examQuestionsRef.current, recovered.snapshot.subQuestionAnswers)[0];
+            if (firstMissing) beginQuestionVisit(firstMissing.questionId);
+            window.requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => {
+                    if (isCurrent() && firstMissing) focusMissingSubQuestionInput(document, firstMissing);
+                });
+            });
+            toast.info("답안 수정 가능", "기존 답안과 필기는 유지됩니다. 필수 심화 응답을 작성한 뒤 다시 제출해주세요.");
+        } catch {
+            if (isCurrent()) {
+                setSubmissionProgress("answers_incomplete");
+                toast.error("답안 복구 지연", "기존 답안은 유지됩니다. 서버 연결을 확인한 뒤 다시 시도해주세요.");
+            }
+        } finally {
+            submissionRecoveryInFlightRef.current = false;
+        }
+    }, [DRAFT_KEY, beginQuestionVisit, navigateToReview]);
 
     useEffect(() => {
         let cancelled = false;
@@ -2268,7 +2410,7 @@ export default function SolvePage() {
             scopeBinding: DRAFT_KEY,
             answers: studentAnswers,
             subQuestionAnswers,
-            drawings: compactDrawings(drawings),
+            drawings,
             drawingsRef: latestDraftRef.current?.drawingsRef,
             timeRemaining,
             startedAt,
@@ -2547,7 +2689,7 @@ export default function SolvePage() {
             scopeBinding: DRAFT_KEY,
             answers: nextAnswers,
             subQuestionAnswers: subQuestionAnswersRef.current,
-            drawings: compactDrawings(drawings),
+            drawings,
             drawingsRef: latestDraftRef.current?.drawingsRef,
             timeRemaining,
             startedAt,
@@ -2565,14 +2707,14 @@ export default function SolvePage() {
         if (submittedRef.current) return;
         const trimmedToLimit = body.slice(0, maxLength);
         const current = subQuestionAnswersRef.current;
-        const questionAnswers = { ...(current[questionId] || {}) };
+        let questionAnswers = { ...(current[questionId] || {}) };
         if (trimmedToLimit.trim()) {
-            questionAnswers[subQuestionId] = {
+            questionAnswers = { ...questionAnswers, [subQuestionId]: {
                 schemaVersion: 1,
                 body: trimmedToLimit,
                 answeredAt: new Date().toISOString(),
                 reviewStatus: 'needs_review',
-            };
+            } };
         } else {
             delete questionAnswers[subQuestionId];
         }
@@ -2862,7 +3004,9 @@ export default function SolvePage() {
                 && Date.parse(queuedSubmission.expiresAt) > Date.now()
             ) {
                 submittedRef.current = true;
-                setSubmissionProgress(queuedSubmission.state === "blocked" ? "blocked" : "queued");
+                setSubmissionProgress(queuedSubmission.state === "blocked"
+                    ? queuedSubmission.blockReason === "answers_incomplete" ? "answers_incomplete" : "blocked"
+                    : "queued");
             }
         } catch {
             // The secure outbox is checked again by the app-wide recovery loop.
@@ -3148,8 +3292,10 @@ export default function SolvePage() {
                     { sessionId: current.session.sessionId },
                 ));
                 if (replay.status === "blocked") {
-                    setSubmissionProgress("blocked");
-                    toast.error("제출 확인 필요", "응시 세션 상태가 달라 자동으로 가져오지 않았습니다. 직접 다시 시도하거나 선생님에게 문의해주세요.");
+                    const blocked = await readSecureSubmission(current.session.sessionId);
+                    const incomplete = blocked?.blockReason === "answers_incomplete";
+                    setSubmissionProgress(incomplete ? "answers_incomplete" : "blocked");
+                    if (!incomplete) toast.error("제출 확인 필요", "응시 세션 상태가 달라 자동으로 가져오지 않았습니다. 직접 다시 시도하거나 선생님에게 문의해주세요.");
                     return;
                 }
                 if (replay.status !== "submitted" || !replay.submitted[0]) {
@@ -3576,15 +3722,14 @@ export default function SolvePage() {
         return () => clearTimeout(timerId);
     }, [timeRemaining, solveAllowed]);
 
-    // Track initial total duration to compute progress percentage smoothly.
-    useEffect(() => {
-        if (timeRemaining !== null && initialTimeLimitSec === null && timeRemaining > 0) {
-            const totalSec = examData?.durationMin && examData.durationMin > 0
-                ? examData.durationMin * 60
-                : timeRemaining;
-            setInitialTimeLimitSec(totalSec);
-        }
-    }, [timeRemaining, initialTimeLimitSec, examData?.durationMin]);
+    // Capture the first valid duration before painting the progress bar. This
+    // guarded state adjustment avoids an effect followed by a cascading render.
+    if (timeRemaining !== null && initialTimeLimitSec === null && timeRemaining > 0) {
+        const totalSec = examData?.durationMin && examData.durationMin > 0
+            ? examData.durationMin * 60
+            : timeRemaining;
+        setInitialTimeLimitSec(totalSec);
+    }
 
     // Low-time milestone notifications (5m, 1m warnings)
     useEffect(() => {
@@ -4066,6 +4211,7 @@ export default function SolvePage() {
 
     const viewerPdfFile = activeTab === 'problem' ? pdfFile : answerFile;
     const studentPdfOpenOffered = shouldOfferStudentPdfOpen(examData);
+    const compactEmptyPdf = !isTeacherMode && !viewerPdfFile && studentPdfOpenOffered;
     const saveStatusChip = solveSaveStatusChip({ saveState: draftSaveState, online: isOnline });
     const retryPdfPane = () => {
         setFailedPdfFile(null);
@@ -4443,7 +4589,7 @@ export default function SolvePage() {
             )}
 
             {/* Body */}
-            <div className="solve-body" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+            <div className={`solve-body${compactEmptyPdf ? ` ${noPdfLayout.withoutPdf}` : ""}`} style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
                 {/* PDF Area (Left, larger) */}
                 <div className="solve-pdf-pane" style={{
                     flex: 1,
@@ -4454,6 +4600,18 @@ export default function SolvePage() {
                     flexDirection: 'column',
                     minWidth: 0
                 }}>
+                    {compactEmptyPdf && (
+                        <div className={noPdfLayout.emptyPdfAction} role="region" aria-label="종이 문제지로 답안 작성">
+                            <p>종이 문제지를 보며 답안을 작성하세요.</p>
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => studentPdfUploadInputRef.current?.click()}
+                            >
+                                문제지 PDF 열기
+                            </button>
+                        </div>
+                    )}
                     {isTeacherMode && activeTab === 'answer' && !answerFile && (
                         <div className="solve-upload-overlay" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
                             <label className="btn btn-primary" style={{ pointerEvents: 'auto', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
@@ -4659,6 +4817,8 @@ export default function SolvePage() {
                                         <label key={subQuestion.id} style={{ display: 'grid', gap: '0.3rem', fontSize: '0.76rem', fontWeight: 800 }}>
                                             <span>{String.fromCharCode(65 + index)}. {subQuestion.prompt} {subQuestion.required && <em style={{ color: 'var(--error)', fontStyle: 'normal' }}>(필수)</em>}</span>
                                             <textarea
+                                                data-question-id={currentQuestion.id}
+                                                data-sub-question-id={subQuestion.id}
                                                 value={value}
                                                 maxLength={maxLength}
                                                 onChange={event => handleSubQuestionAnswer(currentQuestion.id, subQuestion.id, event.target.value, maxLength)}
@@ -4709,6 +4869,7 @@ export default function SolvePage() {
                     phase={submissionProgress}
                     delayed={submissionDelayed}
                     onRetry={retryUncertainSubmission}
+                    onCorrectAnswers={recoverIncompleteSubmission}
                 />
             )}
 

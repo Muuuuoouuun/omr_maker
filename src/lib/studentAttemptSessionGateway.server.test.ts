@@ -439,3 +439,90 @@ describe("student attempt session gateway", () => {
         })).resolves.toEqual({ status: "expired" });
     });
 });
+
+
+const checkpointInput = {
+    sessionId: "session-1", organizationId: "org-1", examId: "exam-1", ownerStudentId: "student-1",
+    expectedRevision: 1, expectedLeaseEpoch: 1, leaseTokenHash: "hash", answers: { 1: 3 },
+    subQuestionAnswers: {}, progressPayload: {},
+};
+
+describe("student checkpoint runtime input and review authority", () => {
+    it.each([
+        ["null answers", { answers: null }],
+        ["array answers", { answers: [3] }],
+        ["string answers", { answers: "3" }],
+        ["noncanonical question key", { answers: { "01": 3 } }],
+        ["unsafe question key", { answers: { "9007199254740992": 3 } }],
+        ["fractional choice", { answers: { 1: 2.5 } }],
+        ["string choice", { answers: { 1: "3" } }],
+        ["out-of-range choice", { answers: { 1: 6 } }],
+        ["null subanswers", { subQuestionAnswers: null }],
+        ["array subanswers", { subQuestionAnswers: [] }],
+        ["array question responses", { subQuestionAnswers: { 1: [] } }],
+        ["malformed response body", { subQuestionAnswers: { 1: { reason: { schemaVersion: 1, body: null } } } }],
+        ["oversize response body", { subQuestionAnswers: { 1: { reason: { schemaVersion: 1, body: "x".repeat(2001) } } } }],
+        ["invalid response timestamp", { subQuestionAnswers: { 1: { reason: { schemaVersion: 1, body: "Reason", answeredAt: "invalid" } } } }],
+        ["missing scope", { organizationId: "" }],
+        ["oversize scope", { sessionId: "x".repeat(257) }],
+        ["blank lease", { leaseTokenHash: " " }],
+        ["coerced generation", { assignmentId: "assignment", assignmentRevision: "1" }],
+    ])("rejects %s without throwing or sending an RPC", async (_label, invalid) => {
+        const rpc = vi.fn();
+        await expect(checkpointStudentAttemptSessionWithGateway({ rpc }, { ...checkpointInput, ...invalid } as never)).resolves.toEqual({ status: "invalid" });
+        expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it("accepts own legacy response keys but strips forged teacher review authority before persistence", async () => {
+        const raw = JSON.parse('{"1":{"__proto__":{"schemaVersion":1,"body":"Student reason","reviewStatus":"reviewed","reviewedBy":"teacher-forged","reviewedAt":"2026-10-21T00:00:00.000Z","answeredAt":"2026-10-21T00:00:00.000Z"},"constructor":{"schemaVersion":1,"body":"Second reason","reviewStatus":"needs_review"}}}');
+        let persisted: Record<string, unknown> = {};
+        const rpc = vi.fn(async (_name: string, params: Record<string, unknown>) => {
+            persisted = params;
+            return { data: [{ ...rpcState, sub_question_answers: params.p_sub_question_answers }], error: null };
+        });
+        const result = await checkpointStudentAttemptSessionWithGateway({ rpc }, { ...checkpointInput, subQuestionAnswers: raw });
+        expect(result.status).toBe("active");
+        if (result.status !== "active") throw new Error("Expected active checkpoint");
+        const roundtrip = JSON.parse(JSON.stringify(persisted.p_sub_question_answers));
+        expect(Object.hasOwn(roundtrip[1], "__proto__")).toBe(true);
+        expect(roundtrip[1].__proto__).toEqual({ schemaVersion: 1, body: "Student reason", reviewStatus: "needs_review", answeredAt: "2026-10-21T00:00:00.000Z" });
+        expect(roundtrip[1].constructor.body).toBe("Second reason");
+        expect(JSON.stringify(roundtrip)).not.toContain("teacher-forged");
+        expect(JSON.stringify(roundtrip)).not.toContain("reviewedAt");
+        expect(raw[1].__proto__.reviewStatus).toBe("reviewed");
+        expect(Object.hasOwn(result.session.subQuestionAnswers[1], "__proto__")).toBe(true);
+        expect(JSON.parse(JSON.stringify(result.session.subQuestionAnswers))).toEqual(roundtrip);
+    });
+
+    it("preserves normalized imported IDs with a uniqueness suffix", async () => {
+        const normalizedId = `${"q".repeat(100)}-2`;
+        const rpc = vi.fn(async () => ({ data: [rpcState], error: null }));
+        const subQuestionAnswers = { 1: { [normalizedId]: { schemaVersion: 1 as const, body: "Reason", reviewStatus: "needs_review" as const } } };
+        await expect(checkpointStudentAttemptSessionWithGateway({ rpc }, { ...checkpointInput, subQuestionAnswers })).resolves.toMatchObject({ status: "active" });
+        expect(rpc).toHaveBeenCalledWith("omr_checkpoint_attempt_session_v2", expect.objectContaining({ p_sub_question_answers: subQuestionAnswers }));
+    });
+
+    it("validates mutation scope before dereferencing runtime inputs", async () => {
+        const rpc = vi.fn();
+        const operations = [checkpointStudentAttemptSessionWithGateway, takeoverStudentAttemptSessionWithGateway, heartbeatStudentAttemptSessionWithGateway, prepareStudentAttemptSessionSubmitWithGateway, commitStudentAttemptSessionSubmitWithGateway];
+        for (const operation of operations) {
+            for (const input of [null, [], { ...checkpointInput, newLeaseTokenHash: "new", examId: "" }, { ...checkpointInput, newLeaseTokenHash: "new", ownerStudentId: "x".repeat(257) }]) {
+                await expect(operation({ rpc }, input as never)).resolves.toEqual({ status: "invalid" });
+            }
+        }
+        expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        { status: "unknown" }, { revision: "1" }, { lease_epoch: Number.MAX_SAFE_INTEGER + 1 },
+        { deadline_at: "invalid" }, { server_now: undefined }, { status: "submitted", submitted_attempt_id: null },
+    ])("does not advertise a usable heartbeat for malformed database state %j", async override => {
+        const rpc = vi.fn(async () => ({ data: [{ ...rpcState, ...override }], error: null }));
+        await expect(heartbeatStudentAttemptSessionWithGateway({ rpc }, checkpointInput)).resolves.toEqual({ status: "service_unavailable" });
+    });
+
+    it("retains authoritative valid heartbeat state", async () => {
+        const rpc = vi.fn(async () => ({ data: [rpcState], error: null }));
+        await expect(heartbeatStudentAttemptSessionWithGateway({ rpc }, checkpointInput)).resolves.toEqual({ status: "active", revision: 1, leaseEpoch: 1, deadlineAt: rpcState.deadline_at, serverNow: rpcState.server_now, submittedAttemptId: undefined });
+    });
+});

@@ -753,7 +753,7 @@ function TeacherDashboard() {
         if (published && nextSyncStatus.kind === "error" && options.notifyOnError === true) {
             toast.info(
                 "로컬 데이터 기준으로 표시 중",
-                "Supabase 동기화가 일부 지연되고 있어 시험·제출·명단은 다음 로드 때 다시 재시도합니다."
+                "서버 동기화가 일부 지연되고 있어 시험·제출·명단은 다음 로드 때 다시 재시도합니다."
             );
         }
         if (published && options.notifyOnSuccess && nextSyncStatus.kind !== "error") {
@@ -1137,19 +1137,19 @@ function TeacherDashboard() {
             icon: CheckCircle2,
             background: 'rgba(16,185,129,0.1)',
             border: 'rgba(16,185,129,0.24)',
-            color: 'var(--success)',
+            color: 'var(--text-success)',
         },
         attention: {
             icon: AlertTriangle,
             background: 'rgba(245,158,11,0.12)',
             border: 'rgba(245,158,11,0.26)',
-            color: 'var(--warning)',
+            color: 'var(--text-warning)',
         },
         blocked: {
             icon: AlertTriangle,
             background: 'rgba(239,68,68,0.1)',
             border: 'rgba(239,68,68,0.24)',
-            color: 'var(--error)',
+            color: 'var(--text-error)',
         },
     }[analyticsDataHealth.kind];
     const DataHealthIcon = dataHealthTone.icon;
@@ -1199,7 +1199,7 @@ function TeacherDashboard() {
             actions.push({
                 key: "refresh",
                 label: "데이터 다시 확인",
-                detail: "저장소와 Supabase 동기화 상태를 다시 읽습니다.",
+                detail: "저장소와 서버 동기화 상태를 다시 읽습니다.",
                 tone: "muted",
             });
             return actions;
@@ -1409,7 +1409,7 @@ function TeacherDashboard() {
 
             <main id="main-content" tabIndex={-1} aria-label="분석 센터" className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
                 {/* Welcome Section */}
-                <div className="dashboard-welcome">
+                <div className={`dashboard-welcome${activeTab !== "overview" ? " dashboard-analysis-welcome" : ""}`}>
                     <div className="dashboard-title-block mobile-section-stack" style={{ minWidth: 0 }}>
                         <h1 className="dashboard-title" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--foreground)' }}>
                             {dashboardHeading.title}
@@ -1443,7 +1443,7 @@ function TeacherDashboard() {
                                 onClick={handleRefreshDashboardData}
                                 disabled={isRefreshingDashboardData}
                                 aria-label="동기화 다시 확인"
-                                title="로컬과 Supabase 데이터를 다시 확인합니다"
+                                title="이 기기와 서버의 데이터를 다시 확인합니다"
                                 style={{
                                     width: 44,
                                     height: 44,
@@ -1461,7 +1461,7 @@ function TeacherDashboard() {
                                 <RefreshCw size={14} className={isRefreshingDashboardData ? "animate-spin" : undefined} />
                             </button>
                         </div>
-                        {dashboardAllowsAnalysis && analyticsDataHealth.kind !== "empty" && <div
+                        {dashboardAllowsAnalysis && activeTab === "overview" && analyticsDataHealth.kind !== "empty" && <div
                             aria-label="분석 데이터 상태"
                             title={analyticsDataHealth.issues[0]?.detail || analyticsDataHealth.detail}
                             style={{ minWidth: 0 }}
@@ -1525,12 +1525,10 @@ function TeacherDashboard() {
                 )}
 
                 {dashboardAllowsAnalysis && dataMode === "real" && analyticsDataHealth.kind !== "ready" && analyticsDataHealth.kind !== "empty" && (
-                    <div
-                        role="status"
+                    <details
+                        open={analyticsDataHealth.kind === "blocked" ? true : undefined}
                         aria-label="분석 데이터 상태"
                         style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'minmax(0, 1.2fr) minmax(220px, 1fr)',
                             gap: '0.75rem',
                             alignItems: 'stretch',
                             padding: '0.65rem 0.85rem',
@@ -1542,13 +1540,18 @@ function TeacherDashboard() {
                         }}
                         className="dashboard-data-health"
                     >
+                        <summary className="dashboard-data-health-summary">
+                            <span role="status" aria-live="polite" aria-atomic="true" style={{ fontWeight: 850, color: dataHealthTone.color }}>{analyticsDataHealth.label} · {analyticsDataHealth.score}점</span>
+                            <span style={{ color: 'var(--foreground)', fontSize: '0.8rem' }}> · {analyticsDataHealth.issues.length}개 항목 · 상세 확인</span>
+                        </summary>
+                        <div className="dashboard-data-health-detail">
                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6rem', minWidth: 0 }}>
                             <DataHealthIcon size={16} color={dataHealthTone.color} style={{ flexShrink: 0, marginTop: 2 }} />
                             <div style={{ minWidth: 0 }}>
                                 <div style={{ fontSize: '0.8rem', fontWeight: 900, color: dataHealthTone.color, marginBottom: '0.15rem' }}>
                                     {analyticsDataHealth.label}
                                 </div>
-                                <p style={{ fontSize: '0.76rem', color: 'var(--muted)', lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                                <p style={{ fontSize: '0.76rem', color: 'var(--foreground)', lineHeight: 1.45, wordBreak: 'keep-all' }}>
                                     시험 {analyticsDataHealth.totalExamCount}개, 제출 {analyticsDataHealth.totalAttemptCount}건, 문항 {analyticsDataHealth.totalQuestionCount}개 기준입니다. {analyticsDataHealth.detail}
                                 </p>
                             </div>
@@ -1575,7 +1578,7 @@ function TeacherDashboard() {
                                         flexShrink: 0,
                                         fontSize: 'var(--type-caption)',
                                         fontWeight: 900,
-                                        color: issue.severity === "error" ? 'var(--error)' : 'var(--warning)',
+                                        color: issue.severity === "error" ? 'var(--text-error)' : 'var(--text-warning)',
                                     }}>
                                         {issue.count}건
                                     </span>
@@ -1650,76 +1653,9 @@ function TeacherDashboard() {
                                 </div>
                             )}
                         </div>
-                    </div>
+                        </div>
+                    </details>
                 )}
-
-                {dashboardHasRenderableData && !isMockupAccount && teacherDataCapability === "fresh_mutable" && activeTab !== "overview" && activeTab !== "exam" && <div
-                    className="dashboard-analysis-actions"
-                    aria-label="분석 다음 조치"
-                    style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))',
-                        gap: '0.6rem',
-                        marginBottom: '1rem',
-                    }}
-                >
-                    {dashboardAnalysisActions.map(action => {
-                        const actionTone = action.tone === "primary"
-                            ? { border: 'rgba(99,102,241,0.24)', background: 'rgba(99,102,241,0.08)', color: 'var(--primary)' }
-                            : action.tone === "warning"
-                                ? { border: 'rgba(245,158,11,0.28)', background: 'rgba(245,158,11,0.09)', color: 'var(--warning)' }
-                                : { border: 'var(--border)', background: 'var(--surface)', color: 'var(--foreground)' };
-                        const content = (
-                            <>
-                                <span style={{ display: 'block', color: actionTone.color, fontSize: '0.82rem', fontWeight: 950, marginBottom: '0.15rem' }}>
-                                    {action.label}
-                                </span>
-                                <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.72rem', lineHeight: 1.4, wordBreak: 'keep-all' }}>
-                                    {action.detail}
-                                </span>
-                            </>
-                        );
-                        const sharedStyle = {
-                            width: '100%',
-                            minHeight: 56,
-                            padding: '0.6rem 0.8rem',
-                            borderRadius: 'var(--radius-lg)',
-                            border: `1px solid ${actionTone.border}`,
-                            background: actionTone.background,
-                            textAlign: 'left' as const,
-                            cursor: 'pointer',
-                        };
-
-                        if (action.key === "create") {
-                            return (
-                                <Link key={action.key} href="/create" style={sharedStyle}>
-                                    {content}
-                                </Link>
-                            );
-                        }
-
-                        return (
-                            <button
-                                key={action.key}
-                                type="button"
-                                onClick={() => {
-                                    if (action.key === "exam") applyTab("exam", selectedExamIdForAnalytics);
-                                    if (action.key === "student") applyTab("student");
-                                    if (action.key === "repair") void handleRepairAnalyticsData();
-                                    if (action.key === "refresh") void handleRefreshDashboardData();
-                                }}
-                                disabled={(action.key === "repair" && isRepairingAnalyticsData) || (action.key === "refresh" && isRefreshingDashboardData)}
-                                style={{
-                                    ...sharedStyle,
-                                    opacity: (action.key === "repair" && isRepairingAnalyticsData) || (action.key === "refresh" && isRefreshingDashboardData) ? 0.62 : 1,
-                                    cursor: (action.key === "repair" && isRepairingAnalyticsData) || (action.key === "refresh" && isRefreshingDashboardData) ? 'wait' : 'pointer',
-                                }}
-                            >
-                                {content}
-                            </button>
-                        );
-                    })}
-                </div>}
 
                 {isDashboardResolving ? (
                     <AnalyticsTabSkeleton />
@@ -1867,6 +1803,75 @@ function TeacherDashboard() {
                         </div>
                     </>
                 )}
+
+                {dashboardHasRenderableData && !isMockupAccount && teacherDataCapability === "fresh_mutable" && activeTab !== "overview" && activeTab !== "exam" && <div
+                    className="dashboard-analysis-actions"
+                    aria-label="분석 다음 조치"
+                    style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))',
+                        gap: '0.6rem',
+                        marginBottom: '1rem',
+                    }}
+                >
+                    {dashboardAnalysisActions.filter(action => action.key !== activeTab).map(action => {
+                        const actionTone = action.tone === "primary"
+                            ? { border: 'rgba(99,102,241,0.24)', background: 'rgba(99,102,241,0.08)', color: 'var(--primary)' }
+                            : action.tone === "warning"
+                                ? { border: 'rgba(245,158,11,0.28)', background: 'rgba(245,158,11,0.09)', color: 'var(--warning)' }
+                                : { border: 'var(--border)', background: 'var(--surface)', color: 'var(--foreground)' };
+                        const content = (
+                            <>
+                                <span style={{ display: 'block', color: actionTone.color, fontSize: '0.82rem', fontWeight: 950, marginBottom: '0.15rem' }}>
+                                    {action.label}
+                                </span>
+                                <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.72rem', lineHeight: 1.4, wordBreak: 'keep-all' }}>
+                                    {action.detail}
+                                </span>
+                            </>
+                        );
+                        const sharedStyle = {
+                            width: '100%',
+                            minHeight: 56,
+                            padding: '0.6rem 0.8rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: `1px solid ${actionTone.border}`,
+                            background: actionTone.background,
+                            textAlign: 'left' as const,
+                            cursor: 'pointer',
+                        };
+
+                        if (action.key === "create") {
+                            return (
+                                <Link key={action.key} href="/create" style={sharedStyle}>
+                                    {content}
+                                </Link>
+                            );
+                        }
+
+                        return (
+                            <button
+                                key={action.key}
+                                type="button"
+                                onClick={() => {
+                                    if (action.key === "exam") applyTab("exam", selectedExamIdForAnalytics);
+                                    if (action.key === "student") applyTab("student");
+                                    if (action.key === "repair") void handleRepairAnalyticsData();
+                                    if (action.key === "refresh") void handleRefreshDashboardData();
+                                }}
+                                disabled={(action.key === "repair" && isRepairingAnalyticsData) || (action.key === "refresh" && isRefreshingDashboardData)}
+                                style={{
+                                    ...sharedStyle,
+                                    opacity: (action.key === "repair" && isRepairingAnalyticsData) || (action.key === "refresh" && isRefreshingDashboardData) ? 0.62 : 1,
+                                    cursor: (action.key === "repair" && isRepairingAnalyticsData) || (action.key === "refresh" && isRefreshingDashboardData) ? 'wait' : 'pointer',
+                                }}
+                            >
+                                {content}
+                            </button>
+                        );
+                    })}
+                </div>}
+
 
             </main>
             </div>

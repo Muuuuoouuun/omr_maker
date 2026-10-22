@@ -5,7 +5,8 @@ import {
     gradeStudentAttemptOnServer,
     gradeTeacherForcedAttemptOnServer,
 } from "./serverAttemptGrading";
-import { attestCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
+import { attestCanonicalQuestionResultEvidence, buildCanonicalQuestionResultEvidence } from "./canonicalQuestionResultManifest";
+import { attemptFromSupabaseRow, attemptToSupabaseRow, questionResultRowsForAttempt } from "./omrPersistence";
 
 const exam: Exam = {
     id: "exam-1",
@@ -35,6 +36,79 @@ const ticket: StudentAttemptTicketClaims = {
 };
 
 describe("server attempt grading", () => {
+    it.each(["registered", "temporary", "guest"] as const)(
+        "seals the hydrated %s class before teacher force-finish serialization",
+        identityType => {
+            const stored: Attempt = {
+                id: `force-scope-${identityType}`,
+                examId: exam.id,
+                examTitle: exam.title,
+                organizationId: "org-1",
+                groupId: "class-force",
+                groupName: "강제 제출 반",
+                studentName: "학생",
+                studentId: identityType === "guest" ? "guest:force-guest" : "student-force",
+                ...(identityType === "guest" ? { guestId: "force-guest" } : {}),
+                identityType,
+                status: "in_progress",
+                startedAt: "2026-07-14T00:00:00.000Z",
+                finishedAt: "2026-07-14T00:00:00.000Z",
+                answers: { 1: 3, 2: 1 },
+                score: 0,
+                totalScore: 0,
+            };
+            const json = (value: unknown) => JSON.parse(JSON.stringify(value));
+            const hydrated = attemptFromSupabaseRow(json(attemptToSupabaseRow(stored)));
+            const result = gradeTeacherForcedAttemptOnServer(
+                { ...exam, classId: "class-force" }, hydrated, "2026-07-14T00:10:00.000Z",
+            );
+            expect(result.ok).toBe(true);
+            if (!result.ok) throw new Error("Expected teacher force-finish grading");
+            const parent = attemptToSupabaseRow(result.attempt);
+            const children = questionResultRowsForAttempt(result.attempt);
+            expect(parent.class_id).toBe("class-force");
+            expect(json(children.map(child => child.payload))).toEqual(json(parent.payload.questionResults));
+            expect(buildCanonicalQuestionResultEvidence(parent.payload, children.map(child => child.payload)))
+                .toEqual(buildCanonicalQuestionResultEvidence(result.attempt, result.attempt.questionResults!));
+            if (identityType === "guest") {
+                expect(parent.student_profile_id).toBeNull();
+                expect(json(parent.payload)).not.toHaveProperty("studentProfileId");
+            }
+        },
+    );
+
+    it.each(["registered", "temporary", "guest"] as const)(
+        "seals %s ticket scope before persistence normalizes canonical child rows",
+        identityType => {
+            const scopedTicket: StudentAttemptTicketClaims = {
+                ...ticket,
+                identityType,
+                studentId: identityType === "guest" ? "guest:ticket-guest" : ticket.studentId,
+                guestId: identityType === "guest" ? "ticket-guest" : undefined,
+                groupId: "class-ticket",
+                groupName: "티켓 반",
+            };
+            const result = gradeStudentAttemptOnServer(exam, scopedTicket, {
+                ticket: "signed-ticket",
+                answers: { 1: 3, 2: 1 },
+            }, 2_000);
+            expect(result.ok).toBe(true);
+            if (!result.ok) throw new Error("Expected server grading");
+            const row = attemptToSupabaseRow(result.attempt);
+            const children = questionResultRowsForAttempt(result.attempt);
+            const json = (value: unknown) => JSON.parse(JSON.stringify(value));
+            expect(json(children.map(child => child.payload))).toEqual(json(row.payload.questionResults));
+            expect(row.class_id).toBe("class-ticket");
+            expect(row.student_profile_id).toBe(identityType === "guest" ? null : scopedTicket.studentId);
+            expect(buildCanonicalQuestionResultEvidence(row.payload, children.map(child => child.payload)))
+                .toEqual(buildCanonicalQuestionResultEvidence(result.attempt, result.attempt.questionResults!));
+            if (identityType === "guest") {
+                expect(json(row.payload)).not.toHaveProperty("studentProfileId");
+                expect(json(children[0].payload)).not.toHaveProperty("studentProfileId");
+            }
+        },
+    );
+
     it("derives the official score and result rows only from the canonical exam", () => {
         const result = gradeStudentAttemptOnServer(exam, ticket, {
             ticket: "signed-ticket",

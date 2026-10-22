@@ -28,6 +28,8 @@ import {
     buildTeacherCanonicalAnalyticsSnapshot,
 } from "@/lib/teacherCanonicalAnalyticsSnapshot.server";
 import { currentTeacherCanonicalAnalyticsSnapshot } from "@/lib/teacherCanonicalAnalyticsSnapshotContract";
+import { buildServerAttempt } from "@/lib/studentExamServerGrading";
+import type { StudentServerIdentity } from "@/lib/studentServerSession";
 
 const submittedExam: Exam = {
     id: "exam-immutable",
@@ -71,6 +73,50 @@ function canonicalAttempt(overrides: Partial<Attempt> = {}): Attempt {
 }
 
 describe("canonical submission grading evidence", () => {
+    it.each(["registered", "temporary", "guest"] as const)(
+        "keeps %s server grading evidence identical to persisted child payloads",
+        identityType => {
+            const identity: StudentServerIdentity = {
+                kind: identityType === "guest" ? "guest" : "student",
+                ...(identityType === "guest" ? { guestId: "guest-1" } : { studentId: "student-1" }),
+                name: "학생",
+                identityType,
+                organizationId: "org-1",
+                groupId: "authenticated-class",
+                groupName: "A반",
+                issuedAt: 0,
+                expiresAt: Number.MAX_SAFE_INTEGER,
+            };
+            const attempt = buildServerAttempt({
+                examId: submittedExam.id,
+                submissionId: "canonical-scope-ticket",
+                answers: { 1: 2, 2: 4 },
+                startedAt: "2026-08-09T00:00:00.000Z",
+            }, { ...submittedExam, organizationId: "org-1", classId: "exam-default-class" },
+            identity, "attempt-canonical-scope", "2026-08-09T00:10:00.000Z");
+            const parent = attemptToSupabaseRow(attempt);
+            const children = questionResultRowsForAttempt(attempt);
+            const childPayloads = JSON.parse(JSON.stringify(children.map(row => row.payload))) as QuestionResult[];
+            const embedded = JSON.parse(JSON.stringify(parent.payload.questionResults));
+
+            expect(attempt.classId).toBe("authenticated-class");
+            expect(childPayloads).toEqual(embedded);
+            expect(buildCanonicalQuestionResultEvidence(parent.payload, childPayloads)).toEqual({
+                questionResultsQuestionCount: attempt.questionResultsQuestionCount,
+                questionResultsDefinitionManifestHash: attempt.questionResultsDefinitionManifestHash,
+                questionResultsFullEvidenceHash: attempt.questionResultsFullEvidenceHash,
+            });
+            if (identityType === "guest") {
+                expect(attempt).not.toHaveProperty("studentProfileId");
+                expect(childPayloads.every(row => !("studentProfileId" in row))).toBe(true);
+                expect(parent.student_profile_id).toBeNull();
+            } else {
+                expect(attempt.studentProfileId).toBe("student-1");
+                expect(childPayloads.every(row => row.studentProfileId === "student-1")).toBe(true);
+            }
+        },
+    );
+
     it("keeps the hash verifier out of client-safe persistence and injects it only at server read boundaries", () => {
         const persistenceSource = readFileSync(resolve(process.cwd(), "src/lib/omrPersistence.ts"), "utf8");
         const listProjectionSource = readFileSync(resolve(process.cwd(), "src/lib/supabaseListProjection.ts"), "utf8");

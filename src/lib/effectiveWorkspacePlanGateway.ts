@@ -1,3 +1,4 @@
+import { LEGACY_RECOVERY_ORGANIZATION_PATTERN, type ProvisionedTeacherEntitlementMode } from "./provisionedTeacherEntitlement";
 import "next/dist/compiled/server-only";
 
 import type { PlanKey } from "@/types/omr";
@@ -14,7 +15,7 @@ export interface EffectiveWorkspacePlanRead {
     plan: PlanKey;
     grantId?: string;
     expiresAt?: string;
-    entitlementMode?: "permanent_demo";
+    entitlementMode?: ProvisionedTeacherEntitlementMode;
 }
 
 const ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16}|(?:pilot_org_|demo_org_)[a-f0-9]{24})$/;
@@ -59,6 +60,10 @@ export async function readEffectiveWorkspacePlan(
             if (row.entitlementMode !== "permanent_demo" || row.grantId !== null || row.expiresAt !== null
                 || (row.plan !== "free" && row.plan !== "pro" && row.plan !== "academy")) return { authoritative: false, plan: "free" };
             return { authoritative: true, plan: row.plan, entitlementMode: "permanent_demo" };
+        }
+        if (row.entitlementMode === "legacy_recovery" && LEGACY_RECOVERY_ORGANIZATION_PATTERN.test(organizationId)
+            && row.plan === "academy" && row.grantId === null && row.expiresAt === null) {
+            return { authoritative: true, plan: "academy", entitlementMode: "legacy_recovery" };
         }
         if (row.entitlementMode !== undefined) return { authoritative: false, plan: "free" };
         if (row.plan === "free" && row.grantId === null && row.expiresAt === null) {

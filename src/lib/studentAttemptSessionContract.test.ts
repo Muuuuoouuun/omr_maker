@@ -97,6 +97,22 @@ describe("student attempt session contract", () => {
         });
     });
 
+    it.each(["__proto__", "constructor", `${"q".repeat(100)}-2`])(
+        "preserves imported subquestion ID %s across the session JSON roundtrip", subQuestionId => {
+            const answer = { schemaVersion: 1, body: "Imported question response", reviewStatus: "needs_review" };
+            const parsed = studentAttemptSessionStateFromRpc({
+                session_id: "session-1", exam_id: "exam-1", status: "in_progress", revision: 1, lease_epoch: 1,
+                started_at: "2026-10-21T00:00:00.000Z", deadline_at: "2026-10-21T01:00:00.000Z",
+                server_now: "2026-10-21T00:01:00.000Z", allowed_question_ids: [1], answers: {},
+                sub_question_answers: { 1: Object.fromEntries([[subQuestionId, answer]]) },
+            });
+            const responses = parsed!.subQuestionAnswers[1];
+            expect(Object.hasOwn(responses, subQuestionId)).toBe(true);
+            expect(Object.getPrototypeOf(responses)).toBe(Object.prototype);
+            expect(JSON.parse(JSON.stringify(responses))[subQuestionId]).toEqual(answer);
+        },
+    );
+
     it("restores only canonical bounded handwriting from the lease checkpoint", () => {
         const stroke = JSON.stringify({
             mode: "pen",

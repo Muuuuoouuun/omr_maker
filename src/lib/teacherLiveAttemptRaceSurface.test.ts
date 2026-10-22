@@ -12,7 +12,7 @@ describe("teacher live selected-attempt request fencing", () => {
         expect(livePage).toContain("selectedAttemptRequestGenerationRef");
         expect(livePage).toContain("selectedExamIdRef");
         expect(livePage).toMatch(
-            /selectedAttemptDetails\.examId === selectedExamId[\s\S]*selectedAttemptDetails\.requestGeneration === selectedAttemptRequestGenerationRef\.current/,
+            /selectedAttemptDetails\.examId === selectedExamId[\s\S]*selectedAttemptDetails\.requestGeneration === selectedAttemptRequestGeneration;/,
         );
     });
 

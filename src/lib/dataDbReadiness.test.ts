@@ -14,7 +14,7 @@ describe("data DB readiness", () => {
 
         expect(summary).toMatchObject({
             label: "로컬 저장",
-            detail: "Supabase 미연결",
+            detail: "서버 미연결",
             tombstoneCount: 0,
         });
         expect(summary.metrics.map(metric => [metric.key, metric.value])).toEqual([

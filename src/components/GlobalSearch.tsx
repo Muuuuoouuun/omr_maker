@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search, PlusCircle, Activity, Users, BarChart3, Settings as SettingsIcon, CreditCard, FileText, LayoutDashboard, X, CornerDownLeft } from "lucide-react";
 import { readLocalExams } from "@/lib/omrPersistence";
@@ -43,6 +43,61 @@ const GROUP_LABELS: Record<SearchItem["group"], string> = {
 const GROUP_ORDER: SearchItem["group"][] = ["page", "exam", "group", "student", "setting"];
 const groupRank = (group: SearchItem["group"]) => GROUP_ORDER.indexOf(group);
 
+// Read browser storage only when a user opens the palette.
+function readDynamicItems(): SearchItem[] {
+    try {
+        const items: SearchItem[] = [];
+        // Exams
+        readLocalExams().slice(0, 50).forEach(ex => {
+            items.push({
+                id: `exam-${ex.id}`,
+                title: ex.title,
+                subtitle: `${ex.questions.length}문항 · 시험`,
+                href: `/teacher/dashboard?tab=exam&examId=${encodeURIComponent(ex.id)}`,
+                icon: <FileText size={16} />,
+                group: "exam",
+                keywords: `exam ${ex.title}`,
+            });
+        });
+        // Groups / classes — land on the "반 · 그룹" tab with that group's
+        // profile opened directly (same view as clicking "분석" on its card).
+        try {
+            readRosterGroups(localStorage).slice(0, 50).forEach(g => {
+                items.push({
+                    id: `group-${g.id}`,
+                    title: g.name,
+                    subtitle: `${g.count}명 · ${g.region || "지역 미설정"}`,
+                    href: `/teacher/users?tab=groups&groupId=${encodeURIComponent(g.id)}`,
+                    icon: <Users size={16} />,
+                    group: "group",
+                    keywords: `group class 반 그룹 ${g.name} ${g.region || ""}`,
+                });
+            });
+        } catch {
+            // ignore
+        }
+        // Students — land on the "학생" tab with that student's detail panel open.
+        try {
+            readRosterStudents(localStorage).slice(0, 50).forEach(s => {
+                items.push({
+                    id: `student-${s.id}`,
+                    title: s.name,
+                    subtitle: `${s.group} · ${s.email || "이메일 없음"}`,
+                    href: `/teacher/users?tab=students&studentId=${encodeURIComponent(s.id)}`,
+                    icon: <Users size={16} />,
+                    group: "student",
+                    keywords: `student ${s.name} ${s.email} ${s.group}`,
+                });
+            });
+        } catch {
+            // ignore
+        }
+        return items;
+    } catch {
+        return [];
+    }
+}
+
 export default function GlobalSearch() {
     const router = useRouter();
     const [open, setOpen] = useState(false);
@@ -54,93 +109,42 @@ export default function GlobalSearch() {
     // Element that held focus before the palette opened, so we can restore it on close.
     const triggerRef = useRef<HTMLElement | null>(null);
 
+    const openSearch = useCallback(() => {
+        setDynamic(readDynamicItems());
+        setActiveIdx(0);
+        setOpen(true);
+    }, []);
+
     // Keyboard: Cmd+K or Ctrl+K
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
                 e.preventDefault();
-                setOpen(prev => !prev);
+                if (open) setOpen(false);
+                else openSearch();
             } else if (e.key === "Escape" && open) {
                 setOpen(false);
             }
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [open]);
+    }, [open, openSearch]);
 
     useEffect(() => {
-        const openSearch = () => setOpen(true);
         window.addEventListener("omr:open-search", openSearch);
         return () => window.removeEventListener("omr:open-search", openSearch);
-    }, []);
+    }, [openSearch]);
 
     // Remember the trigger on open and restore focus to it on close, so keyboard
     // users are not dropped back to the top of the page after the palette closes.
     useEffect(() => {
         if (open) {
             triggerRef.current = (document.activeElement as HTMLElement) ?? null;
+            inputRef.current?.focus();
         } else if (triggerRef.current) {
             triggerRef.current.focus?.();
             triggerRef.current = null;
         }
-    }, [open]);
-
-    // When opening, load dynamic items from localStorage (exams + students)
-    useEffect(() => {
-        if (!open) return;
-        setActiveIdx(0);
-        try {
-            const items: SearchItem[] = [];
-            // Exams
-            readLocalExams().slice(0, 50).forEach(ex => {
-                items.push({
-                    id: `exam-${ex.id}`,
-                    title: ex.title,
-                    subtitle: `${ex.questions.length}문항 · 시험`,
-                    href: `/teacher/dashboard?tab=exam&examId=${encodeURIComponent(ex.id)}`,
-                    icon: <FileText size={16} />,
-                    group: "exam",
-                    keywords: `exam ${ex.title}`,
-                });
-            });
-            // Groups / classes — land on the "반 · 그룹" tab with that group's
-            // profile opened directly (same view as clicking "분석" on its card).
-            try {
-                readRosterGroups(localStorage).slice(0, 50).forEach(g => {
-                    items.push({
-                        id: `group-${g.id}`,
-                        title: g.name,
-                        subtitle: `${g.count}명 · ${g.region || "지역 미설정"}`,
-                        href: `/teacher/users?tab=groups&groupId=${encodeURIComponent(g.id)}`,
-                        icon: <Users size={16} />,
-                        group: "group",
-                        keywords: `group class 반 그룹 ${g.name} ${g.region || ""}`,
-                    });
-                });
-            } catch {
-                // ignore
-            }
-            // Students — land on the "학생" tab with that student's detail panel open.
-            try {
-                readRosterStudents(localStorage).slice(0, 50).forEach(s => {
-                    items.push({
-                        id: `student-${s.id}`,
-                        title: s.name,
-                        subtitle: `${s.group} · ${s.email || "이메일 없음"}`,
-                        href: `/teacher/users?tab=students&studentId=${encodeURIComponent(s.id)}`,
-                        icon: <Users size={16} />,
-                        group: "student",
-                        keywords: `student ${s.name} ${s.email} ${s.group}`,
-                    });
-                });
-            } catch {
-                // ignore
-            }
-            setDynamic(items);
-        } catch {
-            setDynamic([]);
-        }
-        setTimeout(() => inputRef.current?.focus(), 50);
     }, [open]);
 
     const all = useMemo(() => [...STATIC_ITEMS, ...dynamic], [dynamic]);
@@ -171,10 +175,7 @@ export default function GlobalSearch() {
         return by;
     }, [filtered]);
 
-    // Keep activeIdx in range
-    useEffect(() => {
-        if (activeIdx >= filtered.length) setActiveIdx(Math.max(0, filtered.length - 1));
-    }, [filtered.length, activeIdx]);
+    const currentIndex = Math.max(0, Math.min(activeIdx, filtered.length - 1));
 
     const go = (item: SearchItem) => {
         setOpen(false);
@@ -208,13 +209,13 @@ export default function GlobalSearch() {
     const onInputKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === "ArrowDown") {
             e.preventDefault();
-            setActiveIdx(i => Math.min(filtered.length - 1, i + 1));
+            setActiveIdx(Math.min(Math.max(0, filtered.length - 1), currentIndex + 1));
         } else if (e.key === "ArrowUp") {
             e.preventDefault();
-            setActiveIdx(i => Math.max(0, i - 1));
+            setActiveIdx(Math.max(0, currentIndex - 1));
         } else if (e.key === "Enter") {
             e.preventDefault();
-            const item = filtered[activeIdx];
+            const item = filtered[currentIndex];
             if (item) go(item);
         }
     };
@@ -253,14 +254,14 @@ export default function GlobalSearch() {
                     <input
                         ref={inputRef}
                         value={query}
-                        onChange={(e) => setQuery(e.target.value)}
+                        onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
                         onKeyDown={onInputKey}
                         placeholder="빠른 검색... (페이지, 시험, 반, 학생, 설정)"
                         aria-label="빠른 검색 입력"
                         role="combobox"
                         aria-expanded={filtered.length > 0}
                         aria-controls="global-search-listbox"
-                        aria-activedescendant={filtered[activeIdx] ? `gs-opt-${filtered[activeIdx].id}` : undefined}
+                        aria-activedescendant={filtered[currentIndex] ? `gs-opt-${filtered[currentIndex].id}` : undefined}
                         style={{
                             flex: 1, background: 'transparent', border: 'none', outline: 'none',
                             color: 'var(--foreground)', fontSize: '1rem'
@@ -299,14 +300,15 @@ export default function GlobalSearch() {
                                     </div>
                                     {items.map(item => {
                                         globalIdx++;
-                                        const isActive = globalIdx === activeIdx;
+                                        const itemIndex = globalIdx;
+                                        const isActive = itemIndex === currentIndex;
                                         return (
                                             <button
                                                 key={item.id}
                                                 id={`gs-opt-${item.id}`}
                                                 role="option"
                                                 aria-selected={isActive}
-                                                onMouseEnter={() => setActiveIdx(globalIdx)}
+                                                onMouseEnter={() => setActiveIdx(itemIndex)}
                                                 onClick={() => go(item)}
                                                 style={{
                                                     width: '100%', display: 'flex', alignItems: 'center', gap: '0.85rem',

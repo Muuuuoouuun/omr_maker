@@ -99,7 +99,7 @@ describe("persistence health", () => {
         ])).toMatchObject({
             kind: "local",
             label: "로컬 저장",
-            detail: "Supabase 미연결",
+            detail: "서버 미연결",
             pendingCount: 0,
             remoteLoaded: false,
         });
@@ -111,7 +111,7 @@ describe("persistence health", () => {
             { remoteLoaded: true, remoteSynced: true },
         ])).toMatchObject({
             kind: "synced",
-            label: "Supabase 동기화",
+            label: "서버 동기화",
             detail: "최신 데이터 기준",
             remoteLoaded: true,
         });

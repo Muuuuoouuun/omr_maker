@@ -118,7 +118,7 @@ export function summarizePersistenceHealth(sources: PersistenceHealthSource[]): 
         return {
             kind: "local",
             label: "로컬 저장",
-            detail: "Supabase 미연결",
+            detail: "서버 미연결",
             pendingCount,
             remoteLoaded,
         };
@@ -150,7 +150,7 @@ export function summarizePersistenceHealth(sources: PersistenceHealthSource[]): 
     if (remoteSynced) {
         return {
             kind: "synced",
-            label: "Supabase 동기화",
+            label: "서버 동기화",
             detail: "최신 데이터 기준",
             pendingCount,
             remoteLoaded,

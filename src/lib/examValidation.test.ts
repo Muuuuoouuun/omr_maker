@@ -28,6 +28,54 @@ const validQuestions: Question[] = [
 ];
 
 describe("exam validation", () => {
+    it.each([NaN, Infinity, -Infinity, 1.5, "2"])("blocks an unusable answer imported into a draft (%s)", answer => {
+        const summary = validateExamDraft({
+            title: "가져온 시험 검증",
+            questions: [{ ...validQuestions[0], answer: answer as number }],
+        });
+        expect(summary.isPublishable).toBe(false);
+        expect(summary.answeredCount).toBe(0);
+        expect(summary.errors).toContainEqual(expect.objectContaining({ code: "answer_out_of_range", questionIds: [1] }));
+    });
+
+    it.each([0, -1, 1.5, NaN, Number.MAX_SAFE_INTEGER + 1])("blocks invalid answer-map identifiers (%s)", id => {
+        const summary = validateExamDraft({ title: "식별자 검증", questions: [{ ...validQuestions[0], id }] });
+        expect(summary.isPublishable).toBe(false);
+        expect(summary.errors.map(error => error.code)).toContain("invalid_question_ids");
+    });
+
+    it("does not silently publish unsupported imported choice counts as five choices", () => {
+        const summary = validateExamDraft({ title: "선택지 검증", questions: [{ ...validQuestions[0], choices: 3 as 4 }] });
+        expect(summary.isPublishable).toBe(false);
+        expect(summary.errors.map(error => error.code)).toContain("invalid_choice_counts");
+    });
+
+    it("enforces the displayed one-minute minimum without excluding fractional minutes above it", () => {
+        const draft = { title: "시간 검증", questions: validQuestions };
+        expect(validateExamDraft({ ...draft, durationMin: 0.5 }).errors.map(error => error.code)).toContain("invalid_duration");
+        expect(validateExamDraft({ ...draft, durationMin: 1.5 }).isPublishable).toBe(true);
+    });
+
+    it("warns about a target total mismatch without blocking publication", () => {
+        const questions = Array.from({ length: 45 }, (_, index) => ({
+            id: index + 1, number: index + 1, answer: 1, score: 2,
+        }));
+        const summary = validateExamDraft({ title: "국어 배점 검토", questions, targetTotalScore: 100 });
+        expect(summary.totalScore).toBe(90);
+        expect(summary.warnings).toContainEqual(expect.objectContaining({
+            code: "score_target_mismatch", severity: "warning",
+            message: expect.stringContaining("설정 총점 90점이 목표 100점"),
+        }));
+        expect(summary.isPublishable).toBe(true);
+        expect(summary.errors).toHaveLength(0);
+    });
+
+    it.each([8, undefined, "" as const])("does not warn when the target matches or is absent (%s)", targetTotalScore => {
+        const summary = validateExamDraft({ title: "완성된 시험", questions: validQuestions, targetTotalScore });
+        expect(summary.warnings.some(item => item.code === "score_target_mismatch")).toBe(false);
+        expect(summary.isPublishable).toBe(true);
+    });
+
     it("accepts a complete publishable exam draft", () => {
         const summary = validateExamDraft({
             title: "6월 모의고사",

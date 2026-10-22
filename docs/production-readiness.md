@@ -8,6 +8,15 @@
 > 실제(민감) 학생 데이터를 저장하지 마세요. readiness 오류에는 고정된 검사 이름만 기록하고
 > preflight sample, 학생 이름, row id를 포함하지 않습니다.
 
+기존 Academy 조직 복구는
+[운영자 복구 절차](./operator-teacher-provisioning.md#recover-an-existing-legacy-academy-organization)를
+따릅니다. `202610220002_legacy_organization_recovery.sql`과 같은 버전의 앱을 배포하고,
+`legacyOrganizationRecoveryReady=true`, 복구 계정 로그인, 원래 조직·시험 목록과
+Academy 권한을 확인합니다. 복구는 기존 관리자 ID를 재사용하지 않고 새 owner를
+추가하며, private recovery ledger와 감사 기록은 접근 차단 후에도 보존합니다.
+`--dry-run` 검토 digest와 `0600` credential receipt를 사용하고 비밀번호를 로그나
+릴리스 증거에 포함하지 않습니다.
+
 ## 1. Supabase 서버 전용 핸드오프 (실제 학생 데이터 전 필수)
 
 `supabase/production-server-boundary.sql`은 canonical/PII 데이터 평면을
@@ -119,9 +128,11 @@ readiness가 주장하지 않으므로, 별도 스케줄러를 반드시 구성�
 `storage.objects`와 `storage.buckets`는
 [Supabase 플랫폼 권한 문서](https://supabase.com/docs/guides/platform/permissions)의
 요구대로 `supabase_storage_admin` 소유권을 유지합니다. 프로필은 managed table ACL이나
-소유권을 변경하지 않습니다. 대신 `postgres`가 해당 역할을 `SET ROLE`할 수 있는지
-fail-closed로 검사하고, Storage 정책 단계에서만 그 owner로 전환했다가 public 프로필을
-계속하기 전에 `RESET ROLE`합니다.
+소유권을 변경하지 않습니다. `SET ROLE`이 가능하면 Storage 정책 단계에서만 해당 owner로
+전환하고, 불가능하면 같은 정책 DDL을 `postgres`로 직접 실행합니다. 일부 호스팅 프로젝트는
+관리 역할의 membership 없이 이 DDL을 허용합니다. 권한이 거부되면 전체 트랜잭션이
+중단됩니다. `RESET ROLE` 후 실행 주체와 Storage 소유권·RLS가 유지되는지 검증한 다음
+public 프로필을 계속하며, 실행을 위해 역할 membership이나 관리 객체 권한을 추가하지 않습니다.
 
 `omr-private-assets`에는 `anon`/`authenticated`의 target row만 거부하는
 `AS RESTRICTIVE` 제한 정책을 `storage.objects`와 `storage.buckets`에 설치합니다.

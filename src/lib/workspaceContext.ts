@@ -1,3 +1,4 @@
+import { isProvisionedOrganizationShape, isLegacyRecoveryOwner, type ProvisionedTeacherEntitlementMode } from "./provisionedTeacherEntitlement";
 import {
     isProvisionedTeacherMemberRole,
     isTeacherSessionActive,
@@ -20,15 +21,18 @@ export interface WorkspaceContext {
     actorEmail?: string;
     actorLabel?: string;
     memberRole?: TeacherMemberRole;
+    entitlementMode?: ProvisionedTeacherEntitlementMode;
 }
 
 export interface WorkspaceIdentity {
+    plan?: "free" | "pro" | "academy";
     teacherId?: string;
     email?: string;
     displayName?: string;
     organizationId?: string;
     organizationName?: string;
     memberRole?: TeacherMemberRole;
+    entitlementMode?: ProvisionedTeacherEntitlementMode;
 }
 
 const DEFAULT_CONTEXT: WorkspaceContext = {
@@ -100,7 +104,8 @@ export function workspaceContextFromIdentity(
         const organizationId = clean(identity?.organizationId).toLowerCase();
         const actorUserId = clean(identity?.teacherId).toLowerCase();
         const organizationName = clean(identity?.organizationName);
-        if (!/^(?:pilot_org_|demo_org_)[a-f0-9]{24}$/.test(organizationId)
+        if (!isProvisionedOrganizationShape(organizationId, identity?.entitlementMode)
+            || !isLegacyRecoveryOwner(identity?.entitlementMode, identity?.memberRole, identity?.plan)
             || !/^teacher_[a-f0-9]{16}$/.test(actorUserId)
             || !organizationName || !isProvisionedTeacherMemberRole(identity?.memberRole)) return DEFAULT_CONTEXT;
         return {
@@ -110,6 +115,7 @@ export function workspaceContextFromIdentity(
             actorEmail: clean(identity?.email).toLowerCase() || undefined,
             actorLabel: clean(identity?.displayName) || clean(identity?.email) || actorUserId,
             memberRole: identity.memberRole,
+            ...(identity.entitlementMode ? { entitlementMode: identity.entitlementMode } : {}),
         };
     }
     const key = identityKey(identity);

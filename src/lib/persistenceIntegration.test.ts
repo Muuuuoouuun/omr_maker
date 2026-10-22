@@ -69,7 +69,7 @@ describe("persistence integration", () => {
         expect(source).toContain("서버 명단을 불러오는 중입니다.");
         expect(source).toContain("서버 명단을 불러오지 못해 검증된 저장 명단을 표시합니다.");
         expect(source).toContain('const distributionRosterReadOnly = (distributionRosterState.state !== "loaded_empty"');
-        expect(source).toContain("|| rosterExpectedRevisionRef.current === undefined");
+        expect(source).toContain("|| rosterExpectedRevision === undefined");
         expect(source.match(/disabled=\{distributionRosterReadOnly\}/g)?.length).toBeGreaterThanOrEqual(3);
         expect(source).not.toContain("omr_teacher_roster_cache_stale_at_v1");
     });
@@ -189,8 +189,8 @@ describe("persistence integration", () => {
         expect(users).not.toContain("issueStudentStartCredential");
         expect(users).not.toContain("syncStudentAccessCodes");
         expect(users).not.toContain('query.set("workspace", workspaceId)');
-        expect(home).toContain("readExamEntryInviteHandoff(sessionStorage, requestedExam)");
-        expect(home).toContain("loadStudentLoginDirectory({ examId: requestedExam, inviteToken: requestedInvite })");
+        expect(home).toContain("readExamEntryInviteHandoff(sessionStorage, examId)");
+        expect(home).toContain("loadStudentLoginDirectory({ examId: homeInitialization.examId, inviteToken: homeInitialization.invite })");
         expect(home).toContain("requiresServerStudentVerification");
         expect(home).toContain("inviteToken,");
         expect(home).toContain("studentLookup,");

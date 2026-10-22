@@ -1,7 +1,7 @@
 import { isAbsolute } from "node:path";
 import { globSync as tinyGlobSync } from "tinyglobby";
 
-// Next 16.3.8 uses only this API for its configured application roots. Preserve
+// Next 16.4.2 uses only this API for its configured application roots. Preserve
 // fast-glob's absolute-pattern and non-expanding directory behavior explicitly.
 // Reject a changed upstream call contract instead of silently skipping roots.
 export function globSync(pattern, options) {

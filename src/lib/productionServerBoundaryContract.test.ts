@@ -655,7 +655,7 @@ describe("production server-only database boundary", () => {
         );
     });
 
-    it("uses the hosted Storage owner to install restrictive target-bucket policies without managed ACL mutations", () => {
+    it("uses either supported Storage policy actor without managed ACL or ownership mutations", () => {
         expect(livePrelude).toContain("create role supabase_storage_admin");
         expect(livePrelude).toContain("grant supabase_storage_admin to postgres with set true");
         expect(livePrelude).toContain("create table if not exists storage.objects");
@@ -669,6 +669,12 @@ describe("production server-only database boundary", () => {
             /pg_has_role\(\s*session_user,\s*'supabase_storage_admin',\s*'SET'\s*\)/i,
         );
         expect(profile).toContain("set local role supabase_storage_admin");
+        expect(profile).toMatch(
+            /if pg_has_role\(session_user, 'supabase_storage_admin', 'SET'\) then\s+execute 'set local role supabase_storage_admin';\s+end if;/i,
+        );
+        expect(profile).not.toContain("postgres must be able to SET ROLE supabase_storage_admin");
+        expect(profile).toContain("production boundary requires the managed Storage owner role");
+        expect(profile).toContain("Storage policy installation changed the migration actor, managed ownership, or RLS");
         const storageOwnerIndex = profile.indexOf("set local role supabase_storage_admin");
         const resetRoleIndex = profile.indexOf("reset role;", storageOwnerIndex);
         const publicRevokeIndex = profile.indexOf(
@@ -676,6 +682,10 @@ describe("production server-only database boundary", () => {
         );
         expect(resetRoleIndex).toBeGreaterThan(storageOwnerIndex);
         expect(publicRevokeIndex).toBeGreaterThan(resetRoleIndex);
+        const storagePostflightIndex = profile.indexOf("do $storage_policy_postflight$");
+        expect(storagePostflightIndex).toBeGreaterThan(resetRoleIndex);
+        expect(publicRevokeIndex).toBeGreaterThan(storagePostflightIndex);
+        expect(profile).not.toMatch(/\bgrant\s+supabase_storage_admin\s+to\b/i);
         expect(profile).toContain(
             'drop policy if exists "OMR private assets alpha access" on storage.objects',
         );

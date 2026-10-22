@@ -67,7 +67,9 @@ describe("teacher live exam state", () => {
         const page = readFileSync(join(process.cwd(), "src/app/teacher/live/page.tsx"), "utf8");
         expect(page).toContain("loadTeacherRosterSnapshot");
         expect(page).toContain("assignedRosterStudents");
-        expect(page).toContain("attemptMatchesStudentProfile");
+        expect(page).toContain("buildTeacherLiveRosterIndex(assignedRosterStudents)");
+        const rosterIndex = readFileSync(join(process.cwd(), "src/lib/teacherLiveRosterIndex.ts"), "utf8");
+        expect(rosterIndex).toContain("attemptMatchesStudentProfile");
     });
 
     it("distinguishes a failed live catalog read from a successful empty catalog and exposes retry", () => {

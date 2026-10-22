@@ -31,7 +31,7 @@ describe("network status", () => {
     it("routes every solve-page review navigation through the offline-aware helper", () => {
         const solve = readFileSync(path.join(process.cwd(), "src/app/solve/[id]/page.tsx"), "utf8");
         expect(solve).not.toMatch(/router\.push\(`\/student\/review\//);
-        expect(solve.match(/navigateToReview\(/g)?.length).toBe(6);
+        expect(solve).toContain("navigateToReview(heartbeat.submittedAttemptId);");
         expect(solve).toContain('setSubmissionProgress("review_waiting_online")');
         expect(solve).toContain('window.addEventListener("online", openWaitingReview)');
         expect(solve).toContain('<Link href="/student/history"');

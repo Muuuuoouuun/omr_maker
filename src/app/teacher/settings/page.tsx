@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
 import StatusPill from "@/components/dashboard/StatusPill";
@@ -8,7 +8,7 @@ import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, Eye
 import { toast } from "@/components/Toast";
 import { clearTeacherAuthSession, getTeacherDeploymentReadiness } from "@/app/actions/auth";
 import { SETTINGS_STORAGE_KEY, maskGeminiApiKey } from "@/lib/geminiApiKey";
-import { DEFAULT_SETTINGS, parseImportedSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
+import { DEFAULT_SETTINGS, buildSettingsExport, parseImportedSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
 import { MAX_QUESTION_COUNT, MIN_QUESTION_COUNT } from "@/lib/questionCount";
 import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
 import type { DeploymentReadinessSummary, DeploymentReadinessTone } from "@/lib/deploymentReadiness";
@@ -42,8 +42,16 @@ const ACCENT_PALETTES: Record<string, { light: string; dark: string }> = {
 };
 
 function loadPersisted(): Settings {
-    return readStoredSettings();
+    try {
+        return readStoredSettings();
+    } catch {
+        return DEFAULT_SETTINGS;
+    }
 }
+
+const subscribeToBrowserReady = () => () => undefined;
+const readBrowserReady = () => true;
+const readServerReady = () => false;
 
 function applyTheme(theme: Settings["theme"]) {
     if (typeof window === "undefined") return;
@@ -256,6 +264,29 @@ function initialDataDbReadiness(): DataDbReadinessSummary {
     });
 }
 
+async function loadDataDbReadiness(): Promise<DataDbReadinessSummary> {
+    const [examResult, attemptResult, aggregateResult, rosterResult] = await Promise.all([
+        loadTeacherExams(),
+        loadTeacherAttemptSummaries(),
+        loadTeacherAttemptAggregate(),
+        loadTeacherRosterSnapshot(window.localStorage),
+    ]);
+    return buildDataDbReadiness({
+        syncSources: [
+            { ...examResult, sourceKey: "exams", sourceLabel: "시험" },
+            { ...attemptResult, sourceKey: "attempts", sourceLabel: "제출" },
+            { ...rosterResult, sourceKey: "roster", sourceLabel: "명단" },
+        ],
+        examCount: examResult.items.length,
+        attemptCount: aggregateResult.status === "loaded"
+            ? aggregateResult.aggregate.totalAttemptCount
+            : attemptResult.items.length,
+        rosterStudentCount: rosterResult.students.length,
+        rosterGroupCount: rosterResult.groups.length,
+        tombstones: readRosterTombstones(window.localStorage),
+    });
+}
+
 function initialDeploymentReadiness(): DeploymentReadinessSummary {
     return {
         label: "배포 진단 대기",
@@ -334,64 +365,62 @@ function ResetSettingsConfirmDialog({
 }
 
 export default function SettingsPage() {
-    const [section, setSection] = useState<Section>("exam-defaults");
-    const [advancedDisclosureOpen, setAdvancedDisclosureOpen] = useState(false);
+    const browserReady = useSyncExternalStore(subscribeToBrowserReady, readBrowserReady, readServerReady);
+    if (!browserReady) {
+        return <div className="layout-main"><p role="status">설정을 불러오는 중입니다.</p></div>;
+    }
+    return <SettingsEditor />;
+}
+
+function SettingsEditor() {
+    const [section, setSection] = useState<Section>(() => sectionFromHash(window.location.hash) || "exam-defaults");
+    const [advancedDisclosureOpen, setAdvancedDisclosureOpen] = useState(() => ADVANCED_SECTION_KEYS.has(section));
     const [showKey, setShowKey] = useState(false);
     // Draft state: edits live here until 저장 commits to localStorage.
-    const [draft, setDraft] = useState<Settings>(DEFAULT_SETTINGS);
+    const [draft, setDraft] = useState<Settings>(loadPersisted);
     // The last persisted settings (what 취소 reverts to, and what 저장 writes).
-    const [persisted, setPersisted] = useState<Settings>(DEFAULT_SETTINGS);
-    const [hydrated, setHydrated] = useState(false);
+    const [persisted, setPersisted] = useState<Settings>(draft);
     const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
     const [dataReadiness, setDataReadiness] = useState<DataDbReadinessSummary>(() => initialDataDbReadiness());
-    const [isCheckingDataDb, setIsCheckingDataDb] = useState(false);
+    const [isCheckingDataDb, setIsCheckingDataDb] = useState(section === "data");
     const [deploymentReadiness, setDeploymentReadiness] = useState<DeploymentReadinessSummary>(() => initialDeploymentReadiness());
-    const [isCheckingDeployment, setIsCheckingDeployment] = useState(false);
-    const draftRef = useRef<Settings>(DEFAULT_SETTINGS);
-    const persistedRef = useRef<Settings>(DEFAULT_SETTINGS);
+    const [isCheckingDeployment, setIsCheckingDeployment] = useState(section === "security");
+    const draftRef = useRef<Settings>(draft);
+    const persistedRef = useRef<Settings>(persisted);
+    const dataRequestVersion = useRef(0);
+    const deploymentRequestVersion = useRef(0);
 
     // Keep refs in sync so save/cancel callbacks can read latest values without re-binding.
     useEffect(() => { draftRef.current = draft; }, [draft]);
     useEffect(() => { persistedRef.current = persisted; }, [persisted]);
 
-    // Hydrate from localStorage on mount.
-    useEffect(() => {
-        const initial = loadPersisted();
-        // Hydrate client-only persisted settings after mount.
-        setDraft(initial);
-        setPersisted(initial);
-        draftRef.current = initial;
-        persistedRef.current = initial;
-        setHydrated(true);
-    }, []);
-
     useEffect(() => {
         const syncSectionFromUrl = () => {
             const nextSection = sectionFromHash(window.location.hash);
-            if (!nextSection) return;
+            if (!nextSection || nextSection === section) return;
             setSection(nextSection);
+            setIsCheckingDataDb(nextSection === "data");
+            setIsCheckingDeployment(nextSection === "security");
             if (ADVANCED_SECTION_KEYS.has(nextSection)) setAdvancedDisclosureOpen(true);
         };
 
-        syncSectionFromUrl();
         window.addEventListener("hashchange", syncSectionFromUrl);
         return () => window.removeEventListener("hashchange", syncSectionFromUrl);
-    }, []);
+    }, [section]);
 
     // Apply theme whenever the draft theme changes — so the user sees a live preview.
     useEffect(() => {
-        if (!hydrated) return;
         applyTheme(draft.theme);
-    }, [hydrated, draft.theme]);
+    }, [draft.theme]);
 
     // Listen for system scheme changes when in "auto" mode.
     useEffect(() => {
-        if (!hydrated || draft.theme.mode !== "auto" || typeof window === "undefined") return;
+        if (draft.theme.mode !== "auto") return;
         const mq = window.matchMedia("(prefers-color-scheme: dark)");
         const onChange = () => applyTheme(draft.theme);
         mq.addEventListener("change", onChange);
         return () => mq.removeEventListener("change", onChange);
-    }, [hydrated, draft.theme]);
+    }, [draft.theme]);
 
     const updateSection = useCallback(<K extends keyof Settings>(key: K, partial: Partial<Settings[K]>) => {
         setDraft(prev => ({ ...prev, [key]: { ...prev[key], ...partial } }));
@@ -435,7 +464,7 @@ export default function SettingsPage() {
     }, []);
 
     const handleExport = useCallback(() => {
-        const json = JSON.stringify(persistedRef.current, null, 2);
+        const json = JSON.stringify(buildSettingsExport(persistedRef.current), null, 2);
         const blob = new Blob([json], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -451,7 +480,7 @@ export default function SettingsPage() {
         try {
             const text = await file.text();
             const parsed = JSON.parse(text) as unknown;
-            const merged = parseImportedSettings(parsed);
+            const merged = parseImportedSettings(parsed, persistedRef.current.api);
             if (!merged) {
                 toast.error("가져오기 실패", "OMR Maker에서 내보낸 전체 설정 백업 파일을 선택해주세요.");
                 return;
@@ -468,36 +497,16 @@ export default function SettingsPage() {
             persistedRef.current = merged;
             applyTheme(merged.theme);
             persistThemeMode(merged.theme);
-            toast.success("설정 가져오기 완료", "백업 파일을 성공적으로 불러왔습니다.");
+            toast.success("설정 가져오기 완료", "백업 설정을 불러왔습니다. 이 브라우저의 API 키는 그대로 유지됩니다.");
         } catch {
             toast.error("가져오기 실패", "JSON 파일 형식을 확인해주세요.");
         }
     }, []);
 
-    const refreshDataDbReadiness = useCallback(async (notify = false) => {
-        if (typeof window === "undefined") return;
-        setIsCheckingDataDb(true);
-        try {
-            const [examResult, attemptResult, aggregateResult, rosterResult] = await Promise.all([
-                loadTeacherExams(),
-                loadTeacherAttemptSummaries(),
-                loadTeacherAttemptAggregate(),
-                loadTeacherRosterSnapshot(window.localStorage),
-            ]);
-            const summary = buildDataDbReadiness({
-                syncSources: [
-                    { ...examResult, sourceKey: "exams", sourceLabel: "시험" },
-                    { ...attemptResult, sourceKey: "attempts", sourceLabel: "제출" },
-                    { ...rosterResult, sourceKey: "roster", sourceLabel: "명단" },
-                ],
-                examCount: examResult.items.length,
-                attemptCount: aggregateResult.status === "loaded"
-                    ? aggregateResult.aggregate.totalAttemptCount
-                    : attemptResult.items.length,
-                rosterStudentCount: rosterResult.students.length,
-                rosterGroupCount: rosterResult.groups.length,
-                tombstones: readRosterTombstones(window.localStorage),
-            });
+    const refreshDataDbReadiness = useCallback((notify = false) => {
+        const requestVersion = ++dataRequestVersion.current;
+        return loadDataDbReadiness().then(summary => {
+            if (requestVersion !== dataRequestVersion.current) return;
             setDataReadiness(summary);
             if (notify) {
                 if (summary.persistence.kind === "error") {
@@ -506,22 +515,25 @@ export default function SettingsPage() {
                     toast.success("DB 상태 확인 완료", summary.detail);
                 }
             }
-        } catch {
-            toast.error("DB 상태 확인 실패", "브라우저 저장소 또는 네트워크 상태를 확인해주세요.");
-        } finally {
-            setIsCheckingDataDb(false);
-        }
+        }).catch(() => {
+            if (requestVersion === dataRequestVersion.current) {
+                toast.error("DB 상태 확인 실패", "브라우저 저장소 또는 네트워크 상태를 확인해주세요.");
+            }
+        }).finally(() => {
+            if (requestVersion === dataRequestVersion.current) setIsCheckingDataDb(false);
+        });
     }, []);
 
     useEffect(() => {
-        if (!hydrated || section !== "data") return;
+        if (section !== "data") return;
         void refreshDataDbReadiness();
-    }, [hydrated, refreshDataDbReadiness, section]);
+        return () => { dataRequestVersion.current += 1; };
+    }, [refreshDataDbReadiness, section]);
 
-    const refreshDeploymentReadiness = useCallback(async (notify = false) => {
-        setIsCheckingDeployment(true);
-        try {
-            const summary = await getTeacherDeploymentReadiness();
+    const refreshDeploymentReadiness = useCallback((notify = false) => {
+        const requestVersion = ++deploymentRequestVersion.current;
+        return getTeacherDeploymentReadiness().then(summary => {
+            if (requestVersion !== deploymentRequestVersion.current) return;
             setDeploymentReadiness(summary);
             if (notify) {
                 const hasError = summary.checks.some(check => check.tone === "error");
@@ -531,25 +543,32 @@ export default function SettingsPage() {
                     toast.success("배포 진단 완료", summary.detail);
                 }
             }
-        } catch {
-            toast.error("배포 진단 실패", "서버 환경변수 상태를 불러오지 못했습니다.");
-        } finally {
-            setIsCheckingDeployment(false);
-        }
+        }).catch(() => {
+            if (requestVersion === deploymentRequestVersion.current) {
+                toast.error("배포 진단 실패", "서버 환경변수 상태를 불러오지 못했습니다.");
+            }
+        }).finally(() => {
+            if (requestVersion === deploymentRequestVersion.current) setIsCheckingDeployment(false);
+        });
     }, []);
 
     useEffect(() => {
-        if (!hydrated || section !== "security") return;
+        if (section !== "security") return;
         void refreshDeploymentReadiness();
-    }, [hydrated, refreshDeploymentReadiness, section]);
+        return () => { deploymentRequestVersion.current += 1; };
+    }, [refreshDeploymentReadiness, section]);
 
     const selectSection = useCallback((nextSection: Section) => {
-        setSection(nextSection);
+        if (nextSection !== section) {
+            setSection(nextSection);
+            setIsCheckingDataDb(nextSection === "data");
+            setIsCheckingDeployment(nextSection === "security");
+        }
         if (ADVANCED_SECTION_KEYS.has(nextSection)) setAdvancedDisclosureOpen(true);
         if (typeof window !== "undefined") {
             window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${nextSection}`);
         }
-    }, []);
+    }, [section]);
 
     const advancedOpen = advancedDisclosureOpen || ADVANCED_SECTION_KEYS.has(section);
 
@@ -614,19 +633,25 @@ export default function SettingsPage() {
                         {section === "grading" && <GradingSection />}
                         {section === "api" && <ApiSection value={draft.api} onChange={v => updateSection("api", v)} onSave={() => saveSection("api")} onCancel={() => cancelSection("api")} showKey={showKey} setShowKey={setShowKey} />}
                         {section === "theme" && <ThemeSection value={draft.theme} onChange={v => updateSection("theme", v)} onSave={() => saveSection("theme")} onCancel={() => cancelSection("theme")} />}
-                        {section === "data" && <DataDbSection summary={dataReadiness} isChecking={isCheckingDataDb} onRefresh={() => refreshDataDbReadiness(true)} />}
+                        {section === "data" && <DataDbSection summary={dataReadiness} isChecking={isCheckingDataDb} onRefresh={() => {
+                            setIsCheckingDataDb(true);
+                            return refreshDataDbReadiness(true);
+                        }} />}
                         {section === "security" && (
                             <SecuritySection
                                 deploymentReadiness={deploymentReadiness}
                                 isCheckingDeployment={isCheckingDeployment}
-                                onRefreshDeployment={() => refreshDeploymentReadiness(true)}
+                                onRefreshDeployment={() => {
+                                    setIsCheckingDeployment(true);
+                                    return refreshDeploymentReadiness(true);
+                                }}
                             />
                         )}
 
                         {/* Global settings actions */}
                         <details className="settings-backup-disclosure">
                             <summary>
-                                <span><strong>백업 · 복원</strong><small>설정을 JSON으로 이동하거나 초기화</small></span>
+                                <span><strong>백업 · 복원</strong><small>API 키를 제외한 설정을 JSON으로 이동하거나 초기화</small></span>
                                 <span aria-hidden="true">열기</span>
                             </summary>
                             <div className="settings-backup-actions">

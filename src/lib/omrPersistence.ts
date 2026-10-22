@@ -1,3 +1,4 @@
+import { normalizeExamAuthoringSettings } from "@/lib/examAuthoringSettings";
 import { deleteStoredData } from "@/utils/blobStore";
 import { canonicalQuestionIdFor } from "@/lib/questionBank";
 import {
@@ -421,9 +422,16 @@ export function examToSupabaseRow(exam: Exam, context?: WorkspaceContext | null)
 export function examFromSupabaseRow(row: SupabaseExamRow | { payload: Exam }): Exam {
     const exam = sanitizeExamPayload(row.payload);
     if (!exam) throw new Error("Invalid exam payload");
-    if ("organization_id" in row || "class_id" in row || "created_by_user_id" in row) {
+    // The durable attempt gateway compares the exact PostgreSQL timestamp.
+    // payload.updatedAt is serialized to milliseconds by the save RPC, while
+    // updated_at retains microseconds. Do not round it through Date/toISOString.
+    if ("updated_at" in row && (typeof row.updated_at !== "string" || !Number.isFinite(Date.parse(row.updated_at)))) {
+        throw new Error("Invalid canonical exam timestamp");
+    }
+    if ("organization_id" in row || "class_id" in row || "created_by_user_id" in row || "updated_at" in row) {
         return {
             ...exam,
+            updatedAt: "updated_at" in row ? row.updated_at : exam.updatedAt,
             organizationId: scopedValue(row.organization_id) || exam.organizationId,
             classId: scopedValue(row.class_id) || exam.classId,
             createdByUserId: scopedValue(row.created_by_user_id) || exam.createdByUserId,
@@ -1013,6 +1021,7 @@ export function sanitizeExamPayload(value: unknown): Exam | null {
     const questions = sanitizeQuestions(value.questions);
     return {
         ...(value as Partial<Exam>),
+        authoringSettings: normalizeExamAuthoringSettings(value.authoringSettings),
         id,
         title: stringValue(value.title) || "제목 없는 시험",
         createdAt: stringValue(value.createdAt) || new Date(0).toISOString(),
@@ -1061,29 +1070,30 @@ export function sanitizeAttemptPayload(value: unknown): Attempt | null {
     for (const [questionId, answers] of Object.entries(rawSubQuestionAnswers)) {
         const numericQuestionId = Number(questionId);
         if (!Number.isFinite(numericQuestionId) || !isRecord(answers)) continue;
-        const safeAnswers: NonNullable<Attempt["subQuestionAnswers"]>[number] = {};
+        const answerEntries: Array<[string, NonNullable<Attempt["subQuestionAnswers"]>[number][string]]> = [];
         for (const [subQuestionId, candidate] of Object.entries(answers)) {
-            if (!isRecord(candidate)) continue;
+            if (!subQuestionId.trim() || subQuestionId.length > 256 || !isRecord(candidate)) continue;
             const body = stringValue(candidate.body)?.slice(0, MAX_SUB_QUESTION_LENGTH);
             if (!body) continue;
             const reviewed = candidate.reviewStatus === "reviewed";
-            safeAnswers[subQuestionId.slice(0, 100)] = {
+            answerEntries.push([subQuestionId, {
                 schemaVersion: 1,
                 body,
                 answeredAt: stringValue(candidate.answeredAt),
                 reviewStatus: reviewed ? "reviewed" : "needs_review",
                 reviewedAt: reviewed ? stringValue(candidate.reviewedAt) : undefined,
                 reviewedBy: reviewed ? stringValue(candidate.reviewedBy) : undefined,
-            };
+            }]);
         }
+        const safeAnswers = Object.fromEntries(answerEntries);
         if (Object.keys(safeAnswers).length > 0) subQuestionAnswers[numericQuestionId] = safeAnswers;
     }
     const missingRequiredSubQuestions = Array.isArray(value.missingRequiredSubQuestions)
         ? value.missingRequiredSubQuestions.flatMap(candidate => {
             if (!isRecord(candidate)) return [];
             const questionId = numberValue(candidate.questionId);
-            const subQuestionId = stringValue(candidate.subQuestionId)?.slice(0, 100);
-            return questionId !== undefined && subQuestionId ? [{ questionId, subQuestionId }] : [];
+            const subQuestionId = stringValue(candidate.subQuestionId);
+            return questionId !== undefined && subQuestionId && subQuestionId.length <= 256 ? [{ questionId, subQuestionId }] : [];
         })
         : [];
 

@@ -26,7 +26,7 @@ import { liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { awaySeverity, resolveAwayCount } from "@/lib/examAwayTracker";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
-import { attemptMatchesStudentProfile } from "@/utils/storage";
+import { buildTeacherLiveRosterIndex } from "@/lib/teacherLiveRosterIndex";
 import {
     classifyTeacherLiveExamPhase,
     mergeTeacherLiveExamAttempts,
@@ -81,14 +81,12 @@ const EMPTY_LIVE_EXAM: LiveExam = { id: "", title: "", total: 0, duration: 0, qu
  * an end-time window (endAt) takes precedence, otherwise the duration budget.
  * Prevents the banner from showing a hardcoded/stale value across exams.
  */
-function liveExamTimerSeconds(exam: LiveExam, now = Date.now()): number {
-    const source = exam.sourceExam;
-    const endAtMs = source?.endAt ? Date.parse(source.endAt) : NaN;
+function liveExamTimerSeconds(endAt: string | undefined, durationMinutes: number, now = Date.now()): number {
+    const endAtMs = endAt ? Date.parse(endAt) : NaN;
     if (Number.isFinite(endAtMs)) {
         return Math.max(0, Math.floor((endAtMs - now) / 1000));
     }
-    const minutes = source?.durationMin ?? exam.duration ?? 0;
-    return Math.max(0, Math.round(minutes * 60));
+    return Math.max(0, Math.round(durationMinutes * 60));
 }
 
 const AVATAR_COLORS = ["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b", "#0ea5e9"];
@@ -309,18 +307,15 @@ export default function LiveResultsPage() {
     const [catalogLoadStatus, setCatalogLoadStatus] = useState<LiveCatalogLoadStatus>("loading");
     const [catalogLoadRequest, setCatalogLoadRequest] = useState(0);
     const [, setTick] = useState(0);
-    const [timerSeconds, setTimerSeconds] = useState(0);
     const [isScreenRefreshPaused, setIsScreenRefreshPaused] = useState(false);
     const [selectedAttemptDetails, setSelectedAttemptDetails] = useState<SelectedAttemptDetails>({
         examId: "",
         requestGeneration: 0,
         status: "idle",
     });
-    const selectedAttemptDetailsRef = useRef(selectedAttemptDetails);
-    selectedAttemptDetailsRef.current = selectedAttemptDetails;
     const selectedAttemptRequestGenerationRef = useRef(0);
+    const [selectedAttemptRequestGeneration, setSelectedAttemptRequestGeneration] = useState(0);
     const selectedExamIdRef = useRef(selectedExamId);
-    selectedExamIdRef.current = selectedExamId;
     const [forceFinishConfirmOpen, setForceFinishConfirmOpen] = useState(false);
     // Synthetic students per exam — mutable state so they can "progress" over time
     const [syntheticByExam, setSyntheticByExam] = useState<Record<string, LiveStudent[]>>({});
@@ -328,13 +323,15 @@ export default function LiveResultsPage() {
     const loadSelectedAttemptDetails = useCallback(async (examId: string, removeMissing = false) => {
         const requestGeneration = selectedAttemptRequestGenerationRef.current + 1;
         selectedAttemptRequestGenerationRef.current = requestGeneration;
-        const currentDetails = selectedAttemptDetailsRef.current;
-        const isBackgroundRefresh = currentDetails.examId === examId
-            && (currentDetails.status === "ready" || currentDetails.status === "refreshing");
-        setSelectedAttemptDetails({
-            examId,
-            requestGeneration,
-            status: isBackgroundRefresh ? "refreshing" : "loading",
+        setSelectedAttemptRequestGeneration(requestGeneration);
+        setSelectedAttemptDetails(currentDetails => {
+            const isBackgroundRefresh = currentDetails.examId === examId
+                && (currentDetails.status === "ready" || currentDetails.status === "refreshing");
+            return {
+                examId,
+                requestGeneration,
+                status: isBackgroundRefresh ? "refreshing" : "loading",
+            };
         });
 
         const [attemptResult, sessionResult] = await Promise.all([
@@ -431,17 +428,16 @@ export default function LiveResultsPage() {
                 setAttempts(attemptResult.items);
                 setRosterStudents(rosterResult.students);
                 setRosterGroups(rosterResult.groups);
-                setSelectedExamId(prev => {
-                    const nextSelectedExamId = liveData.mode === "demo"
-                        ? (liveData.exams.some(exam => exam.id === prev) ? prev : liveData.exams[0]?.id || "")
-                        : selectTeacherLiveExamId(
+                const previousSelectedExamId = selectedExamIdRef.current;
+                const nextSelectedExamId = liveData.mode === "demo"
+                    ? (liveData.exams.some(exam => exam.id === previousSelectedExamId) ? previousSelectedExamId : liveData.exams[0]?.id || "")
+                    : selectTeacherLiveExamId(
                         liveData.exams.flatMap(exam => exam.sourceExam ? [exam.sourceExam] : []),
                         attemptResult.items,
-                        prev,
-                        );
-                    selectedExamIdRef.current = nextSelectedExamId;
-                    return nextSelectedExamId;
-                });
+                        previousSelectedExamId,
+                    );
+                selectedExamIdRef.current = nextSelectedExamId;
+                setSelectedExamId(nextSelectedExamId);
                 setCatalogLoadStatus("ready");
             } catch {
                 if (!cancelled) setCatalogLoadStatus("failed");
@@ -457,6 +453,7 @@ export default function LiveResultsPage() {
             // when entering demo mode without dismissing its confirmation.
             const requestGeneration = selectedAttemptRequestGenerationRef.current + 1;
             selectedAttemptRequestGenerationRef.current = requestGeneration;
+            setSelectedAttemptRequestGeneration(requestGeneration);
             setSelectedAttemptDetails({ examId: "", requestGeneration, status: "idle" });
             if (!selectedExamId) setForceFinishConfirmOpen(false);
             setActiveSessions([]);
@@ -494,11 +491,21 @@ export default function LiveResultsPage() {
     const isDemoLive = liveDataMode === "demo";
     const selectedAttemptDetailsReady = (selectedAttemptDetails.status === "ready" || selectedAttemptDetails.status === "refreshing")
         && selectedAttemptDetails.examId === selectedExamId
-        && selectedAttemptDetails.requestGeneration === selectedAttemptRequestGenerationRef.current;
+        && selectedAttemptDetails.requestGeneration === selectedAttemptRequestGeneration;
 
+    const attemptsByExamId = useMemo(() => {
+        const grouped = new Map<string, Attempt[]>();
+        for (const attempt of attempts) {
+            if (!attempt) continue;
+            const examAttempts = grouped.get(attempt.examId);
+            if (examAttempts) examAttempts.push(attempt);
+            else grouped.set(attempt.examId, [attempt]);
+        }
+        return grouped;
+    }, [attempts]);
     const examAttempts = useMemo(
-        () => hasExam ? attempts.filter(a => a && a.examId === exam.id) : [],
-        [attempts, exam.id, hasExam]
+        () => hasExam ? attemptsByExamId.get(exam.id) || [] : [],
+        [attemptsByExamId, exam.id, hasExam]
     );
     const selectedPhase: TeacherLiveExamPhase = isDemoLive
         ? "ready"
@@ -506,12 +513,12 @@ export default function LiveResultsPage() {
     const livePresentation = teacherLiveExamPresentation(selectedPhase, isDemoLive);
     const showLiveControls = isDemoLive || selectedPhase === "live";
     const phaseByExamId = useMemo(() => new Map(exams.map(candidate => {
-        const candidateAttempts = attempts.filter(attempt => attempt.examId === candidate.id);
+        const candidateAttempts = attemptsByExamId.get(candidate.id) || [];
         const phase = isDemoLive
             ? "ready" as const
             : classifyTeacherLiveExamPhase(candidate.sourceExam || {}, candidateAttempts);
         return [candidate.id, teacherLiveExamPresentation(phase, isDemoLive)] as const;
-    })), [attempts, exams, isDemoLive]);
+    })), [attemptsByExamId, exams, isDemoLive]);
 
     // Retake-free, one-row-per-student view of the exam's attempts. Used for the
     // live cards, count tiles, and question heatmap so a student who resubmits or
@@ -523,25 +530,19 @@ export default function LiveResultsPage() {
         [isDemoLive, liveAttempts, selectedAttemptDetailsReady],
     );
 
-    // Initialize synthetic students for this exam if not yet seeded
-    useEffect(() => {
-        if (!hasExam || !isDemoLive) return;
-        // Seed derived display-only data once the selected exam is known.
-        setSyntheticByExam(prev => {
-            if (prev[exam.id]) return prev;
-            const real = liveAttempts.map(a => attemptToStudent(a, exam.total, exam.sourceExam));
-            const needed = Math.max(MIN_STUDENT_CARDS - real.length, 0);
-            if (needed === 0) return prev;
-            return { ...prev, [exam.id]: genSyntheticStudents(needed, exam.total || 20, real.length) };
-        });
-    }, [exam.id, exam.sourceExam, exam.total, liveAttempts, hasExam, isDemoLive]);
+    // Initial demo rows are derived; only subsequent simulated progress needs state.
+    const initialSyntheticStudents = useMemo(() => {
+        if (!hasExam || !isDemoLive) return [];
+        const needed = Math.max(MIN_STUDENT_CARDS - liveAttempts.length, 0);
+        return genSyntheticStudents(needed, exam.total || 20, liveAttempts.length);
+    }, [exam.total, liveAttempts.length, hasExam, isDemoLive]);
 
     // Advance synthetic students every 3s when not paused — makes "Live" feel live
     useEffect(() => {
         if (!hasExam || isScreenRefreshPaused || !isDemoLive) return;
         const id = setInterval(() => {
             setSyntheticByExam(prev => {
-                const list = prev[exam.id];
+                const list = prev[exam.id] ?? initialSyntheticStudents;
                 if (!list || list.length === 0) return prev;
                 const totalQ = exam.total || 20;
                 const pulse = Math.floor(Date.now() / 3000);
@@ -577,7 +578,7 @@ export default function LiveResultsPage() {
             });
         }, 3000);
         return () => clearInterval(id);
-    }, [exam.id, exam.total, hasExam, isDemoLive, isScreenRefreshPaused]);
+    }, [exam.id, exam.total, hasExam, initialSyntheticStudents, isDemoLive, isScreenRefreshPaused]);
 
     const assignedRosterStudents = useMemo(() => (
         !isDemoLive && exam.sourceExam
@@ -591,6 +592,7 @@ export default function LiveResultsPage() {
         const real = answerDetailedAttempts.map(a => attemptToStudent(a, totalQ, exam.sourceExam));
         if (!isDemoLive) {
             const attemptById = new Map(answerDetailedAttempts.map(attempt => [attempt.id, attempt]));
+            const rosterIndex = buildTeacherLiveRosterIndex(assignedRosterStudents);
             const latestByStudent = new Map<string, LiveStudent>();
             for (const rosterStudent of assignedRosterStudents) {
                 latestByStudent.set(rosterStudent.id, rosterStudentToLiveStudent(rosterStudent, totalQ));
@@ -598,7 +600,7 @@ export default function LiveResultsPage() {
             for (const student of real) {
                 const attempt = attemptById.get(student.id);
                 const matchedRosterStudent = attempt
-                    ? assignedRosterStudents.find(candidate => attemptMatchesStudentProfile(attempt, candidate))
+                    ? rosterIndex.matchAttempt(attempt)
                     : undefined;
                 latestByStudent.set(
                     matchedRosterStudent?.id || attempt?.studentProfileId || attempt?.studentId || attempt?.guestId || student.id,
@@ -606,9 +608,7 @@ export default function LiveResultsPage() {
                 );
             }
             for (const session of activeSessions) {
-                const matchedRosterStudent = assignedRosterStudents.find(candidate => (
-                    candidate.id === session.studentProfileId || candidate.id === session.ownerStudentId
-                ));
+                const matchedRosterStudent = rosterIndex.matchSession(session);
                 latestByStudent.set(
                     matchedRosterStudent?.id || session.studentProfileId || session.ownerStudentId,
                     activeSessionToStudent(session),
@@ -617,19 +617,32 @@ export default function LiveResultsPage() {
             return Array.from(latestByStudent.values());
         }
         if (real.length >= MIN_STUDENT_CARDS) return real;
-        const synthetic = syntheticByExam[exam.id] ?? [];
+        const synthetic = syntheticByExam[exam.id] ?? initialSyntheticStudents;
         return [...real, ...synthetic];
-    }, [activeSessions, answerDetailedAttempts, assignedRosterStudents, exam.id, exam.sourceExam, exam.total, hasExam, isDemoLive, syntheticByExam]);
+    }, [activeSessions, answerDetailedAttempts, assignedRosterStudents, exam.id, exam.sourceExam, exam.total, hasExam, initialSyntheticStudents, isDemoLive, syntheticByExam]);
 
-    // Reset the countdown from the actual exam whenever the selected exam changes,
-    // instead of counting down from a hardcoded value that never resets.
-    useEffect(() => {
-        setTimerSeconds(hasExam && showLiveControls ? liveExamTimerSeconds(exam) : 0);
-        // Key on the primitive schedule fields, not the `exam` object: the 3s poll
-        // replaces `exams` (new object identity) every tick, and depending on `exam`
-        // would reset the countdown every 3 seconds.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [exam.id, exam.sourceExam?.endAt, exam.sourceExam?.durationMin, exam.duration, hasExam, showLiveControls]);
+    // Reset the countdown by its primitive schedule, without a second render from
+    // a reset effect. Polling the same schedule preserves elapsed countdown time.
+    const timerEndAt = exam.sourceExam?.endAt;
+    const timerDurationMinutes = exam.sourceExam?.durationMin ?? exam.duration ?? 0;
+    const timerScheduleKey = JSON.stringify([exam.id, timerEndAt, timerDurationMinutes, hasExam, showLiveControls]);
+    const [countdown, setCountdown] = useState<{ scheduleKey: string; seconds: number } | null>(null);
+    const countdownForSchedule = countdown?.scheduleKey === timerScheduleKey
+        ? countdown
+        : {
+            scheduleKey: timerScheduleKey,
+            seconds: hasExam && showLiveControls ? liveExamTimerSeconds(timerEndAt, timerDurationMinutes) : 0,
+        };
+    if (countdown !== countdownForSchedule) setCountdown(countdownForSchedule);
+    const timerSeconds = countdownForSchedule.seconds;
+    const setTimerSeconds = useCallback((value: number | ((seconds: number) => number)) => {
+        setCountdown(previous => {
+            const seconds = previous?.scheduleKey === timerScheduleKey
+                ? previous.seconds
+                : hasExam && showLiveControls ? liveExamTimerSeconds(timerEndAt, timerDurationMinutes) : 0;
+            return { scheduleKey: timerScheduleKey, seconds: typeof value === "function" ? value(seconds) : value };
+        });
+    }, [hasExam, showLiveControls, timerDurationMinutes, timerEndAt, timerScheduleKey]);
 
     useEffect(() => {
         if (!hasExam || !showLiveControls) return;
@@ -638,7 +651,7 @@ export default function LiveResultsPage() {
             setTimerSeconds(s => Math.max(0, s - 1));
         }, 1000);
         return () => clearInterval(id);
-    }, [hasExam, showLiveControls]);
+    }, [hasExam, setTimerSeconds, showLiveControls]);
 
     const counts = isDemoLive
         ? {
@@ -777,7 +790,7 @@ export default function LiveResultsPage() {
         }
 
         setSyntheticByExam(prev => {
-            const list = prev[exam.id];
+            const list = prev[exam.id] ?? initialSyntheticStudents;
             if (!list) return prev;
             const totalQ = exam.total || 20;
             const next = list.map(s => {
@@ -852,6 +865,7 @@ export default function LiveResultsPage() {
                                 const nextSelectedExamId = e.target.value;
                                 const requestGeneration = selectedAttemptRequestGenerationRef.current + 1;
                                 selectedAttemptRequestGenerationRef.current = requestGeneration;
+                                setSelectedAttemptRequestGeneration(requestGeneration);
                                 selectedExamIdRef.current = nextSelectedExamId;
                                 setSelectedAttemptDetails({
                                     examId: nextSelectedExamId,

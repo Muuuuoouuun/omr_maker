@@ -1,4 +1,4 @@
-import type { Attempt, Exam, StoredPlanKey } from "@/types/omr";
+import type { Attempt, Exam, MissingRequiredSubQuestion, StoredPlanKey } from "@/types/omr";
 import { gradeAttempt } from "@/types/omr";
 import { buildCanonicalQuestionResultEvidence } from "@/lib/canonicalQuestionResultManifest";
 import { buildQuestionResults } from "@/lib/questionResultBuilder";
@@ -12,6 +12,17 @@ import {
     findMissingRequiredSubQuestions,
     sanitizeSubQuestionAnswersForQuestions,
 } from "@/lib/subQuestions";
+
+/** A correctable answer issue, distinct from a failed or ambiguous server write. */
+export class RequiredSubQuestionAnswersError extends Error {
+    readonly missingRequiredSubQuestions: MissingRequiredSubQuestion[];
+
+    constructor(missing: readonly MissingRequiredSubQuestion[]) {
+        super("REQUIRED_SUB_QUESTIONS_MISSING");
+        this.name = "RequiredSubQuestionAnswersError";
+        this.missingRequiredSubQuestions = missing.map(item => ({ ...item }));
+    }
+}
 
 function clampStartedAt(startedAtInput: string, finishedAtIso: string, exam: Exam): string {
     const finishedMs = Date.parse(finishedAtIso);
@@ -46,13 +57,16 @@ export function buildServerAttempt(
     const subQuestionAnswers = sanitizeSubQuestionAnswersForQuestions(scope.questions, input.subQuestionAnswers, finishedAtIso);
     const missingRequiredSubQuestions = findMissingRequiredSubQuestions(scope.questions, subQuestionAnswers);
     if (!input.autoSubmitted && missingRequiredSubQuestions.length > 0) {
-        throw new Error("REQUIRED_SUB_QUESTIONS_MISSING");
+        throw new RequiredSubQuestionAnswersError(missingRequiredSubQuestions);
     }
     const attempt: Attempt = {
         id: attemptId,
         examId: exam.id,
         examTitle: exam.title,
         organizationId: exam.organizationId,
+        // Seal the same roster scope that persistence writes into each child.
+        ...(identity.groupId ? { classId: identity.groupId } : {}),
+        ...(identity.kind === "student" && identity.studentId ? { studentProfileId: identity.studentId } : {}),
         ...(assignmentId ? { assignmentId, assignmentRevision } : {}),
         studentName: identity.name,
         studentId: ownerStudentId(identity),

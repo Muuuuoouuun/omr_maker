@@ -28,6 +28,14 @@ beforeEach(() => {
     vi.stubEnv('GEMINI_API_KEY', 'server-key');
 });
 describe('premium exam analysis action', () => {
+    it('enforces the four-page limit before reserving shared usage or calling the provider', async () => {
+        await expect(analyzeExamImages(Array(5).fill(images[0]), questions)).rejects.toThrow('최대 4쪽');
+        expect(mocks.quota).not.toHaveBeenCalled();
+        expect(mocks.generate).not.toHaveBeenCalled();
+        await expect(analyzeExamImages(Array(4).fill(images[0]), questions)).resolves.toEqual([]);
+        expect(mocks.quota).toHaveBeenCalledOnce();
+        expect(mocks.generate).toHaveBeenCalledOnce();
+    });
     it('requires authenticated mutation authorization before provider', async () => {
         mocks.session.mockResolvedValue(null);
         await expect(analyzeExamImages(images, questions, 'personal-key')).rejects.toThrow('로그인');

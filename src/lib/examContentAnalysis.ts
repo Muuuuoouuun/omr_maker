@@ -1,5 +1,14 @@
 import type { Question, QuestionContentAnalysis } from '@/types/omr';
 
+export const MAX_EXAM_ANALYSIS_PAGES = 4;
+
+export function validateExamAnalysisPageRange(start: number, end: number): void {
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+        || start < 1 || end < start || end - start >= MAX_EXAM_ANALYSIS_PAGES) {
+        throw new Error(`한 번에 최대 ${MAX_EXAM_ANALYSIS_PAGES}쪽까지 분석할 수 있습니다. 페이지 범위를 확인해 주세요.`);
+    }
+}
+
 export interface ExamContentAnalysisRow {
     questionId: number;
     questionNumber: number;
@@ -7,6 +16,48 @@ export interface ExamContentAnalysisRow {
     contentAnalysis: QuestionContentAnalysis;
 }
 export type ExamAnalysisQuestion = Pick<Question, 'id' | 'number'>;
+
+/** Unmapped questions remain eligible; mapped questions must belong to the selected pages. */
+export function examAnalysisQuestionsForRange(questions: Question[], start: number, end: number): ExamAnalysisQuestion[] {
+    validateExamAnalysisPageRange(start, end);
+    return questions.filter(question => {
+        const page = question.pdfRegion?.page ?? question.pdfLocation?.page;
+        return page === undefined || (page >= start && page <= end);
+    }).map(({ id, number }) => ({ id, number }));
+}
+
+/** Keep the old analysis for re-review, but do not carry its representative concept into new-source analytics. */
+export function invalidateQuestionAnalysisForPdfChange(question: Question): Question {
+    if (!question.contentAnalysis) return question;
+    return { ...question, tags: withoutAppliedAnalysisTags(question), contentAnalysis: { ...question.contentAnalysis, status: 'draft' } };
+}
+
+function withoutAppliedAnalysisTags(question: Question): Question['tags'] {
+    const tags = { ...question.tags };
+    const analysis = question.contentAnalysis;
+    if (!analysis) return tags;
+    if (tags.concept?.trim() === analysis.concepts[0]?.trim()) delete tags.concept;
+    for (const key of ['unit', 'skill'] as const) {
+        const applied = analysis.appliedTags?.[key];
+        if (applied !== undefined && tags[key] === applied) delete tags[key];
+    }
+    return tags;
+}
+
+/**
+ * Removing stale drafts is available on every plan and never invokes AI.
+ * Remove only classifications still matching their applied analysis values.
+ * Independently edited tags and legacy unit/skill without provenance remain.
+ * Reviewed analysis on other questions is never changed.
+ */
+export function discardDraftExamContentAnalysis(questions: Question[]): Question[] {
+    return questions.map(question => {
+        if (question.contentAnalysis?.status !== 'draft') return question;
+        const { contentAnalysis: _analysis, ...rest } = question;
+        void _analysis;
+        return { ...rest, tags: withoutAppliedAnalysisTags(question) };
+    });
+}
 
 function invalid(): never { throw new Error('시험지 분석 형식이 올바르지 않습니다.'); }
 function record(value: unknown): Record<string, unknown> {
@@ -89,7 +140,10 @@ export function applyReviewedExamContentAnalysis(questions: Question[], rows: Ex
         return {
             ...question,
             tags: { ...tags, ...row.tags },
-            contentAnalysis: { ...row.contentAnalysis, status: 'reviewed' },
+            contentAnalysis: {
+                ...row.contentAnalysis, status: 'reviewed',
+                appliedTags: { ...(row.tags.unit ? { unit: row.tags.unit } : {}), ...(row.tags.skill ? { skill: row.tags.skill } : {}) },
+            },
         };
     });
 }
@@ -101,6 +155,13 @@ export function normalizeQuestionContentAnalysis(value: unknown): QuestionConten
         if (row.status !== 'draft' && row.status !== 'reviewed') return undefined;
         const concepts = texts(row.concepts, 8);
         if (!concepts.length) return undefined;
-        return { concepts, trapPoints: texts(row.trapPoints, 8), summary: text(row.summary, 1000), status: row.status };
+        const appliedTags = row.appliedTags === undefined ? undefined : record(row.appliedTags);
+        return {
+            concepts, trapPoints: texts(row.trapPoints, 8), summary: text(row.summary, 1000), status: row.status,
+            ...(appliedTags ? { appliedTags: {
+                ...(appliedTags.unit !== undefined ? { unit: text(appliedTags.unit, 120) } : {}),
+                ...(appliedTags.skill !== undefined ? { skill: text(appliedTags.skill, 120) } : {}),
+            } } : {}),
+        };
     } catch { return undefined; }
 }

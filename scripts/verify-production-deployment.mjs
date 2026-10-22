@@ -385,7 +385,8 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
         },
         body: "{}",
     }, fetchImpl, [200]);
-    if (directReadiness.body?.ready !== true || directReadiness.body?.version !== config.expectedReadinessVersion) {
+    if (directReadiness.body?.ready !== true || directReadiness.body?.version !== config.expectedReadinessVersion
+        || directReadiness.body?.legacyOrganizationRecoveryReady !== true) {
         throw new Error("Production database readiness mismatch");
     }
 

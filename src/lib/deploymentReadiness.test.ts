@@ -72,6 +72,7 @@ const readyDatabaseProbe = {
     studentCredentialBatchReady: true,
     canonicalQuestionResultEvidenceReady: true,
     kakaoReminderEntitlementReady: true,
+    legacyOrganizationRecoveryReady: true,
     failedChecks: [],
 };
 

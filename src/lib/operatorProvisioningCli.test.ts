@@ -149,6 +149,7 @@ describe("operator teacher provisioning CLI", () => {
     it.each(["free", "pro", "academy"])("reviews permanent demo %s with no expiry or credential side effects", async (plan) => {
         const f=await fixture();
         const { expiresAt: _expiry, ...base }=f.request;
+        void _expiry;
         const request={...base,plan,entitlementMode:"permanent_demo",reason:"qa_permanent_demo"};
         await writeFile(f.requestPath,JSON.stringify(request));
         const generatePassword=vi.fn(() => PASSWORD);
@@ -172,6 +173,7 @@ describe("operator teacher provisioning CLI", () => {
     it("rejects demo expiry, unsupported mode and unmarked ordinary organization before generating credentials", async () => {
         for (const extra of [{expiresAt:"9999-01-01T00:00:00.000Z"},{entitlementMode:"permanent"},{plan:"enterprise"}]) {
             const f=await fixture(); const {expiresAt:_expiry,...base}=f.request;
+            void _expiry;
             await writeFile(f.requestPath,JSON.stringify({...base,entitlementMode:"permanent_demo",reason:"qa_permanent_demo",...extra}));
             const generatePassword=vi.fn(() => PASSWORD);
             await expect(executeOperatorProvisioning({argv:[`--request=${f.requestPath}`,"--dry-run"]},{...f.deps,generatePassword}))
@@ -1203,4 +1205,127 @@ describe("operator teacher provisioning CLI", () => {
         expect(error.message).not.toContain(PASSWORD);
         expect(error.message).not.toContain(VERIFIER);
     });
+});
+
+describe("legacy organization recovery CLI", () => {
+    async function recoveryFixture() {
+        const f = await fixture();
+        const request = {
+            organizationId: "teacher_oldorg123", expectedAdminUserId: "teacher_oldadmin",
+            email: "recovery@example.com", displayName: "복구 원장", plan: "academy", entitlementMode: "legacy_recovery",
+            actor: "operator:recovery", reason: "legacy_owner_recovery", idempotencyKey: IDEMPOTENCY_KEY,
+            credentialStatePath: f.statePath,
+        };
+        const result = { status: "provisioned", organizationId: request.organizationId,
+            accountId: "teacher_0123456789abcdef", memberRole: "owner", plan: "academy",
+            entitlementMode: "legacy_recovery", replayed: false };
+        await writeFile(f.requestPath, JSON.stringify(request), { mode: 0o600 });
+        f.deps.provisionWithVerifier.mockResolvedValue(result);
+        return { ...f, request, result };
+    }
+
+    it("reviews the exact existing organization and admin before generating credentials, then replays its protected receipt", async () => {
+        const f = await recoveryFixture();
+        const generatePassword = vi.fn(() => PASSWORD);
+        const deps = { ...f.deps, generatePassword };
+        const review = await executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, "--dry-run"] }, deps);
+        expect(review).toMatchObject({ status: "review_only", organizationId: f.request.organizationId,
+            expectedAdminUserId: f.request.expectedAdminUserId, entitlementMode: "legacy_recovery", plan: "academy", memberRole: "owner" });
+        expect(generatePassword).not.toHaveBeenCalled();
+        expect(f.deps.provisionWithVerifier).not.toHaveBeenCalled();
+        expect(await readdir(f.stateDir)).toEqual([]);
+        if (!("reviewDigest" in review)) throw new Error("Expected review");
+        for (const flag of [undefined, `--approve-qa-demo=${review.reviewDigest}`, `--approve-legacy-recovery=${"0".repeat(64)}`]) {
+            await expect(executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, ...(flag ? [flag] : [])] }, deps))
+                .rejects.toMatchObject({ code: "invalid_arguments" });
+        }
+        const args = [`--request=${f.requestPath}`, `--approve-legacy-recovery=${review.reviewDigest}`];
+        const first = await executeOperatorProvisioning({ argv: args }, deps);
+        expect(first).toMatchObject(f.result);
+        expect(first).not.toHaveProperty("initialPassword");
+        expect(f.deps.provisionWithVerifier).toHaveBeenCalledWith(expect.objectContaining({
+            organizationId: f.request.organizationId, expectedAdminUserId: f.request.expectedAdminUserId,
+            encodedVerifier: VERIFIER, entitlementMode: "legacy_recovery", plan: "academy",
+        }), {});
+        expect(JSON.stringify(f.calls)).not.toContain(PASSWORD);
+        const saved = await receipt(f.statePath);
+        expect(saved).toMatchObject({ ...f.result, initialPassword: PASSWORD });
+        expect((await lstat(`${f.statePath}.receipt`)).mode & 0o777).toBe(0o600);
+        expect(await executeOperatorProvisioning({ argv: args }, deps)).toEqual(first);
+        expect(generatePassword).toHaveBeenCalledTimes(1);
+        expect(f.deps.provisionWithVerifier).toHaveBeenCalledTimes(1);
+        const stdout = vi.fn();
+        expect(await runOperatorProvisioningCli({ argv: args, env: {}, deps, stdout, stderr: vi.fn() })).toBe(0);
+        expect(stdout).toHaveBeenCalledWith("entitlement_mode=legacy_recovery");
+        expect(JSON.stringify(stdout.mock.calls)).not.toContain(PASSWORD);
+        expect(JSON.stringify(stdout.mock.calls)).not.toContain(VERIFIER);
+    });
+
+    it("binds the approval to old-admin provenance and rejects malformed or broader requests before RPC", async () => {
+        const f = await recoveryFixture();
+        const review = await executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, "--dry-run"] }, f.deps);
+        if (!("reviewDigest" in review)) throw new Error("Expected review");
+        await writeFile(f.requestPath, JSON.stringify({ ...f.request, expectedAdminUserId: "teacher_otheradmin" }));
+        await expect(executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, `--approve-legacy-recovery=${review.reviewDigest}`] }, f.deps))
+            .rejects.toMatchObject({ code: "invalid_arguments" });
+        for (const patch of [{ organizationId: "default" }, { organizationId: `demo_org_${"a".repeat(24)}` },
+            { expectedAdminUserId: "invalid" }, { plan: "pro" }, { reason: "qa_permanent_demo" },
+            { entitlementMode: "permanent_demo" }, { memberRole: "teacher" }, { expiresAt: "2099-01-01T00:00:00Z" }]) {
+            await writeFile(f.requestPath, JSON.stringify({ ...f.request, ...patch }));
+            await expect(executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, "--dry-run"] }, f.deps))
+                .rejects.toMatchObject({ code: "invalid_request" });
+        }
+        expect(f.deps.provisionWithVerifier).not.toHaveBeenCalled();
+        expect(await readdir(f.stateDir)).toEqual([]);
+    });
+
+    it("retains the original pending password after an uncertain response and validates exact recovery result bindings", async () => {
+        const f = await recoveryFixture();
+        const review = await executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, "--dry-run"] }, f.deps);
+        if (!("reviewDigest" in review)) throw new Error("Expected review");
+        const args = [`--request=${f.requestPath}`, `--approve-legacy-recovery=${review.reviewDigest}`];
+        for (const patch of [{ organizationId: "teacher_otherorg" }, { accountId: "teacher_oldadmin" },
+            { memberRole: "teacher" }, { plan: "pro" }, { entitlementMode: "permanent_demo" }, { extra: true }]) {
+            f.deps.provisionWithVerifier.mockResolvedValueOnce({ ...f.result, ...patch });
+            await expect(executeOperatorProvisioning({ argv: args }, f.deps)).rejects.toMatchObject({ code: "dependency_unavailable" });
+            expect(JSON.parse(await readFile(f.statePath, "utf8"))).toMatchObject({ initialPassword: PASSWORD, passwordVerifier: VERIFIER });
+        }
+        f.deps.provisionWithVerifier.mockResolvedValueOnce({ ...f.result, replayed: true });
+        expect(await executeOperatorProvisioning({ argv: args }, { ...f.deps, generatePassword: () => { throw new Error("must reuse"); } }))
+            .toMatchObject({ ...f.result, replayed: true });
+        const saved = await receipt(f.statePath);
+        saved.entitlementMode = "permanent_demo";
+        await writeFile(`${f.statePath}.receipt`, JSON.stringify(saved));
+        await expect(executeOperatorProvisioning({ argv: args }, f.deps)).rejects.toMatchObject({ code: "unsafe_receipt" });
+    });
+
+    it("sends only the verifier and reviewed recovery provenance to the exact service RPC", async () => {
+        const f = await recoveryFixture();
+        const review = await executeOperatorProvisioning({ argv: [`--request=${f.requestPath}`, "--dry-run"] }, f.deps);
+        if (!("reviewDigest" in review)) throw new Error("Expected review");
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify(f.result), {
+            status: 200, headers: { "content-type": "application/json" },
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+        try {
+            const result = await executeOperatorProvisioning({
+                argv: [`--request=${f.requestPath}`, `--approve-legacy-recovery=${review.reviewDigest}`],
+                env: { SUPABASE_URL: "https://recovery.example.test", SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key-for-recovery-contract-only" },
+            }, { ...f.deps, provisionWithVerifier: undefined });
+            expect(result).toMatchObject(f.result);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+            expect(String(url)).toBe("https://recovery.example.test/rest/v1/rpc/omr_recover_legacy_organization_v1");
+            expect(JSON.parse(String(init.body))).toEqual({
+                p_organization_id: f.request.organizationId, p_expected_admin_user_id: f.request.expectedAdminUserId,
+                p_email: f.request.email, p_display_name: f.request.displayName, p_password_hash: VERIFIER,
+                p_plan: "academy", p_entitlement_mode: "legacy_recovery", p_actor: f.request.actor,
+                p_reason: "legacy_owner_recovery", p_idempotency_key: IDEMPOTENCY_KEY,
+            });
+            expect(String(init.body)).not.toContain(PASSWORD);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
 });
