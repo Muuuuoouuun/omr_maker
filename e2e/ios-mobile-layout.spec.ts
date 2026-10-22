@@ -1,3 +1,4 @@
+import { observeNativeAction } from "./nativeActionDiagnostics";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -757,8 +758,11 @@ test.describe("iPhone WebKit mobile layout", () => {
         const loginCard = page.locator(".home-login-card");
         const loginForm = page.getByRole("form", { name: "교사 로그인" });
         await expect(loginCard).toBeVisible();
-        await loginForm.getByRole("button", { name: "대시보드 입장" }).click();
-        await expect(loginForm.getByRole("alert")).toContainText("아이디와 비밀번호를 모두 입력해주세요.");
+        const submit = loginForm.getByRole("button", { name: "대시보드 입장" });
+        await observeNativeAction(page, submit, "teacher-empty-submit", async () => {
+            await submit.click();
+            await expect(loginForm.getByRole("alert")).toContainText("아이디와 비밀번호를 모두 입력해주세요.");
+        });
 
         await expectNoDocumentHorizontalOverflow(page);
         for (const control of [

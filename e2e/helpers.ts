@@ -2,7 +2,7 @@ import { expect, test, type BrowserContext, type Locator, type Page } from "@pla
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { startShowcaseEntryDiagnostics } from "./showcaseEntryDiagnostics";
+import { observeShowcaseRuntimeFailures, startShowcaseEntryDiagnostics } from "./showcaseEntryDiagnostics";
 import { activateByInput } from "./inputActivation";
 
 export async function activateControl(control: Locator, hasTouch = false) {
@@ -97,6 +97,7 @@ function showcaseDiagnosticScenario(title: string): string {
 }
 
 export async function loginAsShowcaseTeacher(page: Page, hasTouch = false) {
+    observeShowcaseRuntimeFailures(page);
     const diagnostics = process.env.OMR_SHOWCASE_ENTRY_DIAGNOSTICS === "1"
         ? startShowcaseEntryDiagnostics(page) : null;
     let outcome: "passed" | "failed" = "failed";

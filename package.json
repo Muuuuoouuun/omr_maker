@@ -83,7 +83,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitest/ui": "^4.1.11",
+    "@vitest/ui": "^4.1.12",
     "concurrently": "^10.0.6",
     "electron": "^42.11.15",
     "electron-builder": "^26.15.3",
@@ -91,7 +91,7 @@
     "eslint-config-next": "16.4.2",
     "jsdom": "29.1.1",
     "typescript": "^5",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "wait-on": "^9.0.10",
     "fast-glob": "file:./scripts/next-eslint-glob-adapter"
   },

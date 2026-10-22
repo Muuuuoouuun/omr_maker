@@ -1,3 +1,4 @@
+import { observeNativeAction } from "./nativeActionDiagnostics";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { studentAssignmentDraftStorageKey } from "../src/lib/studentAssignmentClassification";
 
@@ -406,11 +407,14 @@ test.describe("Mobile PWA entry", () => {
         // remains available independently in the alternate-entry disclosure.
         await expect(page.getByLabel("학생 로그인 ID")).toBeVisible();
         await expect(page.getByLabel("시작 코드", { exact: true })).toHaveAttribute("type", "password");
-        await page.getByText("다른 방법으로 참여", { exact: true }).click();
-        const guestEntry = page.getByRole("button", { name: "코드 없이 게스트로 계속하기" });
-        await expectTouchTarget(guestEntry);
-        await guestEntry.click();
-        await expect(page).toHaveURL(/\/student\/dashboard$/);
+        const disclosure = page.getByText("다른 방법으로 참여", { exact: true });
+        await observeNativeAction(page, disclosure, "student-alternate-entry", async () => {
+            await disclosure.click();
+            const guestEntry = page.getByRole("button", { name: "코드 없이 게스트로 계속하기" });
+            await expectTouchTarget(guestEntry);
+            await guestEntry.click();
+            await expect(page).toHaveURL(/\/student\/dashboard$/);
+        });
         await expectNoHorizontalOverflow(page);
         expect(consoleProblems).toEqual([]);
     });
