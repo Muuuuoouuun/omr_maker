@@ -35,7 +35,8 @@ describe("canonical list projections", () => {
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).not.toContain("payload");
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).not.toContain("question_results");
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).toContain("question_results_question_count");
-        expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).toContain("updated_at");
+        expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).not.toContain("updated_at");
+        expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).toContain("updated_at:payload->>updatedAt");
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS.split(/\s*,\s*/)).toContain("assignment_revision");
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS).toContain("student_questions:student_question_summaries");
         expect(SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS).toContain("handwriting_question_count:payload->handwriting->summary->questionCount");

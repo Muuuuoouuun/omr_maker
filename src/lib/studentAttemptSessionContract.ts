@@ -66,10 +66,10 @@ function safeSubQuestionAnswers(value: unknown, allowedQuestionIds: Set<number>)
     for (const [rawQuestionId, rawSubAnswers] of Object.entries(value).slice(0, 500)) {
         const questionId = Number(rawQuestionId);
         if (!allowedQuestionIds.has(questionId) || !rawSubAnswers || typeof rawSubAnswers !== "object" || Array.isArray(rawSubAnswers)) continue;
-        const accepted: SubQuestionAnswers[number] = {};
+        const accepted: [string, SubQuestionAnswers[number][string]][] = [];
         for (const [rawSubQuestionId, rawAnswer] of Object.entries(rawSubAnswers).slice(0, 10)) {
             const subQuestionId = clean(rawSubQuestionId);
-            if (!subQuestionId || subQuestionId.length > 100 || !rawAnswer || typeof rawAnswer !== "object" || Array.isArray(rawAnswer)) continue;
+            if (!subQuestionId || subQuestionId.length > 256 || !rawAnswer || typeof rawAnswer !== "object" || Array.isArray(rawAnswer)) continue;
             const answer = rawAnswer as Record<string, unknown>;
             if (
                 answer.schemaVersion !== 1
@@ -77,16 +77,17 @@ function safeSubQuestionAnswers(value: unknown, allowedQuestionIds: Set<number>)
                 || answer.body.length > 2_000
                 || (answer.reviewStatus !== "needs_review" && answer.reviewStatus !== "reviewed")
             ) continue;
-            accepted[subQuestionId] = {
+            accepted.push([subQuestionId, {
                 schemaVersion: 1,
                 body: answer.body,
                 reviewStatus: answer.reviewStatus,
                 ...(safeIso(answer.answeredAt) ? { answeredAt: safeIso(answer.answeredAt) } : {}),
                 ...(safeIso(answer.reviewedAt) ? { reviewedAt: safeIso(answer.reviewedAt) } : {}),
                 ...(clean(answer.reviewedBy) ? { reviewedBy: clean(answer.reviewedBy).slice(0, 200) } : {}),
-            };
+            }]);
         }
-        if (Object.keys(accepted).length > 0) safe[questionId] = accepted;
+        // Imported IDs can name object prototype properties or include a normalization suffix.
+        if (accepted.length > 0) safe[questionId] = Object.fromEntries(accepted);
     }
     return safe;
 }

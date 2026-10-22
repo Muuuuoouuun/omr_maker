@@ -192,8 +192,9 @@ describe("distribution invite lifecycle surface", () => {
         const modal = source("src/components/DistributeModal.tsx");
 
         expect(modal).toMatch(
-            /inviteMetadataLoad\.status === "not_found"[\s\S]{0,240}onInviteRawUrlStateChange\(null\)/,
+            /const shouldDiscardGroupBearer = inviteMetadataLoad\.status === "not_found"/,
         );
+        expect(modal).toContain("if (shouldDiscardGroupBearer && inviteRawUrlState) onInviteRawUrlStateChange(null)");
     });
 
     it("also discards the group-derived share URL before another access mode can expose it", () => {

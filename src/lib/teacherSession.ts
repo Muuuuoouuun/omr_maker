@@ -1,3 +1,4 @@
+import { isProvisionedOrganizationShape, isLegacyRecoveryOwner, type ProvisionedTeacherEntitlementMode } from "./provisionedTeacherEntitlement";
 import { isExactMockupTeacherIdentity } from "@/lib/mockupAccount";
 import {
     purgeLegacyCanonicalSurfaceMarkers,
@@ -13,7 +14,6 @@ export const TEACHER_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 export const TEACHER_SESSION_EXPIRING_SOON_MS = 30 * 60 * 1000;
 const DEFAULT_TEACHER_REDIRECT = "/teacher/dashboard";
 const LEGACY_ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
-const PILOT_ORGANIZATION_ID_PATTERN = /^(?:pilot_org_|demo_org_)[a-f0-9]{24}$/;
 
 export type TeacherMemberRole = "owner" | "admin" | "teacher" | "assistant" | "viewer";
 export type TeacherPlanCeiling = "free" | "pro" | "academy";
@@ -42,11 +42,11 @@ function normalizePlan(value: unknown): TeacherPlanCeiling | undefined {
         : undefined;
 }
 
-function normalizeOrganizationId(value: unknown, authority?: TeacherSessionAuthority): string | undefined {
+function normalizeOrganizationId(value: unknown, authority?: TeacherSessionAuthority, mode?: ProvisionedTeacherEntitlementMode): string | undefined {
     const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
     if (authority === "mockup") return normalized || undefined;
-    const pattern = authority === "account" ? PILOT_ORGANIZATION_ID_PATTERN : LEGACY_ORGANIZATION_ID_PATTERN;
-    return pattern.test(normalized) ? normalized : undefined;
+    if (authority === "account") return isProvisionedOrganizationShape(normalized, mode) ? normalized : undefined;
+    return LEGACY_ORGANIZATION_ID_PATTERN.test(normalized) ? normalized : undefined;
 }
 
 export type TeacherSessionAuthority = "account" | "legacy_account" | "bootstrap" | "mockup";
@@ -62,6 +62,7 @@ export interface TeacherSession {
     organizationName?: string;
     memberRole?: TeacherMemberRole;
     plan?: TeacherPlanCeiling;
+    entitlementMode?: ProvisionedTeacherEntitlementMode;
     /**
      * Signed server-cookie authority. Account-backed sessions are checked
      * against the private database generation on every protected request.
@@ -81,6 +82,7 @@ export interface TeacherSessionIdentity {
     organizationName?: string;
     memberRole?: TeacherMemberRole;
     plan?: TeacherPlanCeiling;
+    entitlementMode?: ProvisionedTeacherEntitlementMode;
     sessionAuthority?: TeacherSessionAuthority;
     accountSessionGeneration?: number;
 }
@@ -209,10 +211,11 @@ export function createTeacherSession(token: string, now = Date.now(), identity?:
         teacherId: identity?.teacherId?.trim() || undefined,
         email: identity?.email?.trim() || undefined,
         displayName: identity?.displayName?.trim() || undefined,
-        organizationId: normalizeOrganizationId(identity?.organizationId, sessionAuthority),
+        organizationId: normalizeOrganizationId(identity?.organizationId, sessionAuthority, identity?.entitlementMode),
         organizationName: identity?.organizationName?.trim() || undefined,
         memberRole: normalizeMemberRole(identity?.memberRole),
         plan: normalizePlan(identity?.plan),
+        entitlementMode: identity?.entitlementMode,
         sessionAuthority,
         accountSessionGeneration,
         issuedAt: now,
@@ -230,13 +233,15 @@ export function isTeacherSessionActive(session: TeacherSession | null | undefine
     if (!baseActive) return false;
     if (session.sessionAuthority === "account") {
         return /^teacher_[a-f0-9]{16}$/.test(session.teacherId || "")
-            && PILOT_ORGANIZATION_ID_PATTERN.test(session.organizationId || "")
+            && isProvisionedOrganizationShape(session.organizationId || "", session.entitlementMode)
+            && isLegacyRecoveryOwner(session.entitlementMode, session.memberRole, session.plan)
             && !!session.organizationName?.trim()
             && isProvisionedTeacherMemberRole(session.memberRole)
             && !!session.plan
             && Number.isSafeInteger(session.accountSessionGeneration)
             && (session.accountSessionGeneration || 0) >= 1;
     }
+    if (session.entitlementMode !== undefined) return false;
     if (session.sessionAuthority === "mockup") return isExactMockupTeacherIdentity(session);
     return session.sessionAuthority === "legacy_account" || session.sessionAuthority === "bootstrap";
 }
@@ -245,6 +250,7 @@ export function parseTeacherSession(raw: string | null | undefined, now = Date.n
     if (!raw) return null;
     try {
         const parsed = JSON.parse(raw) as Partial<TeacherSession>;
+        if (parsed.entitlementMode !== undefined && parsed.entitlementMode !== "permanent_demo" && parsed.entitlementMode !== "legacy_recovery") return null;
         const sessionAuthority = parsed.sessionAuthority === "account"
             || parsed.sessionAuthority === "legacy_account"
             || parsed.sessionAuthority === "bootstrap"
@@ -259,10 +265,11 @@ export function parseTeacherSession(raw: string | null | undefined, now = Date.n
             teacherId: typeof parsed.teacherId === "string" ? parsed.teacherId.trim() || undefined : undefined,
             email: typeof parsed.email === "string" ? parsed.email.trim() || undefined : undefined,
             displayName: typeof parsed.displayName === "string" ? parsed.displayName.trim() || undefined : undefined,
-            organizationId: normalizeOrganizationId(parsed.organizationId, sessionAuthority),
+            organizationId: normalizeOrganizationId(parsed.organizationId, sessionAuthority, parsed.entitlementMode),
             organizationName: typeof parsed.organizationName === "string" ? parsed.organizationName.trim() || undefined : undefined,
             memberRole: normalizeMemberRole(parsed.memberRole),
             plan: normalizePlan(parsed.plan),
+            entitlementMode: parsed.entitlementMode,
             sessionAuthority,
             accountSessionGeneration: Number.isSafeInteger(parsed.accountSessionGeneration)
                 && (parsed.accountSessionGeneration || 0) >= 1

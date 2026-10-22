@@ -20,6 +20,7 @@ export interface ExamValidationInput {
     endAt?: string;
     hasProblemPdf?: boolean;
     accessConfig?: Exam["accessConfig"];
+    targetTotalScore?: number | "";
 }
 
 export interface ExamValidationSummary {
@@ -59,6 +60,13 @@ export function validateExamDraft(input: ExamValidationInput): ExamValidationSum
         errors.push(issue("error", "questions_required", "문항이 1개 이상 필요합니다."));
     }
 
+    const invalidIds = questions
+        .filter(question => !Number.isSafeInteger(question.id) || question.id <= 0)
+        .map(question => question.id);
+    if (invalidIds.length > 0) {
+        errors.push(issue("error", "invalid_question_ids", "문항 ID가 올바르지 않습니다. 문항을 다시 추가해 주세요.", invalidIds));
+    }
+
     const duplicateIds = questions
         .map(question => question.id)
         .filter((id, index, ids) => ids.indexOf(id) !== index);
@@ -67,7 +75,7 @@ export function validateExamDraft(input: ExamValidationInput): ExamValidationSum
     }
 
     const invalidNumberIds = questions
-        .filter(question => !Number.isInteger(question.number) || question.number <= 0)
+        .filter(question => !Number.isSafeInteger(question.number) || question.number <= 0)
         .map(question => question.id);
     if (invalidNumberIds.length > 0) {
         errors.push(issue("error", "invalid_question_numbers", "문항 번호는 1 이상의 정수여야 합니다.", invalidNumberIds));
@@ -90,14 +98,21 @@ export function validateExamDraft(input: ExamValidationInput): ExamValidationSum
         errors.push(issue("error", "missing_answers", `정답이 없는 문항이 ${missingAnswerIds.length}개 있습니다.`, missingAnswerIds));
     }
 
+    const invalidChoiceIds = questions
+        .filter(question => question.choices !== undefined && question.choices !== 4 && question.choices !== 5)
+        .map(question => question.id);
+    if (invalidChoiceIds.length > 0) {
+        errors.push(issue("error", "invalid_choice_counts", "선택지 수는 4개 또는 5개여야 합니다.", invalidChoiceIds));
+    }
+
     const outOfRangeAnswerIds = questions
         .filter(question => {
             if (question.answer === undefined || question.answer === null) return false;
-            return question.answer < 1 || question.answer > questionChoiceCount(question);
+            return !Number.isInteger(question.answer) || question.answer < 1 || question.answer > questionChoiceCount(question);
         })
         .map(question => question.id);
     if (outOfRangeAnswerIds.length > 0) {
-        errors.push(issue("error", "answer_out_of_range", "선택지 수보다 큰 정답이 지정된 문항이 있습니다.", outOfRangeAnswerIds));
+        errors.push(issue("error", "answer_out_of_range", "정답은 1부터 선택지 수까지의 정수여야 합니다.", outOfRangeAnswerIds));
     }
 
     const invalidScoreIds = questions
@@ -105,6 +120,11 @@ export function validateExamDraft(input: ExamValidationInput): ExamValidationSum
         .map(question => question.id);
     if (invalidScoreIds.length > 0) {
         errors.push(issue("error", "invalid_scores", "배점은 0보다 큰 숫자여야 합니다.", invalidScoreIds));
+    }
+
+    const unreviewedAnalysisIds = questions.filter(question => question.contentAnalysis?.status === 'draft').map(question => question.id);
+    if (unreviewedAnalysisIds.length > 0) {
+        errors.push(issue('error', 'analysis_review_required', `문제지 분석 ${unreviewedAnalysisIds.length}문항을 검토해야 합니다. 시험지 개념·함정 분석에서 검토·적용하거나 검토 대기 분석 제외를 선택해 주세요.`, unreviewedAnalysisIds));
     }
 
     const invalidSubQuestionIds = questions.filter(question => (question.subQuestions || []).some(subQuestion => (
@@ -128,7 +148,7 @@ export function validateExamDraft(input: ExamValidationInput): ExamValidationSum
     }
 
     if (input.durationMin !== "" && input.durationMin !== undefined) {
-        if (!Number.isFinite(input.durationMin) || input.durationMin <= 0) {
+        if (!Number.isFinite(input.durationMin) || input.durationMin < 1) {
             errors.push(issue("error", "invalid_duration", "시험 시간은 1분 이상이어야 합니다."));
         }
     }
@@ -152,7 +172,8 @@ export function validateExamDraft(input: ExamValidationInput): ExamValidationSum
         errors.push(issue("error", "invalid_pin", "PIN은 4~6자리 숫자여야 합니다."));
     }
 
-    const answeredCount = totalQuestions - missingAnswerIds.length;
+    const answeredCount = questions.filter(question => Number.isInteger(question.answer)
+        && Number(question.answer) >= 1 && Number(question.answer) <= questionChoiceCount(question)).length;
     const taggedCount = questions.filter(question => question.tags?.concept || question.label).length;
     const pdfLinkedQuestions = questions.filter(question => question.pdfLocation || question.pdfRegion);
     const pdfLinkedCount = pdfLinkedQuestions.length;
@@ -161,6 +182,13 @@ export function validateExamDraft(input: ExamValidationInput): ExamValidationSum
     const totalScore = Math.round(
         questions.reduce((sum, question) => sum + questionWeight(question, totalQuestions), 0) * 100
     ) / 100;
+
+    if (typeof input.targetTotalScore === "number"
+        && Number.isFinite(input.targetTotalScore)
+        && input.targetTotalScore > 0
+        && Math.abs(totalScore - input.targetTotalScore) > 0.001) {
+        warnings.push(issue("warning", "score_target_mismatch", `설정 총점 ${totalScore}점이 목표 ${input.targetTotalScore}점과 다릅니다. 원본 시험지의 배점을 확인해 주세요.`));
+    }
 
     if (!input.hasProblemPdf) {
         warnings.push(issue("warning", "problem_pdf_missing", "문제지 PDF가 없으면 학생 화면에서 별도 파일 업로드가 필요합니다."));

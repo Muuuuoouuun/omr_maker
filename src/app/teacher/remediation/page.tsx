@@ -48,25 +48,36 @@ export default function RemediationPage() {
     const [page, setPage] = useState(0);
     const generation = useRef(0);
     const saving = useRef(false);
-    const load = useCallback(async () => {
+    const load = useCallback(() => {
         const request = ++generation.current;
-        setLoading(true); setError(""); setDashboard(null); setSelected([]);
-        try {
-            const result = await manageRemediation({ op: "load", page });
+        return manageRemediation({ op: "load", page }).then(result => {
             if (request !== generation.current) return;
             if (result.status === "loaded") setDashboard(result.dashboard);
             else setError(result.status === "error" ? result.error : "보강 목록을 불러오지 못했습니다.");
-        } catch { if (request === generation.current) setError("연결을 확인하고 다시 시도해주세요."); }
-        finally { if (request === generation.current) setLoading(false); }
+        }, () => {
+            if (request === generation.current) setError("연결을 확인하고 다시 시도해주세요.");
+        }).finally(() => { if (request === generation.current) setLoading(false); });
     }, [page]);
     useEffect(() => { const counter = generation; void load(); return () => { counter.current++; }; }, [load]);
+    function resetList() {
+        setLoading(true); setError(""); setDashboard(null); setSelected([]);
+    }
+    async function refresh() {
+        resetList();
+        await load();
+    }
+    function changePage(next: number) {
+        generation.current++;
+        resetList();
+        setPage(next);
+    }
     async function save(command: Mutation) {
         if (saving.current) return;
         saving.current = true; setBusy(true); setError(""); setMessage("");
         try {
             const result = await manageRemediation(command);
-            if (result.status === "saved") { await load(); setMessage("저장했습니다. 최신 제출 근거로 목록을 갱신했습니다."); }
-            else if (result.status === "error") { await load(); setError(result.error); }
+            if (result.status === "saved") { await refresh(); setMessage("저장했습니다. 최신 제출 근거로 목록을 갱신했습니다."); }
+            else if (result.status === "error") { await refresh(); setError(result.error); }
         } catch { setDashboard(null); setError("저장 결과를 확인하지 못했습니다. 새로고침 후 상태를 확인해주세요."); }
         finally { saving.current = false; setBusy(false); }
     }
@@ -80,7 +91,7 @@ export default function RemediationPage() {
     return <><TeacherHeader /><main id="main-content" className={styles.main}>
         <header className={styles.heading}><div><span className={styles.eyebrow}>PREMIUM · 보강 관리</span><h1>오답을 끝까지 확인하는 관리</h1>
             <p>배정하고, 수정 결과를 보고, 확인 근거를 남기세요.<br />다시 맞혔다고 이해한 것으로 자동 처리하지 않습니다.</p></div>
-            <button className="btn btn-secondary" disabled={loading || busy} onClick={() => void load()}>새로고침</button></header>
+            <button className="btn btn-secondary" disabled={loading || busy} onClick={() => void refresh()}>새로고침</button></header>
         {error && <p role="alert" className={styles.error}>{error}</p>}
         {message && <p role="status" className={styles.notice}>{message}</p>}
         {loading && <p role="status">담당 반과 제출 근거를 확인하고 있습니다…</p>}
@@ -90,7 +101,7 @@ export default function RemediationPage() {
                 <p>문항별 가장 최근 재시험 결과를 반영합니다. 새 제출이 생기면 완료된 건도 다시 확인 대상으로 바뀔 수 있습니다.</p>
                 {!dashboard.cases.length && <div className={styles.card}><p>{page ? "이 페이지에 보강 기록이 없습니다." : "아직 배정된 보강이 없습니다. 아래에서 오답이 있는 학생을 선택해주세요."}</p></div>}
                 <div className={styles.grid}>{dashboard.cases.map(item => <CaseCard key={`${item.sourceAttemptId}:${item.revision}:${item.evidenceKey}`} item={item} disabled={busy || !dashboard.planEnabled} save={save} />)}</div>
-                <nav className={styles.row} aria-label="보강 목록 페이지"><button className="btn btn-secondary" disabled={busy || page === 0} onClick={() => setPage(p => p - 1)}>이전</button><span>{page + 1}페이지 · 최대 50건</span><button className="btn btn-secondary" disabled={busy || !dashboard.hasMore || page === 10000} onClick={() => setPage(p => p + 1)}>다음</button></nav>
+                <nav className={styles.row} aria-label="보강 목록 페이지"><button className="btn btn-secondary" disabled={busy || page === 0} onClick={() => changePage(page - 1)}>이전</button><span>{page + 1}페이지 · 최대 50건</span><button className="btn btn-secondary" disabled={busy || !dashboard.hasMore || page === 10000} onClick={() => changePage(page + 1)}>다음</button></nav>
             </section>
             {dashboard.canAssign && <section className={styles.card} aria-labelledby="assign-title"><h2 id="assign-title">오답 보강 배정</h2>
                 <p>미배정 원시험 중 최근 50건입니다. 담당 반의 재원생·서버 채점 결과만 표시합니다. 배정한 교사가 담당하며, 학생에게는 다시 풀기 목록이 생깁니다.</p>

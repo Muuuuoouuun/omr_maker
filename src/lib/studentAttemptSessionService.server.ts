@@ -1,6 +1,6 @@
 import { evaluateExamAccess, verifyExamPin } from "@/lib/examAccess";
 import { attemptOwnedBy, ownerStudentId } from "@/lib/studentExamCore";
-import { buildServerAttempt } from "@/lib/studentExamServerGrading";
+import { buildServerAttempt, RequiredSubQuestionAnswersError } from "@/lib/studentExamServerGrading";
 import { leaseTokenHash } from "@/lib/studentAttemptSessionCrypto.server";
 import type {
     OpenStudentAttemptSessionGatewayInput,
@@ -9,7 +9,7 @@ import type {
     StudentAttemptSessionMutationResult,
 } from "@/lib/studentAttemptSessionGateway.server";
 import type { StudentServerIdentity } from "@/lib/studentServerSession";
-import type { Attempt, Exam, FocusLossEvent, QuestionTiming, RetakeMetadata } from "@/types/omr";
+import type { Attempt, Exam, FocusLossEvent, MissingRequiredSubQuestion, QuestionTiming, RetakeMetadata } from "@/types/omr";
 
 type OpenGateway = (
     input: OpenStudentAttemptSessionGatewayInput,
@@ -147,7 +147,11 @@ export interface SubmitStudentAttemptSessionServiceInput {
 
 export async function submitStudentAttemptSessionService(
     params: SubmitStudentAttemptSessionServiceInput,
-): Promise<{ status: "submitted"; attempt: Attempt } | { status: StudentAttemptSessionErrorStatus }> {
+): Promise<
+    | { status: "submitted"; attempt: Attempt }
+    | { status: "answers_incomplete"; missingRequiredSubQuestions: MissingRequiredSubQuestion[]; revision: number }
+    | { status: StudentAttemptSessionErrorStatus }
+> {
     const organizationId = params.identity.organizationId || "";
     const studentId = ownerStudentId(params.identity);
     if (!organizationId || !studentId) return { status: "not_owned" };
@@ -184,21 +188,31 @@ export async function submitStudentAttemptSessionService(
             createdAt: finishedAt,
         }
         : undefined;
-    const attempt = buildServerAttempt({
-        examId: session.gradingSnapshot.id,
-        submissionId: session.submissionId,
-        answers: session.answers,
-        subQuestionAnswers: session.subQuestionAnswers,
-        startedAt: session.startedAt,
-        autoSubmitted: params.autoSubmitted,
-        questionTimings: params.questionTimings,
-        focusLossEvents: params.focusLossEvents,
-        tabFociLostCount: params.tabFociLostCount,
-        retake,
-    }, session.gradingSnapshot, params.identity, session.attemptId, finishedAt, {}, {
-        assignmentId: session.assignmentId,
-        assignmentRevision: session.assignmentRevision,
-    });
+    let attempt: Attempt;
+    try {
+        attempt = buildServerAttempt({
+            examId: session.gradingSnapshot.id,
+            submissionId: session.submissionId,
+            answers: session.answers,
+            subQuestionAnswers: session.subQuestionAnswers,
+            startedAt: session.startedAt,
+            autoSubmitted: params.autoSubmitted,
+            questionTimings: params.questionTimings,
+            focusLossEvents: params.focusLossEvents,
+            tabFociLostCount: params.tabFociLostCount,
+            retake,
+        }, session.gradingSnapshot, params.identity, session.attemptId, finishedAt, {}, {
+            assignmentId: session.assignmentId,
+            assignmentRevision: session.assignmentRevision,
+        });
+    } catch (error) {
+        if (!(error instanceof RequiredSubQuestionAnswersError)) throw error;
+        return {
+            status: "answers_incomplete",
+            missingRequiredSubQuestions: error.missingRequiredSubQuestions,
+            revision: session.revision,
+        };
+    }
     return params.commitGateway({
         sessionId: params.sessionId,
         organizationId,

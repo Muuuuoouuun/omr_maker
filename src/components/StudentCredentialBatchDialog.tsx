@@ -332,15 +332,15 @@ export default function StudentCredentialBatchDialog({
     const activeRequestRef = useRef<number | null>(null);
     const requestCloseRef = useRef<() => void>(() => {});
     const onCloseRef = useRef(onClose);
-    onCloseRef.current = onClose;
+    useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
     const requestGuardRef = useRef<ReturnType<typeof createStudentCredentialRequestGuard> | null>(null);
-    if (!requestGuardRef.current) requestGuardRef.current = createStudentCredentialRequestGuard();
+    if (requestGuardRef.current === null) requestGuardRef.current = createStudentCredentialRequestGuard();
     const expectedStudentIds = useMemo(
         () => expectedStudents.map(student => student.studentId),
         [expectedStudents],
     );
     const controllerRef = useRef<ReturnType<typeof createStudentCredentialDownloadController> | null>(null);
-    if (!controllerRef.current && typeof window !== "undefined") {
+    if (controllerRef.current === null) {
         controllerRef.current = createStudentCredentialDownloadController({
             createBlob: csv => new Blob([csv], { type: "text/csv;charset=utf-8" }),
             createObjectURL: blob => URL.createObjectURL(blob),
@@ -604,7 +604,7 @@ export default function StudentCredentialBatchDialog({
         clearSecrets();
         onClose();
     }, [clearSecrets, onClose, state.phase, state.retryable]);
-    requestCloseRef.current = requestClose;
+    useEffect(() => { requestCloseRef.current = requestClose; }, [requestClose]);
 
     const confirmDiscard = useCallback(() => {
         clearSecrets();

@@ -1,3 +1,4 @@
+import type { ProvisionedTeacherEntitlementMode } from "./provisionedTeacherEntitlement";
 import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
 import type { TeacherMemberRole } from "@/lib/teacherSession";
 import type { PlanKey } from "@/types/omr";
@@ -19,6 +20,7 @@ export interface TeacherCredential {
 }
 
 export interface TeacherLoginIdentity {
+    entitlementMode?: ProvisionedTeacherEntitlementMode;
     teacherId: string;
     email: string;
     displayName: string;

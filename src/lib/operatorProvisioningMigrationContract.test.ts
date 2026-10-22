@@ -116,7 +116,8 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
             "omr_pilot_plan_grants_superseded_check",
             "extensions.digest(pg_catalog.pg_get_functiondef",
             "282a79ed02c1a3cfc927248cf554ff5ae64eb73b18b8b1f658396d466f884a46",
-            "117c3f5df5cc58a3a69116cbc95176fc7d3263aa9a2d1504ccecf346ac908826",
+            // PostgreSQL-attested workspace plan after forward migration 202610220002.
+            "778083d5e37553c1089bacc01839fd64f7fd2fe433d3b8bf11bdbc6f9cbe7201",
             "9e546425eaa75644fb8ee944062da143dad242f4424061910bee2fab4ea07670",
             "a28a831abf38473c8a7d6989749d298b2de2c6d7629fb08925c146a5c57e0bc1",
             "9b6c6c9153157a0f4eef095e5c1bbe3c31103c2322d80e8d306d46e8429f250e",

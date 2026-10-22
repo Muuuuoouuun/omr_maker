@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
 import StatusPill from "@/components/dashboard/StatusPill";
@@ -23,17 +23,23 @@ export default function RemindersPage() {
     const [busy, setBusy] = useState(false);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
+    const generation = useRef(0);
 
-    const load = useCallback(async () => {
-        setLoading(true);
-        try {
-            const result = await loadSolapiReminderDashboard();
+    const load = useCallback(() => {
+        const request = ++generation.current;
+        return loadSolapiReminderDashboard().then(result => {
+            if (request !== generation.current) return;
             if (result.status === "error") { setError(result.error); return; }
             setDashboard(result.dashboard); setReadiness(result.readiness); setError("");
-        } catch { setError("알림 정보를 불러오지 못했습니다. 다시 시도해주세요."); }
-        finally { setLoading(false); }
+        }, () => {
+            if (request === generation.current) setError("알림 정보를 불러오지 못했습니다. 다시 시도해주세요.");
+        }).finally(() => { if (request === generation.current) setLoading(false); });
     }, []);
-    useEffect(() => { void load(); }, [load]);
+    useEffect(() => { const counter = generation; void load(); return () => { counter.current++; }; }, [load]);
+    function refresh() {
+        setLoading(true);
+        void load();
+    }
 
     function selectExam(id: string) {
         setExamId(id); setSettings(dashboard?.settings.find(item => item.examId === id) || defaultReminderSettings(id));
@@ -81,7 +87,7 @@ export default function RemindersPage() {
         <main id="main-content" className={styles.main}>
             <div className={styles.heading}>
                 <div><h1>학습 알림</h1><p>마감이 다가오면, 아직 제출하지 않은 학생에게 알려주세요.</p></div>
-                <button type="button" className="btn btn-secondary" disabled={loading || busy} onClick={() => void load()}>새로고침</button>
+                <button type="button" className="btn btn-secondary" disabled={loading || busy} onClick={refresh}>새로고침</button>
             </div>
             {error && <p role="alert" className={styles.error}>{error}</p>}
             {message && <p role="status" className={styles.notice}>{message}</p>}

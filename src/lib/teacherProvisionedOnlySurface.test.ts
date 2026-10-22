@@ -36,12 +36,17 @@ describe("provisioned-only teacher identity surface", () => {
         const page = source("src/app/page.tsx");
         const layout = source("src/app/layout.tsx");
         const queryLifecycle = page.slice(
-            page.indexOf('const resetToken = query.get("teacherResetToken")'),
-            page.indexOf('const requestedExam = query.get("exam")'),
+            page.indexOf("if (storedHomeState && !homeInitialization)"),
+            page.indexOf("// /intro's demo CTAs"),
         );
 
-        expect(queryLifecycle).toContain("if (teacherSelfServiceEnabled && resetToken)");
-        expect(queryLifecycle).toContain("else if (teacherSelfServiceEnabled && verifyToken)");
+        expect(queryLifecycle).toContain("if (!operatorRecovery && teacherSelfServiceEnabled)");
+        expect(queryLifecycle).toContain("if (resetToken)");
+        expect(queryLifecycle).toContain("else if (verifyToken)");
+        expect(queryLifecycle).toContain("if (!teacherSelfServiceEnabled && hasLifecycleQuery)");
+        expect(queryLifecycle.indexOf("redirectToCanonicalTeacherRecovery()")).toBeLessThan(
+            queryLifecycle.indexOf("confirmTeacherSignupEmail(verifyToken)"),
+        );
         expect(queryLifecycle).toContain("setTeacherLegacyLinkBlocked(true)");
         expect(queryLifecycle).toContain("scrubTeacherLifecycleQuery(query)");
         expect(page).toContain("현재 운영 모드에서는 이 링크를 사용할 수 없습니다.");
@@ -54,13 +59,13 @@ describe("provisioned-only teacher identity surface", () => {
     it("makes canonical operator recovery dominate student and exam handoffs", () => {
         const page = source("src/app/page.tsx");
         const queryEffect = page.slice(
-            page.indexOf("const query = new URLSearchParams(window.location.search)"),
-            page.indexOf("}, [router, teacherSelfServiceEnabled])"),
+            page.indexOf("if (storedHomeState && !homeInitialization)"),
+            page.indexOf("// /intro's demo CTAs"),
         );
 
         expect(queryEffect).toContain('query.get("teacherRecovery") === "legacy_link"');
-        expect(queryEffect).toContain("!teacherOperatorRecovery && requestedInvite && requestedExam");
-        expect(queryEffect).toContain('!teacherOperatorRecovery && requestedRole === "student"');
+        expect(queryEffect).toContain("!canonicalRecovery && !operatorRecovery && storedHomeState.invite && storedHomeState.examId");
+        expect(queryEffect).toContain('!operatorRecovery && requestedRole === "student"');
     });
 
     it("rebuilds provisioned recovery URLs from a strict shared allowlist", () => {
@@ -83,13 +88,16 @@ describe("provisioned-only teacher identity surface", () => {
     it("stores or uses valid self-service tokens before scrubbing them from the address bar", () => {
         const page = source("src/app/page.tsx");
         const queryLifecycle = page.slice(
-            page.indexOf('const resetToken = query.get("teacherResetToken")'),
-            page.indexOf('const requestedExam = query.get("exam")'),
+            page.indexOf("if (storedHomeState && !homeInitialization)"),
+            page.indexOf("// /intro's demo CTAs"),
         );
         const scrub = queryLifecycle.indexOf("scrubTeacherLifecycleQuery(query)");
 
+        expect(queryLifecycle).toContain("setTeacherResetToken(resetToken)");
+        expect(queryLifecycle).toContain("confirmTeacherSignupEmail(verifyToken)");
+        expect(scrub).toBeGreaterThan(-1);
         expect(queryLifecycle.indexOf("setTeacherResetToken(resetToken)")).toBeLessThan(scrub);
         expect(queryLifecycle.indexOf("confirmTeacherSignupEmail(verifyToken)")).toBeLessThan(scrub);
-        expect(queryLifecycle).toContain("!teacherSelfServiceEnabled && hasTeacherLifecycleQuery");
+        expect(queryLifecycle).toContain("!teacherSelfServiceEnabled && hasLifecycleQuery");
     });
 });

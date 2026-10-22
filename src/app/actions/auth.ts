@@ -182,6 +182,7 @@ export async function verifyTeacherPassword(
                         organizationName: account.organizationName,
                         memberRole: account.memberRole,
                         plan: account.plan,
+                        entitlementMode: account.entitlementMode,
                     },
                     accountSessionGeneration: account.sessionGeneration,
                     sessionAuthority: "account",

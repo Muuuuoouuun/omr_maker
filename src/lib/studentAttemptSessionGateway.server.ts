@@ -37,6 +37,18 @@ function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function boundedIdentifier(value: unknown): boolean {
+    return typeof value === "string" && value.trim().length > 0 && value.length <= 256;
+}
+
+function validScope(input: unknown): boolean {
+    return isRecord(input) && [input.sessionId, input.organizationId, input.examId, input.ownerStudentId].every(boundedIdentifier);
+}
+
 export async function resolveLegacyStudentAttemptSessionScopeWithGateway(
     client: StudentAttemptSessionRpcClient,
     input: { sessionId: string; organizationId: string; ownerStudentId: string },
@@ -44,6 +56,7 @@ export async function resolveLegacyStudentAttemptSessionScopeWithGateway(
     | { status: "resolved"; examId: string }
     | { status: "targeted" | "not_found" | "invalid" | "service_unavailable" }
 > {
+    if (!isRecord(input)) return { status: "invalid" };
     const sessionId = clean(input.sessionId);
     const organizationId = clean(input.organizationId);
     const ownerStudentId = clean(input.ownerStudentId);
@@ -83,7 +96,7 @@ function validQuestionIds(value: number[], allowEmpty = false): boolean {
         && (allowEmpty || value.length > 0)
         && value.length <= MAX_SESSION_ITEMS
         && new Set(value).size === value.length
-        && value.every(id => Number.isInteger(id) && id > 0);
+        && value.every(id => Number.isSafeInteger(id) && id > 0);
 }
 
 function validCas(value: number): boolean {
@@ -95,22 +108,25 @@ function validLeaseTokenHash(value: string): boolean {
 }
 
 function validOpenInput(input: OpenStudentAttemptSessionGatewayInput): boolean {
+    if (!isRecord(input)) return false;
     const boundedStrings = [input.sessionId, input.organizationId, input.examId, input.ownerStudentId,
         input.submissionId, input.attemptId, input.newLeaseTokenHash];
     return boundedStrings.every(value => clean(value).length > 0 && clean(value).length <= 256)
-        && (clean(input.assignmentId)
-            ? Number.isSafeInteger(input.assignmentRevision) && Number(input.assignmentRevision) > 0
-            : input.assignmentRevision === undefined)
+        && validAssignmentGeneration(input)
         && clean(input.studentName).length > 0 && clean(input.studentName).length <= 300
+        && ["guest", "temporary", "registered"].includes(input.identityType)
+        && (input.currentLeaseTokenHash === undefined || validLeaseTokenHash(input.currentLeaseTokenHash))
         && validQuestionIds(input.examQuestionIds)
         && (!input.retake || (
-            clean(input.retake.sourceAttemptId).length > 0
+            ["wrong", "similar", "custom"].includes(input.retake.mode)
+            && clean(input.retake.sourceAttemptId).length > 0
             && clean(input.retake.sourceAttemptId).length <= 256
             && validQuestionIds(input.retake.questionIds, input.retake.mode === "wrong")
         ))
         && Number.isInteger(input.durationSeconds)
         && input.durationSeconds > 0
         && input.durationSeconds <= 43_200
+        && isRecord(input.gradingSnapshot) && input.gradingSnapshot.id === input.examId
         && jsonSize(input.gradingSnapshot) <= MAX_SUBMISSION_BYTES;
 }
 
@@ -230,31 +246,61 @@ export interface CheckpointStudentAttemptSessionGatewayInput {
 }
 
 function validAssignmentGeneration(input: { assignmentId?: string; assignmentRevision?: number }): boolean {
+    if (input.assignmentId !== undefined && (typeof input.assignmentId !== "string" || input.assignmentId.length > 256)) return false;
     const assignmentId = clean(input.assignmentId);
-    const revision = Number(input.assignmentRevision);
     return assignmentId
-        ? Number.isSafeInteger(revision) && revision > 0
+        ? validCas(input.assignmentRevision as number)
         : input.assignmentRevision === undefined;
+}
+
+function validAnswerKey(value: string): boolean {
+    return /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value));
+}
+
+function validAnswers(value: unknown): boolean {
+    return isRecord(value)
+        && Object.keys(value).length <= MAX_SESSION_ITEMS
+        && jsonSize(value) <= 65_536
+        && Object.entries(value).every(([key, answer]) => validAnswerKey(key)
+            && Number.isInteger(answer) && Number(answer) >= 1 && Number(answer) <= 5);
+}
+
+/** A student can save response text, never impersonate a teacher's review. */
+function studentSubQuestionAnswers(value: unknown): SubQuestionAnswers | null {
+    if (!isRecord(value) || Object.keys(value).length > MAX_SESSION_ITEMS || jsonSize(value) > 524_288) return null;
+    const parents: [string, SubQuestionAnswers[number]][] = [];
+    for (const [questionId, rawAnswers] of Object.entries(value)) {
+        if (!validAnswerKey(questionId) || !isRecord(rawAnswers) || Object.keys(rawAnswers).length > 10) return null;
+        const responses: [string, SubQuestionAnswers[number][string]][] = [];
+        for (const [subQuestionId, rawAnswer] of Object.entries(rawAnswers)) {
+            // Normalization can append a uniqueness suffix to a 100-character imported ID.
+            if (!subQuestionId.trim() || subQuestionId.length > 256 || !isRecord(rawAnswer)
+                || rawAnswer.schemaVersion !== 1 || typeof rawAnswer.body !== "string" || rawAnswer.body.length > 2_000
+                || (rawAnswer.answeredAt !== undefined && (typeof rawAnswer.answeredAt !== "string"
+                    || rawAnswer.answeredAt.length > 64 || !Number.isFinite(Date.parse(rawAnswer.answeredAt))))) return null;
+            responses.push([subQuestionId, {
+                schemaVersion: 1,
+                body: rawAnswer.body,
+                reviewStatus: "needs_review",
+                ...(typeof rawAnswer.answeredAt === "string" ? { answeredAt: rawAnswer.answeredAt } : {}),
+            }]);
+        }
+        // Preserve legacy/imported IDs such as __proto__ as own data properties.
+        parents.push([questionId, Object.fromEntries(responses)]);
+    }
+    return Object.fromEntries(parents);
 }
 
 export async function checkpointStudentAttemptSessionWithGateway(
     client: StudentAttemptSessionRpcClient,
     input: CheckpointStudentAttemptSessionGatewayInput,
 ): Promise<StudentAttemptSessionMutationResult> {
+    if (!validScope(input) || !validCas(input.expectedRevision) || !validCas(input.expectedLeaseEpoch)
+        || !validLeaseTokenHash(input.leaseTokenHash) || !validAssignmentGeneration(input)
+        || !validAnswers(input.answers)) return { status: "invalid" };
+    const subQuestionAnswers = studentSubQuestionAnswers(input.subQuestionAnswers);
     const progressPayload = canonicalStudentAttemptProgressPayload(input.progressPayload);
-    if (
-        !Number.isSafeInteger(input.expectedRevision)
-        || input.expectedRevision < 1
-        || !Number.isSafeInteger(input.expectedLeaseEpoch)
-        || input.expectedLeaseEpoch < 1
-        || Object.keys(input.answers).length > MAX_SESSION_ITEMS
-        || Object.keys(input.subQuestionAnswers).length > MAX_SESSION_ITEMS
-        || jsonSize(input.answers) > 65_536
-        || jsonSize(input.subQuestionAnswers) > 524_288
-        || !progressPayload
-        || !validAssignmentGeneration(input)
-        || !clean(input.examId)
-    ) return { status: "invalid" };
+    if (!subQuestionAnswers || !progressPayload) return { status: "invalid" };
     const result = await client.rpc("omr_checkpoint_attempt_session_v2", {
         p_session_id: input.sessionId,
         p_organization_id: input.organizationId,
@@ -266,7 +312,7 @@ export async function checkpointStudentAttemptSessionWithGateway(
         p_expected_lease_epoch: input.expectedLeaseEpoch,
         p_lease_token_hash: input.leaseTokenHash,
         p_answers: input.answers,
-        p_sub_question_answers: input.subQuestionAnswers,
+        p_sub_question_answers: subQuestionAnswers,
         p_progress_payload: progressPayload,
         p_lease_seconds: STUDENT_ATTEMPT_LEASE_SECONDS,
         p_final_checkpoint: input.finalCheckpoint === true,
@@ -281,7 +327,8 @@ export async function takeoverStudentAttemptSessionWithGateway(
     > & { newLeaseTokenHash: string },
 ): Promise<StudentAttemptSessionMutationResult> {
     if (
-        !validCas(input.expectedRevision)
+        !validScope(input)
+        || !validCas(input.expectedRevision)
         || !validCas(input.expectedLeaseEpoch)
         || !validLeaseTokenHash(input.newLeaseTokenHash)
         || !validAssignmentGeneration(input)
@@ -316,7 +363,7 @@ export async function heartbeatStudentAttemptSessionWithGateway(
         "sessionId" | "organizationId" | "examId" | "ownerStudentId" | "assignmentId" | "assignmentRevision" | "expectedLeaseEpoch" | "leaseTokenHash"
     >,
 ): Promise<StudentAttemptSessionHeartbeat> {
-    if (!validCas(input.expectedLeaseEpoch) || !validLeaseTokenHash(input.leaseTokenHash) || !validAssignmentGeneration(input)) {
+    if (!validScope(input) || !validCas(input.expectedLeaseEpoch) || !validLeaseTokenHash(input.leaseTokenHash) || !validAssignmentGeneration(input)) {
         return { status: "invalid" };
     }
     const result = await client.rpc("omr_heartbeat_attempt_session_v2", {
@@ -332,8 +379,14 @@ export async function heartbeatStudentAttemptSessionWithGateway(
     });
     if (result.error) return { status: errorStatus(result.error) };
     const row = Array.isArray(result.data) ? result.data[0] : result.data;
-    if (!row || typeof row !== "object") return { status: "service_unavailable" };
-    const record = row as Record<string, unknown>;
+    if (!isRecord(row)
+        || !["in_progress", "submitted", "expired"].includes(String(row.status))
+        || !validCas(row.revision as number) || !validCas(row.lease_epoch as number)
+        || !Number.isFinite(Date.parse(clean(row.deadline_at))) || !Number.isFinite(Date.parse(clean(row.server_now)))
+        || (row.status === "submitted" && !boundedIdentifier(row.submitted_attempt_id))) {
+        return { status: "service_unavailable" };
+    }
+    const record = row;
     const status = record.status === "submitted" ? "submitted" : record.status === "in_progress" ? "active" : "expired";
     return {
         status,
@@ -373,7 +426,8 @@ export async function prepareStudentAttemptSessionSubmitWithGateway(
     >,
 ): Promise<{ status: "prepared"; session: PreparedStudentAttemptSession } | { status: StudentAttemptSessionErrorStatus }> {
     if (
-        !validCas(input.expectedRevision)
+        !validScope(input)
+        || !validCas(input.expectedRevision)
         || !validCas(input.expectedLeaseEpoch)
         || !validLeaseTokenHash(input.leaseTokenHash)
         || !validAssignmentGeneration(input)
@@ -443,7 +497,8 @@ export async function commitStudentAttemptSessionSubmitWithGateway(
     > & { attempt: Attempt },
 ): Promise<{ status: "submitted"; attempt: Attempt } | { status: StudentAttemptSessionErrorStatus }> {
     if (
-        !validCas(input.expectedRevision)
+        !validScope(input)
+        || !validCas(input.expectedRevision)
         || !validCas(input.expectedLeaseEpoch)
         || !validLeaseTokenHash(input.leaseTokenHash)
         || !validAssignmentGeneration(input)

@@ -1,68 +1,132 @@
-import type { Attempt, Exam, Question, QuestionSubQuestion } from "@/types/omr";
+import type { Attempt, Exam, Question, QuestionSubQuestion, StoredDataRef, QuestionPdfRegion } from "@/types/omr";
 
-export type StudentSubQuestion = Omit<QuestionSubQuestion, "answerGuide" | "teacherNote">;
-export type SolvableQuestion = Omit<Question, "answer" | "explanation" | "subQuestions"> & {
-    subQuestions?: StudentSubQuestion[];
+export type StudentSubQuestion = Pick<QuestionSubQuestion,
+    "schemaVersion" | "id" | "prompt" | "kind" | "templateId" | "required" | "maxLength"
+>;
+export type SolvableQuestion = Pick<Question,
+    "id" | "number" | "score" | "choices" | "pdfLocation" | "pdfRegion" | "passagePdfRegions"
+> & { subQuestions?: StudentSubQuestion[] };
+export type ReviewableQuestion = SolvableQuestion & Pick<Question, "answer" | "explanation" | "label"> & {
+    tags?: Pick<NonNullable<Question["tags"]>, "concept" | "source">;
 };
 
-export interface SolvableExam
-    extends Omit<Exam, "questions" | "answerKeyPdf" | "answerKeyPdfRef" | "accessConfig" | "organizationId"> {
+type StudentExamFields = Pick<Exam,
+    "id" | "title" | "revision" | "createdAt" | "updatedAt"
+    | "durationMin" | "startAt" | "endAt" | "archived" | "pdfData" | "pdfDataRef"
+>;
+
+export interface SolvableExam extends StudentExamFields {
     questions: SolvableQuestion[];
     /** Always absent on the solve payload — never sent to the client. */
     answerKeyPdf?: undefined;
-    /** Always absent on the solve payload — never sent to the client. */
     answerKeyPdfRef?: undefined;
     accessConfig?: { type: "public" | "group" | "targeted"; hasPin: boolean };
     /** Server-derived capabilities for this exam's organization. */
-    premiumCapabilities: {
-        handwritingArchive: boolean;
-    };
+    premiumCapabilities: { handwritingArchive: boolean };
 }
 
-export interface ReviewableExam extends Omit<Exam, "answerKeyPdf" | "answerKeyPdfRef" | "accessConfig"> {
+export interface ReviewableExam extends StudentExamFields {
+    questions: ReviewableQuestion[];
     /** Never shipped on the review payload — the answer sheet stays teacher-side. */
     answerKeyPdf?: undefined;
     answerKeyPdfRef?: undefined;
-    accessConfig?: { type: "public" | "group" | "targeted"; groupIds?: string[]; hasPin: boolean };
+    accessConfig?: { type: "public" | "group" | "targeted"; hasPin: boolean };
 }
 
-/** Remove teacher-only nested fields while otherwise preserving an exam payload. */
-export function stripTeacherOnlySubQuestionFields(exam: Exam): Exam {
+// These explicit projections are a security boundary. New authoring fields must
+// be reviewed before being added here; spreading a persisted Exam/Question can
+// expose teacher-only material even when answers themselves have been removed.
+function studentDataRef(ref: StoredDataRef | undefined): StoredDataRef | undefined {
+    return ref ? {
+        store: ref.store, key: ref.key, organizationId: ref.organizationId,
+        kind: ref.kind, examId: ref.examId, attemptId: ref.attemptId,
+        name: ref.name, mimeType: ref.mimeType, size: ref.size, updatedAt: ref.updatedAt,
+    } : undefined;
+}
+
+function studentPdfRegion(region: QuestionPdfRegion): QuestionPdfRegion {
+    return { page: region.page, x: region.x, y: region.y, width: region.width, height: region.height };
+}
+
+function studentQuestion(question: Question): SolvableQuestion {
     return {
-        ...exam,
-        questions: exam.questions.map(question => ({
-            ...question,
-            subQuestions: question.subQuestions?.map(({ answerGuide: _guide, teacherNote: _note, ...subQuestion }) => {
-                void _guide;
-                void _note;
-                return subQuestion;
-            }),
+        id: question.id,
+        number: question.number,
+        score: question.score,
+        choices: question.choices,
+        pdfLocation: question.pdfLocation ? {
+            page: question.pdfLocation.page, x: question.pdfLocation.x, y: question.pdfLocation.y,
+        } : undefined,
+        pdfRegion: question.pdfRegion ? studentPdfRegion(question.pdfRegion) : undefined,
+        passagePdfRegions: question.passagePdfRegions?.map(studentPdfRegion),
+        subQuestions: question.subQuestions?.map(subQuestion => ({
+            schemaVersion: subQuestion.schemaVersion,
+            id: subQuestion.id,
+            prompt: subQuestion.prompt,
+            kind: subQuestion.kind,
+            templateId: subQuestion.templateId,
+            required: subQuestion.required,
+            maxLength: subQuestion.maxLength,
         })),
     };
 }
 
+function reviewQuestion(question: Question): ReviewableQuestion {
+    return {
+        ...studentQuestion(question), answer: question.answer, explanation: question.explanation,
+        // The submitted-attempt review renders these three student-facing chips.
+        // Other diagnostic tags (e.g. trap/mistake prerequisites) stay private.
+        label: question.label,
+        tags: question.tags ? { concept: question.tags.concept, source: question.tags.source } : undefined,
+    };
+}
+
+function studentExamFields(exam: Exam): StudentExamFields {
+    return {
+        id: exam.id, title: exam.title, revision: exam.revision,
+        createdAt: exam.createdAt, updatedAt: exam.updatedAt,
+        durationMin: exam.durationMin, startAt: exam.startAt, endAt: exam.endAt,
+        archived: exam.archived, pdfData: exam.pdfData, pdfDataRef: studentDataRef(exam.pdfDataRef),
+    };
+}
+
 /**
- * Server-side projection for the POST-SUBMIT review: correct answers and
- * explanations are intentionally kept (the student already submitted), but the
- * inline PIN and the teacher's answer-key PDF never leave the server.
+ * Strip teacher-only question material from the local solve fallback too.
+ * NOT a server DTO: local grading and analytics still need the existing answer,
+ * PIN, tags and other metadata already stored on this device. Server responses
+ * must use the allowlisted DTO projections below instead.
+ */
+export function stripTeacherOnlySubQuestionFields(exam: Exam): Exam {
+    return {
+        ...exam,
+        questions: exam.questions.map(question => {
+            const { contentAnalysis: _analysis, subQuestions, ...localQuestion } = question;
+            void _analysis;
+            return {
+                ...localQuestion,
+                subQuestions: subQuestions?.map(subQuestion => {
+                    const { answerGuide: _guide, teacherNote: _note, ...studentPrompt } = subQuestion;
+                    void _guide;
+                    void _note;
+                    return studentPrompt;
+                }),
+            };
+        }),
+    };
+}
+
+/**
+ * POST-SUBMIT review intentionally includes answers and explanations. AI content
+ * analysis, authoring notes, the inline PIN and answer-key PDF remain private.
  */
 export function stripExamForReview(exam: Exam): ReviewableExam {
-    const studentSafeExam = stripTeacherOnlySubQuestionFields(exam);
-    const {
-        answerKeyPdf: _omitPdf,
-        answerKeyPdfRef: _omitPdfRef,
-        accessConfig,
-        ...rest
-    } = studentSafeExam;
-    void _omitPdf;
-    void _omitPdfRef;
-
     return {
-        ...rest,
-        questions: rest.questions,
-        accessConfig: accessConfig
-            ? { type: accessConfig.type, groupIds: accessConfig.groupIds, hasPin: !!accessConfig.pin }
-            : undefined,
+        ...studentExamFields(exam),
+        questions: exam.questions.map(reviewQuestion),
+        accessConfig: exam.accessConfig ? {
+            type: exam.accessConfig.type,
+            hasPin: !!exam.accessConfig.pin,
+        } : undefined,
     };
 }
 
@@ -74,62 +138,31 @@ export function stripExamForReview(exam: Exam): ReviewableExam {
  *
  * Legacy attempts without question results retain the historical full-exam
  * review behavior because their issued question set cannot be reconstructed.
+ * A nonempty but malformed result list must never unlock the full answer key.
  */
 export function stripExamForAttemptReview(exam: Exam, attempt: Attempt): ReviewableExam {
+    const questionResults = attempt.questionResults || [];
     const issuedQuestionIds = new Set(
-        (attempt.questionResults || [])
+        questionResults
             .map(result => result.questionId)
-            .filter(questionId => Number.isInteger(questionId) && questionId > 0),
+            .filter(questionId => Number.isSafeInteger(questionId) && questionId >= 0),
     );
-    return stripExamForReview(issuedQuestionIds.size > 0
-        ? {
-            ...exam,
-            questions: exam.questions.filter(question => issuedQuestionIds.has(question.id)),
-        }
+    return stripExamForReview(questionResults.length > 0
+        ? { ...exam, questions: exam.questions.filter(question => issuedQuestionIds.has(question.id)) }
         : exam);
 }
 
-/**
- * Server-side projection of an exam that is safe to ship to the solving client:
- * no correct answers, no answer-key PDF, no inline PIN (only a hasPin flag).
- */
+/** Safe pre-submit DTO; no teacher analysis, answers, answer-key PDF or PIN. */
 export function stripExamForSolving(
     exam: Exam,
     premiumCapabilities: SolvableExam["premiumCapabilities"] = { handwritingArchive: false },
 ): SolvableExam {
-    const solvableQuestions: SolvableQuestion[] = exam.questions.map(question => {
-        const { answer: _omitAnswer, explanation: _omitExplanation, subQuestions, ...rest } = question;
-        void _omitAnswer;
-        void _omitExplanation;
-        return {
-            ...rest,
-            subQuestions: subQuestions?.map(({ answerGuide: _guide, teacherNote: _note, ...subQuestion }) => {
-                void _guide;
-                void _note;
-                return subQuestion;
-            }),
-        };
-    });
-
-    const {
-        answerKeyPdf: _omitPdf,
-        answerKeyPdfRef: _omitPdfRef,
-        accessConfig,
-        organizationId: _omitOrganizationId,
-        questions: _omitQuestions,
-        ...rest
-    } = exam;
-    void _omitPdf;
-    void _omitPdfRef;
-    void _omitQuestions;
-    void _omitOrganizationId;
-
     return {
-        ...rest,
-        questions: solvableQuestions,
-        premiumCapabilities,
-        accessConfig: accessConfig
-            ? { type: accessConfig.type, hasPin: !!accessConfig.pin }
+        ...studentExamFields(exam),
+        questions: exam.questions.map(studentQuestion),
+        premiumCapabilities: { handwritingArchive: premiumCapabilities.handwritingArchive },
+        accessConfig: exam.accessConfig
+            ? { type: exam.accessConfig.type, hasPin: !!exam.accessConfig.pin }
             : undefined,
     };
 }

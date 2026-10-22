@@ -28,14 +28,10 @@ begin
     end if;
     if not exists (
         select 1 from pg_roles where rolname = 'supabase_storage_admin'
-    ) or not pg_has_role(
-        session_user,
-        'supabase_storage_admin',
-        'SET'
     ) then
         raise exception using
-            errcode = '42501',
-            message = 'postgres must be able to SET ROLE supabase_storage_admin';
+            errcode = '42704',
+            message = 'production boundary requires the managed Storage owner role';
     end if;
     if to_regclass('storage.objects') is null
         or to_regclass('storage.buckets') is null
@@ -67,11 +63,21 @@ $$;
 select public.omr_assert_production_boundary_preflight_v1();
 
 -- Supabase requires every managed Storage entity to retain
--- supabase_storage_admin ownership. Enter that owner only for the supported RLS
--- policy phase, remove exact repository-owned policies, then restore postgres
--- before changing the public application boundary. Restrictive policies combine
--- with unrelated permissive policies and only subtract the OMR private bucket.
-set local role supabase_storage_admin;
+-- supabase_storage_admin ownership. Some hosted projects authorize policy DDL
+-- directly for postgres without allowing SET ROLE to the managed owner. Prefer
+-- the owner role when available; otherwise let the same policy DDL run as
+-- postgres. A denied DDL operation aborts this entire transaction. Do not grant
+-- role membership or change managed ownership to make either path succeed.
+do $storage_policy_actor$
+begin
+    if pg_has_role(session_user, 'supabase_storage_admin', 'SET') then
+        execute 'set local role supabase_storage_admin';
+    end if;
+end
+$storage_policy_actor$;
+
+-- Restrictive policies combine with unrelated permissive policies and only
+-- subtract the OMR private bucket.
 
 drop policy if exists "OMR private assets alpha access" on storage.objects;
 drop policy if exists "OMR private assets server-only objects" on storage.objects;
@@ -93,6 +99,26 @@ create policy "OMR private assets server-only buckets"
     with check (id <> 'omr-private-assets');
 
 reset role;
+
+do $storage_policy_postflight$
+begin
+    if current_user is distinct from 'postgres' or exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'storage'
+           and relation.relname in ('objects', 'buckets')
+           and (
+               relation.relowner <> 'supabase_storage_admin'::regrole
+               or not relation.relrowsecurity
+           )
+    ) then
+        raise exception using
+            errcode = '42501',
+            message = 'Storage policy installation changed the migration actor, managed ownership, or RLS';
+    end if;
+end
+$storage_policy_postflight$;
 
 -- Close current objects and the schema itself to browser roles. PUBLIC must be
 -- revoked as well because function EXECUTE is granted to PUBLIC by default.
@@ -661,6 +687,7 @@ declare
     v_canonical_question_result_evidence_ready boolean;
     v_assignment_generation_scope_ready boolean;
     v_kakao_reminder_entitlement_ready boolean;
+    v_legacy_organization_recovery_ready boolean;
     v_ready boolean;
 begin
     v_previous := public.omr_service_readiness_v10_snapshot();
@@ -1450,7 +1477,7 @@ begin
         ), 'sha256'), 'hex') = '282a79ed02c1a3cfc927248cf554ff5ae64eb73b18b8b1f658396d466f884a46'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '117c3f5df5cc58a3a69116cbc95176fc7d3263aa9a2d1504ccecf346ac908826'
+        ), 'sha256'), 'hex') = '778083d5e37553c1089bacc01839fd64f7fd2fe433d3b8bf11bdbc6f9cbe7201'
         and exists (
             select 1 from pg_catalog.pg_index index_record
              where index_record.indexrelid = pg_catalog.to_regclass(
@@ -1686,25 +1713,25 @@ begin
         ) = 'side-effect-free exact provisioned teacher release canary:202608080007'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_lookup_teacher_account_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '54789f75c1cf21b39bf023cc18bf288e752058f26506f08d9c53e874b89bd464'
+        ), 'sha256'), 'hex') = '943ebd34f874b92c32b80ad32dfa9a8c82d333a38a8a778a563158c664298f06'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_validate_teacher_session_v1(text,bigint)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '9ed7e0dc70f70443703c50a8ae6aea25c6079c76a9b13a22ab7e9349cc242bd1'
+        ), 'sha256'), 'hex') = '2b07eb8fd3708b470a159ad031d542e78dea0ec19810c8ab478632159a927850'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_begin_teacher_password_reset_v1(text,text,text,timestamptz)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '56aaf95ed3cfe82c6cbd0375a1f199e94eb3f95f7c2ec1a257b5ce1add83c616'
+        ), 'sha256'), 'hex') = '3b93c38fa98fb897274fc7f6ead886d18eb692d49f542a84c652a6bdf4aa8953'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_complete_teacher_password_reset_v1(text,text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '6dab50aa13601fe31e9d15542245b753c952ec45d57fa809436c94aba640c284'
+        ), 'sha256'), 'hex') = 'ff66b8dd21859d592db7caac040b883f0b521821af5a0bc6149e528ba000e55c'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_lookup_provisioned_teacher_login_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '67a31068f1b3094fc39fbb14fed5b4a68665405e827bae7094e1496eea9790a5'
+        ), 'sha256'), 'hex') = '9efc7745af6c20181ce1cc1a219bcb72f8d69c1813c5d3f3d7ad8239a726722c'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = 'a17a29edc7161ec12477ceeeacf71be9cfe99b57a12edf005b662e3ec7423ff5'
+        ), 'sha256'), 'hex') = '25d78d77d24aff14c38a4d93c5a52e4b6aeb58a5e9e1ef9dbda84514cf341d56'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_probe_provisioned_teacher_canary_v1(text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '0302d984bd9f280d887ff17d7953f1e3346b36631ed0bc40ef2e55be5a61cb4e';
+        ), 'sha256'), 'hex') = 'ce443ff814669bed63aa3e2bce01cb7ebd9b6d33d45973fbed2e9f06307c2a42';
 
     v_teacher_live_sessions_ready :=
         pg_catalog.to_regclass('public.omr_attempt_sessions_teacher_live_idx') is not null
@@ -2422,7 +2449,7 @@ begin
                E'\n-- phase-c-routine --\n' order by name, args
                ), 'sha256'), 'hex')
              from actual
-       ) = 'e51c72a08857729f474d1cdef45e96a9f28f5e2230f380e96b07495ecb1866cf'
+       ) = 'a5681e53ecbc749fc3b8e30bce20f189af8594648eaa1b6b4886e9f603bca487'
        and not exists (
            select 1 from (values
                ('omr_remote_assets'), ('omr_remote_asset_upload_intents'),
@@ -3158,7 +3185,79 @@ begin
                )
         );
 
+    -- Exact legacy recovery definitions and private ledger protection are required.
+    select exists(select 1 from pg_catalog.pg_class c
+        where c.oid=pg_catalog.to_regclass('omr_internal.legacy_organization_recoveries')
+          and c.relkind='r' and c.relowner='postgres'::regrole and c.relrowsecurity and c.relforcerowsecurity
+          and not exists(select 1 from pg_catalog.pg_policy p where p.polrelid=c.oid)
+          and not exists(select 1 from (values ('anon'),('authenticated'),('service_role')) role_name(name)
+             where pg_catalog.has_table_privilege(role_name.name,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')))
+      and not exists(select 1 from (values ('anon'),('authenticated'),('service_role')) role_name(name)
+          where pg_catalog.has_schema_privilege(role_name.name,'omr_internal','USAGE,CREATE'))
+      and (select count(*) from pg_catalog.pg_attribute a
+          where a.attrelid=pg_catalog.to_regclass('omr_internal.legacy_organization_recoveries')
+            and a.attnum>0 and not a.attisdropped)=11
+      and not exists(select 1 from (values
+          ('organization_id','text',true),('owner_account_id','text',true),('source_admin_user_id','text',true),
+          ('idempotency_key_hash','text',true),('request_hash','text',true),('audit_id','text',true),
+          ('plan','text',true),('entitlement_mode','text',true),('state','text',true),
+          ('created_at','timestamp with time zone',true),('revoked_at','timestamp with time zone',false)
+        ) expected(name,type_name,required)
+        where not exists(select 1 from pg_catalog.pg_attribute a
+          where a.attrelid=pg_catalog.to_regclass('omr_internal.legacy_organization_recoveries')
+            and a.attname=expected.name and not a.attisdropped and a.attnotnull=expected.required
+            and pg_catalog.format_type(a.atttypid,a.atttypmod)=expected.type_name))
+      and (select count(*) from pg_catalog.pg_constraint c
+          where c.conrelid=pg_catalog.to_regclass('omr_internal.legacy_organization_recoveries'))=15
+      and not exists(select 1 from (values
+          ('legacy_organization_recoveries_audit_id_key','UNIQUE (audit_id)'),
+          ('legacy_organization_recoveries_check','CHECK ((((state = ''active''::text) AND (revoked_at IS NULL)) OR ((state = ''revoked''::text) AND (revoked_at IS NOT NULL))))'),
+          ('legacy_organization_recoveries_entitlement_mode_check','CHECK ((entitlement_mode = ''legacy_recovery''::text))'),
+          ('legacy_organization_recoveries_idempotency_key_hash_check','CHECK ((idempotency_key_hash ~ ''^[a-f0-9]{64}$''::text))'),
+          ('legacy_organization_recoveries_idempotency_key_hash_key','UNIQUE (idempotency_key_hash)'),
+          ('legacy_organization_recoveries_organization_id_check','CHECK ((organization_id ~ ''^teacher_[a-z0-9]{7,16}$''::text))'),
+          ('legacy_organization_recoveries_organization_id_fkey','FOREIGN KEY (organization_id) REFERENCES public.omr_organizations(id) ON DELETE RESTRICT'),
+          ('legacy_organization_recoveries_owner_account_id_check','CHECK ((owner_account_id ~ ''^teacher_[a-f0-9]{16}$''::text))'),
+          ('legacy_organization_recoveries_owner_account_id_fkey','FOREIGN KEY (owner_account_id) REFERENCES public.omr_teacher_accounts(id) ON DELETE RESTRICT'),
+          ('legacy_organization_recoveries_owner_account_id_key','UNIQUE (owner_account_id)'),
+          ('legacy_organization_recoveries_pkey','PRIMARY KEY (organization_id)'),
+          ('legacy_organization_recoveries_plan_check','CHECK ((plan = ''academy''::text))'),
+          ('legacy_organization_recoveries_request_hash_check','CHECK ((request_hash ~ ''^[a-f0-9]{64}$''::text))'),
+          ('legacy_organization_recoveries_source_admin_user_id_check','CHECK ((source_admin_user_id ~ ''^teacher_[a-z0-9]{7,16}$''::text))'),
+          ('legacy_organization_recoveries_state_check','CHECK ((state = ANY (ARRAY[''active''::text, ''revoked''::text])))')
+        ) expected(name,definition)
+        where not exists(select 1 from pg_catalog.pg_constraint c
+          where c.conrelid=pg_catalog.to_regclass('omr_internal.legacy_organization_recoveries')
+            and c.conname=expected.name and c.convalidated and not c.condeferrable
+            and pg_catalog.pg_get_constraintdef(c.oid)=expected.definition))
+      and not exists(select 1 from (values
+          ('public.omr_read_effective_workspace_plan_v1(text)','778083d5e37553c1089bacc01839fd64f7fd2fe433d3b8bf11bdbc6f9cbe7201',true),
+          ('public.omr_read_effective_organization_plan_v1(text)','fc84aad4097ac2cfc7b15d767471f55bb50dcb80dad3e81239d223a14027fc51',false),
+          ('public.omr_lock_provisioned_teacher_identity_v1(text, bigint, text)','da88b56b78f6a27bda5e38bfc350923e653dd927f4d2a3595183a15b649af7d0',false),
+          ('public.omr_validate_provisioned_teacher_session_v1(text, bigint, text)','25d78d77d24aff14c38a4d93c5a52e4b6aeb58a5e9e1ef9dbda84514cf341d56',true),
+          ('public.omr_authorize_effective_teacher_plan_v1(text, text)','67f82ff84b845e835274264bfdf36e3c965b476ca34657a5399e3a260400f3bd',false),
+          ('public.omr_read_teacher_mutation_plan_v1(text, text, text, text)','bd8a94856ae1f95092d58a40fb28c7b2d2f6a43340f7f6ecb532574570229726',false),
+          ('public.omr_lookup_provisioned_teacher_login_v1(text)','9efc7745af6c20181ce1cc1a219bcb72f8d69c1813c5d3f3d7ad8239a726722c',true),
+          ('public.omr_lock_legacy_teacher_identity_v1(text, bigint, text, text)','dfd1f868a9d400608e28056882b642ce4dfaf7c647d8d60ca1c7e6cea59a23c3',false),
+          ('public.omr_read_legacy_teacher_plan_v1(text, text, text)','13dc0a2af4cd03872822c80a564d3e51aca6b6243daeb67e0b2a6c54f1ef2b25',false),
+          ('public.omr_lookup_teacher_account_v1(text)','943ebd34f874b92c32b80ad32dfa9a8c82d333a38a8a778a563158c664298f06',true),
+          ('public.omr_validate_teacher_session_v1(text, bigint)','2b07eb8fd3708b470a159ad031d542e78dea0ec19810c8ab478632159a927850',true),
+          ('public.omr_begin_teacher_password_reset_v1(text, text, text, timestamp with time zone)','3b93c38fa98fb897274fc7f6ead886d18eb692d49f542a84c652a6bdf4aa8953',true),
+          ('public.omr_complete_teacher_password_reset_v1(text, text)','ff66b8dd21859d592db7caac040b883f0b521821af5a0bc6149e528ba000e55c',true),
+          ('omr_internal.lock_legacy_recovery_identity_v1(text,bigint,text)','1ce8d2528bddccab5dd7df690fafc78dcfc47d7df8c1dde66df98658f829b491',false),
+          ('omr_internal.read_legacy_recovery_plan_v1(text)','2a644e039d9b0ab61c73f4f9eb5d69853af32354c82e4103cd6d09bef193258f',false),
+          ('public.omr_recover_legacy_organization_v1(text,text,text,text,text,text,text,text,text,text)','bf45db448dba6735abc7143229a002cb9cc1cebe10cda070ff37ab548caae475',true)
+        ) expected(signature,fingerprint,service_execute)
+        where not exists(select 1 from pg_catalog.pg_proc p where p.oid=pg_catalog.to_regprocedure(expected.signature)
+          and p.proowner='postgres'::regrole and p.prosecdef
+          and encode(extensions.digest(pg_catalog.pg_get_functiondef(p.oid),'sha256'),'hex')=expected.fingerprint
+          and not pg_catalog.has_function_privilege('anon',p.oid,'EXECUTE')
+          and not pg_catalog.has_function_privilege('authenticated',p.oid,'EXECUTE')
+          and pg_catalog.has_function_privilege('service_role',p.oid,'EXECUTE')=expected.service_execute))
+      into v_legacy_organization_recovery_ready;
+
     v_server_gateway_capabilities_ready := v_legacy_gateway_catalog_ready
+        and v_legacy_organization_recovery_ready
         and v_assignment_generation_scope_ready
         and v_student_session_generation_ready
         and v_student_credential_batch_ready
@@ -3259,6 +3358,7 @@ begin
             'initialOperationsLoadControlReady', v_initial_operations_load_control_ready,
             'individualStudentAssignmentsReady', v_individual_student_assignments_ready,
             'teacherAttemptReportingReady', v_teacher_attempt_reporting_ready,
+            'legacyOrganizationRecoveryReady', v_legacy_organization_recovery_ready,
             'ready', v_ready
         );
 end;
@@ -3489,5 +3589,14 @@ revoke all on function public.omr_set_effective_plan_transaction_proof_v1(text,j
 revoke all on function public.omr_assert_effective_plan_transaction_proof_v1(text,boolean) from public,anon,authenticated;
 revoke all on function public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb) from public,anon,authenticated;
 revoke all on function public.omr_attach_attempt_handwriting_v2(text,text,text,text,text) from public,anon,authenticated;
+
+-- Recovery ledger and private helpers remain inaccessible through direct REST access.
+revoke all on table omr_internal.legacy_organization_recoveries from public,anon,authenticated,service_role;
+revoke all on function omr_internal.lock_legacy_recovery_identity_v1(text,bigint,text),
+    omr_internal.read_legacy_recovery_plan_v1(text) from public,anon,authenticated,service_role;
+revoke all on function public.omr_recover_legacy_organization_v1(text,text,text,text,text,text,text,text,text,text)
+    from public,anon,authenticated;
+grant execute on function public.omr_recover_legacy_organization_v1(text,text,text,text,text,text,text,text,text,text)
+    to service_role;
 
 commit;

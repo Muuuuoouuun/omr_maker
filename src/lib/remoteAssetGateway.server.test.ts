@@ -616,3 +616,130 @@ describe("teacher direct remote asset gateway", () => {
         })).resolves.toEqual({ status: "invalid_object", error: "storage_size_mismatch" });
     });
 });
+
+describe("bounded PDF prefix verification", () => {
+    function finalizeWithFetch(fetchImpl: typeof fetch) {
+        const rpc = vi.fn(async (name: string) => ({
+            data: name === "omr_authorize_teacher_asset_finalize_v2"
+                ? authorizedTeacherIntent()
+                : {
+                    ...authorizedTeacherIntent(),
+                    created_at: "2026-08-06T00:00:00.000Z",
+                    updated_at: "2026-08-06T00:00:00.000Z",
+                },
+            error: null,
+        }));
+        const client = {
+            rpc,
+            storage: { from: () => ({
+                createSignedUrl: async () => ({ data: { signedUrl: "https://storage.test/object.pdf?token=read" }, error: null }),
+                info: async () => ({
+                    data: { size: 1024, contentType: "application/pdf", metadata: { sha256Hex: "c".repeat(64) } },
+                    error: null,
+                }),
+            }) },
+        };
+        return {
+            rpc,
+            pending: finalizeTeacherRemoteAssetUploadWithGateway(client as never, {
+                uploadId: "asset-1",
+                organizationId: "org-1",
+                examId: "exam-new",
+                kind: "problem_pdf",
+                objectPath: "organizations/org-1/exams/exam-new/problem/asset-1.pdf",
+                byteSize: 1024,
+                mimeType: "application/pdf",
+                sha256Hex: "c".repeat(64),
+                createdByUserId: "teacher-1",
+            }, { fetchImpl }),
+        };
+    }
+
+    it("validates a fragmented five-byte prefix without buffering the full response", async () => {
+        const response = new Response(new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode("%PD"));
+                controller.enqueue(new TextEncoder().encode("F-"));
+                controller.close();
+            },
+        }), { status: 206, headers: { "content-range": "bytes 0-4/1024" } });
+        const arrayBuffer = vi.spyOn(response, "arrayBuffer");
+        const { pending, rpc } = finalizeWithFetch(async () => response);
+
+        await expect(pending).resolves.toMatchObject({ status: "finalized" });
+        expect(arrayBuffer).not.toHaveBeenCalled();
+        expect(rpc.mock.calls.map(([name]) => name)).toEqual([
+            "omr_authorize_teacher_asset_finalize_v2",
+            "omr_finalize_teacher_asset_upload_v2",
+        ]);
+    });
+
+    it.each(["%PDF", "%PDF-extra"])("rejects an inexact prefix body: %s", async body => {
+        const { pending, rpc } = finalizeWithFetch(async () => new Response(body, {
+            status: 206,
+            headers: { "content-range": "bytes 0-4/1024" },
+        }));
+
+        await expect(pending).resolves.toMatchObject({ status: "storage_unavailable" });
+        expect(rpc).toHaveBeenCalledOnce();
+    });
+
+    it.each<ResponseInit>([
+        { status: 200, headers: { "content-range": "bytes 0-4/1024" } },
+        { status: 206, headers: { "content-range": "bytes 0-4/2048" } },
+        { status: 206, headers: { "content-range": "bytes 0-4/1024", "content-length": "52428800" } },
+    ])("cancels responses with unusable range headers: %o", async init => {
+        const cancel = vi.fn();
+        const response = new Response(new ReadableStream({ cancel }), init);
+        const { pending, rpc } = finalizeWithFetch(async () => response);
+
+        await expect(pending).resolves.toMatchObject({ status: "storage_unavailable" });
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(rpc).toHaveBeenCalledOnce();
+    });
+
+    it("rejects an oversized streamed response without waiting for cancellation", async () => {
+        const cancel = vi.fn(() => new Promise<void>(() => undefined));
+        const response = new Response(new ReadableStream({
+            start(controller) {
+                controller.enqueue(new Uint8Array(1024));
+            },
+            cancel,
+        }), { status: 206, headers: { "content-range": "bytes 0-4/1024" } });
+        const { pending, rpc } = finalizeWithFetch(async () => response);
+
+        await expect(pending).resolves.toMatchObject({ status: "storage_unavailable" });
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(rpc).toHaveBeenCalledOnce();
+    });
+
+    it.each(["headers", "body"])("times out stalled %s and aborts the request", async stalled => {
+        vi.useFakeTimers();
+        try {
+            const cancel = vi.fn();
+            let signal: AbortSignal | null | undefined;
+            const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+                signal = init?.signal;
+                if (stalled === "headers") return new Promise<Response>(() => undefined);
+                return new Response(new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode("%PDF-"));
+                    },
+                    cancel,
+                }), { status: 206, headers: { "content-range": "bytes 0-4/1024" } });
+            });
+            const { pending, rpc } = finalizeWithFetch(fetchImpl);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(fetchImpl).toHaveBeenCalledOnce();
+
+            await vi.advanceTimersByTimeAsync(10_000);
+            await expect(pending).resolves.toMatchObject({ status: "storage_unavailable" });
+            expect(signal?.aborted).toBe(true);
+            expect(rpc).toHaveBeenCalledOnce();
+            if (stalled === "body") expect(cancel).toHaveBeenCalledOnce();
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});

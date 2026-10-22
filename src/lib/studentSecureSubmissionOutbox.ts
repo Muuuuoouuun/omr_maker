@@ -30,7 +30,8 @@ type SecureSubmissionBlockReason =
     | "not_owned"
     | "not_active"
     | "retake_denied"
-    | "max_attempts";
+    | "max_attempts"
+    | "answers_incomplete";
 
 export interface SecureSubmissionSnapshot {
     sessionId: string;
@@ -203,6 +204,7 @@ function validBlockReason(value: unknown): value is SecureSubmissionBlockReason 
     return typeof value === "string" && [
         "revision_conflict", "lease_conflict", "expired", "unauthenticated", "invalid",
         "not_found", "not_owned", "not_active", "retake_denied", "max_attempts",
+        "answers_incomplete",
     ].includes(value);
 }
 
@@ -850,6 +852,7 @@ const blockedStatuses = new Set<SecureSubmissionBlockReason>([
     "not_active",
     "retake_denied",
     "max_attempts",
+    "answers_incomplete",
 ]);
 
 type SecureSubmissionReplayResult =
@@ -1096,6 +1099,9 @@ export async function retryBlockedSecureSubmission(
         await lock(async () => {
             const record = (await store.list()).map(normalizedRecord).find(candidate => candidate?.id === sessionId);
             if (!record || record.ownerFingerprint !== ownerFingerprint) return;
+            // The frozen rejected snapshot cannot become valid by resending it.
+            // Restore it for editing explicitly before creating a new snapshot.
+            if (record.blockReason === "answers_incomplete") return;
             if (record.replayClaim && Date.parse(record.replayClaim.expiresAt) > Date.now()) return;
             await store.put({
                 ...record,
@@ -1110,4 +1116,42 @@ export async function retryBlockedSecureSubmission(
         return { status: "storage_error" as const, submitted: [], blockedCount: 0 };
     }
     return replaySecureSubmissionsForOwner(ownerFingerprint, actions, options);
+}
+
+/**
+ * Release only a confirmed input rejection, after the caller safely preserves
+ * its answers in the same owner's editable draft. Ambiguous writes stay frozen.
+ */
+export async function recoverIncompleteSecureSubmissionForEditing(
+    sessionId: string,
+    ownerFingerprint: string,
+    preserveDraft: (snapshot: SecureSubmissionSnapshot, revision: number) => boolean | Promise<boolean>,
+    options: OutboxOptions = {},
+): Promise<
+    | { status: "recovered"; snapshot: SecureSubmissionSnapshot; revision: number }
+    | { status: "not_recoverable" | "storage_error" }
+> {
+    if (clean(ownerFingerprint).length !== 64) return { status: "not_recoverable" };
+    const store = options.store || defaultStore();
+    const lock = options.lock || defaultLock();
+    const now = options.now ?? Date.now();
+    try {
+        return await lock(async () => {
+            const record = (await store.list()).map(normalizedRecord).find(candidate => candidate?.id === sessionId);
+            if (!record || record.ownerFingerprint !== ownerFingerprint
+                || record.state !== "blocked" || record.blockReason !== "answers_incomplete"
+                || Date.parse(record.expiresAt) <= now
+                || (record.replayClaim && Date.parse(record.replayClaim.expiresAt) > now)) {
+                return { status: "not_recoverable" as const };
+            }
+            const revision = record.checkpointRevision || record.snapshot.expectedRevision;
+            const snapshot = JSON.parse(JSON.stringify(record.snapshot)) as SecureSubmissionSnapshot;
+            if (!await preserveDraft(snapshot, revision)) return { status: "storage_error" as const };
+            await store.delete(record.id);
+            emitOutboxEvent({ sessionId: record.id, status: "editing" });
+            return { status: "recovered" as const, snapshot, revision };
+        });
+    } catch {
+        return { status: "storage_error" };
+    }
 }

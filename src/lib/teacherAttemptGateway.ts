@@ -480,7 +480,7 @@ function isCanonicalAttemptListRow(
         && value.total_score >= 0
         && !!safeIso(value.started_at)
         && !!safeIso(value.finished_at)
-        && (value.updated_at === undefined || !!safeIso(value.updated_at))
+        && optionalProjectionField(value, "updated_at", item => !!safeIso(item))
         && isCanonicalAttemptOptionalProjection(value)
         && (!requireAnswers || isCanonicalAnswers(value.answers));
 }
@@ -711,8 +711,7 @@ export async function setTeacherAttemptSubquestionReviewWithGateway(
         !attemptId
         || !/^\d+$/.test(questionId)
         || !subquestionId
-        || subquestionId.length > 100
-        || subquestionId.includes(":")
+        || subquestionId.length > 256
         || (input.status !== "reviewed" && input.status !== "needs_review")
     ) {
         return { status: "invalid_request" };
@@ -984,7 +983,8 @@ export async function listTeacherAttemptsWithGateway(
                 ...record,
                 started_at: safeIso(record.started_at),
                 finished_at: safeIso(record.finished_at),
-                ...(record.updated_at === undefined ? {} : { updated_at: safeIso(record.updated_at) }),
+                ...(record.updated_at === undefined || record.updated_at === null
+                    ? {} : { updated_at: safeIso(record.updated_at) }),
             }, attestCanonicalQuestionResultEvidence);
             if (clean(attempt.organizationId) !== clean(context.organizationId)) {
                 return { status: "service_unavailable", error: "Invalid canonical attempt collection" };
@@ -1041,7 +1041,8 @@ export async function listTeacherAttemptSummariesWithGateway(
                 ...record,
                 started_at: safeIso(record.started_at),
                 finished_at: safeIso(record.finished_at),
-                ...(record.updated_at === undefined ? {} : { updated_at: safeIso(record.updated_at) }),
+                ...(record.updated_at === undefined || record.updated_at === null
+                    ? {} : { updated_at: safeIso(record.updated_at) }),
             });
             if (clean(attempt.organizationId) !== clean(context.organizationId)) {
                 return { status: "service_unavailable", error: "Invalid canonical attempt collection" };

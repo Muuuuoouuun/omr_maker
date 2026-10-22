@@ -1,0 +1,43 @@
+.emptyPdfAction {
+  display: none;
+}
+
+@media (max-width: 599px) {
+  .withoutPdf > :global(.solve-pdf-pane) {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+    background: var(--surface) !important;
+  }
+
+  .withoutPdf :global(.pdf-viewer-container) {
+    display: none !important;
+  }
+
+  .withoutPdf > :global(.solve-omr-pane):not(:global(.is-collapsed)) {
+    flex: 1 1 auto !important;
+    max-height: none !important;
+  }
+
+  .emptyPdfAction {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.65rem;
+    padding: 0.6rem 0.75rem;
+    color: var(--foreground);
+  }
+
+  .emptyPdfAction p {
+    margin: 0;
+    font-size: 0.76rem;
+    line-height: 1.5;
+    word-break: keep-all;
+  }
+
+  .emptyPdfAction button {
+    min-height: 44px;
+    flex: 0 0 auto;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.76rem;
+  }
+}

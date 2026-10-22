@@ -10,6 +10,7 @@ import {
     type StudentAttemptReadGatewayClient,
 } from "./studentAttemptReadGateway";
 import { studentTrustedOfficialReviewFromUnknown } from "@/lib/studentAttemptHistoryContract";
+import { buildServerAttempt } from "@/lib/studentExamServerGrading";
 
 const session: StudentServerSession = {
     audience: "omr-student",
@@ -197,6 +198,50 @@ function mockClient(options: {
 }
 
 describe("student attempt read gateway", () => {
+    function sealedPostgresListRow() {
+        const completed = buildServerAttempt({
+            examId: exam.id,
+            submissionId: "history-timestamp-ticket",
+            answers: { 1: 3, 2: 1 },
+            startedAt: "2026-07-14T00:00:00.123456+00:00",
+        }, exam, session, "attempt-history-timestamps", "2026-07-14T00:10:00.123Z");
+        return {
+            ...attemptListRow(completed),
+            started_at: "2026-07-14T00:00:00.123456+00:00",
+            finished_at: "2026-07-14T00:10:00.123+00:00",
+            grading_started_at: completed.startedAt,
+            grading_finished_at: completed.finishedAt,
+        };
+    }
+
+    it("verifies sealed history using original timestamp strings after PostgreSQL formats the same instants", async () => {
+        const row = JSON.parse(JSON.stringify(sealedPostgresListRow()));
+        const { client } = mockClient({ attemptRows: [row] });
+
+        const result = await listStudentAttemptsWithGateway(client, session);
+
+        expect(result).toMatchObject({
+            status: "loaded",
+            attempts: [{ id: "attempt-history-timestamps", score: 10, totalScore: 10,
+                startedAt: "2026-07-14T00:00:00.123456+00:00", finishedAt: "2026-07-14T00:10:00.123Z" }],
+        });
+        expect(JSON.stringify(result)).not.toMatch(/correctAnswer|questionResults(?:DefinitionManifest|FullEvidence)Hash/);
+    });
+
+    it.each([
+        { field: "grading_started_at", value: "2026-07-14T00:00:00.123457+00:00" },
+        { field: "grading_finished_at", value: "2026-07-14T00:10:00.123001Z" },
+        { field: "finished_at", value: "2026-07-14T00:10:00.123001+00:00" },
+        { field: "grading_finished_at", value: "not-a-timestamp" },
+    ])("rejects a mismatched or malformed projected $field without weakening evidence", async ({ field, value }) => {
+        const row = { ...sealedPostgresListRow(), [field]: value };
+        const { client } = mockClient({ attemptRows: [JSON.parse(JSON.stringify(row))] });
+
+        await expect(listStudentAttemptsWithGateway(client, session)).resolves.toEqual({
+            status: "service_unavailable", error: "Invalid scoped student attempt",
+        });
+    });
+
     it("lists only completed attempts scoped by both HttpOnly-session organization and student", async () => {
         const { client, calls } = mockClient();
         const result = await listStudentAttemptsWithGateway(client, session);

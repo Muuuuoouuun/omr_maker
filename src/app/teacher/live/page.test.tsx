@@ -127,6 +127,57 @@ describe("teacher live demo confirmation lifecycle", () => {
         expect(trigger).toHaveFocus();
     });
 
+    it("counts down one second on the first scheduled tick and preserves time across detail polls", async () => {
+        await renderReady();
+        const countdown = document.querySelector(".numeric-emphasis");
+        expect(countdown).toHaveTextContent("60:00");
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        expect(countdown).toHaveTextContent("59:59");
+        await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+        expect(countdown).toHaveTextContent("59:57");
+        expect(controls.loadAttempts).toHaveBeenCalledTimes(2);
+        expect(controls.loadExams).toHaveBeenCalledTimes(1);
+    });
+
+    it("extends demo time from the current countdown and resets it when another exam is selected", async () => {
+        controls.allowDemo = true;
+        controls.loadExams.mockResolvedValue(unauthorizedAttempts);
+        controls.loadSummaries.mockResolvedValue(unauthorizedAttempts);
+        controls.loadRoster.mockResolvedValue({ students: [], groups: [], remoteError: "unauthorized" });
+        await renderReady();
+        const countdown = document.querySelector(".numeric-emphasis");
+        expect(countdown).toHaveTextContent("60:00");
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        expect(countdown).toHaveTextContent("59:59");
+        fireEvent.click(within(screen.getByRole("region", { name: "실시간 시험 작업" }))
+            .getByRole("button", { name: "+5분 연장" }));
+        expect(countdown).toHaveTextContent("64:59");
+
+        fireEvent.change(screen.getByRole("combobox"), { target: { value: "ex2" } });
+        expect(countdown).toHaveTextContent("45:00");
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        expect(countdown).toHaveTextContent("44:59");
+    });
+
+    it("can finish every initial demo student before the first simulated progress interval", async () => {
+        controls.allowDemo = true;
+        controls.loadExams.mockResolvedValue(unauthorizedAttempts);
+        controls.loadSummaries.mockResolvedValue(unauthorizedAttempts);
+        controls.loadRoster.mockResolvedValue({ students: [], groups: [], remoteError: "unauthorized" });
+        await renderReady();
+        const { dialog } = openConfirmation();
+        fireEvent.click(within(dialog).getByRole("button", { name: "지금 종료" }));
+
+        expect(document.querySelector(".numeric-emphasis")).toHaveTextContent("00:00");
+        const cards = document.querySelectorAll(".card-hover");
+        expect(cards).toHaveLength(8);
+        for (const card of cards) expect(card).toHaveTextContent("제출 완료");
+        expect(controls.finishAttempts).not.toHaveBeenCalled();
+        expect(controls.finishSessions).not.toHaveBeenCalled();
+    });
+
     it("continues polling real details and closes the real confirmation on an authorization failure", async () => {
         controls.loadAttempts.mockResolvedValueOnce(readyAttempts).mockResolvedValue(unauthorizedAttempts);
         await renderReady();

@@ -64,6 +64,7 @@ type TeacherAttemptActionContext = {
 type AnalyticsSummaryPreflight = {
     attempts: TeacherAttemptSummary[];
     eligibleAttempts: TeacherAttemptSummary[];
+    unavailableAttempts: TeacherAttemptSummary[];
     canonicalQuestionResultCount: number;
 };
 
@@ -74,6 +75,7 @@ function preflightAnalyticsSummaries(value: unknown): AnalyticsSummaryPreflight 
     const attempts: TeacherAttemptSummary[] = [];
     const eligibleAttempts: TeacherAttemptSummary[] = [];
     const attemptIds = new Set<string>();
+    const unavailableExamIds = new Set<string>();
     let canonicalQuestionResultCount = 0;
     for (let index = 0; index < value.length; index += 1) {
         if (!Object.prototype.hasOwnProperty.call(value, index)) return null;
@@ -90,16 +92,28 @@ function preflightAnalyticsSummaries(value: unknown): AnalyticsSummaryPreflight 
             || (record.status !== "completed" && record.status !== "in_progress")) return null;
         attemptIds.add(record.id);
         if (record.status === "completed" && !record.retake) {
-            const count = Number(record.questionResultsQuestionCount);
-            if (!Number.isSafeInteger(count) || count <= 0 || count > 500) return null;
-            canonicalQuestionResultCount += count;
-            if (!Number.isSafeInteger(canonicalQuestionResultCount)
-                || canonicalQuestionResultCount > INITIAL_OPERATIONS_LIMITS.teacherAttempts * 500) return null;
-            eligibleAttempts.push(record as unknown as TeacherAttemptSummary);
+            if (record.questionResultsQuestionCount === undefined || record.questionResultsQuestionCount === null) {
+                // Imported results without canonical submission evidence remain readable,
+                // but no subset of their exam may masquerade as complete official analysis.
+                unavailableExamIds.add(record.examId);
+            } else {
+                const count = record.questionResultsQuestionCount;
+                if (typeof count !== "number" || !Number.isSafeInteger(count) || count <= 0 || count > 500) return null;
+                canonicalQuestionResultCount += count;
+                if (!Number.isSafeInteger(canonicalQuestionResultCount)
+                    || canonicalQuestionResultCount > INITIAL_OPERATIONS_LIMITS.teacherAttempts * 500) return null;
+                eligibleAttempts.push(record as unknown as TeacherAttemptSummary);
+            }
         }
         attempts.push(record as unknown as TeacherAttemptSummary);
     }
-    return { attempts, eligibleAttempts, canonicalQuestionResultCount };
+    const completeExamAttempts = eligibleAttempts.filter(attempt => !unavailableExamIds.has(attempt.examId));
+    return {
+        attempts,
+        eligibleAttempts: completeExamAttempts,
+        unavailableAttempts: attempts.filter(attempt => unavailableExamIds.has(attempt.examId)),
+        canonicalQuestionResultCount: completeExamAttempts.reduce((total, attempt) => total + Number(attempt.questionResultsQuestionCount), 0),
+    };
 }
 
 async function mapWithConcurrency<T, R>(
@@ -205,8 +219,12 @@ export async function loadTeacherCanonicalAnalyticsSnapshots(examId?: string): P
                 meta: summaryResult.meta,
             };
         }
+        const unavailableSnapshots = buildTeacherUnavailableAnalyticsSnapshotMap(preflight.unavailableAttempts);
+        if (new TextEncoder().encode(JSON.stringify(unavailableSnapshots)).byteLength > TEACHER_ANALYTICS_SNAPSHOT_MAX_BYTES) {
+            return { status: "service_unavailable", error: "공식 분석 데이터가 전송 한도를 초과했습니다." };
+        }
         if (preflight.eligibleAttempts.length === 0) {
-            return { status: "loaded", analyticsSnapshots: {}, meta: summaryResult.meta };
+            return { status: "loaded", analyticsSnapshots: unavailableSnapshots, meta: summaryResult.meta };
         }
         const [detailResults, examResult] = await Promise.all([
             mapWithConcurrency(preflight.eligibleAttempts, 6, summary => (
@@ -245,7 +263,10 @@ export async function loadTeacherCanonicalAnalyticsSnapshots(examId?: string): P
         if ([...requiredExamIds].some(requiredExamId => !availableExamIds.has(requiredExamId))) {
             return { status: "service_unavailable", error: "공식 시험 정의가 분석 범위와 일치하지 않습니다." };
         }
-        const analyticsSnapshots = buildTeacherCanonicalAnalyticsSnapshotMap(examResult.exams, richAttempts);
+        const analyticsSnapshots = {
+            ...buildTeacherCanonicalAnalyticsSnapshotMap(examResult.exams, richAttempts),
+            ...unavailableSnapshots,
+        };
         const serialized = JSON.stringify(analyticsSnapshots);
         if (new TextEncoder().encode(serialized).byteLength > TEACHER_ANALYTICS_SNAPSHOT_MAX_BYTES) {
             return { status: "service_unavailable", error: "공식 분석 데이터가 전송 한도를 초과했습니다." };

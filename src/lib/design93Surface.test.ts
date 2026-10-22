@@ -149,7 +149,7 @@ describe("design 93 surface regressions", () => {
         const css = read("src/app/globals.css");
 
         expect(toast).toContain("toast-host");
-        expect(css).toMatch(/body:has\(\.create-workspace\) \.toast-host\s*\{[^}]*bottom:/);
+        expect(css).toMatch(/body:has\(\.create-workspace\):not\(:has\(\.distribute-dialog\)\) \.toast-host\s*\{[^}]*bottom:/);
     });
 
     it("provides 44px create-editor touch targets without squeezing six presets into one row", () => {

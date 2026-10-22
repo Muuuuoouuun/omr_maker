@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { CheckCircle2, AlertCircle, Info, X } from "lucide-react";
 
 export type ToastKind = "success" | "error" | "info";
@@ -77,7 +77,31 @@ const KIND: Record<ToastKind, { color: string; icon: React.ReactNode }> = {
 
 export default function ToastHost() {
     const [items, setItems] = useState<ToastMessage[]>([]);
+    const hostRef = useRef<HTMLDivElement>(null);
     const removalTimersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+    const activeToastId = items[0]?.id;
+
+    // Distribution dialogs reserve this measured space while a notice is visible.
+    // Measuring before paint also covers browsers without ResizeObserver; viewport
+    // resize events keep that fallback current without changing toast lifetimes.
+    useLayoutEffect(() => {
+        const host = hostRef.current;
+        if (!host) return;
+        const root = document.documentElement;
+        const measure = () => root.style.setProperty("--active-toast-height", `${Math.ceil(host.getBoundingClientRect().height)}px`);
+        measure();
+        const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+        observer?.observe(host);
+        window.addEventListener("resize", measure);
+        const viewport = window.visualViewport;
+        viewport?.addEventListener("resize", measure);
+        return () => {
+            observer?.disconnect();
+            window.removeEventListener("resize", measure);
+            viewport?.removeEventListener("resize", measure);
+            root.style.removeProperty("--active-toast-height");
+        };
+    }, [activeToastId]);
 
     const remove = useCallback((id: number) => {
         const timer = removalTimersRef.current.get(id);
@@ -128,6 +152,7 @@ export default function ToastHost() {
 
     return (
         <div
+            ref={hostRef}
             className="toast-host"
             role="region"
             aria-label="알림"
@@ -139,6 +164,8 @@ export default function ToastHost() {
                 bottom: 'max(1rem, env(safe-area-inset-bottom))',
                 display: 'flex', flexDirection: 'column', gap: '0.6rem',
                 alignItems: 'flex-end',
+                maxHeight: 'min(12rem, calc(var(--app-viewport-height, 100dvh) * 0.3))',
+                overflowY: 'auto',
                 zIndex: 2000, pointerEvents: 'none'
             }}
         >

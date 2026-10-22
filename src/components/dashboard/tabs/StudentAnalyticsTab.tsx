@@ -597,7 +597,7 @@ export default function StudentAnalyticsTab({
                 </p>
             )}
             {/* Filter Section */}
-            <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
+            <div className="card student-analysis-filters" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
                 {regionScopeOptions.length > 0 && (
                     <>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 800, color: 'var(--text)' }}>
@@ -632,8 +632,9 @@ export default function StudentAnalyticsTab({
                         </select>
                     </>
                 )}
-                <span style={{ fontWeight: 600, color: 'var(--text)' }}>분석할 학생 선택:</span>
+                <label htmlFor="student-analysis-student" style={{ fontWeight: 600, color: 'var(--text)' }}>분석할 학생 선택:</label>
                 <select
+                    id="student-analysis-student"
                     value={activeStudentKey}
                     onChange={(e) => setSelectedStudentKey(e.target.value)}
                     style={{
@@ -643,8 +644,8 @@ export default function StudentAnalyticsTab({
                         background: 'var(--background)',
                         color: 'var(--text)',
                         flex: 1,
-                        maxWidth: '400px',
-                        outline: 'none',
+                        maxWidth: '100%',
+                        minWidth: 0,
                         cursor: 'pointer'
                     }}
                 >

@@ -116,16 +116,26 @@ export function sanitizeSubQuestionAnswersForQuestions(
     if (!isRecord(value)) return {};
     const result: SubQuestionAnswers = {};
     for (const question of questions) {
+        if (!Object.hasOwn(value, String(question.id))) continue;
         const rawAnswers = value[String(question.id)];
         if (!isRecord(rawAnswers)) continue;
-        const subAnswers: Record<string, SubQuestionAnswer> = {};
+        const subAnswers: [string, SubQuestionAnswer][] = [];
         for (const subQuestion of normalizeQuestionSubQuestions(question.subQuestions, question.id)) {
+            if (!Object.hasOwn(rawAnswers, subQuestion.id)) continue;
             const answer = normalizeAnswer(rawAnswers[subQuestion.id], subQuestion.maxLength || DEFAULT_SUB_QUESTION_MAX_LENGTH, nowIso);
-            if (answer) subAnswers[subQuestion.id] = answer;
+            if (answer) subAnswers.push([subQuestion.id, answer]);
         }
-        if (Object.keys(subAnswers).length > 0) result[question.id] = subAnswers;
+        if (subAnswers.length > 0) result[question.id] = Object.fromEntries(subAnswers);
     }
     return result;
+}
+
+function hasSubQuestionResponse(answers: SubQuestionAnswers | undefined, questionId: number, subQuestionId: string): boolean {
+    if (!isRecord(answers) || !Object.hasOwn(answers, String(questionId))) return false;
+    const questionAnswers = answers[questionId];
+    if (!isRecord(questionAnswers) || !Object.hasOwn(questionAnswers, subQuestionId)) return false;
+    const answer = questionAnswers[subQuestionId];
+    return isRecord(answer) && typeof answer.body === 'string' && answer.body.trim().length > 0;
 }
 
 export function findMissingRequiredSubQuestions(
@@ -133,7 +143,7 @@ export function findMissingRequiredSubQuestions(
     answers: SubQuestionAnswers | undefined,
 ): MissingRequiredSubQuestion[] {
     return questions.flatMap(question => normalizeQuestionSubQuestions(question.subQuestions, question.id)
-        .filter(subQuestion => subQuestion.required && !answers?.[question.id]?.[subQuestion.id]?.body.trim())
+        .filter(subQuestion => subQuestion.required && !hasSubQuestionResponse(answers, question.id, subQuestion.id))
         .map(subQuestion => ({ questionId: question.id, subQuestionId: subQuestion.id })));
 }
 
@@ -181,6 +191,6 @@ export function requiredSubQuestionProgress(questions: Question[], answers: SubQ
     const required = questions.flatMap(question => normalizeQuestionSubQuestions(question.subQuestions, question.id)
         .filter(subQuestion => subQuestion.required)
         .map(subQuestion => ({ questionId: question.id, subQuestionId: subQuestion.id })));
-    const completed = required.filter(item => !!answers?.[item.questionId]?.[item.subQuestionId]?.body.trim()).length;
+    const completed = required.filter(item => hasSubQuestionResponse(answers, item.questionId, item.subQuestionId)).length;
     return { completed, total: required.length };
 }

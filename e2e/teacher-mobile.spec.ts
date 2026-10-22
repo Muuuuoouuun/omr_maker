@@ -1,3 +1,4 @@
+import { observeNativeAction } from "./nativeActionDiagnostics";
 import { devices, expect, test, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -330,11 +331,14 @@ test.describe("Teacher phone and tablet app surfaces", () => {
 
         const loginForm = page.getByRole("form", { name: "교사 로그인" });
         const identifier = loginForm.getByLabel("아이디 또는 이메일");
-        const password = loginForm.getByLabel("비밀번호");
+        const password = loginForm.getByLabel("비밀번호", { exact: true });
         await expect(identifier).toHaveAttribute("autocomplete", "username");
         await expect(password).toHaveAttribute("autocomplete", "current-password");
-        await loginForm.getByRole("button", { name: "대시보드 입장" }).click();
-        await expect(loginForm.getByRole("alert")).toContainText("아이디와 비밀번호를 모두 입력해주세요.");
+        const submit = loginForm.getByRole("button", { name: "대시보드 입장" });
+        await observeNativeAction(page, submit, "teacher-empty-submit", async () => {
+            await submit.click();
+            await expect(loginForm.getByRole("alert")).toContainText("아이디와 비밀번호를 모두 입력해주세요.");
+        });
         await expect(identifier).toHaveAttribute("aria-invalid", "true");
         await expect(password).toHaveAttribute("aria-invalid", "true");
         await expectNoHorizontalOverflow(page);
@@ -407,27 +411,29 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         const scoreMetric = page.getByRole("button", { name: /전체 평균 점수.*점수 원인 보기/ });
         await expectTouchTarget(scoreMetric);
         await expect(scoreMetric).toContainText(/직전 시험보다 .*점 (상승|하락)/);
-        await activateControl(scoreMetric, hasTouch);
-        await expect(page).toHaveURL(/tab=exam/, { timeout: 25_000 });
-        const usesSidebar = await page.evaluate(() => window.matchMedia("(min-width: 1121px)").matches);
-        const sidebar = page.getByRole("complementary", { name: "교사 대시보드 내비게이션" });
-        if (usesSidebar) {
-            await expect(sidebar.getByRole("button", { name: "결과 분석" })).toHaveAttribute("aria-current", "page");
-            await activateControl(sidebar.getByRole("button", { name: "대시보드", exact: true }), hasTouch);
-        } else {
-            await expect(page.getByRole("button", { name: "시험별 분석" })).toHaveAttribute("aria-pressed", "true");
-            await activateControl(page.getByRole("button", { name: "개요", exact: true }), hasTouch);
-        }
-        const studentMetric = page.getByRole("button", { name: /명단 학생.*학생별 성취 보기/ });
-        await expectTouchTarget(studentMetric);
-        await activateControl(studentMetric, hasTouch);
-        await expect(page).toHaveURL(/tab=student/, { timeout: 25_000 });
-        if (usesSidebar) {
-            await expect(sidebar.getByRole("button", { name: "학생 성취도" })).toHaveAttribute("aria-current", "page");
-        } else {
-            await expect(page.getByRole("button", { name: "학생별 분석" })).toHaveAttribute("aria-pressed", "true");
-        }
-        await expectNoHorizontalOverflow(page);
+        await observeNativeAction(page, scoreMetric, "metrics-next-action", async () => {
+            await activateControl(scoreMetric, hasTouch);
+            await expect(page).toHaveURL(/tab=exam/, { timeout: 25_000 });
+            const usesSidebar = await page.evaluate(() => window.matchMedia("(min-width: 1121px)").matches);
+            const sidebar = page.getByRole("complementary", { name: "교사 대시보드 내비게이션" });
+            if (usesSidebar) {
+                await expect(sidebar.getByRole("button", { name: "결과 분석" })).toHaveAttribute("aria-current", "page");
+                await activateControl(sidebar.getByRole("button", { name: "대시보드", exact: true }), hasTouch);
+            } else {
+                await expect(page.getByRole("button", { name: "시험별 분석" })).toHaveAttribute("aria-pressed", "true");
+                await activateControl(page.getByRole("button", { name: "개요", exact: true }), hasTouch);
+            }
+            const studentMetric = page.getByRole("button", { name: /명단 학생.*학생별 성취 보기/ });
+            await expectTouchTarget(studentMetric);
+            await activateControl(studentMetric, hasTouch);
+            await expect(page).toHaveURL(/tab=student/, { timeout: 25_000 });
+            if (usesSidebar) {
+                await expect(sidebar.getByRole("button", { name: "학생 성취도" })).toHaveAttribute("aria-current", "page");
+            } else {
+                await expect(page.getByRole("button", { name: "학생별 분석" })).toHaveAttribute("aria-pressed", "true");
+            }
+            await expectNoHorizontalOverflow(page);
+        });
     });
 
     test("progressively reveals showcase exam results on a 390px phone", async ({ page, hasTouch }) => {

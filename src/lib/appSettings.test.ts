@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
     DEFAULT_SETTINGS,
+    buildSettingsExport,
     normalizeExamDefaults,
     parseImportedSettings,
     parseStoredSettings,
@@ -71,5 +72,40 @@ describe("app settings", () => {
             ...DEFAULT_SETTINGS,
             theme: { ...DEFAULT_SETTINGS.theme, mode: "sepia" },
         })).toBeNull();
+    });
+
+    it("exports preferences without API credentials and leaves saved settings intact", () => {
+        const settings = {
+            ...DEFAULT_SETTINGS,
+            theme: { ...DEFAULT_SETTINGS.theme, mode: "dark" as const },
+            api: { geminiKey: "private-browser-key", legacyKey: "another-secret" },
+        };
+
+        const exported = buildSettingsExport(settings);
+        expect(exported.api).toEqual({ geminiKey: "" });
+        expect(exported.theme.mode).toBe("dark");
+        expect(JSON.stringify(exported)).not.toContain("private-browser-key");
+        expect(JSON.stringify(exported)).not.toContain("another-secret");
+        expect(settings.api.geminiKey).toBe("private-browser-key");
+    });
+
+    it("round-trips a sanitized backup while preserving the current browser key", () => {
+        const exported = buildSettingsExport({
+            ...DEFAULT_SETTINGS,
+            examDefaults: { ...DEFAULT_SETTINGS.examDefaults, questions: 30 },
+            api: { geminiKey: "source-browser-key" },
+        });
+
+        expect(parseImportedSettings(exported, { geminiKey: "current-browser-key" })).toMatchObject({
+            examDefaults: { questions: 30 },
+            api: { geminiKey: "current-browser-key" },
+        });
+    });
+
+    it("never restores an API key embedded in a legacy backup", () => {
+        const legacyBackup = { ...DEFAULT_SETTINGS, api: { geminiKey: "legacy-backup-key" } };
+        expect(parseImportedSettings(legacyBackup)?.api).toEqual({ geminiKey: "" });
+        expect(parseImportedSettings(legacyBackup, { geminiKey: "current-key" })?.api)
+            .toEqual({ geminiKey: "current-key" });
     });
 });

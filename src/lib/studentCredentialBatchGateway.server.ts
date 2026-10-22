@@ -1,3 +1,4 @@
+import { isProvisionedOrganizationShape } from "./provisionedTeacherEntitlement";
 import "next/dist/compiled/server-only";
 
 import { pbkdf2, randomBytes } from "node:crypto";
@@ -21,6 +22,7 @@ export type IssueStudentCredentialBatchResult =
 
 export interface IssueStudentCredentialBatchInput {
     sessionAuthority: unknown;
+    entitlementMode?: unknown;
     accountId: unknown;
     accountSessionGeneration: unknown;
     organizationId: unknown;
@@ -44,7 +46,6 @@ const FORBIDDEN_STUDENT_ID_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029
 const PROVISIONED_ACCOUNT_PATTERN = /^teacher_[a-f0-9]{16}$/;
 const LEGACY_ACCOUNT_PATTERN = /^teacher_[a-z0-9]{16}$/;
 const LEGACY_ACTOR_PATTERN = /^teacher_[a-z0-9]{7,16}$/;
-const PILOT_ORGANIZATION_PATTERN = /^(?:pilot_org_|demo_org_)[a-f0-9]{24}$/;
 const LEGACY_ORGANIZATION_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
 const IDEMPOTENCY_PATTERN = /^batch_[A-Za-z0-9_-]{32,122}$/;
 const VERIFIER_PATTERN = /^pbkdf2-sha256:120000:[a-f0-9]{32}:[a-f0-9]{64}$/;
@@ -248,9 +249,10 @@ function validateIdentity(input: IssueStudentCredentialBatchInput): {
     if (sessionAuthority === "account" && (
         !PROVISIONED_ACCOUNT_PATTERN.test(accountId)
         || actorUserId !== accountId
-        || !PILOT_ORGANIZATION_PATTERN.test(organizationId)
+        || !isProvisionedOrganizationShape(organizationId, input.entitlementMode)
     )) return null;
     if (sessionAuthority === "legacy_account" && (
+        input.entitlementMode !== undefined ||
         !LEGACY_ACCOUNT_PATTERN.test(accountId)
         || !LEGACY_ACTOR_PATTERN.test(actorUserId)
         || !LEGACY_ORGANIZATION_PATTERN.test(organizationId)

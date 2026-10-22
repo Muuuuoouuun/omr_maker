@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import DistributeModal from "./DistributeModal";
 
@@ -89,9 +89,9 @@ const readyRoster = {
     },
 };
 
-function renderExistingExam(initialAccessConfig: { type: "group"; groupIds: string[] } | { type: "targeted" }) {
-    return render(<DistributeModal
-        isOpen
+function existingExam(initialAccessConfig: { type: "group"; groupIds: string[] } | { type: "targeted" }, isOpen = true) {
+    return <DistributeModal
+        isOpen={isOpen}
         onClose={vi.fn()}
         onSaveAndShare={vi.fn()}
         onAssignStudents={vi.fn()}
@@ -105,7 +105,11 @@ function renderExistingExam(initialAccessConfig: { type: "group"; groupIds: stri
         initialAccessConfig={initialAccessConfig}
         examId="exam-existing"
         isExistingExam
-    />);
+    />;
+}
+
+function renderExistingExam(initialAccessConfig: { type: "group"; groupIds: string[] } | { type: "targeted" }) {
+    return render(existingExam(initialAccessConfig));
 }
 
 afterEach(cleanup);
@@ -139,6 +143,49 @@ beforeEach(() => {
 });
 
 describe("DistributeModal canonical roster recovery", () => {
+    it("restores initial access and blocks writes while a reopened dialog reloads its roster revision", async () => {
+        let resolveReload!: (value: typeof readyRoster) => void;
+        controls.loadRoster.mockReset()
+            .mockResolvedValueOnce(readyRoster)
+            .mockReturnValueOnce(new Promise(resolve => { resolveReload = resolve; }));
+        const config = { type: "group" as const, groupIds: [] };
+        const view = renderExistingExam(config);
+        const publicAccess = screen.getByRole("radio", { name: "전체 공개 (링크 공유)" });
+        await waitFor(() => expect(publicAccess).toBeEnabled());
+        fireEvent.click(publicAccess);
+        expect(publicAccess).toBeChecked();
+
+        view.rerender(existingExam(config, false));
+        view.rerender(existingExam(config));
+
+        const groupAccess = screen.getByRole("radio", { name: "특정 그룹만" });
+        expect(groupAccess).toBeChecked();
+        expect(groupAccess).toBeDisabled();
+        expect(screen.getByTestId("canonical-distribution-roster-loading")).toBeVisible();
+        await act(async () => { resolveReload(readyRoster); });
+        await waitFor(() => expect(groupAccess).toBeEnabled());
+    });
+
+    it("ignores an earlier dialog's roster completion after reopening with a fresh mutable revision", async () => {
+        let resolveStale!: (value: { remoteLoaded: boolean; remoteSynced: boolean; remoteError: string }) => void;
+        controls.loadRoster.mockReset()
+            .mockReturnValueOnce(new Promise(resolve => { resolveStale = resolve; }))
+            .mockResolvedValueOnce(readyRoster);
+        const config = { type: "group" as const, groupIds: [] };
+        const view = renderExistingExam(config);
+        view.rerender(existingExam(config, false));
+        view.rerender(existingExam(config));
+        const groupAccess = screen.getByRole("radio", { name: "특정 그룹만" });
+        await waitFor(() => expect(groupAccess).toBeEnabled());
+
+        await act(async () => {
+            resolveStale({ remoteLoaded: false, remoteSynced: false, remoteError: "stale offline response" });
+        });
+
+        expect(groupAccess).toBeEnabled();
+        expect(screen.queryByTestId("canonical-degraded-cache")).not.toBeInTheDocument();
+    });
+
     it("restarts assignment and invite metadata loads after degraded roster recovery", async () => {
         renderExistingExam({ type: "group", groupIds: ["group-1"] });
 

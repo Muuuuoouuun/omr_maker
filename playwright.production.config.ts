@@ -35,7 +35,8 @@ export default defineConfig({
         reuseExistingServer: false,
         timeout: 60_000,
         env: {
-            ...process.env,
+            // The child inherits process.env; copying it here exposes credentials
+            // in JSON reports that serialize the webServer configuration.
             VERCEL_GIT_COMMIT_SHA: build,
             GIT_SHA: build,
             // Neutralize developer-local account JSON — TEACHER_ACCOUNTS takes

@@ -64,6 +64,8 @@ export interface QuestionContentAnalysis {
     trapPoints: string[];
     summary: string;
     status: 'draft' | 'reviewed';
+    /** Teacher-only provenance for classifications applied during explicit analysis review. */
+    appliedTags?: { unit?: string; skill?: string };
 }
 
 export interface Question {
@@ -116,6 +118,8 @@ export function questionChoiceCount(question: Pick<Question, "choices">, fallbac
 }
 
 export interface Exam {
+    /** Teacher-only editor preferences, persisted with the exam; omit from student DTOs. */
+    authoringSettings?: { targetTotalScore?: number; pdfPageRange?: string };
     id: string; // generated ID
     title: string;
     /** Canonical server revision used for optimistic-concurrency saves. New unsaved exams omit it. */

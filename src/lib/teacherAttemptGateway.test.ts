@@ -170,6 +170,60 @@ describe("teacher attempt gateway", () => {
         });
     });
 
+    it.each([null, "2026-07-14T00:02:00.123456+00:00"])(
+        "loads summaries from the deployed attempt schema with optional payload version %s",
+        async payloadVersion => {
+            const row = {
+                ...attemptListRow(attempt),
+                updated_at: payloadVersion,
+                question_results_question_count: null,
+            };
+            const client = {
+                from() {
+                    return {
+                        select(columns: string) {
+                            // The deployed omr_attempts table has no updated_at column.
+                            // PostgREST projects an absent payload JSON key as null.
+                            const selectsMissingColumn = columns.split(/\s*,\s*/).includes("updated_at");
+                            const query = {
+                                eq() { return query; },
+                                order() { return query; },
+                                async limit() {
+                                    return selectsMissingColumn
+                                        ? { data: null, error: { code: "42703", message: "column omr_attempts.updated_at does not exist" } }
+                                        : { data: [row], error: null };
+                                },
+                            };
+                            return query;
+                        },
+                    };
+                },
+            } as unknown as TeacherAttemptGatewayClient;
+
+            const result = await listTeacherAttemptSummariesWithGateway(client, {
+                organizationId: "org-a", organizationName: "Org A",
+            });
+            expect(result.status).toBe("loaded");
+            if (result.status !== "loaded") throw new Error("Expected canonical summary");
+            expect(result.attempts).toHaveLength(1);
+            expect(result.attempts[0]).toMatchObject({ id: attempt.id, score: 1, totalScore: 1 });
+            expect(result.attempts[0]).not.toHaveProperty("questionResultsQuestionCount");
+            expect(result.attempts[0]).not.toHaveProperty("questionResults");
+            if (payloadVersion === null) {
+                expect(result.attempts[0]).not.toHaveProperty("updatedAt");
+            } else {
+                expect(result.attempts[0].updatedAt).toBe("2026-07-14T00:02:00.123Z");
+            }
+        },
+    );
+
+    it("rejects malformed non-null attempt payload versions", async () => {
+        const { client } = clientWithRows([{ ...attemptListRow(attempt), updated_at: "not-a-timestamp" }]);
+        await expect(listTeacherAttemptSummariesWithGateway(client, {
+            organizationId: "org-a", organizationName: "Org A",
+        })).resolves.toMatchObject({ status: "service_unavailable" });
+    });
+
     it("lists attempts only through the server-owned organization filter", async () => {
         const postgresUtcRow = {
             ...attemptListRow(attempt),
@@ -599,6 +653,37 @@ describe("teacher attempt gateway", () => {
                 p_actor_label: "김 선생",
             },
         }]);
+    });
+
+    it.each(["a".repeat(100) + "-2", "b".repeat(256), "reason:stage:2", ":leading:trailing:", "__proto__"])(
+        "preserves the exact imported subquestion identity for review (%s)",
+        async subquestionId => {
+            const calls: Array<Record<string, unknown>> = [];
+            const client = { async rpc(_name: string, args: Record<string, unknown>) {
+                calls.push(args);
+                return { data: [{ payload: attempt }], error: null };
+            } } as unknown as TeacherAttemptGatewayClient;
+            const result = await teacherAttemptGateway.setTeacherAttemptSubquestionReviewWithGateway(client, {
+                attemptId: "attempt-1", questionId: 7, subquestionId, status: "reviewed",
+            }, {
+                organizationId: "org-a", organizationName: "Org A", actorUserId: "teacher-1",
+                actorLabel: "김 선생", memberRole: "teacher",
+            });
+            expect(result.status).toBe("saved");
+            expect(calls).toEqual([expect.objectContaining({ p_subquestion_id: `7:${subquestionId}` })]);
+        },
+    );
+
+    it("rejects a review identity beyond the student-answer limit before the RPC", async () => {
+        let calls = 0;
+        const client = { async rpc() { calls += 1; return { data: null, error: null }; } } as unknown as TeacherAttemptGatewayClient;
+        await expect(teacherAttemptGateway.setTeacherAttemptSubquestionReviewWithGateway(client, {
+            attemptId: "attempt-1", questionId: 7, subquestionId: "x".repeat(257), status: "reviewed",
+        }, {
+            organizationId: "org-a", organizationName: "Org A", actorUserId: "teacher-1",
+            actorLabel: "김 선생", memberRole: "teacher",
+        })).resolves.toEqual({ status: "invalid_request" });
+        expect(calls).toBe(0);
     });
 
     it("loads canonical attempts and exams before force-finishing with trusted grading", async () => {

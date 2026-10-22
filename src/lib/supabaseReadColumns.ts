@@ -95,7 +95,8 @@ export const SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS = [
     "merged_at",
     "started_at",
     "finished_at",
-    "updated_at",
+    // Attempts have no updated_at column; legacy payloads may omit this optional version.
+    "updated_at:payload->>updatedAt",
     "exam_title:payload->>examTitle",
     "guest_id:payload->>guestId",
     "student_questions:student_question_summaries",
@@ -139,6 +140,8 @@ export const SUPABASE_ATTEMPT_LIST_READ_COLUMNS = [
     "merged_at",
     "started_at",
     "finished_at",
+    "grading_started_at:payload->>startedAt",
+    "grading_finished_at:payload->>finishedAt",
     "exam_title:payload->>examTitle",
     "guest_id:payload->>guestId",
     "answers:payload->answers",

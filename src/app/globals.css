@@ -1969,6 +1969,27 @@ html[data-motion="off"] .mockup-dashboard-tabs button::after {
   min-height: 44px;
 }
 
+/* Keep notices and the distribution dialog in separate visible areas. The
+   dialog body scrolls when a long notice leaves less space on a small screen. */
+body:has(.distribute-dialog) .toast-host {
+  top: calc(var(--app-visual-viewport-offset-top, 0px) + max(0.5rem, var(--app-safe-area-top))) !important;
+  bottom: auto !important;
+}
+
+body:has(.toast-host) .distribute-dialog-backdrop {
+  padding-top: calc(max(0.5rem, var(--app-safe-area-top)) + var(--active-toast-height, 0px) + 0.75rem) !important;
+}
+
+body:has(.toast-host) .distribute-dialog {
+  max-height: calc(
+    var(--app-viewport-height, 100dvh)
+    - max(1rem, var(--app-safe-area-top))
+    - max(1rem, var(--app-safe-area-bottom))
+    - var(--active-toast-height, 0px)
+    - 0.75rem
+  );
+}
+
 .distribute-share-actions {
   display: flex;
   gap: 0.5rem;
@@ -6242,8 +6263,7 @@ body:has(.create-workspace.is-resizing) {
   gap: 0.75rem;
   margin: -1.5rem -1.5rem 1.15rem;
   padding: 1rem 1.5rem 0.9rem;
-  background:
-    linear-gradient(180deg, var(--surface) 0%, var(--surface) 78%, rgba(255, 255, 255, 0) 100%);
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   box-shadow: 0 12px 22px rgba(15, 23, 42, 0.05);
 }
@@ -7296,8 +7316,7 @@ body:has(.create-workspace.is-resizing) {
 }
 
 [data-theme="dark"] .create-settings-sticky-summary {
-  background:
-    linear-gradient(180deg, var(--surface) 0%, var(--surface) 78%, rgba(15, 23, 42, 0) 100%);
+  background: var(--surface);
 }
 
 .create-publish-chip {
@@ -8051,7 +8070,7 @@ body:has(.create-workspace.is-resizing) {
     margin-top: var(--mobile-section-gap);
   }
 
-  body:has(.create-workspace) .toast-host {
+  body:has(.create-workspace):not(:has(.distribute-dialog)) .toast-host {
     bottom: max(6.75rem, calc(env(safe-area-inset-bottom) + 6rem)) !important;
   }
 }
@@ -12638,4 +12657,38 @@ body:has(.create-workspace.is-resizing) {
   .mockup-quick-exam-score {
     font-size: 1.18rem;
   }
+}
+
+/* Keep the selected analysis first; supporting diagnostics remain keyboard accessible. */
+.dashboard-data-health-summary {
+  cursor: pointer;
+  min-height: 44px;
+  align-content: center;
+  line-height: 1.55;
+  word-break: keep-all;
+}
+.dashboard-data-health-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, 1fr);
+  gap: .75rem;
+  padding-top: .75rem;
+}
+.create-resizer:focus-visible,
+.dashboard-data-health-summary:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+@media (max-width: 767px) {
+  .dashboard-data-health-detail { grid-template-columns: minmax(0, 1fr); }
+}
+
+.student-analysis-filters select:focus-visible {
+  outline: 3px solid var(--primary) !important;
+  outline-offset: 2px;
+}
+@media (max-width: 767px) {
+  .dashboard-analysis-welcome .dashboard-create-button { width: auto; min-height: 44px; }
+  .dashboard-analysis-welcome .dashboard-welcome-actions { gap: .6rem; }
+  .student-analysis-filters { padding: 1rem !important; gap: .65rem !important; }
+  .student-analysis-filters select { width: 100%; min-width: 0 !important; flex-basis: 100% !important; }
 }

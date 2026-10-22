@@ -60,6 +60,7 @@ const readyV22Payload = {
     studentCredentialBatchReady: true,
     canonicalQuestionResultEvidenceReady: true,
     kakaoReminderEntitlementReady: true,
+    legacyOrganizationRecoveryReady: true,
 };
 
 describe("Supabase deployment readiness probe", () => {
@@ -119,12 +120,14 @@ describe("Supabase deployment readiness probe", () => {
             studentCredentialBatchReady: true,
             canonicalQuestionResultEvidenceReady: true,
             kakaoReminderEntitlementReady: true,
+            legacyOrganizationRecoveryReady: true,
             failedChecks: [],
         });
     });
 
     it("fails closed when any v22 evidence key is false or missing", () => {
         for (const key of [
+            "legacyOrganizationRecoveryReady",
             "browserSchemaPrivilegesDenied",
             "anonTablePrivilegesDenied",
             "authenticatedCanonicalPrivilegesDenied",

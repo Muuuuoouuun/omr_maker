@@ -3,7 +3,7 @@
 import { EventEmitter } from "node:events";
 import type { Frame, Page, Request, Response } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startShowcaseEntryDiagnostics, type ShowcaseEntryStage } from "../../e2e/showcaseEntryDiagnostics";
+import { observeShowcaseRuntimeFailures, startShowcaseEntryDiagnostics, type ShowcaseEntryStage } from "../../e2e/showcaseEntryDiagnostics";
 
 const CANARY = "credential-canary-password-bearer-token-private@example.test";
 const EVENTS = ["request", "response", "requestfinished", "requestfailed", "framenavigated", "console", "pageerror"];
@@ -68,10 +68,30 @@ afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     document.body.innerHTML = "";
 });
 
 describe("showcase entry diagnostics", () => {
+    it("bounds journey runtime output and detaches on the cap or page close without exposing errors", () => {
+        vi.stubEnv("OMR_SHOWCASE_ENTRY_DIAGNOSTICS", "1");
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        const { page, playwrightPage } = mockPage();
+        observeShowcaseRuntimeFailures(playwrightPage);
+        observeShowcaseRuntimeFailures(playwrightPage);
+        for (let i = 0; i < 25; i++) page.emit("pageerror", new TypeError(CANARY));
+        expect(log).toHaveBeenCalledTimes(20);
+        expect(page.listenerCount("pageerror")).toBe(0);
+        expect(page.listenerCount("close")).toBe(0);
+        expect(JSON.stringify(log.mock.calls)).not.toContain(CANARY);
+        const second = mockPage();
+        observeShowcaseRuntimeFailures(second.playwrightPage);
+        log.mockImplementation(() => { throw new Error(CANARY); });
+        expect(() => second.page.emit("pageerror", new TypeError(CANARY))).not.toThrow();
+        second.page.emit("close");
+        expect(second.page.listenerCount("pageerror")).toBe(0);
+        expect(second.page.listenerCount("close")).toBe(0);
+    });
     it("retains only boolean native-delivery flags and never arbitrary event or focus payloads", async () => {
         const { page, playwrightPage } = mockPage();
         page.evaluate.mockResolvedValue({ ...snapshot(), focusedTeacherIdentifier: CANARY,

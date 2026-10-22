@@ -77,7 +77,7 @@ function storageCheck(persistence: PersistenceHealth): DataDbReadinessCheck {
     if (persistence.kind === "synced") {
         return {
             key: "storage",
-            label: "Supabase 동기화 정상",
+            label: "서버 동기화 정상",
             detail: "시험, 제출, 명단 원격 상태를 함께 확인했습니다.",
             tone: "ready",
         };
@@ -86,7 +86,7 @@ function storageCheck(persistence: PersistenceHealth): DataDbReadinessCheck {
         return {
             key: "storage",
             label: "로컬 저장 모드",
-            detail: "Supabase 환경변수가 없으면 이 브라우저 기준으로 저장됩니다.",
+            detail: "서버에 연결되지 않으면 이 브라우저에만 저장됩니다.",
             tone: "neutral",
         };
     }
@@ -133,7 +133,7 @@ function buildSyncSourceStatus(source: PersistenceHealthSource, index: number): 
         return {
             key,
             label: `${label} 로컬 저장`,
-            detail: "Supabase 원격 로드 없이 이 브라우저 데이터로 표시합니다.",
+            detail: "서버에서 불러오지 않고 이 브라우저 데이터로 표시합니다.",
             tone: "neutral",
             remoteLoaded: false,
             remoteSynced: source.remoteSynced,
@@ -156,7 +156,7 @@ function buildSyncSourceStatus(source: PersistenceHealthSource, index: number): 
     return {
         key,
         label: `${label} 원격 동기화`,
-        detail: "Supabase 최신 데이터 기준으로 읽었습니다.",
+        detail: "서버의 최신 데이터를 불러왔습니다.",
         tone: "ready",
         remoteLoaded: true,
         remoteSynced: source.remoteSynced,

@@ -285,6 +285,34 @@ export default function PDFViewer({
     const wrapperRef = useRef<HTMLDivElement>(null);
     const pageWrapRef = useRef<HTMLDivElement>(null);
     const [containerWidth, setContainerWidth] = useState<number>(0);
+    const [navigationSource, setNavigationSource] = useState({ file, forcePage, focusTarget, numPages });
+    const [displayedPage, setDisplayedPage] = useState(pageNumber);
+    if (navigationSource.file !== file) {
+        setNavigationSource({ file, forcePage, focusTarget, numPages: 0 });
+        setNumPages(0);
+        setPageNumber(1);
+        setInputPage("1");
+        setActivePopupKey(null);
+    } else if (navigationSource.forcePage !== forcePage
+        || navigationSource.focusTarget !== focusTarget || navigationSource.numPages !== numPages) {
+        setNavigationSource({ file, forcePage, focusTarget, numPages });
+        if ((navigationSource.forcePage !== forcePage || navigationSource.numPages !== numPages)
+            && typeof forcePage === 'number' && forcePage >= 1 && forcePage <= numPages) {
+            setPageNumber(forcePage);
+        }
+        if ((navigationSource.focusTarget !== focusTarget || navigationSource.numPages !== numPages)
+            && focusTarget && focusTarget.page >= 1 && (numPages === 0 || focusTarget.page <= numPages)) {
+            setActivePopupKey(null);
+            setPageNumber(focusTarget.page);
+        }
+    }
+    if (displayedPage !== pageNumber) {
+        // Adjust only this component before commit, keeping the input DOM and
+        // drawing canvases mounted while dropping page-specific popup state.
+        setDisplayedPage(pageNumber);
+        setInputPage(String(pageNumber));
+        setActivePopupKey(null);
+    }
     const currentPdfRenderIdentity = useMemo<PdfRenderIdentity>(() => ({
         file,
         pageNumber,
@@ -367,24 +395,9 @@ export default function PDFViewer({
     }, []);
 
     useEffect(() => {
-        setNumPages(0);
-        setPageNumber(1);
-        setInputPage("1");
-        setActivePopupKey(null);
-    }, [file]);
-
-    useEffect(() => {
-        if (typeof forcePage === 'number' && forcePage >= 1 && forcePage <= numPages) {
-            setPageNumber(forcePage);
-        }
-    }, [forcePage, numPages]);
-
-    useEffect(() => {
         if (!focusTarget) return;
         if (focusTarget.page < 1 || (numPages > 0 && focusTarget.page > numPages)) return;
         pendingFocusTargetRef.current = focusTarget;
-        setActivePopupKey(null);
-        setPageNumber(focusTarget.page);
     }, [focusTarget, numPages]);
 
     useEffect(() => {
@@ -451,11 +464,6 @@ export default function PDFViewer({
         };
     }, [drawingPopoverVisible]);
 
-    // Close popup when changing page
-    useEffect(() => {
-        setActivePopupKey(null);
-    }, [pageNumber]);
-
     function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
         setNumPages(numPages);
         onLoadSuccess(numPages);
@@ -471,10 +479,6 @@ export default function PDFViewer({
             backingCanvas?.height ?? 0,
         ));
     };
-
-    useEffect(() => {
-        setInputPage(pageNumber.toString());
-    }, [pageNumber]);
 
     const handlePageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         setInputPage(e.target.value);

@@ -130,14 +130,22 @@ export function mergeSettings(parsed: Partial<AppSettings> | null | undefined): 
     };
 }
 
+/** Keep the backup shape compatible without copying browser credentials. */
+export function buildSettingsExport(settings: AppSettings): AppSettings {
+    return { ...settings, api: { geminiKey: "" } };
+}
+
 /**
- * Settings imports are destructive, so only accept the complete object shape
- * produced by this app's export action. Stored settings stay backward
- * compatible through parseStoredSettings, which intentionally accepts partial
- * objects written by older app versions.
+ * Only accept complete backups; restore preferences without importing secrets
+ * from legacy backups or clearing credentials already saved in this browser.
+ * Stored settings stay backward compatible through parseStoredSettings.
  */
-export function parseImportedSettings(value: unknown): AppSettings | null {
-    return isCompleteSettingsExport(value) ? mergeSettings(value) : null;
+export function parseImportedSettings(
+    value: unknown,
+    currentApi: AppSettings["api"] = DEFAULT_SETTINGS.api,
+): AppSettings | null {
+    if (!isCompleteSettingsExport(value)) return null;
+    return { ...mergeSettings(value), api: { geminiKey: currentApi.geminiKey } };
 }
 
 export function parseStoredSettings(rawSettings: string | null | undefined): AppSettings {

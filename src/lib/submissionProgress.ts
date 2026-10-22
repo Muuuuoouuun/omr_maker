@@ -43,6 +43,8 @@ export type SubmitProgressPhase =
     | "confirmation_required"
     | "queued"
     | "blocked"
+    | "answers_incomplete"
+    | "answer_recovery_blocked"
     | "saving_handwriting"
     | "opening_review"
     | "review_waiting_online";
@@ -117,6 +119,18 @@ export function submissionProgressCopy(
     phase: SubmitProgressPhase,
     delayed: boolean,
 ): SubmissionProgressCopy {
+    if (phase === "answer_recovery_blocked") {
+        return {
+            title: "응시 상태를 다시 확인해주세요",
+            detail: "응시 시간이 끝났거나 로그인·기기 상태가 달라 답안 수정을 열 수 없습니다. 보관한 답안은 유지됩니다. 응시 상태를 다시 불러오거나 학생 홈에서 확인해주세요.",
+        };
+    }
+    if (phase === "answers_incomplete") {
+        return {
+            title: "필수 응답을 확인해주세요",
+            detail: "필수 심화 응답이 빠져 제출되지 않았습니다. 기존 답안과 필기를 유지한 채 누락된 응답을 작성하고 다시 제출할 수 있습니다.",
+        };
+    }
     if (phase === "queued") {
         return {
             title: "제출 재시도 대기",

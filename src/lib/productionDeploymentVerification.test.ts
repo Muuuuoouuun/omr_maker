@@ -94,6 +94,7 @@ function fetchFor(options: {
     assetGcObservability?: string;
     assetGcBody?: Record<string, unknown>;
     canaryReady?: boolean;
+    recoveryReady?: unknown;
 } = {}) {
     return vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
         const url = String(input);
@@ -163,7 +164,8 @@ function fetchFor(options: {
         }
         if (url.endsWith("/rest/v1/rpc/omr_service_readiness_v1")) {
             expect(new Headers(init?.headers).get("apikey")).toBe(SERVICE_KEY);
-            const result = response(url, { ready: true, version: VERSION });
+            const result = response(url, { ready: true, version: VERSION,
+                legacyOrganizationRecoveryReady: Object.hasOwn(options, "recoveryReady") ? options.recoveryReady : true });
             Object.defineProperties(result, { url: { value: url }, redirected: { value: false } });
             return result;
         }
@@ -634,6 +636,9 @@ describe("hosted production deployment verification", () => {
         ["wrong build", { build: "b".repeat(40) }],
         ["degraded readiness", { readyStatus: "degraded" }],
         ["failed provisioned teacher canary", { canaryReady: false }],
+        ["missing recovery boundary", { recoveryReady: undefined }],
+        ["failed recovery boundary", { recoveryReady: false }],
+        ["non-boolean recovery boundary", { recoveryReady: "true" }],
         ["anon/auth read succeeds", { denyStatus: 200 }],
     ])("rejects %s", async (_label, fetchOptions) => {
         const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-reject-"));

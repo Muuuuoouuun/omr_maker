@@ -87,6 +87,45 @@ async function sameOriginMutation(): Promise<boolean> {
     return !!headerStore.get("origin") && isSameOriginServerActionRequest(headerStore);
 }
 
+function isInputRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function boundedText(value: unknown, maxLength = 256): value is string {
+    return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength;
+}
+
+function positiveRevision(value: unknown): boolean {
+    return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+// Server Action arguments are untrusted at runtime, even when callers use TypeScript.
+// Reject invalid envelopes before accessing fields or hashing a lease token.
+function validMutationInput(value: unknown, options: { revision: boolean; lease: boolean }): boolean {
+    if (!isInputRecord(value)) return false;
+    const assignmentId = value.assignmentId;
+    const hasAssignment = typeof assignmentId === "string" && assignmentId.trim().length > 0;
+    return boundedText(value.sessionId) && boundedText(value.examId)
+        && positiveRevision(value.expectedLeaseEpoch)
+        && (!options.revision || positiveRevision(value.expectedRevision))
+        && (!options.lease || boundedText(value.leaseToken))
+        && (assignmentId === undefined || typeof assignmentId === "string" && assignmentId.length <= 256)
+        && (hasAssignment ? positiveRevision(value.assignmentRevision) : value.assignmentRevision === undefined);
+}
+
+function validOpenInput(value: unknown): boolean {
+    if (!isInputRecord(value) || !boundedText(value.examId) || !boundedText(value.attemptTicket, 16_384)) return false;
+    if ([value.pin, value.currentLeaseToken, value.requestedAssignmentId]
+        .some(field => field !== undefined && (typeof field !== "string" || field.length > 256))) return false;
+    if (value.requestedAssignmentRevision !== undefined && !positiveRevision(value.requestedAssignmentRevision)) return false;
+    const retake = value.requestedRetake;
+    return retake === undefined || isInputRecord(retake)
+        && boundedText(retake.sourceAttemptId)
+        && ["wrong", "similar", "custom"].includes(retake.mode as string)
+        && Array.isArray(retake.questionIds) && retake.questionIds.length <= 500
+        && retake.questionIds.every(positiveRevision);
+}
+
 async function canonicalExam(context: AttemptSessionContext, examId: string) {
     const row = await fetchExamRowById(
         context.admin,
@@ -154,6 +193,7 @@ export async function openDurableStudentAttemptSession(
     input: OpenDurableStudentAttemptSessionInput,
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
+    if (!validOpenInput(input)) return { status: "invalid" as const };
     const context = await parseStudentAttemptSessionContext();
     if (typeof context === "string") return { status: context };
     const claims = parseStudentAttemptTicket(input.attemptTicket);
@@ -211,6 +251,7 @@ export async function resolveLegacyDurableStudentAttemptSessionScope(
     input: { sessionId: string },
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
+    if (!isInputRecord(input) || !boundedText(input.sessionId)) return { status: "invalid" as const };
     const context = await parseStudentAttemptSessionContext();
     if (typeof context === "string") return { status: context };
     return resolveLegacyStudentAttemptSessionScopeWithGateway(context.admin, {
@@ -229,6 +270,7 @@ export async function checkpointDurableStudentAttemptSession(
     },
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
+    if (!validMutationInput(input, { revision: true, lease: true })) return { status: "invalid" as const };
     const context = await parseStudentAttemptSessionContext();
     if (typeof context === "string") return { status: context };
     return checkpointStudentAttemptSessionWithGateway(context.admin, {
@@ -252,6 +294,7 @@ export async function heartbeatDurableStudentAttemptSession(
     input: Omit<DurableStudentAttemptMutationInput, "expectedRevision">,
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
+    if (!validMutationInput(input, { revision: false, lease: true })) return { status: "invalid" as const };
     const context = await parseStudentAttemptSessionContext();
     if (typeof context === "string") return { status: context };
     return heartbeatStudentAttemptSessionWithGateway(context.admin, {
@@ -270,6 +313,7 @@ export async function takeoverDurableStudentAttemptSession(
     input: Omit<DurableStudentAttemptMutationInput, "leaseToken">,
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
+    if (!validMutationInput(input, { revision: true, lease: false })) return { status: "invalid" as const };
     const context = await parseStudentAttemptSessionContext();
     if (typeof context === "string") return { status: context };
     const leaseToken = randomUUID();
@@ -297,6 +341,7 @@ export async function submitDurableStudentAttemptSession(
     },
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
+    if (!validMutationInput(input, { revision: true, lease: true })) return { status: "invalid" as const };
     const context = await parseStudentAttemptSessionContext();
     if (typeof context === "string") return { status: context };
     const result = await submitStudentAttemptSessionService({

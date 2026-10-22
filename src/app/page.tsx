@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, type MouseEvent } from "react";
+import { useState, useEffect, useMemo, useRef, useSyncExternalStore, type MouseEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
+import PasswordInput from "@/components/PasswordInput";
 import StudentDirectLoginForm from "@/components/StudentDirectLoginForm";
 import { toast } from "@/components/Toast";
 import { startMockupTeacherSession, verifyTeacherPassword } from "@/app/actions/auth";
@@ -212,10 +213,70 @@ function redirectToCanonicalTeacherRecovery(): void {
   window.location.replace(buildTeacherRecoveryCanonicalUrl(new URL(window.location.href)));
 }
 
+function createHomeStorageStore(teacherSelfServiceEnabled: boolean) {
+  const read = () => {
+    const query = new URLSearchParams(window.location.search);
+    const examId = query.get("exam")?.trim() || "";
+    let groups: RosterGroup[] = [];
+    let students: RosterStudent[] = [];
+    let recentSession: StudentSession | null = null;
+    let hint: StudentReturnHint | null = null;
+    let codes: Record<string, string> = {};
+    let pendingPreview: GuestMergePreview | null = null;
+    try {
+      loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
+      seedLocalTestStudentAccounts(localStorage);
+      groups = readRosterGroups(localStorage);
+      students = readRosterStudents(localStorage);
+      const session = getSession();
+      recentSession = session && !session.isGuest ? session : null;
+      hint = readStudentReturnHint();
+      codes = loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
+      const pending = readPendingGuestMerge();
+      const preview = pending ? previewGuestMerge(pending.guestId) : null;
+      pendingPreview = preview && preview.mergeableCount > 0 ? preview : null;
+    } catch { /* Keep credential login usable when browser storage is blocked. */ }
+    let invite: string | null = null;
+    try {
+      const canonicalRecovery = !teacherSelfServiceEnabled
+        && (query.has("teacherResetToken") || query.has("teacherVerifyToken"));
+      if (!canonicalRecovery && query.get("teacherRecovery") !== "legacy_link" && examId) {
+        invite = readExamEntryInviteHandoff(sessionStorage, examId);
+      }
+    } catch { /* The regular credential form remains available without a handoff. */ }
+    return {
+      groups, students, recentSession, hint, codes, pendingPreview,
+      search: window.location.search,
+      examId,
+      invite,
+    };
+  };
+  let snapshot: ReturnType<typeof read> | null = null;
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (notify: () => void) => {
+      const refresh = () => {
+        try {
+          const next = read();
+          if (JSON.stringify(next) === JSON.stringify(snapshot)) return;
+          snapshot = next;
+          notify();
+        } catch { /* Browser storage can be unavailable; credential login remains usable. */ }
+      };
+      window.addEventListener("storage", refresh);
+      refresh();
+      return () => window.removeEventListener("storage", refresh);
+    },
+  };
+}
+
 export default function Home() {
   const router = useRouter();
   const teacherIdentityMode = useTeacherIdentityMode();
   const teacherSelfServiceEnabled = teacherIdentityMode === "self_service";
+  const storageStore = useMemo(() => createHomeStorageStore(teacherSelfServiceEnabled), [teacherSelfServiceEnabled]);
+  const storedHomeState = useSyncExternalStore(storageStore.subscribe, storageStore.getSnapshot, () => null);
+  const [homeInitialization, setHomeInitialization] = useState<ReturnType<typeof storageStore.getSnapshot>>(null);
   const [role, setRole] = useState<"none" | "teacher" | "student">("none");
   const [studentName, setStudentName] = useState("");
   const [studentLookup, setStudentLookup] = useState("");
@@ -239,7 +300,7 @@ export default function Home() {
   const [mockupLoginPending, setMockupLoginPending] = useState(false);
   const [error, setError] = useState("");
   const studentNameInputRef = useRef<HTMLInputElement>(null);
-  const [pendingGuestPreview, setPendingGuestPreview] = useState<GuestMergePreview | null>(null);
+  const pendingGuestPreview: GuestMergePreview | null = role === "student" ? storedHomeState?.pendingPreview ?? null : null;
   const [recentStudentSession, setRecentStudentSession] = useState<StudentSession | null>(null);
   // Anti-spoof: require a start-code for returning students.
   const [startCode, setStartCode] = useState("");
@@ -256,7 +317,7 @@ export default function Home() {
   const [rememberStudentOnDevice, setRememberStudentOnDevice] = useState(false);
   // Opt-in returning-student hint (name + class only) used to pre-fill the form.
   const [returnHint, setReturnHint] = useState<StudentReturnHint | null>(null);
-  const returnHintAppliedRef = useRef(false);
+  const [returnHintApplied, setReturnHintApplied] = useState(false);
   const demoIntentAppliedRef = useRef(false);
   const studentLookupInputRef = useRef<HTMLInputElement>(null);
   const startCodeInputRef = useRef<HTMLInputElement>(null);
@@ -316,128 +377,96 @@ export default function Home() {
     return normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    let localGroups: RosterGroup[] = [];
-    try {
-      loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
-      // Hydrate client-only localStorage state after mount.
-      seedLocalTestStudentAccounts(localStorage);
-      localGroups = readRosterGroups(localStorage);
-      setGroups(localGroups);
-      setRosterStudents(readRosterStudents(localStorage));
-      const restoredSession = getSession();
-      setRecentStudentSession(restoredSession && !restoredSession.isGuest ? restoredSession : null);
-    } catch {
-      // Keep the empty group list and show the existing teacher-contact message.
-    }
-
-    const query = new URLSearchParams(window.location.search);
-    // An expired-session return link always opens the student form.
+  if (storedHomeState && !homeInitialization) {
+    setHomeInitialization(storedHomeState);
+    setGroups(storedHomeState.groups);
+    setRosterStudents(storedHomeState.students);
+    setRecentStudentSession(storedHomeState.recentSession);
+    const query = new URLSearchParams(storedHomeState.search);
     const requestedRole = query.get("reason") === "expired" ? "student" : query.get("role");
-    const teacherOperatorRecovery = query.get("teacherRecovery") === "legacy_link";
-    if (teacherOperatorRecovery) {
-      setRole("teacher");
-      setTeacherLegacyLinkBlocked(true);
-    } else if (requestedRole === "student" || requestedRole === "teacher") {
-      setRole(requestedRole);
+    const operatorRecovery = query.get("teacherRecovery") === "legacy_link";
+    const hasLifecycleQuery = query.has("teacherResetToken") || query.has("teacherVerifyToken");
+    if (operatorRecovery || hasLifecycleQuery) setRole("teacher");
+    else if (requestedRole === "student" || requestedRole === "teacher") setRole(requestedRole);
+    if (operatorRecovery || (!teacherSelfServiceEnabled && hasLifecycleQuery)) setTeacherLegacyLinkBlocked(true);
+    setIsHydrated(teacherSelfServiceEnabled || !hasLifecycleQuery);
+    if (!operatorRecovery && teacherSelfServiceEnabled) {
+      const resetToken = query.get("teacherResetToken")?.trim() || "";
+      const verifyToken = query.get("teacherVerifyToken")?.trim() || "";
+      if (resetToken) {
+        setTeacherResetToken(resetToken);
+        setTeacherAccountMode("reset_complete");
+      } else if (verifyToken) setTeacherLifecyclePending(true);
+    }
+    // Provisioned-only teacher recovery remains dominant over an exam handoff.
+    const canonicalRecovery = !teacherSelfServiceEnabled && hasLifecycleQuery;
+    setInviteToken(canonicalRecovery ? "" : storedHomeState.invite || "");
+    setInviteExamId(canonicalRecovery ? "" : storedHomeState.examId);
+    if (!canonicalRecovery && !operatorRecovery && storedHomeState.invite && storedHomeState.examId) {
+      setRole("student");
+      setGroups([]);
+      setStudentDirectoryStatus("loading");
+    }
+  }
+
+  useEffect(() => {
+    if (!homeInitialization) return;
+    let cancelled = false;
+    const query = new URLSearchParams(homeInitialization.search);
+    const requestedRole = query.get("reason") === "expired" ? "student" : query.get("role");
+    const operatorRecovery = query.get("teacherRecovery") === "legacy_link";
+    const hasLifecycleQuery = query.has("teacherResetToken") || query.has("teacherVerifyToken");
+    if (!teacherSelfServiceEnabled && hasLifecycleQuery) {
+      redirectToCanonicalTeacherRecovery();
+      return;
     }
     const resetToken = query.get("teacherResetToken")?.trim() || "";
     const verifyToken = query.get("teacherVerifyToken")?.trim() || "";
-    const hasTeacherLifecycleQuery = query.has("teacherResetToken") || query.has("teacherVerifyToken");
-    if (!teacherSelfServiceEnabled && hasTeacherLifecycleQuery) {
-      setRole("teacher");
-      setTeacherLegacyLinkBlocked(true);
-      redirectToCanonicalTeacherRecovery();
-      return () => { cancelled = true; };
-    }
-    // A legacy recovery link replaces this document. Keep its controls inert
-    // until the canonical destination has mounted, so entered state is not lost.
-    setIsHydrated(true);
-    if (teacherOperatorRecovery) {
-      // A provisioned-only legacy link has already been canonicalized. Keep
-      // operator recovery dominant over every student or exam handoff.
-    } else if (teacherSelfServiceEnabled && resetToken) {
-      setRole("teacher");
-      setTeacherResetToken(resetToken);
-      setTeacherAccountMode("reset_complete");
-    } else if (teacherSelfServiceEnabled && verifyToken) {
-      setRole("teacher");
-      setTeacherLifecyclePending(true);
-      const verification = confirmTeacherSignupEmail(verifyToken);
-      void verification.then(result => {
+    if (!operatorRecovery && teacherSelfServiceEnabled && !resetToken && verifyToken) {
+      void confirmTeacherSignupEmail(verifyToken).then(result => {
         if (!cancelled) setTeacherLifecycleResult(teacherLifecycleFeedback(result.status));
       }).catch(() => {
         if (!cancelled) setTeacherLifecycleResult({ status: "service_unavailable", tone: "error", text: "이메일 확인 서비스를 사용할 수 없습니다." });
       }).finally(() => {
         if (!cancelled) setTeacherLifecyclePending(false);
       });
-    } else if (hasTeacherLifecycleQuery) {
-      setRole("teacher");
     }
-    if (teacherSelfServiceEnabled && hasTeacherLifecycleQuery) {
-      scrubTeacherLifecycleQuery(query);
-    }
-    const requestedExam = query.get("exam")?.trim() || "";
-    const requestedInvite = !teacherOperatorRecovery && requestedExam
-      ? readExamEntryInviteHandoff(sessionStorage, requestedExam)
-      : null;
-    setInviteToken(requestedInvite || "");
-    setInviteExamId(requestedExam);
-    if (!teacherOperatorRecovery && requestedInvite && requestedExam) {
-      setRole("student");
-      setGroups([]);
-      setStudentDirectoryStatus("loading");
-      void loadStudentLoginDirectory({ examId: requestedExam, inviteToken: requestedInvite }).then(result => {
+    if (teacherSelfServiceEnabled && hasLifecycleQuery) scrubTeacherLifecycleQuery(query);
+    if (!operatorRecovery && homeInitialization.invite && homeInitialization.examId) {
+      void loadStudentLoginDirectory({ examId: homeInitialization.examId, inviteToken: homeInitialization.invite }).then(result => {
         if (cancelled) return;
         if (result.status === "ok") {
           const remoteGroups = (result.groups || []).map((group, index) => ({
-            ...group,
-            count: 0,
-            avgScore: 0,
+            ...group, count: 0, avgScore: 0,
             color: ["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b"][index % 5],
           }));
           setGroups(remoteGroups);
           setSelectedGroupId(previous => remoteGroups.some(group => group.id === previous) ? previous : "");
           setStudentDirectoryStatus("remote");
-          return;
-        }
-        if (result.status === "degraded_local") {
-          setGroups(localGroups);
+        } else if (result.status === "degraded_local") {
+          setGroups(homeInitialization.groups);
           setStudentDirectoryStatus("degraded_local");
-          return;
+        } else {
+          setGroups([]);
+          setSelectedGroupId("");
+          setStudentDirectoryStatus("error");
         }
-        setGroups([]);
-        setSelectedGroupId("");
-        setStudentDirectoryStatus("error");
       }).catch(() => {
         if (cancelled) return;
         setGroups([]);
         setSelectedGroupId("");
         setStudentDirectoryStatus("error");
       });
-    } else if (!teacherOperatorRecovery && requestedRole === "student" && !hasTeacherLifecycleQuery) {
-      // A signed student cookie restores student home. Guests retain their
-      // cookie for ownership claims and use the direct credential form.
-      const restoreSignedStudentScope = async () => {
-        const restored = await refreshStudentSession();
-        if (cancelled || !restored.ok || !restored.session) return;
-        const session = restored.session;
-        if (!session.isGuest) {
-          saveSession(session);
-          setRecentStudentSession(session);
-          router.replace(normalizeStudentRedirectPath(query.get("next")));
-          return;
-        }
-        // Keep the signed guest cookie for account claims. Direct login resolves
-        // the student's own organization and classes after verifying credentials.
-      };
-      void restoreSignedStudentScope().catch(() => {
-        // Keep credential login available when session restoration fails.
-      });
+    } else if (!operatorRecovery && requestedRole === "student" && !hasLifecycleQuery) {
+      void refreshStudentSession().then(restored => {
+        if (cancelled || !restored.ok || !restored.session || restored.session.isGuest) return;
+        saveSession(restored.session);
+        setRecentStudentSession(restored.session);
+        router.replace(normalizeStudentRedirectPath(query.get("next")));
+      }).catch(() => { /* Credential login remains available. */ });
     }
     return () => { cancelled = true; };
-  }, [router, teacherSelfServiceEnabled]);
+  }, [homeInitialization, router, teacherSelfServiceEnabled]);
 
   // /intro's demo CTAs arrive with intent=demo. Bring the existing showcase
   // card into view once; starting the demo stays an explicit button press.
@@ -448,23 +477,20 @@ export default function Home() {
     document.getElementById("teacher-demo-entry")?.scrollIntoView({ block: "center" });
   }, [role, isHydrated]);
 
-  // Pre-fill a returning student's name and class from the opt-in hint, then
-  // move focus to the first credential they still have to type.
-  useEffect(() => {
-    if (role !== "student" || returnHintAppliedRef.current || !isHydrated) return;
-    if (studentDirectoryStatus === "loading") return;
-    returnHintAppliedRef.current = true;
-    const hint = readStudentReturnHint();
-    if (!hint) return;
-    // Derived from client-only localStorage after the role is chosen.
-    setReturnHint(hint);
-    setRememberStudentOnDevice(true);
-    setStudentName(previous => previous.trim() ? previous : hint.name);
-    const hintGroup = studentGroupOptions.find(group => group.id === hint.groupId);
-    if (hintGroup || studentGroupOptions.length === 0) {
-      setSelectedGroupId(previous => previous || hint.groupId);
+  // Apply the external hint once before commit; the following focus effect
+  // runs against the final credential inputs, keeping typing uninterrupted.
+  if (role === "student" && !returnHintApplied && isHydrated && studentDirectoryStatus !== "loading") {
+    setReturnHintApplied(true);
+    const hint = storedHomeState?.hint;
+    if (hint) {
+      setReturnHint(hint);
+      setRememberStudentOnDevice(true);
+      setStudentName(previous => previous.trim() ? previous : hint.name);
+      if (studentGroupOptions.some(group => group.id === hint.groupId) || studentGroupOptions.length === 0) {
+        setSelectedGroupId(previous => previous || hint.groupId);
+      }
     }
-  }, [role, isHydrated, studentDirectoryStatus, studentGroupOptions]);
+  }
 
   useEffect(() => {
     if (!returnHint || role !== "student") return;
@@ -477,55 +503,25 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [returnHint, role]);
 
-  // Surface the start-code field proactively for returning students.
-  useEffect(() => {
-    if (role !== "student" || !studentName.trim()) {
-      // Derived from client-only localStorage inputs.
-      setNeedsCode(false);
-      setNeedsStudentLookup(false);
-      return;
-    }
-    if (requiresServerStudentVerification) {
-      setNeedsStudentLookup(true);
-      setNeedsCode(true);
-      return;
-    }
-    try {
-      const codes = loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
-      const identity = resolveStudentIdentity({
-        name: studentName,
-        selectedGroupId,
-        groups: studentGroupOptions,
-        students: rosterStudents,
-        studentLookup,
-      });
-      const lookupRequired = identity.requiresStudentLookup || identity.lookupMismatch;
-      setNeedsStudentLookup(lookupRequired);
-      if (lookupRequired) {
-        setNeedsCode(false);
-        return;
-      }
-      setNeedsCode(hasStudentStartCode(codes, identity.studentId, identity.legacyStudentId));
-    } catch {
-      setNeedsCode(false);
-      setNeedsStudentLookup(false);
-    }
-  }, [role, studentName, studentLookup, selectedGroupId, studentGroupOptions, rosterStudents, requiresServerStudentVerification]);
-
-  useEffect(() => {
-    if (role !== "student") {
-      // Derived from localStorage after role selection.
-      setPendingGuestPreview(null);
-      return;
-    }
-    try {
-      const pending = readPendingGuestMerge();
-      const preview = pending ? previewGuestMerge(pending.guestId) : null;
-      setPendingGuestPreview(preview && preview.mergeableCount > 0 ? preview : null);
-    } catch {
-      setPendingGuestPreview(null);
-    }
-  }, [role]);
+  const [credentialInputs, setCredentialInputs] = useState({
+    role, studentName, studentLookup, selectedGroupId, studentGroupOptions, rosterStudents, requiresServerStudentVerification,
+    codes: storedHomeState?.codes,
+  });
+  if (credentialInputs.role !== role || credentialInputs.studentName !== studentName
+    || credentialInputs.studentLookup !== studentLookup || credentialInputs.selectedGroupId !== selectedGroupId
+    || credentialInputs.studentGroupOptions !== studentGroupOptions || credentialInputs.rosterStudents !== rosterStudents
+    || credentialInputs.requiresServerStudentVerification !== requiresServerStudentVerification
+    || credentialInputs.codes !== storedHomeState?.codes) {
+    setCredentialInputs({ role, studentName, studentLookup, selectedGroupId, studentGroupOptions, rosterStudents,
+      requiresServerStudentVerification, codes: storedHomeState?.codes });
+    const identity = resolveStudentIdentity({ name: studentName, selectedGroupId,
+      groups: studentGroupOptions, students: rosterStudents, studentLookup });
+    const hasName = role === "student" && Boolean(studentName.trim());
+    const lookupRequired = hasName && (requiresServerStudentVerification || identity.requiresStudentLookup || identity.lookupMismatch);
+    setNeedsStudentLookup(lookupRequired);
+    setNeedsCode(hasName && (requiresServerStudentVerification || (!lookupRequired
+      && hasStudentStartCode(storedHomeState?.codes ?? {}, identity.studentId, identity.legacyStudentId))));
+  }
 
   const handleTeacherLogin = async () => {
     try {
@@ -932,7 +928,7 @@ export default function Home() {
   };
 
   const applyReturnHint = (hint: StudentReturnHint, remembered: boolean) => {
-    returnHintAppliedRef.current = true;
+    setReturnHintApplied(true);
     setReturnHint(hint);
     setRememberStudentOnDevice(remembered);
     setStudentName(hint.name);
@@ -980,7 +976,7 @@ export default function Home() {
 
   const handleNotThisStudent = () => {
     clearStudentReturnHint();
-    returnHintAppliedRef.current = true;
+    setReturnHintApplied(true);
     setReturnHint(null);
     setRememberStudentOnDevice(false);
     setStudentName("");
@@ -1531,9 +1527,9 @@ export default function Home() {
                       >
                         {visibleTeacherAccountMode === "reset_complete" ? "새 비밀번호" : "비밀번호"}
                       </label>
-                      <input
+                      <PasswordInput
+                        key={visibleTeacherAccountMode}
                         id="teacher-password"
-                        type="password"
                         className="input-field"
                         value={password}
                         onChange={(event) => {
@@ -1544,14 +1540,19 @@ export default function Home() {
                         autoFocus={visibleTeacherAccountMode === "reset_complete"}
                         autoComplete={visibleTeacherAccountMode === "login" ? "current-password" : "new-password"}
                         aria-invalid={teacherPasswordInvalid}
-                        aria-describedby="teacher-login-feedback"
+                        aria-describedby={visibleTeacherAccountMode === "signup" || visibleTeacherAccountMode === "reset_complete" ? "teacher-password-requirement teacher-login-feedback" : "teacher-login-feedback"}
                       />
+                      {(visibleTeacherAccountMode === "signup" || visibleTeacherAccountMode === "reset_complete") && (
+                        <p id="teacher-password-requirement" style={{ marginTop: "0.45rem", fontSize: "var(--type-caption)", color: "var(--muted)" }}>
+                          비밀번호는 12자 이상 입력해 주세요.
+                        </p>
+                      )}
                     </div>
                   )}
 
                   {visibleTeacherAccountMode === "signup" && (
                     <p style={{ color: "var(--muted)", fontSize: "var(--type-label)", lineHeight: 1.5, marginBottom: "1.05rem" }}>
-                      위 이메일과 12자 이상의 비밀번호로 가입합니다. 이메일 확인 전에는 로그인할 수 없습니다.
+                      가입 요청 후 이메일 확인이 필요합니다. 확인 전에는 로그인할 수 없습니다.
                     </p>
                   )}
                   {visibleTeacherAccountMode === "reset" && (
@@ -1561,7 +1562,7 @@ export default function Home() {
                   )}
                   {visibleTeacherAccountMode === "reset_complete" && (
                     <p style={{ color: "var(--muted)", fontSize: "var(--type-label)", lineHeight: 1.5, marginBottom: "1.05rem" }}>
-                      12자 이상의 새 비밀번호를 입력하세요. 링크는 한 번만 사용할 수 있습니다.
+                      재설정 링크는 한 번만 사용할 수 있습니다.
                     </p>
                   )}
 
@@ -1694,7 +1695,7 @@ export default function Home() {
                         </div>
                       )}
                       <p style={{ color: "var(--muted)", fontSize: "var(--type-caption)", lineHeight: 1.5 }}>
-                        부트스트랩 계정은 초기 운영자가 명시적으로 허용한 경우에만 사용됩니다.
+                        관리자가 미리 발급한 계정은 이용을 허용받은 교사만 사용할 수 있습니다.
                       </p>
                     </>
                   ) : (

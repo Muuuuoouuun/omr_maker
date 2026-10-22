@@ -19,7 +19,7 @@ const ERROR_NAMES = [
 type Route = "home" | "teacher-dashboard" | "next-static" | "next-hmr" | "other-local" | "external";
 type RequestCategory = "home-post" | "dashboard-rsc" | "dashboard" | "mockup-overview-chunk"
     | "teacher-dashboard-chunk" | "next-other-chunk" | "next-hmr" | "other";
-type RuntimeCategory = "chunk-load" | "hydration" | "network" | "other-runtime";
+type RuntimeCategory = "chunk-load" | "hydration" | "network" | "aborted" | "other-runtime";
 export type ShowcaseEntryStage = typeof STAGES[number];
 type RequestFields = {
     requestId: number;
@@ -36,7 +36,7 @@ type Event = { elapsedMs: number } & (
     | ({ type: "request-failed"; durationMs: number | null; failure: "aborted" | "timeout" | "connection" | "other" } & RequestFields)
     | { type: "navigation"; route: Route }
     | { type: "console"; level: "warning" | "error"; category: RuntimeCategory }
-    | { type: "page-error"; name: typeof ERROR_NAMES[number] | "OtherError"; category: RuntimeCategory }
+    | { type: "page-error"; name: typeof ERROR_NAMES[number] | "OtherError"; category: RuntimeCategory; location: ReturnType<typeof staticRuntimeLocation> }
 );
 
 type ReadinessSnapshot = {
@@ -132,8 +132,51 @@ function runtimeCategory(value: unknown): RuntimeCategory {
     const text = typeof value === "string" ? value.slice(0, 4_000).toLowerCase() : "";
     if (/chunkloaderror|loading chunk|chunk load|failed to fetch dynamically imported module|importing a module script failed/.test(text)) return "chunk-load";
     if (/hydration|hydrating|server rendered html/.test(text)) return "hydration";
+    if (/aborterror|aborted|cancelled|canceled/.test(text)) return "aborted";
     if (/failed to fetch|networkerror|network error|err_connection|load failed/.test(text)) return "network";
     return "other-runtime";
+}
+
+/** Emit known static source names only; never retain a raw stack, URL or function name. */
+export function staticRuntimeLocation(value: unknown): { file: string; line: number; column: number } | null {
+    if (typeof value !== "string") return null;
+    const stack = value.slice(0, 8_000);
+    const files = ["MockupOverview.tsx", "CountUp.tsx", "useCometReveal.ts", "WaveBar.tsx"];
+    for (const file of files) {
+        const escaped = file.replaceAll(".", "\\.");
+        const match = stack.match(new RegExp(`(?:[/\\\\])${escaped}:(\\d{1,7}):(\\d{1,7})(?:\\)|\\s|$)`));
+        if (match) return { file, line: Number(match[1]), column: Number(match[2]) };
+    }
+    const chunk = stack.match(/\/_next\/static\/chunks\/[^\s?#():]+:(\d{1,7}):(\d{1,7})(?:\)|\s|$)/);
+    return chunk ? { file: "next-static-chunk", line: Number(chunk[1]), column: Number(chunk[2]) } : null;
+}
+
+export function sanitizedRuntimeError(error: Error) {
+    let location: ReturnType<typeof staticRuntimeLocation> = null;
+    try { location = staticRuntimeLocation(error.stack); } catch {}
+    return {
+        name: allowListed(error.name, [...ERROR_NAMES, "OtherError"], "OtherError"),
+        category: runtimeCategory(error.message), location,
+    };
+}
+
+const runtimeObservedPages = new WeakSet<Page>();
+/** Observe the whole showcase journey, including navigation after the entry recorder ends. */
+export function observeShowcaseRuntimeFailures(page: Page): void {
+    if (process.env.OMR_SHOWCASE_ENTRY_DIAGNOSTICS !== "1" || runtimeObservedPages.has(page)) return;
+    runtimeObservedPages.add(page);
+    let remaining = 20;
+    const cleanup = () => {
+        page.off("pageerror", onError);
+        page.off("close", cleanup);
+    };
+    const onError = (error: Error) => {
+        remaining -= 1;
+        try { console.log("OMR_RUNTIME_DIAGNOSTIC " + JSON.stringify(sanitizedRuntimeError(error))); } catch {}
+        if (remaining <= 0) cleanup();
+    };
+    page.on("pageerror", onError);
+    page.once("close", cleanup);
 }
 
 function failureCategory(value: unknown): "aborted" | "timeout" | "connection" | "other" {
@@ -355,8 +398,7 @@ export function startShowcaseEntryDiagnostics(page: Page): {
     });
     const onPageError = guard((error: Error) => {
         record({ type: "page-error", elapsedMs: elapsed(),
-            name: allowListed(error.name, [...ERROR_NAMES, "OtherError"], "OtherError"),
-            category: runtimeCategory(error.message),
+            ...sanitizedRuntimeError(error),
         });
     });
     // Keep literal event names so Playwright's event-specific overloads stay checked.

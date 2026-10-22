@@ -687,15 +687,15 @@ function ManageUsersInner() {
     }, [rosterMutationsDisabled]);
 
     // Write-through helpers
-    const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[], nextInvites: RosterInvite[]) => {
+    const persistRoster = async (nextStudents: RosterStudent[], nextGroups: RosterGroup[], nextInvites: RosterInvite[]): Promise<boolean> => {
         if (rosterMutationsDisabled) {
             toast.info("읽기 전용 명단", "최신 서버 명단을 확인한 뒤 변경할 수 있습니다.");
-            return;
+            return false;
         }
         const sessionIdentity = captureTeacherRosterLoadIdentity(0);
-        if (!sessionIdentity) return;
+        if (!sessionIdentity) return false;
         const expectedRevision = rosterExpectedRevisionRef.current;
-        if (expectedRevision === undefined) return;
+        if (expectedRevision === undefined) return false;
         profileLoadGenerationRef.current += 1;
         setStudentProfileResult(null);
         setGroupProfileResult(null);
@@ -721,36 +721,44 @@ function ManageUsersInner() {
             return filteredIds.length === prev.size ? prev : new Set(filteredIds);
         });
         setSelectedGroupId(prev => nextGroups.some(group => group.id === prev) ? prev : null);
-        void saveTeacherRosterSnapshotIfCurrent(localStorage, {
-            students: nextStudents,
-            groups: nextGroups,
-            invites: nextInvites,
-        }, () => mutationVersion === rosterMutationVersionRef.current && operationIsCurrent(), expectedRevision, operation.identity).then(result => {
-            if ("status" in result || !operationIsCurrent()) return;
-            if (result.remoteRevision !== undefined && mutationVersion === rosterMutationVersionRef.current) {
-                rosterExpectedRevisionRef.current = result.remoteRevision;
+        let result: Awaited<ReturnType<typeof saveTeacherRosterSnapshotIfCurrent>>;
+        try {
+            result = await saveTeacherRosterSnapshotIfCurrent(localStorage, {
+                students: nextStudents,
+                groups: nextGroups,
+                invites: nextInvites,
+            }, () => mutationVersion === rosterMutationVersionRef.current && operationIsCurrent(), expectedRevision, operation.identity);
+        } catch {
+            result = { localSaved: false, remoteSaved: false, remoteError: "roster_save_unavailable" };
+        }
+        if ("status" in result || !operationIsCurrent() || mutationVersion !== rosterMutationVersionRef.current) return false;
+        if (result.remoteRevision !== undefined && mutationVersion === rosterMutationVersionRef.current) {
+            rosterExpectedRevisionRef.current = result.remoteRevision;
+        }
+        if (!result.remoteSaved && !result.localSaved) {
+            rosterSnapshotRef.current = previousSnapshot;
+            setStudents(previousSnapshot.students);
+            setGroups(previousSnapshot.groups);
+            setInvites(previousSnapshot.invites);
+            if (result.remoteError === ROSTER_REVISION_CONFLICT_ERROR) {
+                toast.error(
+                    "다른 기기에서 명단이 변경됨",
+                    "방금 변경을 되돌렸습니다. 새로고침해 최신 명단을 확인한 뒤 다시 시도해주세요."
+                );
+            } else if (result.remoteError === "roster_save_unavailable") {
+                toast.error("저장 확인 실패", "저장 결과를 확인하지 못했습니다. 새로고침해 명단을 확인한 뒤 다시 시도해주세요.");
+            } else {
+                toast.error(
+                    "명단 저장 실패",
+                    "서버에 저장되지 않아 방금 변경을 되돌렸습니다. 연결 상태를 확인한 뒤 다시 시도해주세요."
+                );
             }
-            if (result.remoteError && !result.localSaved && mutationVersion === rosterMutationVersionRef.current) {
-                rosterSnapshotRef.current = previousSnapshot;
-                setStudents(previousSnapshot.students);
-                setGroups(previousSnapshot.groups);
-                setInvites(previousSnapshot.invites);
-                if (result.remoteError === ROSTER_REVISION_CONFLICT_ERROR) {
-                    toast.error(
-                        "다른 기기에서 명단이 변경됨",
-                        "방금 변경을 되돌렸습니다. 새로고침해 최신 명단을 확인한 뒤 다시 시도해주세요."
-                    );
-                } else {
-                    toast.error(
-                        "명단 저장 실패",
-                        "서버에 저장되지 않아 방금 변경을 되돌렸습니다. 연결 상태를 확인한 뒤 다시 시도해주세요."
-                    );
-                }
-            }
-        });
+            return false;
+        }
         // The canonical server save now synchronizes reductions and same-size
         // edits atomically. Growth paths still preflight below for immediate UI
         // feedback, without racing a second post-save ledger mutation.
+        return true;
     };
 
     // The account-bound roster RPC is the only quota mutation boundary. The UI
@@ -1050,9 +1058,9 @@ function ManageUsersInner() {
     };
 
     // ===== Student CRUD =====
-    const handleAddStudent = async (data: StudentFormData) => {
+    const handleAddStudent = async (data: StudentFormData): Promise<boolean> => {
         const sessionIdentity = captureTeacherRosterLoadIdentity(0);
-        if (!sessionIdentity) return;
+        if (!sessionIdentity) return false;
         const operation = beginTeacherRosterIdentityOperation(sessionIdentity, rosterOperationEpochRef.current);
         const operationIsCurrent = () => canContinueTeacherRosterIdentityOperation(
             operation,
@@ -1086,7 +1094,7 @@ function ManageUsersInner() {
         const id = uniqueStudentIdForRoster(baseId, emailKey, students);
         if (students.some(student => normalizeEmail(student.email) === emailKey || student.id === id)) {
             toast.info("이미 등록된 학생", "같은 이메일 또는 학생번호의 학생이 이미 있습니다.");
-            return;
+            return false;
         }
         const newStudent: RosterStudent = {
             id,
@@ -1102,14 +1110,14 @@ function ManageUsersInner() {
             status: "active",
         };
         const next = [newStudent, ...students];
-        if (!await authorizeRosterMutation(next) || !operationIsCurrent()) return;
-        persistRoster(next, recomputeGroups(next, baseGroups), invites);
+        if (!await authorizeRosterMutation(next) || !operationIsCurrent()) return false;
+        return persistRoster(next, recomputeGroups(next, baseGroups), invites);
     };
 
-    const handleEditStudent = (id: string, data: StudentFormData) => {
+    const handleEditStudent = async (id: string, data: StudentFormData): Promise<boolean> => {
         if (isDemoRoster) {
             toast.info("데모 명단은 편집되지 않음", "실제 학생을 추가하거나 CSV로 업로드하면 저장 가능한 명단으로 전환됩니다.");
-            return;
+            return false;
         }
         const selectedGroup = groups.find(group => group.id === data.groupId);
         const resolvedRegion = data.region.trim() || selectedGroup?.region || "";
@@ -1117,7 +1125,7 @@ function ManageUsersInner() {
         const emailKey = normalizeEmail(data.email);
         if (students.some(student => student.id !== id && normalizeEmail(student.email) === emailKey)) {
             toast.info("이미 등록된 이메일", "다른 학생이 같은 이메일을 사용 중입니다.");
-            return;
+            return false;
         }
         const next = students.map(s => s.id === id ? {
             ...s,
@@ -1132,7 +1140,7 @@ function ManageUsersInner() {
                 ? { ...group, region: regionPatch.region }
                 : group
         ));
-        persistRoster(next, recomputeGroups(next, nextGroups), invites);
+        return persistRoster(next, recomputeGroups(next, nextGroups), invites);
     };
 
     const handleDeleteStudent = (id: string) => {
@@ -1433,7 +1441,7 @@ function ManageUsersInner() {
         setShowGroupModal(true);
     };
 
-    const handleSaveGroup = (data: GroupFormData): boolean => {
+    const handleSaveGroup = async (data: GroupFormData): Promise<boolean> => {
         if (isDemoRoster && editingGroup) {
             toast.info("데모 반은 저장하지 않음", "새 반을 만들면 실제 명단으로 전환됩니다.");
             return false;
@@ -1450,7 +1458,7 @@ function ManageUsersInner() {
                 toast.error("반 편집 실패", message);
                 return false;
             }
-            persistRoster(result.students, result.groups, invites);
+            if (!await persistRoster(result.students, result.groups, invites)) return false;
             toast.success("반 정보 저장됨", `${result.group?.name || data.name} 반 정보를 업데이트했습니다.`);
             return true;
         }
@@ -1465,7 +1473,7 @@ function ManageUsersInner() {
             toast.error("반 생성 실패", message);
             return false;
         }
-        persistRoster(result.students, result.groups, invites);
+        if (!await persistRoster(result.students, result.groups, invites)) return false;
         toast.success("반 생성됨", `${result.group?.name || data.name} 반을 추가했습니다.`);
         return true;
     };
@@ -2816,12 +2824,12 @@ function ManageUsersInner() {
                     initial={editingStudent}
                     defaultGroupId={studentModalDefaultGroupId}
                     onClose={() => { setShowStudentModal(false); setEditingStudent(null); setStudentModalDefaultGroupId(undefined); }}
-                    onSubmit={(data) => {
-                        if (editingStudent) {
-                            handleEditStudent(editingStudent.id, data);
-                        } else {
-                            handleAddStudent(data);
-                        }
+                    onSubmit={async (data) => {
+                        const saved = editingStudent
+                            ? await handleEditStudent(editingStudent.id, data)
+                            : await handleAddStudent(data);
+                        if (!saved) return;
+                        toast.success(editingStudent ? "학생 정보 저장됨" : "학생 추가됨", `${data.name} 학생을 명단에 저장했습니다.`);
                         setShowStudentModal(false);
                         setEditingStudent(null);
                         setStudentModalDefaultGroupId(undefined);
@@ -2837,8 +2845,8 @@ function ManageUsersInner() {
                         setShowGroupModal(false);
                         setEditingGroup(null);
                     }}
-                    onSubmit={(data) => {
-                        if (handleSaveGroup(data)) {
+                    onSubmit={async (data) => {
+                        if (await handleSaveGroup(data)) {
                             setShowGroupModal(false);
                             setEditingGroup(null);
                         }

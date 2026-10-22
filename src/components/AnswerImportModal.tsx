@@ -84,14 +84,6 @@ export default function AnswerImportModal({
     const lowConfidenceData = parsedData.filter(item => item.confidence < LOW_CONFIDENCE_THRESHOLD);
     const unreviewedLowConfidence = lowConfidenceData.filter(item => !reviewedQuestions.has(item.questionNum));
 
-    // Use effect to re-analyze when AI mode is toggled if file exists
-    useEffect(() => {
-        if (file) {
-            void analyzeFile(file, useAI);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [useAI]);
-
     useEffect(() => () => {
         analysisRunRef.current += 1;
     }, []);
@@ -271,7 +263,11 @@ export default function AnswerImportModal({
                             type="checkbox"
                             id="use-ai-mode"
                             checked={useAI}
-                            onChange={(e) => setUseAI(e.target.checked)}
+                            onChange={(e) => {
+                                const isAiMode = e.target.checked;
+                                setUseAI(isAiMode);
+                                if (file) void analyzeFile(file, isAiMode);
+                            }}
                             style={{ width: '1.2rem', height: '1.2rem' }}
                         />
                         <label htmlFor="use-ai-mode" style={{ fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>

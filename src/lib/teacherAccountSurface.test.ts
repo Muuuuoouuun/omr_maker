@@ -30,7 +30,7 @@ describe("teacher account lifecycle surface", () => {
         expect(page).toContain("teacherVerifyToken");
         expect(page).toContain("교사 계정 만들기");
         expect(page).toContain("비밀번호 재설정");
-        expect(page).toContain("부트스트랩 계정");
+        expect(page).toContain("관리자가 미리 발급한 계정은 이용을 허용받은 교사만 사용할 수 있습니다.");
         // Outcome copy lives in one module; the page renders it by tone, so a
         // confirmation never lands in the red error slot that marks fields invalid.
         const feedback = source("src/lib/teacherLifecycleFeedback.ts");

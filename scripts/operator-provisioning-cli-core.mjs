@@ -44,6 +44,8 @@ const DEMO_RECEIPT_KEYS = [
     "accountId", "entitlementMode", "idempotencyKeyHash", "initialPassword", "integrity", "memberRole",
     "organizationId", "plan", "replayed", "requestFingerprint", "schemaVersion", "status",
 ];
+const LEGACY_RECOVERY_ORGANIZATION_PATTERN = /^teacher_[a-z0-9]{7,16}$/;
+const RECOVERY_RECEIPT_DOMAIN = "omr.operator-legacy-recovery-receipt:v1";
 const DEMO_RECEIPT_DOMAIN = "omr.operator-demo-provisioning-receipt:v1";
 const MEMBER_RECEIPT_DOMAIN = "omr.operator-member-provisioning-receipt:v1";
 const SAFE_CODES = new Set([
@@ -788,7 +790,44 @@ function validateDemoResult(raw, request, receipt = false) {
     return value;
 }
 
+function validateRecoveryRequest(raw) {
+    const value = exactObject(raw, [
+        "organizationId", "expectedAdminUserId", "email", "displayName", "plan", "entitlementMode",
+        "actor", "reason", "idempotencyKey", "credentialStatePath",
+    ], "invalid_request");
+    const input = {
+        kind: "owner", organizationId: clean(value.organizationId).toLowerCase(),
+        expectedAdminUserId: clean(value.expectedAdminUserId).toLowerCase(),
+        email: clean(value.email).toLowerCase(), displayName: clean(value.displayName),
+        plan: clean(value.plan), entitlementMode: clean(value.entitlementMode),
+        actor: clean(value.actor), reason: clean(value.reason), idempotencyKey: clean(value.idempotencyKey),
+    };
+    if (!LEGACY_RECOVERY_ORGANIZATION_PATTERN.test(input.organizationId)
+        || !LEGACY_RECOVERY_ORGANIZATION_PATTERN.test(input.expectedAdminUserId)
+        || input.plan !== "academy" || input.entitlementMode !== "legacy_recovery"
+        || input.reason !== "legacy_owner_recovery" || !validateIdentityFields(input)) fail("invalid_request");
+    return {
+        ...input, credentialStatePath: normalizedAbsolutePath(value.credentialStatePath, "invalid_request"),
+        requestFingerprint: sha256(JSON.stringify(canonicalize(input))),
+    };
+}
+
+function validateRecoveryResult(raw, request, receipt = false) {
+    const code = receipt ? "unsafe_receipt" : "dependency_unavailable";
+    const value = exactObject(raw, receipt ? DEMO_RECEIPT_KEYS
+        : ["status", "organizationId", "accountId", "memberRole", "plan", "entitlementMode", "replayed"], code);
+    if (value.status !== "provisioned" || value.organizationId !== request.organizationId
+        || !ACCOUNT_ID_PATTERN.test(value.accountId) || value.memberRole !== "owner"
+        || value.plan !== "academy" || value.entitlementMode !== "legacy_recovery"
+        || typeof value.replayed !== "boolean") fail(code);
+    if (receipt && (value.schemaVersion !== 1 || value.requestFingerprint !== request.requestFingerprint
+        || value.idempotencyKeyHash !== sha256(request.idempotencyKey) || !PASSWORD_PATTERN.test(value.initialPassword)
+        || value.integrity !== integrity(RECOVERY_RECEIPT_DOMAIN, value))) fail(code);
+    return value;
+}
+
 function validateRequest(raw, now) {
+    if (raw && typeof raw === "object" && raw.entitlementMode === "legacy_recovery") return validateRecoveryRequest(raw);
     if (raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw,"entitlementMode")) return validateDemoRequest(raw);
     if (raw && typeof raw === "object" && !Array.isArray(raw)
         && Object.prototype.hasOwnProperty.call(raw, "organizationId")) {
@@ -869,6 +908,7 @@ function validateMemberReceipt(raw, request) {
 }
 
 function validateReceipt(raw, request) {
+    if (request.entitlementMode === "legacy_recovery") return validateRecoveryResult(raw, request, true);
     if (request.entitlementMode === "permanent_demo") return validateDemoResult(raw, request, true);
     if (request.kind === "teacher") return validateMemberReceipt(raw, request);
     const value = exactObject(raw, RECEIPT_KEYS, "unsafe_receipt");
@@ -906,6 +946,7 @@ function validateMemberProvisionedResult(value, request) {
 }
 
 function validateProvisionedResult(value, request) {
+    if (request.entitlementMode === "legacy_recovery") return validateRecoveryResult(value, request);
     if (request.entitlementMode === "permanent_demo") return validateDemoResult(value, request);
     if (request.kind === "teacher") return validateMemberProvisionedResult(value, request);
     const expectedKeys = ["accountId", "expiresAt", "grantId", "organizationId", "plan", "replayed", "status"];
@@ -927,7 +968,7 @@ function validateProvisionedResult(value, request) {
 }
 
 function publicResult(receiptPath, value) {
-    if (value.entitlementMode === "permanent_demo") return {
+    if (value.entitlementMode === "permanent_demo" || value.entitlementMode === "legacy_recovery") return {
         status: "provisioned", receiptPath, organizationId:value.organizationId, accountId:value.accountId,
         memberRole:value.memberRole, plan:value.plan, entitlementMode:value.entitlementMode, replayed:value.replayed,
     };
@@ -971,7 +1012,14 @@ async function defaultProvisionWithVerifier(input, env) {
                 origin,
             ) },
         });
-        const result = input.entitlementMode === "permanent_demo"
+        const result = input.entitlementMode === "legacy_recovery"
+            ? await client.rpc("omr_recover_legacy_organization_v1", {
+                p_organization_id: input.organizationId, p_expected_admin_user_id: input.expectedAdminUserId,
+                p_email: input.email, p_display_name: input.displayName, p_password_hash: input.encodedVerifier,
+                p_plan: input.plan, p_entitlement_mode: input.entitlementMode,
+                p_actor: input.actor, p_reason: input.reason, p_idempotency_key: input.idempotencyKey,
+            })
+            : input.entitlementMode === "permanent_demo"
             ? await client.rpc("omr_provision_demo_account_v1", {
                 p_org_name: input.organizationName ?? null, p_org_id: input.organizationId ?? null,
                 p_email: input.email, p_display: input.displayName, p_verifier: input.encodedVerifier,
@@ -1012,7 +1060,7 @@ async function defaultProvisionWithVerifier(input, env) {
             return { status: "unavailable", error: "dependency_unavailable" };
         }
         const row = result.data;
-        return { status: "provisioned", ...row };
+        return input.entitlementMode === "legacy_recovery" ? row : { status: "provisioned", ...row };
     } catch {
         return { status: "unavailable", error: "dependency_unavailable" };
     }
@@ -1039,7 +1087,7 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
     if (!Array.isArray(input.argv) || !input.argv[0]?.startsWith("--request=")
         || input.argv.length > 2
         || (input.argv.length === 2 && input.argv[1] !== "--dry-run"
-            && !/^--approve-qa-(?:free|demo)=[a-f0-9]{64}$/.test(input.argv[1]))) {
+            && !/^--approve-(?:qa-(?:free|demo)|legacy-recovery)=[a-f0-9]{64}$/.test(input.argv[1]))) {
         fail("invalid_arguments");
     }
     if ((deps.platform !== "darwin" && deps.platform !== "linux") || constants.O_NOFOLLOW === undefined) {
@@ -1064,12 +1112,15 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
             status: "review_only", reviewDigest, kind: request.kind,
             organizationName: request.organizationName,
             organizationId: request.organizationId,
+            ...(request.entitlementMode === "legacy_recovery" ? { expectedAdminUserId: request.expectedAdminUserId } : {}),
             email: request.email, displayName: request.displayName,
             memberRole: request.kind === "owner" ? "owner" : "teacher",
             plan: request.plan, expiresAt: request.expiresAt, entitlementMode: request.entitlementMode,
         };
     }
-    if (request.entitlementMode === "permanent_demo") {
+    if (request.entitlementMode === "legacy_recovery") {
+        if (input.argv[1] !== `--approve-legacy-recovery=${reviewDigest}`) fail("invalid_arguments");
+    } else if (request.entitlementMode === "permanent_demo") {
         if (input.argv[1] !== `--approve-qa-demo=${reviewDigest}`) fail("invalid_arguments");
     } else if (request.plan === "free") {
         if (input.argv[1] !== `--approve-qa-free=${reviewDigest}`) fail("invalid_arguments");
@@ -1135,6 +1186,7 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
             idempotencyKey: request.idempotencyKey,
             encodedVerifier: pending.passwordVerifier,
         } : {
+            ...(request.entitlementMode === "legacy_recovery" ? { organizationId: request.organizationId, expectedAdminUserId: request.expectedAdminUserId } : {}),
             entitlementMode: request.entitlementMode,
             organizationName: request.organizationName,
             email: request.email,
@@ -1174,7 +1226,7 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
                 finalized.initialPassword !== pending.initialPassword
                 || finalized.organizationId !== result.organizationId
                 || finalized.accountId !== result.accountId
-                || (request.entitlementMode === "permanent_demo"
+                || (request.entitlementMode === "permanent_demo" || request.entitlementMode === "legacy_recovery"
                     ? finalized.entitlementMode !== result.entitlementMode || finalized.memberRole !== result.memberRole || finalized.plan !== result.plan
                     : request.kind === "teacher"
                     ? finalized.provisionId !== result.provisionId
@@ -1183,14 +1235,14 @@ export async function executeOperatorProvisioning(input, overrides = {}) {
                         || finalized.plan !== result.plan
                         || finalized.expiresAt !== result.expiresAt)
             ) fail("unsafe_receipt");
-        } else if (request.entitlementMode === "permanent_demo") {
+        } else if (request.entitlementMode === "permanent_demo" || request.entitlementMode === "legacy_recovery") {
             finalized = {
                 schemaVersion:1, status:"provisioned", requestFingerprint:request.requestFingerprint,
                 idempotencyKeyHash:sha256(request.idempotencyKey), organizationId:result.organizationId,
                 accountId:result.accountId, memberRole:result.memberRole, plan:result.plan,
-                entitlementMode:"permanent_demo", replayed:result.replayed, initialPassword:pending.initialPassword,
+                entitlementMode:result.entitlementMode, replayed:result.replayed, initialPassword:pending.initialPassword,
             };
-            finalized.integrity=integrity(DEMO_RECEIPT_DOMAIN,finalized);
+            finalized.integrity=integrity(request.entitlementMode === "legacy_recovery" ? RECOVERY_RECEIPT_DOMAIN : DEMO_RECEIPT_DOMAIN,finalized);
             await atomicPublish(receiptPath,finalized,stateBoundary,deps,"unsafe_receipt");
         } else if (request.kind === "teacher") {
             finalized = {
@@ -1244,8 +1296,8 @@ export async function runOperatorProvisioningCli({ argv, env, deps, stdout = con
         stdout(`receipt_path=${result.receiptPath}`);
         stdout(`organization_id=${result.organizationId}`);
         stdout(`account_id=${result.accountId}`);
-        if ("entitlementMode" in result && result.entitlementMode === "permanent_demo") {
-            stdout("entitlement_mode=permanent_demo"); stdout(`member_role=${result.memberRole}`); stdout(`plan=${result.plan}`);
+        if ("entitlementMode" in result && (result.entitlementMode === "permanent_demo" || result.entitlementMode === "legacy_recovery")) {
+            stdout(`entitlement_mode=${result.entitlementMode}`); stdout(`member_role=${result.memberRole}`); stdout(`plan=${result.plan}`);
         } else if (result.provisionId !== undefined) {
             stdout(`provision_id=${result.provisionId}`);
             stdout(`member_role=${result.memberRole}`);

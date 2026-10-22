@@ -126,6 +126,7 @@ export function selectTeacherLiveExamId(
     currentId = "",
     now = Date.now(),
 ): string {
+    if (exams.length === 0) return "";
     if (exams.some(exam => exam.id === currentId)) return currentId;
     const rank: Record<TeacherLiveExamPhase, number> = {
         live: 0,
@@ -133,18 +134,30 @@ export function selectTeacherLiveExamId(
         ready: 2,
         completed: 3,
     };
-    return [...exams]
-        .sort((left, right) => {
-            const leftPhase = classifyTeacherLiveExamPhase(
-                left,
-                attempts.filter(attempt => attempt.examId === left.id),
-                now,
-            );
-            const rightPhase = classifyTeacherLiveExamPhase(
-                right,
-                attempts.filter(attempt => attempt.examId === right.id),
-                now,
-            );
-            return rank[leftPhase] - rank[rightPhase];
-        })[0]?.id || "";
+    // Phase classification only needs to know whether an exam has an active
+    // attempt. Build that index once instead of filtering all attempts twice
+    // for every comparison in a full exam sort.
+    const activeExamIds = new Set<string>();
+    for (const attempt of attempts) {
+        if (attempt.status === "in_progress") activeExamIds.add(attempt.examId);
+    }
+    const activeAttempts = [{ status: "in_progress" as const }];
+    const noAttempts: [] = [];
+    let preferredId = "";
+    let preferredRank = Number.POSITIVE_INFINITY;
+    for (const exam of exams) {
+        const phase = classifyTeacherLiveExamPhase(
+            exam,
+            activeExamIds.has(exam.id) ? activeAttempts : noAttempts,
+            now,
+        );
+        // Strictly lower rank preserves the first catalog row on ties, as
+        // the previous stable sort did. No later row can outrank a live exam.
+        if (rank[phase] < preferredRank) {
+            preferredId = exam.id;
+            preferredRank = rank[phase];
+            if (phase === "live") break;
+        }
+    }
+    return preferredId;
 }

@@ -20,7 +20,9 @@ describe("production showcase session contract", () => {
         const page = source("src/app/page.tsx");
 
         expect(page).toContain("const [isHydrated, setIsHydrated] = useState(false)");
-        expect(page).toMatch(/useEffect\(\(\) => \{[\s\S]*?setIsHydrated\(true\)/);
+        expect(page).toContain("useSyncExternalStore(storageStore.subscribe, storageStore.getSnapshot, () => null)");
+        expect(page).toContain("if (storedHomeState && !homeInitialization)");
+        expect(page).toContain("setIsHydrated(teacherSelfServiceEnabled || !hasLifecycleQuery)");
         expect(page).toContain("disabled={!isHydrated || mockupLoginPending}");
     });
 

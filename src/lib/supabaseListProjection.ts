@@ -9,6 +9,7 @@ import type { Attempt, Exam } from "@/types/omr";
 import { resolveAssignmentLifecycle } from "@/lib/assignmentLifecycle";
 import { answeredQuestionSummaryFromListValue, type StudentAssignmentPreview, type StudentAttemptSummary } from "@/lib/studentExamContract";
 import type { TeacherAttemptSummary } from "@/lib/teacherAttemptSummary";
+import { canonicalUtcTimestampMicrosecondKey } from "@/lib/canonicalCollectionContract";
 
 type ListRow = Record<string, unknown>;
 
@@ -48,6 +49,18 @@ function projectedQuestionResultsSource(value: unknown): Attempt["questionResult
     return value === "legacy_derived_current_exam"
         ? "legacy_derived_current_exam"
         : "incomplete_or_invalid";
+}
+
+function projectedGradingTimestamp(scalar: unknown, original: unknown): string {
+    if (original === undefined || original === null) return clean(scalar);
+    const scalarKey = canonicalUtcTimestampMicrosecondKey(scalar);
+    const originalKey = canonicalUtcTimestampMicrosecondKey(original);
+    if (!scalarKey || !originalKey || scalarKey !== originalKey) {
+        throw new Error("Attempt grading timestamp does not match canonical row");
+    }
+    // Evidence seals the original string, while timestamptz can serialize the
+    // same instant with a different UTC suffix or fractional precision.
+    return original as string;
 }
 
 function projectedAssignmentGeneration(row: ListRow): Pick<Attempt, "assignmentId" | "assignmentRevision"> {
@@ -195,8 +208,8 @@ export function attemptFromSupabaseListRow(
         examId: clean(row.exam_id),
         examTitle: clean(row.exam_title),
         studentName: clean(row.student_name),
-        startedAt: clean(row.started_at),
-        finishedAt: clean(row.finished_at),
+        startedAt: projectedGradingTimestamp(row.started_at, row.grading_started_at),
+        finishedAt: projectedGradingTimestamp(row.finished_at, row.grading_finished_at),
         score: finiteNumber(row.score),
         totalScore: finiteNumber(row.total_score),
         answers: optionalObject<Attempt["answers"]>(row.answers) || {},

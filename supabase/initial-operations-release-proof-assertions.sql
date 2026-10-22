@@ -1642,7 +1642,8 @@ declare
         'operationalJobStatusReady', 'operatorPilotProvisioningReady',
         'provisionedTeacherLoginReady', 'effectiveWorkspacePlanEnforcementReady',
         'studentSessionGenerationReady', 'studentCredentialBatchReady',
-        'canonicalQuestionResultEvidenceReady', 'kakaoReminderEntitlementReady'
+        'canonicalQuestionResultEvidenceReady', 'kakaoReminderEntitlementReady',
+        'legacyOrganizationRecoveryReady'
     ];
 begin
     if pg_catalog.jsonb_typeof(v_readiness) is distinct from 'object'

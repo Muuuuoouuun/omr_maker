@@ -1,6 +1,6 @@
 # Next ESLint glob dependency replacement
 
-`eslint-config-next` 16.3.8 loads `@next/eslint-plugin-next`, whose root-directory
+`eslint-config-next` 16.4.2 loads `@next/eslint-plugin-next`, whose root-directory
 utility imports `fast-glob`. The only call is `globSync(pattern,
 { onlyDirectories: true })`. The repository otherwise has no fast-glob consumer.
 Its micromatch dependency brings in braces 3.0.3 and
@@ -18,7 +18,8 @@ throws an error rather than silently suppressing lint checks.
 The adapter is ESM and can be loaded synchronously by the Next plugin's CommonJS
 import on the project's supported Node >=22.13.0 runtime. It has no asynchronous
 module initialization. This is a narrow adapter, not a general fast-glob API.
-Reassess it when upgrading the pinned Next ESLint plugin.
+Reassess it when upgrading the pinned Next ESLint plugin. The compatibility suite
+has been rerun against 16.4.2, including the actual plugin's lint rules.
 
 `scripts/next-eslint-glob-compatibility.test.ts` exercises the actual plugin's
 root-directory utility: default root, directory-only wildcard, brace/extglob

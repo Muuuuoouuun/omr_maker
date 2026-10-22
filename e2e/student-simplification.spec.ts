@@ -310,26 +310,38 @@ test.describe("student UI simplification regressions", () => {
         const nextTheme = currentTheme === "dark" ? "light" : "dark";
         await themeToggle.click();
         await expect(page.locator("html")).toHaveAttribute("data-theme", nextTheme);
+        const paperExam = page.getByRole("region", { name: "종이 문제지로 답안 작성" });
+        await expect(paperExam).toBeVisible();
+        await expect(paperExam.getByRole("button", { name: "문제지 PDF 열기", exact: true })).toBeVisible();
+        await expect(page.locator(".pdf-viewer-toolbar")).toBeHidden();
 
         const rows = await page.locator(".solve-header-content").evaluate(element => {
             const title = element.querySelector<HTMLElement>(".solve-title-group")!.getBoundingClientRect();
             const status = element.querySelector<HTMLElement>(".solve-status-row")!.getBoundingClientRect();
             const controls = element.querySelector<HTMLElement>(".solve-controls")!.getBoundingClientRect();
             const header = element.closest("header")!.getBoundingClientRect();
-            const toolbar = document.querySelector<HTMLElement>(".pdf-viewer-toolbar")?.getBoundingClientRect();
+            const paper = document.querySelector<HTMLElement>('[aria-label="종이 문제지로 답안 작성"]')!.getBoundingClientRect();
+            const paperButton = document.querySelector<HTMLElement>('[aria-label="종이 문제지로 답안 작성"] button')!.getBoundingClientRect();
             return {
                 titleBottom: title.bottom,
                 statusTop: status.top,
                 statusBottom: status.bottom,
                 controlsTop: controls.top,
                 headerBottom: header.bottom,
-                toolbarTop: toolbar?.top ?? null,
+                paperTop: paper.top,
+                paperBottom: paper.bottom,
+                paperButtonTop: paperButton.top,
+                paperButtonBottom: paperButton.bottom,
+                viewportHeight: window.innerHeight,
             };
         });
         expect(rows.statusTop).toBeGreaterThanOrEqual(rows.titleBottom - 1);
         expect(rows.controlsTop).toBeGreaterThanOrEqual(rows.statusBottom - 1);
-        if (rows.toolbarTop !== null) expect(rows.toolbarTop).toBeGreaterThanOrEqual(rows.headerBottom - 1);
-        await expectInsideViewport(page, ".solve-header, .solve-header-content, .solve-body, .pdf-viewer-toolbar");
+        expect(rows.paperTop).toBeGreaterThanOrEqual(rows.headerBottom - 1);
+        expect(rows.paperBottom).toBeLessThanOrEqual(rows.viewportHeight + 1);
+        expect(rows.paperButtonTop).toBeGreaterThanOrEqual(rows.paperTop - 1);
+        expect(rows.paperButtonBottom).toBeLessThanOrEqual(rows.paperBottom + 1);
+        await expectInsideViewport(page, '.solve-header, .solve-header-content, .solve-body, [aria-label="종이 문제지로 답안 작성"], [aria-label="종이 문제지로 답안 작성"] button');
     });
     }
 

@@ -196,6 +196,8 @@ export async function resolveAuthorizedTeacherSessionCookie(
             session.teacherId,
             session.accountSessionGeneration!,
             session.organizationId,
+            options.now ?? Date.now(),
+            session.entitlementMode,
         );
         return current ? {
             ...session,
@@ -203,6 +205,7 @@ export async function resolveAuthorizedTeacherSessionCookie(
             organizationName: current.organizationName,
             memberRole: current.memberRole,
             plan: current.plan,
+            entitlementMode: current.entitlementMode,
         } : null;
     } catch {
         return null;

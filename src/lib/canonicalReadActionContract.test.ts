@@ -576,6 +576,82 @@ describe("canonical collection server action contract", () => {
         expect(gatewayMocks.attemptList).not.toHaveBeenCalled();
     });
 
+    it.each([undefined, null])("keeps legacy scalar results readable with an explicit unavailable exam snapshot (%s)", async count => {
+        const summary = {
+            id: "legacy-base", examId: "legacy-exam", examTitle: "기존 시험", studentName: "학생",
+            startedAt: "2026-08-09T00:00:00.000Z", finishedAt: "2026-08-09T01:00:00.000Z",
+            score: 3, totalScore: 5, answers: {}, detailLevel: "summary", status: "completed",
+            questionResultsQuestionCount: count,
+        };
+        const original = structuredClone(summary);
+        const meta = { organizationId: "org-1", loadedAt: "2026-08-09T01:02:03.000Z", rawCount: 1, parsedCount: 1 };
+        gatewayMocks.attemptSummaryList.mockResolvedValue({
+            status: "loaded", attempts: [summary], page: { partial: false, hasMore: false, itemCount: 1 }, meta,
+        });
+        const result = await loadTeacherCanonicalAnalyticsSnapshots();
+        expect(result).toMatchObject({ status: "loaded", analyticsSnapshots: {
+            "legacy-exam": { status: "unavailable", questionStats: [], studentRows: [], retakeEligibleCohortKeys: [] },
+        } });
+        expect(summary).toEqual(original);
+        expect(summary).not.toHaveProperty("questionResultsDefinitionManifestHash");
+        expect(gatewayMocks.attemptLoad).not.toHaveBeenCalled();
+        expect(gatewayMocks.examList).not.toHaveBeenCalled();
+    });
+
+    it("withholds the entire mixed-evidence exam while retaining verified analytics for an independent exam", async () => {
+        const { buildQuestionResults } = await import("@/lib/premiumAnalytics");
+        const { buildCanonicalQuestionResultEvidence } = await import("@/lib/canonicalQuestionResultManifest");
+        const { currentTeacherCanonicalAnalyticsSnapshot } = await import("@/lib/teacherCanonicalAnalyticsSnapshotContract");
+        const exam = {
+            id: "verified-exam", organizationId: "org-1", title: "검증 시험", createdAt: "2026-08-09T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 2, score: 5, label: "검증 문항" }],
+        };
+        const base = {
+            id: "verified-base", examId: exam.id, examTitle: exam.title, organizationId: "org-1", studentName: "학생",
+            startedAt: "2026-08-09T00:00:00.000Z", finishedAt: "2026-08-09T01:00:00.000Z",
+            score: 5, totalScore: 5, answers: { 1: 2 }, status: "completed" as const,
+        };
+        const questionResults = buildQuestionResults(exam, base);
+        const verified = { ...base, questionResults, ...buildCanonicalQuestionResultEvidence(base, questionResults) };
+        const summaries = [
+            { ...base, id: "legacy", examId: "mixed-exam", answers: {}, detailLevel: "summary" as const },
+            { ...base, id: "mixed-verified", examId: "mixed-exam", answers: {}, detailLevel: "summary" as const, questionResultsQuestionCount: 1 },
+            { ...base, answers: {}, detailLevel: "summary" as const, questionResultsQuestionCount: 1 },
+        ];
+        const original = structuredClone(summaries);
+        const meta = { organizationId: "org-1", loadedAt: "2026-08-09T01:02:03.000Z", rawCount: 3, parsedCount: 3 };
+        gatewayMocks.attemptSummaryList.mockResolvedValue({
+            status: "loaded", attempts: summaries, page: { partial: false, hasMore: false, itemCount: 3 }, meta,
+        });
+        gatewayMocks.attemptLoad.mockResolvedValue({ status: "loaded", attempt: verified });
+        gatewayMocks.examList.mockResolvedValue({ status: "loaded", exams: [exam], meta: { ...meta, rawCount: 1, parsedCount: 1 } });
+        const result = await loadTeacherCanonicalAnalyticsSnapshots();
+        expect(result.status).toBe("loaded");
+        if (result.status !== "loaded") throw new Error("Expected bounded analytics snapshots");
+        expect(result.analyticsSnapshots["mixed-exam"]).toMatchObject({
+            status: "unavailable", questionStats: [], studentRows: [], diagnostics: { attemptCount: 2 },
+        });
+        expect(currentTeacherCanonicalAnalyticsSnapshot(result.analyticsSnapshots["mixed-exam"], "mixed-exam", summaries.slice(0, 2))).not.toBeNull();
+        expect(result.analyticsSnapshots[exam.id]).toMatchObject({
+            status: "ready", questionStats: [expect.objectContaining({ questionId: 1, correctCount: 1 })],
+        });
+        expect(gatewayMocks.attemptLoad).toHaveBeenCalledTimes(1);
+        expect(gatewayMocks.attemptLoad.mock.calls[0][1]).toBe("verified-base");
+        expect(summaries).toEqual(original);
+    });
+
+    it.each([0, -1, 501, 1.5, "1", Number.NaN])("still rejects malformed non-null canonical counts (%s)", async count => {
+        const summary = {
+            id: "bad-count", examId: "exam-1", status: "completed", questionResultsQuestionCount: count,
+        };
+        const meta = { organizationId: "org-1", loadedAt: "2026-08-09T01:02:03.000Z", rawCount: 1, parsedCount: 1 };
+        gatewayMocks.attemptSummaryList.mockResolvedValue({
+            status: "loaded", attempts: [summary], page: { partial: false, hasMore: false, itemCount: 1 }, meta,
+        });
+        await expect(loadTeacherCanonicalAnalyticsSnapshots()).resolves.toMatchObject({ status: "service_unavailable" });
+        expect(gatewayMocks.attemptLoad).not.toHaveBeenCalled();
+    });
+
     it("ignores a legacy retake missing a declared result count because retakes are never materialized officially", async () => {
         const retake = {
             id: "legacy-retake", examId: "exam-retake", examTitle: "재시험", studentName: "학생",

@@ -23,7 +23,8 @@
 .body textarea { resize: vertical; line-height: 1.65; }
 .helper, .applyArea > p { font-size: .75rem; line-height: 1.65; color: var(--muted); margin: .6rem 0; }
 .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
-.actions button { min-height: 44px; white-space: normal; max-width: 100%; }
+.actions button { min-height: 44px; white-space: normal; max-width: 100%; gap: .4rem; }
+.actions button > svg { flex-shrink: 0; }
 .status { border-left: 3px solid var(--primary); padding: .65rem .75rem; font-size: .8rem; line-height: 1.6; margin: .75rem 0; }
 .error { border-left: 3px solid var(--error); padding: .65rem .75rem; color: var(--text-error); font-size: .8125rem; line-height: 1.6; }
 .review { margin-top: 1.25rem; }
