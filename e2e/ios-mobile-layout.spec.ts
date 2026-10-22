@@ -563,10 +563,21 @@ test.describe("iPhone WebKit mobile layout", () => {
         await continueSolveEntryIfPresent(page);
 
         await expect(page.locator(".solve-body")).toBeVisible({ timeout: 20_000 });
-        const emptyState = page.locator(".pdf-upload-empty");
+        const compactNoPdf = (page.viewportSize()?.width || 0) < 600;
+        const emptyState = compactNoPdf
+            ? page.getByRole("region", { name: "종이 문제지로 답안 작성" })
+            : page.locator(".pdf-upload-empty");
+        const emptyStateTrigger = compactNoPdf
+            ? emptyState.getByRole("button", { name: "문제지 PDF 열기", exact: true })
+            : emptyState;
         await expect(emptyState).toBeVisible();
         await expect(emptyState).toContainText("문제지 PDF 열기");
         await expect(emptyState).not.toContainText("정답지");
+        if (compactNoPdf) {
+            await expect(page.locator(".pdf-upload-empty")).toBeHidden();
+            await expectMinimumTouchTarget(emptyStateTrigger);
+            await expectWithinViewport(emptyStateTrigger, page);
+        }
 
         const toolsDisclosure = page.locator(".solve-tools-disclosure");
         const toolsSummary = toolsDisclosure.locator(":scope > summary");
@@ -587,9 +598,8 @@ test.describe("iPhone WebKit mobile layout", () => {
         await toolsSummary.click();
         await expect(toolsDisclosure).toHaveJSProperty("open", false);
         const emptyStateChooser = page.waitForEvent("filechooser");
-        // Plan A2 keeps the PDF pane tall enough on a 320x568 phone for a real
-        // tap on the empty state to reach it.
-        await emptyState.click();
+        // The compact paper-exam action remains reachable above the answer sheet.
+        await emptyStateTrigger.click();
         await emptyStateChooser;
         await expectNoDocumentHorizontalOverflow(page);
     });
@@ -754,7 +764,7 @@ test.describe("iPhone WebKit mobile layout", () => {
         for (const control of [
             loginCard.getByRole("button", { name: "역할 선택으로" }),
             loginForm.getByLabel("아이디 또는 이메일"),
-            loginForm.getByLabel("비밀번호"),
+            loginForm.getByLabel("비밀번호", { exact: true }),
             loginForm.getByRole("button", { name: "대시보드 입장" }),
             loginCard.getByRole("button", { name: "데모 계정으로 둘러보기" }),
         ]) {

@@ -330,7 +330,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
 
         const loginForm = page.getByRole("form", { name: "교사 로그인" });
         const identifier = loginForm.getByLabel("아이디 또는 이메일");
-        const password = loginForm.getByLabel("비밀번호");
+        const password = loginForm.getByLabel("비밀번호", { exact: true });
         await expect(identifier).toHaveAttribute("autocomplete", "username");
         await expect(password).toHaveAttribute("autocomplete", "current-password");
         await loginForm.getByRole("button", { name: "대시보드 입장" }).click();
