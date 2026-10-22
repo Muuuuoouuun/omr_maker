@@ -213,7 +213,14 @@ export default function NotificationBell() {
     const refresh = useCallback(async () => {
         const generation = refreshGenerationRef.current + 1;
         refreshGenerationRef.current = generation;
-        const result = await loadTeacherNotificationSummary();
+        let result: Awaited<ReturnType<typeof loadTeacherNotificationSummary>>;
+        try {
+            result = await loadTeacherNotificationSummary();
+        } catch {
+            // The action models server failures, but its transport can still
+            // reject when a request is interrupted or the connection is lost.
+            result = { status: "service_unavailable" };
+        }
         if (refreshGenerationRef.current !== generation) return;
         const resolution = resolveTeacherNotificationRefresh<Notification>(result, {
             readPersisted: readPersistedNotifications,
