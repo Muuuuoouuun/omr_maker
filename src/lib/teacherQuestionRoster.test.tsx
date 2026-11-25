@@ -63,7 +63,7 @@ describe("teacher exam detail original submission roster", () => {
         } };
         mount(e, [c, b, a, retake, { ...a, id: "draft", status: "in_progress" }], 3);
         const panel = await rosterPanel();
-        const questions = panel.getByRole("combobox", { name: "문항", exact: true });
+        const questions = panel.getByRole("combobox", { name: /^문항$/ });
         expect(within(questions).getAllByRole("option").map(o => o.textContent)).toEqual(["1번", "2번", "10번", "11번"]);
         fireEvent.change(questions, { target: { value: 20 } });
         expect(panel.getByRole("status")).toHaveTextContent("2번 · 본시험 제출 3건 중 2건");
