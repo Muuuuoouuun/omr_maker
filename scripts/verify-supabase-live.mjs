@@ -497,6 +497,9 @@ async function runSqlMatrix(
         capture: true,
         variables: ["release_proof_phase=final_asserted"],
     })));
+    // This fixture deliberately commits independent RPC transactions. Run it
+    // last, on the disposable cluster, after the rollback/reapply checks.
+    psqlFile("supabase/retake-session-continuation-assertions.sql");
     return deriveLivePgReleaseProofs({ reports: releaseProofReports });
 }
 

@@ -2449,7 +2449,7 @@ begin
                E'\n-- phase-c-routine --\n' order by name, args
                ), 'sha256'), 'hex')
              from actual
-       ) = 'a5681e53ecbc749fc3b8e30bce20f189af8594648eaa1b6b4886e9f603bca487'
+       ) = '3c83faddf176a52992cb6d6acc4f1b317b406f470a1a599a6a14fc904950b47d'
        and not exists (
            select 1 from (values
                ('omr_remote_assets'), ('omr_remote_asset_upload_intents'),

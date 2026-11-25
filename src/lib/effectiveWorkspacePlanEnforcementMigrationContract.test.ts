@@ -262,8 +262,8 @@ describe("effective workspace plan enforcement migration", () => {
         expect(productionBoundary).toContain("'statement_timeout=5s'");
         expect(productionBoundary).toContain("'lock_timeout=2s'");
         expect(productionBoundary).toMatch(/extensions\.digest\([\s\S]*phase-c-effective-plan-enforcement:202608080008/);
-        // PostgreSQL-attested catalog after the 202610220002 legacy recovery migration.
-        expect(productionBoundary).toContain("a5681e53ecbc749fc3b8e30bce20f189af8594648eaa1b6b4886e9f603bca487");
+        // PostgreSQL 17 attestation after the retake continuation migration.
+        expect(productionBoundary).toContain("3c83faddf176a52992cb6d6acc4f1b317b406f470a1a599a6a14fc904950b47d");
         expect(productionBoundary).toContain("omr_save_exam_effective_worker_v3");
         expect(productionBoundary).toContain("omr_set_effective_plan_transaction_proof_v1");
         expect(productionBoundary).toContain("omr_claim_remote_asset_cleanup_v8_snapshot");
