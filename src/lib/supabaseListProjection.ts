@@ -51,10 +51,24 @@ function projectedQuestionResultsSource(value: unknown): Attempt["questionResult
         : "incomplete_or_invalid";
 }
 
+function postgresTimestampMicrosecondKey(value: unknown): string {
+    if (typeof value !== "string") return "";
+    const offset = /([+-])(\d{2}):(\d{2})$/.exec(value);
+    if (!offset) return canonicalUtcTimestampMicrosecondKey(value);
+    const [, sign, hours, minutes] = offset;
+    // PostgreSQL supports numeric offsets strictly below sixteen hours.
+    if (Number(hours) >= 16 || Number(minutes) >= 60 || offset[0] === "-00:00") return "";
+    const wallTime = canonicalUtcTimestampMicrosecondKey(value.slice(0, offset.index) + "Z");
+    if (!wallTime) return "";
+    const displacement = (Number(hours) * 60 + Number(minutes)) * (sign === "+" ? 1 : -1);
+    const utc = new Date(Date.parse(wallTime) - displacement * 60_000).toISOString();
+    return utc.slice(0, utc.indexOf(".")) + wallTime.slice(wallTime.indexOf("."));
+}
+
 function projectedGradingTimestamp(scalar: unknown, original: unknown): string {
     if (original === undefined || original === null) return clean(scalar);
-    const scalarKey = canonicalUtcTimestampMicrosecondKey(scalar);
-    const originalKey = canonicalUtcTimestampMicrosecondKey(original);
+    const scalarKey = postgresTimestampMicrosecondKey(scalar);
+    const originalKey = postgresTimestampMicrosecondKey(original);
     if (!scalarKey || !originalKey || scalarKey !== originalKey) {
         throw new Error("Attempt grading timestamp does not match canonical row");
     }

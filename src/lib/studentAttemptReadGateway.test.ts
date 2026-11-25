@@ -198,13 +198,13 @@ function mockClient(options: {
 }
 
 describe("student attempt read gateway", () => {
-    function sealedPostgresListRow() {
+    function sealedPostgresListRow(startedAt = "2026-07-14T00:00:00.123456+00:00", finishedAt = "2026-07-14T00:10:00.123Z") {
         const completed = buildServerAttempt({
             examId: exam.id,
             submissionId: "history-timestamp-ticket",
             answers: { 1: 3, 2: 1 },
-            startedAt: "2026-07-14T00:00:00.123456+00:00",
-        }, exam, session, "attempt-history-timestamps", "2026-07-14T00:10:00.123Z");
+            startedAt,
+        }, exam, session, "attempt-history-timestamps", finishedAt);
         return {
             ...attemptListRow(completed),
             started_at: "2026-07-14T00:00:00.123456+00:00",
@@ -229,14 +229,50 @@ describe("student attempt read gateway", () => {
     });
 
     it.each([
+        {
+            signedStart: "2026-07-14T03:00:00.123456+09:00", databaseStart: "2026-07-13T18:00:00.123456Z",
+            signedEnd: "2026-07-13T18:10:00.123Z", databaseEnd: "2026-07-14T03:10:00.123000+09:00",
+        },
+        {
+            signedStart: "2025-12-31T23:55:00.123456-03:30", databaseStart: "2026-01-01T03:25:00.123456+00:00",
+            signedEnd: "2026-01-01T00:05:00.123-03:30", databaseEnd: "2026-01-01T03:35:00.123Z",
+        },
+    ])("reads equivalent database offsets while preserving the signed strings", async ({ signedStart, databaseStart, signedEnd, databaseEnd }) => {
+        const row = { ...sealedPostgresListRow(signedStart, signedEnd), started_at: databaseStart, finished_at: databaseEnd };
+        const { client } = mockClient({ attemptRows: [row] });
+        await expect(listStudentAttemptsWithGateway(client, session)).resolves.toMatchObject({
+            status: "loaded", attempts: [{ startedAt: signedStart, finishedAt: signedEnd, score: 10 }],
+        });
+    });
+
+    it.each([
         { field: "grading_started_at", value: "2026-07-14T00:00:00.123457+00:00" },
         { field: "grading_finished_at", value: "2026-07-14T00:10:00.123001Z" },
         { field: "finished_at", value: "2026-07-14T00:10:00.123001+00:00" },
         { field: "grading_finished_at", value: "not-a-timestamp" },
+        { field: "started_at", value: "2026-07-14T09:00:00.123457+09:00" },
+        { field: "started_at", value: "2026-07-14T09:00:00.123456+08:60" },
+        { field: "started_at", value: "2026-07-15T00:00:00.123456+24:00" },
+        { field: "started_at", value: "2026-07-14T00:00:00.123456-00:00" },
+        { field: "started_at", value: "2026-07-14T09:00:00.123456+0900" },
+        { field: "started_at", value: "2026-07-14T09:00:00.1234560+09:00" },
+        { field: "grading_started_at", value: "2026-07-14T09:00:00.123456+09:00" },
     ])("rejects a mismatched or malformed projected $field without weakening evidence", async ({ field, value }) => {
         const row = { ...sealedPostgresListRow(), [field]: value };
         const { client } = mockClient({ attemptRows: [JSON.parse(JSON.stringify(row))] });
 
+        await expect(listStudentAttemptsWithGateway(client, session)).resolves.toEqual({
+            status: "service_unavailable", error: "Invalid scoped student attempt",
+        });
+    });
+
+    it("rejects a nonexistent local calendar date even when Date.parse rolls it onto the signed instant", async () => {
+        const row = {
+            ...sealedPostgresListRow("2026-03-01T00:00:00Z", "2026-03-01T00:10:00Z"),
+            started_at: "2026-02-29T09:00:00+09:00",
+            finished_at: "2026-03-01T09:10:00+09:00",
+        };
+        const { client } = mockClient({ attemptRows: [row] });
         await expect(listStudentAttemptsWithGateway(client, session)).resolves.toEqual({
             status: "service_unavailable", error: "Invalid scoped student attempt",
         });
