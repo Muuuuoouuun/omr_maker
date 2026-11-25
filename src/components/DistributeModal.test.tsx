@@ -143,6 +143,20 @@ beforeEach(() => {
 });
 
 describe("DistributeModal canonical roster recovery", () => {
+    it("offers the same issued link for manual copying when clipboard access is unavailable", async () => {
+        const url = "http://localhost:18893/solve/synthetic-a";
+        controls.loadRoster.mockReset().mockResolvedValue(readyRoster);
+        const modal = existingExam({ type: "group", groupIds: [] });
+        render(<DistributeModal {...modal.props} initialAccessConfig={{ type: "public" }} initialShareUrl={url} />);
+        expect(screen.queryByRole("textbox", { name: "학생 응시 링크" })).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "링크 복사" }));
+        const input = await screen.findByRole<HTMLInputElement>("textbox", { name: "학생 응시 링크" });
+        expect(input).toHaveValue(url);
+        input.focus();
+        expect(input.selectionStart).toBe(0);
+        expect(input.selectionEnd).toBe(url.length);
+    });
+
     it("restores initial access and blocks writes while a reopened dialog reloads its roster revision", async () => {
         let resolveReload!: (value: typeof readyRoster) => void;
         controls.loadRoster.mockReset()

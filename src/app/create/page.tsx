@@ -729,6 +729,8 @@ function CreateOMRPageInner() {
         : "";
     // UI State
     const [isSaving, setIsSaving] = useState(false);
+    const draftSaveInFlight = useRef(false);
+    const [isDraftSaving, setIsDraftSaving] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isDistributeModalOpen, setIsDistributeModalOpen] = useState(false);
     const distributeTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -3078,6 +3080,7 @@ function CreateOMRPageInner() {
     };
 
     const handleSaveDraftNow = async () => {
+        if (draftSaveInFlight.current) return;
         if (fastAnswerError) {
             toast.error("빠른 정답 입력 확인", fastAnswerError);
             document.getElementById("create-fast-answers")?.focus();
@@ -3092,6 +3095,8 @@ function CreateOMRPageInner() {
         const currentProblemPdf = problemPdfFileRef.current;
         const currentAnswerKeyPdf = answerKeyPdfFileRef.current;
         const loadedExamSnapshot = loadedExam;
+        draftSaveInFlight.current = true;
+        setIsDraftSaving(true);
         try {
             const pendingCleanup = await retryPendingScopedDraftPdfCleanup({
                 storage: safeBrowserStorage(() => window.localStorage),
@@ -3172,10 +3177,14 @@ function CreateOMRPageInner() {
             if (isEditorRouteGenerationCurrent(routeGeneration)) {
                 toast.error("초안 저장 실패", "설정 또는 PDF 저장 공간을 확인한 뒤 다시 시도해주세요.");
             }
+        } finally {
+            draftSaveInFlight.current = false;
+            setIsDraftSaving(false);
         }
     };
 
     const handleOpenDistribution = (event: ReactMouseEvent<HTMLButtonElement>) => {
+        if (draftSaveInFlight.current) return;
         if (fastAnswerError) {
             toast.error("빠른 정답 입력 확인", fastAnswerError);
             document.getElementById("create-fast-answers")?.focus();
@@ -3208,6 +3217,15 @@ function CreateOMRPageInner() {
                         <h1 style={{ fontSize: '0.9rem', fontWeight: 850, whiteSpace: 'nowrap' }}>
                             {editId ? '시험 편집' : '새 시험 만들기'}
                         </h1>
+                        <button
+                            type="button"
+                            className="btn btn-secondary create-mobile-header-save"
+                            onClick={handleSaveDraftNow}
+                            aria-disabled={isDraftSaving}
+                        >
+                            <Save size={15} />
+                            {isDraftSaving ? "저장 중…" : "초안 저장"}
+                        </button>
                     </div>
                     <div className="create-editor-actions scroll-custom" role="toolbar" aria-label="출제 도구 모음" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <button
@@ -3269,9 +3287,10 @@ function CreateOMRPageInner() {
                                 className="btn btn-secondary"
                                 style={{ padding: '0.55rem 1rem', fontSize: '0.85rem' }}
                                 onClick={handleSaveDraftNow}
+                                aria-disabled={isDraftSaving}
                             >
                                 <Save size={15} />
-                                초안 저장
+                                {isDraftSaving ? "저장 중…" : "초안 저장"}
                             </button>
                             <button
                                 type="button"
@@ -3287,6 +3306,7 @@ function CreateOMRPageInner() {
                                 className="btn btn-primary"
                                 style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
                                 onClick={handleOpenDistribution}
+                                aria-disabled={isDraftSaving}
                             >
                                 저장하고 배포하기
                             </button>
@@ -4990,6 +5010,7 @@ function CreateOMRPageInner() {
                     type="button"
                     className="btn btn-primary"
                     onClick={handleOpenDistribution}
+                    aria-disabled={isDraftSaving}
                 >
                     저장하고 배포하기
                 </button>
@@ -4997,9 +5018,10 @@ function CreateOMRPageInner() {
                     type="button"
                     className="btn btn-secondary"
                     onClick={handleSaveDraftNow}
+                    aria-disabled={isDraftSaving}
                 >
                     <Save size={16} />
-                    초안 저장
+                    {isDraftSaving ? "저장 중…" : "초안 저장"}
                 </button>
             </div>
         </div >

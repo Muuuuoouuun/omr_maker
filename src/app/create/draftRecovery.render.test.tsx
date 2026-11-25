@@ -178,6 +178,23 @@ describe("editor departure draft recovery", () => {
         expect(unloadWarning()).toBe(false);
     });
 
+    it("serializes draft saves across controls and keeps the header button focused", async () => {
+        render(<CreateOMRPage />);
+        fireEvent.change(titleField(), { target: { value: "두 번 누른 합성 시험" } });
+        const buttons = screen.getAllByRole("button", { name: "초안 저장" });
+        const header = buttons[0];
+        header.focus();
+        const writes = vi.spyOn(Storage.prototype, "setItem");
+        fireEvent.click(header);
+        expect(header).toHaveAttribute("aria-disabled", "true");
+        fireEvent.click(buttons[buttons.length - 1]);
+        await act(async () => {});
+        expect(writes.mock.calls.filter(([key]) => key === draftKey)).toHaveLength(1);
+        expect(storedDraft().title).toBe("두 번 누른 합성 시험");
+        expect(header).toHaveFocus();
+        expect(header).toHaveAttribute("aria-disabled", "false");
+    });
+
     it("retains accepted answers, old persisted draft, and native dirty warning on a failed autosave", () => {
         const view = render(<CreateOMRPage />);
         fireEvent.change(fastAnswers(), { target: { value: "12345" } });

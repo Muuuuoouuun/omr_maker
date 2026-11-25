@@ -8,12 +8,13 @@ import { Exam, Attempt } from "@/types/omr";
 import StatusPill from "@/components/dashboard/StatusPill";
 import TeacherHeader from "@/components/TeacherHeader";
 import { toast } from "@/components/Toast";
-import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherAttempts, loadTeacherAttemptSummaries } from "@/lib/teacherAttemptClient";
 import { loadTeacherExamDetail } from "@/lib/teacherExamClient";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { resolveAttemptScore, type ResolvedAttemptScore } from "@/lib/attemptScores";
+import { resolveAttemptScore } from "@/lib/attemptScores";
 import { serializeCsvRows } from "@/lib/csv";
-import { resolveAttemptGrading } from "@/lib/premiumAnalytics";
+import { belongsToExam, buildTeacherQuestionRoster, summarizeTeacherAttempt, type TeacherAttemptSummary } from "@/lib/teacherQuestionRoster";
+import TeacherQuestionRosterPanel from "@/components/dashboard/TeacherQuestionRosterPanel";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
 import { awaySeverity, resolveAwayCount } from "@/lib/examAwayTracker";
 import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
@@ -51,14 +52,6 @@ function withDetailLoadTimeout<T>(operation: Promise<T>): Promise<T> {
     });
 }
 
-interface AttemptTableSummary {
-    score: ResolvedAttemptScore;
-    correctCount: number;
-    wrongCount: number;
-    unansweredCount: number;
-    ungradedCount: number;
-}
-
 export default function ExamDetailPage() {
     const params = useParams();
     const id = params?.id as string;
@@ -74,6 +67,7 @@ export default function ExamDetailPage() {
     const [reportingMode, setReportingMode] = useState<ReportingMode>("unavailable");
     const [reportingAggregate, setReportingAggregate] = useState<TeacherAttemptAggregate | null>(null);
     const [isExportingCsv, setIsExportingCsv] = useState(false);
+    const [attemptCollectionComplete, setAttemptCollectionComplete] = useState(false);
 
     useEffect(() => {
         if (!id) return;
@@ -86,6 +80,7 @@ export default function ExamDetailPage() {
             setAttempts([]);
             setReportingAggregate(null);
             setReportingMode("unavailable");
+            setAttemptCollectionComplete(false);
 
             // Showcase exams are deterministic, display-only fixtures. Resolve them
             // only for the active showcase identity and only from the fixture's
@@ -99,6 +94,7 @@ export default function ExamDetailPage() {
                     return;
                 }
                 setExam(demoExam);
+                setAttemptCollectionComplete(true);
                 setAttempts(demo.attempts.filter(attempt => attempt.examId === id));
                 setReportingMode("local");
                 setLoadStatus("ready");
@@ -126,13 +122,27 @@ export default function ExamDetailPage() {
                     setLoadStatus("error");
                     return;
                 }
-                if (loadedAttempts.remoteError) {
+                // A legacy or malformed rich row can reject the whole rich gateway read.
+                // Preserve totals only when the independently authorized server summary succeeds.
+                const summariesOnly = !!loadedAttempts.remoteError && loadedExamResult.source === "server" && aggregateResult.status === "loaded";
+                const collection = summariesOnly
+                    ? await withDetailLoadTimeout(loadTeacherAttemptSummaries(id)) : loadedAttempts;
+                if (cancelled) return;
+                if (collection.remoteError || (summariesOnly && (!collection.remoteLoaded || collection.remotePartial || collection.remoteHasMore))) {
                     setLoadError("제출 기록을 서버에서 확인하지 못했습니다. 빈 제출 목록으로 표시하지 않고 다시 확인이 필요합니다.");
                     setLoadStatus("error");
                     return;
                 }
+                const rows = collection.items;
+                if (loadedExamResult.exam.id !== id || rows.some(attempt => !belongsToExam(loadedExamResult.exam, attempt))
+                    || new Set(rows.map(attempt => attempt.id)).size !== rows.length) {
+                    setLoadError("요청한 시험의 응시 기록을 확인할 수 없습니다.");
+                    setLoadStatus("error");
+                    return;
+                }
                 setExam(loadedExamResult.exam);
-                setAttempts(loadedAttempts.items);
+                setAttemptCollectionComplete(!summariesOnly && !collection.remotePartial && !collection.remoteHasMore);
+                setAttempts(rows);
                 if (aggregateResult.status === "loaded") {
                     setReportingAggregate(aggregateResult.aggregate);
                     setReportingMode("exact");
@@ -156,23 +166,11 @@ export default function ExamDetailPage() {
     }, [id, retryNonce]);
 
     const attemptSummaryById = useMemo(() => {
-        const summaries = new Map<string, AttemptTableSummary>();
+        const summaries = new Map<string, TeacherAttemptSummary>();
         if (!exam) return summaries;
 
         for (const attempt of attempts) {
-            const gradingResolution = resolveAttemptGrading(exam, attempt);
-            const score: ResolvedAttemptScore = {
-                ...gradingResolution.scoreSummary,
-                source: gradingResolution.source,
-            };
-            const counts = gradingResolution.questionResults.reduce((acc, result) => {
-                if (result.status === "correct") acc.correctCount += 1;
-                if (result.status === "wrong") acc.wrongCount += 1;
-                if (result.status === "unanswered") acc.unansweredCount += 1;
-                if (result.status === "ungraded") acc.ungradedCount += 1;
-                return acc;
-            }, { correctCount: 0, wrongCount: 0, unansweredCount: 0, ungradedCount: 0 });
-            summaries.set(attempt.id, { score, ...counts });
+            summaries.set(attempt.id, summarizeTeacherAttempt(exam, attempt));
         }
 
         return summaries;
@@ -231,6 +229,10 @@ export default function ExamDetailPage() {
         };
     }, [attemptSummaryById, baseAttempts, completedAttempts, reportingAggregate, reportingMode, retakeAttempts.length]);
 
+    const expectedOriginalCount = attemptCollectionComplete ? stats?.submitCount ?? null : null;
+    const roster = useMemo(() => exam && buildTeacherQuestionRoster(exam, attempts, attemptSummaryById, expectedOriginalCount),
+        [exam, attempts, attemptSummaryById, expectedOriginalCount]);
+
     const explanationStats = useMemo(() => {
         if (!exam) return { written: 0, total: 0, missingNumbers: [] as number[] };
         const missingNumbers = exam.questions
@@ -281,9 +283,9 @@ export default function ExamDetailPage() {
                 score.earnedScore,
                 score.totalScore,
                 (Math.round(score.scorePercent * 10) / 10).toString(),
-                summary?.correctCount ?? 0,
-                summary?.wrongCount ?? 0,
-                summary?.unansweredCount ?? 0,
+                summary?.rows.length ? summary.correctCount : "",
+                summary?.rows.length ? summary.wrongCount : "",
+                summary?.rows.length ? summary.unansweredCount : "",
                 score.source,
                 a.finishedAt,
                 resolveAwayCount(a),
@@ -353,7 +355,7 @@ export default function ExamDetailPage() {
         }
     };
 
-    const visibleLoadStatus: DetailLoadStatus = id ? loadStatus : "not_found";
+    const visibleLoadStatus: DetailLoadStatus = !id ? "not_found" : exam && exam.id !== id ? "loading" : loadStatus;
 
     if (visibleLoadStatus === "loading") {
         return (
@@ -564,6 +566,7 @@ export default function ExamDetailPage() {
                 </section>
 
                 {/* Students Table */}
+                {roster && <TeacherQuestionRosterPanel key={exam.id} roster={roster} />}
                 <section className="bento-card teacher-exam-results" style={{ padding: '0', overflow: 'hidden' }} aria-labelledby="teacher-exam-results-title">
                     <div className="teacher-exam-results-heading" style={{
                         padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border)',
@@ -656,11 +659,11 @@ export default function ExamDetailPage() {
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
                                                     <StatusPill
-                                                        tone={summary && (summary.wrongCount > 0 || summary.unansweredCount > 0) ? "grade" : "success"}
+                                                        tone={!summary?.rows.length ? "muted" : (summary.wrongCount > 0 || summary.unansweredCount > 0) ? "grade" : "success"}
                                                         size="sm"
-                                                        label={summary
+                                                        label={summary?.rows.length
                                                             ? `정 ${summary.correctCount} · 오 ${summary.wrongCount} · 미 ${summary.unansweredCount}`
-                                                            : "Completed"}
+                                                            : "문항 기록 없음"}
                                                     />
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
@@ -748,11 +751,11 @@ export default function ExamDetailPage() {
                                                     />
                                                 )}
                                                 <StatusPill
-                                                    tone={summary && (summary.wrongCount > 0 || summary.unansweredCount > 0) ? "grade" : "success"}
+                                                    tone={!summary?.rows.length ? "muted" : (summary.wrongCount > 0 || summary.unansweredCount > 0) ? "grade" : "success"}
                                                     size="sm"
-                                                    label={summary
+                                                    label={summary?.rows.length
                                                         ? `정 ${summary.correctCount} · 오 ${summary.wrongCount} · 미 ${summary.unansweredCount}`
-                                                        : "완료"}
+                                                        : "문항 기록 없음"}
                                                 />
                                                 {awayCount > 0 ? (
                                                     <span className="away-severity-badge" data-away-severity={awaySeverity(awayCount)}>

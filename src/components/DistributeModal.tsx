@@ -1617,6 +1617,21 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                                 {visibleShareUrl}
                             </div>
 
+                            {copyStatus === "복사 실패" && (
+                                <div>
+                                    <p role="status">자동 복사를 사용할 수 없습니다. 아래 학생 응시 링크를 선택해 직접 복사하세요.</p>
+                                    <label htmlFor="manual-student-invite-url">학생 응시 링크</label>
+                                    <input
+                                        id="manual-student-invite-url"
+                                        type="text"
+                                        readOnly
+                                        value={visibleShareUrl}
+                                        onFocus={event => event.currentTarget.select()}
+                                        style={{ width: '100%', minWidth: 0 }}
+                                    />
+                                </div>
+                            )}
+
                             {shareExpiresAt && (
                                 <div role="status" style={{ background: 'var(--warning-soft)', border: '1px solid var(--warning-line)', padding: '0.7rem 0.85rem', borderRadius: '6px', color: 'var(--text-warning)', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5, marginBottom: '1.25rem' }}>
                                     링크 만료 시각: {new Date(shareExpiresAt).toLocaleString('ko-KR')}

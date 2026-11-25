@@ -7472,6 +7472,10 @@ body:has(.create-workspace.is-resizing) {
   gap: 0.5rem;
 }
 
+.create-editor-brand .create-mobile-header-save {
+  display: none;
+}
+
 .create-primary-actions--mobile {
   display: none;
 }
@@ -8030,6 +8034,14 @@ body:has(.create-workspace.is-resizing) {
 @media (max-width: 640px) {
   .create-primary-actions--desktop {
     display: none;
+  }
+
+  .create-editor-brand .create-mobile-header-save {
+    display: inline-flex;
+    min-height: 44px;
+    margin-inline-start: auto;
+    padding-inline: 0.65rem;
+    white-space: nowrap;
   }
 
   .create-editor-actions .teacher-session-chip,
