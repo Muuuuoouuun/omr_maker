@@ -179,6 +179,29 @@ describe("Supabase server admin transport", () => {
         return options.global.fetch;
     }
 
+    it("asks only canonical table GETs for UTC, preserving preferences and other headers", async () => {
+        const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response());
+        vi.stubGlobal("fetch", fetchMock);
+        supabaseJsMock.createClient.mockReturnValue({});
+        const url = "https://example.supabase.co/project/";
+        createSupabaseAdminClient({ url, serviceRoleKey: "fixture-key", backendTimeoutMs: 3_000 });
+        const rest = url + "rest/v1/";
+        const headers = { Prefer: "count=exact, timezone=Asia/Seoul", "X-Fixture": "kept" };
+        const send = capturedFetch();
+        await send(rest + "omr_exams?select=id", { headers });
+        await send(new Request(rest + "omr_attempts", { headers }));
+        await send(rest + "omr_exams", { method: "PATCH", headers });
+        await send(rest + "rpc/omr_load_roster_v2", { method: "POST", headers });
+        await send(rest + "omr_classes", { headers });
+        await send("https://other.example/project/rest/v1/omr_exams", { headers });
+        const sentHeaders = fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers));
+        expect(sentHeaders.map(sent => sent.get("Prefer"))).toEqual([
+            "count=exact, timezone=UTC", "count=exact, timezone=UTC",
+            headers.Prefer, headers.Prefer, headers.Prefer, headers.Prefer,
+        ]);
+        expect(sentHeaders.every(sent => sent.get("X-Fixture") === "kept")).toBe(true);
+    });
+
     it("aborts requests at the configured backend deadline", async () => {
         vi.useFakeTimers();
         const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {

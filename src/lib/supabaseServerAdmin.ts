@@ -76,15 +76,15 @@ export function getSupabaseServerConfigFromEnv(env: Env = process.env): Supabase
     };
 }
 
-function createDeadlineFetch(timeoutMs: number, fetchImplementation: typeof fetch): typeof fetch {
-    const deadlineMs = normalizeBackendTimeoutMs(timeoutMs);
+function createServerFetch(config: SupabaseServerConfig, fetchImplementation: typeof fetch): typeof fetch {
+    const deadlineMs = normalizeBackendTimeoutMs(config.backendTimeoutMs);
+    const rest = new URL("rest/v1/", config.url.replace(/\/?$/, "/"));
+    const utcReadPaths = new Set(["omr_exams", "omr_attempts"].map(table => rest.pathname + table));
 
     return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const deadlineController = new AbortController();
-        const requestSignal = typeof Request !== "undefined" && input instanceof Request
-            ? input.signal
-            : undefined;
-        const callerSignal = init?.signal ?? requestSignal;
+        const request = typeof Request !== "undefined" && input instanceof Request ? input : undefined;
+        const callerSignal = init?.signal ?? request?.signal;
         const forwardCallerAbort = () => deadlineController.abort(callerSignal?.reason);
 
         if (callerSignal?.aborted) {
@@ -100,8 +100,20 @@ function createDeadlineFetch(timeoutMs: number, fetchImplementation: typeof fetc
             }, deadlineMs);
 
         try {
+            const url = new URL(request?.url ?? String(input), rest);
+            let headers = init?.headers;
+            if ((init?.method ?? request?.method ?? "GET").toUpperCase() === "GET"
+                && url.origin === rest.origin && utcReadPaths.has(url.pathname)) {
+                // These two PostgREST projections contain timestamps validated as UTC.
+                const canonicalHeaders = new Headers(headers ?? request?.headers);
+                const preferences = (canonicalHeaders.get("Prefer") || "").split(",")
+                    .map(value => value.trim()).filter(value => value && !/^timezone\s*=/i.test(value));
+                canonicalHeaders.set("Prefer", [...preferences, "timezone=UTC"].join(", "));
+                headers = canonicalHeaders;
+            }
             return await fetchImplementation(input, {
                 ...init,
+                ...(headers ? { headers } : {}),
                 signal: deadlineController.signal,
             });
         } finally {
@@ -112,14 +124,14 @@ function createDeadlineFetch(timeoutMs: number, fetchImplementation: typeof fetc
 }
 
 export function createSupabaseAdminClient(config: SupabaseServerConfig): SupabaseAdminClientLike {
-    const deadlineFetch = createDeadlineFetch(config.backendTimeoutMs, globalThis.fetch.bind(globalThis));
+    const serverFetch = createServerFetch(config, globalThis.fetch.bind(globalThis));
     return createClient(config.url, config.serviceRoleKey, {
         auth: {
             persistSession: false,
             autoRefreshToken: false,
         },
         global: {
-            fetch: deadlineFetch,
+            fetch: serverFetch,
         },
     }) as unknown as SupabaseAdminClientLike;
 }
