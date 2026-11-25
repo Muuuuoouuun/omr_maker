@@ -551,6 +551,12 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
     const visibleShareUrl = accessType === "group"
         ? inviteCapability === "copyable_here" ? inviteRawUrlState?.url || null : null
         : isGroupInviteShareUrl(shareUrl) ? null : shareUrl;
+    const studentEntryGuide = accessType === "public"
+        ? "공개 시험입니다. 링크를 열어 학생 계정으로 응시하거나 게스트로 입장하세요."
+            + (pin ? " 시험 PIN은 선생님께 따로 확인하세요." : "")
+        : accessType === "group"
+            ? "초대받은 반의 학생만 응시할 수 있습니다. 링크를 열어 본인 학생 계정으로 입장하세요. 로그인 화면이 나오면 이름과 반을 확인하고 학생번호 또는 명단 이메일과 시작 코드를 입력하세요. 처음이라면 선생님께 학생번호와 시작 코드를 받아 주세요."
+            : "배정받은 학생 계정으로 로그인하고 시험 목록에서 이 시험을 여세요.";
 
     if (!isOpen) return null;
 
@@ -781,7 +787,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
             copyResetTimerRef.current = undefined;
         }
         try {
-            const message = `[OMR 시험 응시 안내]\n선생님이 배포한 시험에 접속하여 응시해주세요.\n👉 응시 링크: ${visibleShareUrl}`;
+            const message = `[OMR 시험 응시 안내]\n${studentEntryGuide}\n응시 링크: ${visibleShareUrl}`;
             await navigator.clipboard.writeText(message);
             if (!operationIsCurrent(operation)) return;
             setCopyStatus("안내 문구 복사됨");
@@ -1639,7 +1645,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAss
                             )}
 
                             <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, marginBottom: '1.25rem', wordBreak: 'keep-all' }}>
-                                설치 앱 또는 웹 브라우저에서 열리는 응시 링크입니다. 학생 앱 로그인이 있으면 학생으로, 없으면 확인 화면에서 게스트로 입장합니다.
+                                {studentEntryGuide}
                             </p>
 
                             {examId && (

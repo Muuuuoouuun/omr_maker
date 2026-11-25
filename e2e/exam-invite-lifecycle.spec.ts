@@ -199,6 +199,7 @@ test("group invite lifecycle stays honest across reopen, refresh, rotation, and 
     await expect(modal.getByRole("button", { name: "링크 복사" })).toBeVisible();
     const oldUrl = (await modal.getByTestId("distribution-share-url").textContent())?.trim() || "";
     expect(oldUrl).toContain(`/solve/${EXAM_A}#invite=`);
+    await expect(modal.getByText(/^초대받은 반의 학생만/)).toContainText("학생번호 또는 명단 이메일과 시작 코드");
 
     await modal.getByRole("button", { name: "닫기" }).click();
     phase = "reopen-a";

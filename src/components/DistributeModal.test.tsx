@@ -143,6 +143,41 @@ beforeEach(() => {
 });
 
 describe("DistributeModal canonical roster recovery", () => {
+    it.each(["public", "group"] as const)("shows and copies the student entry requirements for a %s link", async accessType => {
+        const url = accessType === "group"
+            ? "https://classroom.example.invalid/solve/exam-existing#invite=synthetic"
+            : "https://classroom.example.invalid/solve/exam-existing";
+        const metadata = {
+            examId: "exam-existing", inviteId: "synthetic-id", targetType: "groups", targetIds: ["fixture-class"],
+            generation: 2, issuedAt: "2026-08-09T01:00:00.000Z", expiresAt: "2099-08-09T02:00:00.000Z", revokedAt: null,
+        };
+        controls.loadRoster.mockReset().mockResolvedValue(readyRoster);
+        controls.loadMetadata.mockResolvedValue({ status: "found", metadata });
+        const modal = existingExam({ type: "group", groupIds: ["fixture-class"] });
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal("navigator", { clipboard: { writeText } });
+        try {
+            render(<DistributeModal {...modal.props}
+                initialAccessConfig={accessType === "group" ? modal.props.initialAccessConfig : { type: "public", pin: "7194" }}
+                initialShareUrl={accessType === "public" ? url : undefined}
+                inviteRawUrlState={accessType === "group" ? { ...metadata, url } : null}
+            />);
+            const guidance = await screen.findByText(accessType === "group" ? /^초대받은 반의 학생만/ : /^공개 시험입니다/);
+            if (accessType === "group") {
+                expect(guidance).toHaveTextContent("학생번호 또는 명단 이메일과 시작 코드");
+                expect(guidance).not.toHaveTextContent("게스트");
+            } else {
+                expect(guidance).toHaveTextContent("게스트로 입장");
+                expect(guidance).toHaveTextContent("시험 PIN은 선생님께 따로 확인");
+                expect(guidance).not.toHaveTextContent("7194");
+            }
+            fireEvent.click(screen.getByRole("button", { name: "안내 문구 복사" }));
+            await waitFor(() => expect(writeText).toHaveBeenCalledWith(`[OMR 시험 응시 안내]\n${guidance.textContent}\n응시 링크: ${url}`));
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
     it("offers the same issued link for manual copying when clipboard access is unavailable", async () => {
         const url = "http://localhost:18893/solve/synthetic-a";
         controls.loadRoster.mockReset().mockResolvedValue(readyRoster);
