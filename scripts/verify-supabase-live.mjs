@@ -490,6 +490,7 @@ async function runSqlMatrix(
     psqlFile("supabase/live-test-assertions.sql");
     psqlFile("supabase/remediation-assertions.sql");
     psqlFile("supabase/roster-snapshot-cas-assertions.sql");
+    psqlFile("supabase/roster-snapshot-timezone-assertions.sql");
     psqlFile("supabase/teacher-notification-summary-assertions.sql");
     psqlFile("supabase/teacher-notification-state-assertions.sql");
     releaseProofReports.push(releaseProofReport(psqlFile("supabase/initial-operations-release-proof-assertions.sql", [], {
