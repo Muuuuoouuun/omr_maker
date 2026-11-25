@@ -2052,8 +2052,11 @@ describe("service UI surface", () => {
         expect(examAnalytics).toContain("[...input.questionResults]");
         expect(examAnalytics).toContain("left.questionNumber - right.questionNumber");
         expect(examAnalytics).not.toContain("new Map(student.questionResults.map");
-        expect(teacherExam).toContain("const gradingResolution = resolveAttemptGrading(exam, attempt)");
-        expect(teacherExam).toContain("const counts = gradingResolution.questionResults.reduce");
+        const teacherSummary = readProjectFile("src/lib/teacherQuestionRoster.ts");
+        expect(teacherExam).toContain("summarizeTeacherAttempt(exam, attempt)");
+        expect(teacherSummary).toContain('grading?.source === "canonical_submission"');
+        expect(teacherSummary).toContain("const rows = canonical?.questionResults ?? []");
+        expect(teacherSummary).toContain("resolveAttemptScore(attempt)");
         expect(studentAnalytics).toContain("const gradingResolution = !requiresCanonicalSnapshot && exam && localRuntime");
         expect(studentAnalytics).toContain("localRuntime.resolveAttemptGrading(exam, attempt)");
         expect(studentAnalytics).toContain("canonicalStudentRowsByAttemptId.get(attempt.id)");
