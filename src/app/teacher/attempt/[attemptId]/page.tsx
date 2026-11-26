@@ -168,6 +168,7 @@ export default function TeacherAttemptPage() {
     const [feedbackViewMode, setFeedbackViewMode] = useState<"student" | "markup" | "combined">("student");
     const [feedbackNotice, setFeedbackNotice] = useState("");
     const [feedbackSaving, setFeedbackSaving] = useState(false);
+    const [printPdfBusy, setPrintPdfBusy] = useState(false);
     const [detailLoadStatus, setDetailLoadStatus] = useState<AttemptDetailLoadStatus>("loading");
     const [detailLoadRequest, setDetailLoadRequest] = useState(0);
     const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({});
@@ -229,6 +230,7 @@ export default function TeacherAttemptPage() {
             setFeedbackViewMode("student");
             setFeedbackNotice("");
             setFeedbackSaving(false);
+            setPrintPdfBusy(false);
             setAnswerDrafts({});
             setSavingAnswerFor(null);
             setCumulativeAttempts([]);
@@ -872,6 +874,32 @@ export default function TeacherAttemptPage() {
             if (activeAttemptIdRef.current === targetAttemptId) setSavingAnswerFor(null);
         }
     };
+    const handleDownloadPrintPdf = async () => {
+        if (!handwritingArchiveEnabled || !attempt || !pdfFile || !drawings || !hasDrawings(drawings) || printPdfBusy
+            || handwritingReadyAttemptIdRef.current !== attempt.id) return;
+        const selectedId = attempt.id;
+        setPrintPdfBusy(true);
+        try {
+            const { buildAnnotatedPdfBlob } = await import("@/lib/annotatedPdfExport");
+            // Only the selected student's stored strokes are used; no teacher markup or other result.
+            const blob = await buildAnnotatedPdfBlob(pdfFile, drawings);
+            if (activeAttemptIdRef.current !== selectedId || handwritingReadyAttemptIdRef.current !== selectedId) return;
+            const safePart = (value: string, fallback: string) => value.replace(/[\\/:*?"<>|]+/g, "_").trim().slice(0, 48) || fallback;
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = safePart(attempt.studentName, "student") + "_" + safePart(attempt.examTitle, "exam") + "_handwriting-print.pdf";
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+        } catch {
+            if (activeAttemptIdRef.current === selectedId) toast.error("인쇄용 PDF를 만들지 못했습니다", "문제지와 필기를 불러온 뒤 다시 시도해주세요.");
+        } finally {
+            if (activeAttemptIdRef.current === selectedId) setPrintPdfBusy(false);
+        }
+    };
+
     const handleDownloadHandwriting = () => {
         if (!drawings) return;
         const payload = {
@@ -1004,6 +1032,8 @@ export default function TeacherAttemptPage() {
                                 feedbackSaving={feedbackSaving}
                                 onSaveFeedback={saveFeedback}
                                 onDownloadHandwriting={handleDownloadHandwriting}
+                                onDownloadPrintPdf={handleDownloadPrintPdf}
+                                printPdfBusy={printPdfBusy}
                                 onRetry={() => void loadHandwritingResources()}
                             />
                         ) : activeView === "report" ? (

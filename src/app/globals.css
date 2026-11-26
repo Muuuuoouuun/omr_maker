@@ -12704,3 +12704,29 @@ body:has(.create-workspace.is-resizing) {
   .student-analysis-filters { padding: 1rem !important; gap: .65rem !important; }
   .student-analysis-filters select { width: 100%; min-width: 0 !important; flex-basis: 100% !important; }
 }
+
+/* Student PDF zone: the controls stay visible and usable on the dark viewer. */
+.pdf-zone-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 4px 8px;
+  background: #25282b;
+  color: #f8fafc;
+  font-size: .875rem;
+  font-weight: 650;
+}
+.pdf-zone-controls > button {
+  min-width: 44px;
+  min-height: 44px;
+  padding-inline: .55rem;
+  border: 1px solid #64748b;
+  border-radius: 8px;
+  background: #334155;
+  color: #f8fafc;
+  cursor: pointer;
+}
+.pdf-zone-controls > button:hover:not(:disabled) { background: #475569; }
+.pdf-zone-controls > button:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+.pdf-zone-controls > button:disabled { opacity: .55; cursor: not-allowed; }

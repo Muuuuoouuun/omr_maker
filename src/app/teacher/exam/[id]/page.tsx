@@ -679,6 +679,12 @@ export default function ExamDetailPage() {
                                                     )}
                                                 </td>
                                                 <td style={{ padding: '1rem', textAlign: 'right' }}>
+                                                    {attempt.handwritingArchived && (
+                                                        <Link href={buildStudentResultHref(attempt.id, "handwriting")} className="btn btn-secondary"
+                                                            aria-label={(attempt.studentName || '학생') + " 제출 필기"} style={{ minHeight: 44, marginRight: '0.4rem' }}>
+                                                            제출 필기
+                                                        </Link>
+                                                    )}
                                                     <Link
                                                         href={buildStudentResultHref(attempt.id, "answers")}
                                                         className="btn btn-secondary"
@@ -765,6 +771,12 @@ export default function ExamDetailPage() {
                                                     <StatusPill tone="muted" size="sm" label="이탈 0회" />
                                                 )}
                                             </div>
+                                            {attempt.handwritingArchived && (
+                                                <Link href={buildStudentResultHref(attempt.id, "handwriting")}
+                                                    className="btn btn-secondary teacher-exam-mobile-result-link" aria-label={studentName + " 제출 필기"}>
+                                                    제출 필기
+                                                </Link>
+                                            )}
                                             <Link
                                                 href={buildStudentResultHref(attempt.id, "answers")}
                                                 className="btn btn-secondary teacher-exam-mobile-result-link"

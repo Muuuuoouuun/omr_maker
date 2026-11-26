@@ -1411,3 +1411,106 @@ test.describe("Global Search", () => {
         await expect(page).toHaveURL(/\/teacher\/billing/);
     });
 });
+
+async function seedTwoInkStudents(page: Page) {
+    const dataURL = "data:application/pdf;base64," + (await (await import("node:fs/promises")).readFile(
+        path.join(process.cwd(), "e2e/fixtures/sample-problem-2pages.pdf"),
+    )).toString("base64");
+    await page.addInitScript(({pdf})=>{
+        const exam = {id:"ink-two-qa", title:"Ink separation QA", organizationId:"default", createdByUserId:"fixture-teacher-owner",
+            createdAt:"2026-11-26T00:00:00.000Z", updatedAt:"2026-11-26T00:00:00.000Z", durationMin:30,
+            accessConfig:{type:"public"}, pdfData:pdf, questions:[{id:1,number:1,answer:2,score:10,choices:5,label:"Q1"}]};
+        const attempts = [{n:"A", x:.22, color:"#ef4444"},{n:"B",x:.69,color:"#2563eb"},{n:"C",x:0,color:""}].map(({n,x,color})=>({
+            id:"ink-attempt-"+n, studentName:"Fixture Student "+n,studentId:"ink-student-"+n,studentProfileId:"ink-student-"+n,
+            examId:exam.id,examTitle:exam.title,organizationId:"default",createdByUserId:"fixture-teacher-owner",groupId:"ink-class",
+            groupName:"Synthetic QA",startedAt:"2026-11-26T00:01:00.000Z",finishedAt:"2026-11-26T00:08:00.000Z",
+            score:10,totalScore:10,answers:{1:2},status:"completed",
+            handwritingArchived:n!=="C",handwritingPlan:"pro",drawingPageCount:n==="C"?0:1,drawingStrokeCount:n==="B"?3:n==="C"?0:1,
+            drawings:n==="C"?undefined:n==="A"?{1:[JSON.stringify({mode:"pen",color,width:8,points:[{x,y:.23},{x:x+.07,y:.26},{x:x+.05,y:.17},{x,y:.23}]})]}:
+                {2:[0,.03,.06].map(spacing=>JSON.stringify({mode:"pen",color,width:8,points:[{x,y:.23+spacing},{x:x+.06,y:.23+spacing}]}))},
+            handwriting:n==="C"?undefined:{schemaVersion:1,status:"saved",plan:"pro",summary:{pageCount:1,strokeCount:n==="B"?3:1,questionCount:0},questions:{}},
+        }));
+        localStorage.setItem("omr_exam_"+exam.id,JSON.stringify(exam));
+        localStorage.setItem("omr_attempts",JSON.stringify(attempts));
+    },{pdf:dataURL});
+}
+
+test("archived PDF ink and downloaded originals are separate per student", async({page,baseURL})=>{
+    await authenticateTeacher(page,baseURL);
+    await seedTwoInkStudents(page);
+    await page.goto("/teacher/exam/ink-two-qa");
+    const coverage = async () => page.getByTestId("pdf-draw-overlay").evaluate(el=>{
+        const c=el as HTMLCanvasElement;
+        const ctx=c.getContext("2d")!;
+        const vals=[.22,.69].map(x=>Array.from(ctx.getImageData(Math.round(x*c.width),Math.round(.23*c.height),1,1).data));
+        return vals;
+    });
+    for(const [i,n,other] of [[0,"A","B"],[1,"B","A"]] as const){
+        const row=page.getByRole("row").filter({hasText:"Fixture Student "+n});
+        await row.getByRole("link",{name:"Fixture Student "+n+" 제출 필기"}).click();
+        await expect(page).toHaveURL(new RegExp("/teacher/attempt/ink-attempt-"+n));
+        await expect(page.getByRole("tab",{name:"필기",exact:true})).toHaveAttribute("aria-selected","true");
+        if(n==="B") {
+            await expect(page.getByTestId("pdf-draw-overlay")).toHaveAttribute("data-pdf-ready","true");
+            expect((await coverage())[0][3]).toBe(0);
+            expect((await coverage())[1][3]).toBe(0);
+            await page.getByRole("button",{name:"다음 페이지",exact:true}).click();
+        }
+        await expect(page.getByTestId("pdf-draw-overlay")).toHaveAttribute("data-pdf-ready","true");
+        await expect.poll(async()=>(await coverage())[i][3]).toBeGreaterThan(0);
+        expect((await coverage())[1-i][3]).toBe(0);
+        const event=page.waitForEvent("download");
+        await page.getByRole("button",{name:"필기 원본 파일 저장"}).click();
+        const download=await event;
+        expect(download.suggestedFilename()).toMatch(/_handwriting\.json$/);
+        const file = test.info().outputPath(download.suggestedFilename());
+        await download.saveAs(file);
+        const bytes=await (await import("node:fs/promises")).readFile(file,"utf8");
+        const decoded=JSON.parse(bytes);
+        expect(decoded.attemptId).toBe("ink-attempt-"+n);
+        expect(decoded.studentName).toBe("Fixture Student "+n);
+        expect(JSON.parse(decoded.drawings[i+1][0]).color).toBe(i===0?"#ef4444":"#2563eb");
+        expect(bytes).not.toContain("Fixture Student "+other);
+        const pdfEvent=page.waitForEvent("download");
+        await page.getByRole("button",{name:"필기 인쇄용 PDF 저장"}).click();
+        const pdfDownload=await pdfEvent;
+        expect(pdfDownload.suggestedFilename()).toMatch(new RegExp("Fixture Student "+n+".*_handwriting-print\\.pdf$"));
+        const pdfPath=test.info().outputPath(pdfDownload.suggestedFilename());
+        await pdfDownload.saveAs(pdfPath);
+        const pdf=await (await import("node:fs/promises")).readFile(pdfPath);
+        expect(pdf.subarray(0,4).toString()).toBe("%PDF");
+        const asLatin=pdf.toString("latin1");
+        const imagePatterns=[...asLatin.matchAll(/\/Subtype \/Image[^>]*\/Length (\d+) >>\nstream\n/g)];
+        expect(imagePatterns).toHaveLength(2);
+        const tested=await page.evaluate(async pages => {
+            return Promise.all(pages.map(async encoded=>{
+                const b=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));
+                const bitmap=await createImageBitmap(new Blob([b],{type:"image/jpeg"}));
+                const cv=document.createElement("canvas");cv.width=bitmap.width;cv.height=bitmap.height;
+                const ctx=cv.getContext("2d")!;ctx.drawImage(bitmap,0,0);
+                const measure=(x:number,y:number)=>{
+                    const colors=ctx.getImageData(Math.round(cv.width*x)-3,Math.round(cv.height*y)-3,7,7).data;
+                    let red=0,blue=0;
+                    for(let k=0;k<colors.length;k+=4){
+                        if(colors[k]>colors[k+2]+40&&colors[k]>colors[k+1]+40)red++;
+                        if(colors[k+2]>colors[k]+40&&colors[k+2]>colors[k+1]+35)blue++;
+                    }return {red,blue};
+                };
+                return {a:measure(.22,.23),b:[.23,.26,.29].map(y=>measure(.69,y))};
+            }));
+        },imagePatterns.map(match=>pdf.subarray(match.index!+match[0].length,match.index!+match[0].length+Number(match[1])).toString("base64")));
+        expect(tested[0].a.red>0).toBe(n==="A");
+        expect(tested[1].a.red).toBe(0);
+        expect(tested[0].b.every(v=>v.blue===0)).toBe(true);
+        expect(tested[1].b.every(v=>n==="B"?v.blue>0:v.blue===0)).toBe(true);
+        console.log("Scoped print PDF pixel results", n, JSON.stringify(tested));
+        await page.goto("/teacher/exam/ink-two-qa");
+    }
+    const c=page.getByRole("row").filter({hasText:"Fixture Student C"});
+    await expect(c.getByRole("link",{name:"Fixture Student C 제출 필기"})).toHaveCount(0);
+    await c.getByRole("link",{name:"Fixture Student C 결과 보기"}).click();
+    await page.getByRole("tab",{name:"필기",exact:true}).click();
+    await expect(page.getByText("저장된 필기가 없습니다",{exact:true})).toBeVisible();
+    await expect(page.getByRole("button",{name:"필기 원본 파일 저장"})).toHaveCount(0);
+    await expect(page.getByRole("button",{name:"필기 인쇄용 PDF 저장"})).toHaveCount(0);
+});

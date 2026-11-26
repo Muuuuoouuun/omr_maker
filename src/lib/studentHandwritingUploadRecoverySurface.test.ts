@@ -31,6 +31,10 @@ describe("student handwriting upload recovery surface", () => {
         const actionStart = action.indexOf("export async function uploadStudentAttemptHandwriting(input:");
         const actionBody = action.slice(actionStart, action.indexOf("): Promise<", actionStart));
         expect(actionBody).not.toContain("ticket:");
+        const implementation = action.slice(actionStart);
+        expect(implementation).toContain("resolveAuthorizedStudentSessionCookie(");
+        expect(implementation).toContain("ownerStudentId: ownerStudentId(identity)");
+        expect(implementation).not.toContain('.from("omr_attempt_sessions")');
     });
 
     it("exposes explicit pending, waiting, uploading, success, and failure states", () => {

@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { Download, PenLine, Send } from "lucide-react";
+import { Download, PenLine, Printer, Send } from "lucide-react";
 import type { Attempt, AttemptFeedback, FeedbackDownloadPolicy, PdfDrawings } from "@/types/omr";
 import { mergePdfDrawings } from "@/lib/feedbackPersistence";
 import { formatKoreanDateTime } from "@/lib/pure";
@@ -36,6 +36,8 @@ interface HandwritingPanelProps {
     feedbackSaving: boolean;
     onSaveFeedback(returnAfterSave: boolean): Promise<void>;
     onDownloadHandwriting(): void;
+    onDownloadPrintPdf(): Promise<void>;
+    printPdfBusy: boolean;
     onRetry(): void;
 }
 
@@ -100,6 +102,8 @@ export default function HandwritingPanel({
     feedbackSaving,
     onSaveFeedback,
     onDownloadHandwriting,
+    onDownloadPrintPdf,
+    printPdfBusy,
     onRetry,
 }: HandwritingPanelProps) {
     const feedbackReturned = feedback?.status === "returned";
@@ -139,9 +143,19 @@ export default function HandwritingPanel({
                         </div>
                     )}
                     {hasStudentDrawings && handwritingArchiveEnabled && (
-                        <button type="button" onClick={onDownloadHandwriting} className="btn btn-secondary" style={{ width: "100%", marginTop: "0.9rem", justifyContent: "center" }}>
-                            <Download size={14} aria-hidden="true" /> 필기 원본 파일 저장
-                        </button>
+                        <div className={styles.panelStack} style={{ marginTop: "0.9rem" }}>
+                            {pdfFile && handwritingStatus === 'ready' && (
+                                <button type="button" className="btn btn-primary" disabled={printPdfBusy}
+                                    aria-busy={printPdfBusy} style={{ minHeight: 44, justifyContent: "center" }}
+                                    onClick={() => void onDownloadPrintPdf()}>
+                                    <Printer size={16} aria-hidden="true" />
+                                    {printPdfBusy ? "PDF 만드는 중…" : "필기 인쇄용 PDF 저장"}
+                                </button>
+                            )}
+                            <button type="button" onClick={onDownloadHandwriting} className="btn btn-secondary" style={{ minHeight: 44, justifyContent: "center" }}>
+                                <Download size={14} aria-hidden="true" /> 필기 원본 파일 저장
+                            </button>
+                        </div>
                     )}
                     </section>
                 ) : (

@@ -4642,6 +4642,7 @@ export default function SolvePage() {
                                 onRenderError={() => setFailedPdfFile(viewerPdfFile)}
                                 onFileDrop={activeTab === 'problem' ? handleStudentPdfUpload : setAnswerFile}
                                 enableDrawing={activeTab === 'problem'}
+                                allowWritingZone={!isTeacherMode && activeTab === 'problem'}
                                 emptyStateAudience={isTeacherMode ? "editor" : "student"}
                                 drawings={drawings}
                                 onDrawingsChange={handleDrawingsChange}

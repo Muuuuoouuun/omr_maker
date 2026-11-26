@@ -7,6 +7,8 @@ import {
 
 function mockGateway(options: {
     attachFailures?: number;
+    uploadFailures?: number;
+    denyPrepare?: boolean;
     prepareResponseLosses?: number;
     attachResult?: unknown;
     attachResponseLossAfterCommit?: boolean;
@@ -15,6 +17,7 @@ function mockGateway(options: {
     const preparedAssetIds: string[] = [];
     const uploadedPaths = new Set<string>();
     let attached = false;
+    let uploadFailures = options.uploadFailures || 0;
     let attachFailures = options.attachFailures || 0;
     let prepareResponseLosses = options.prepareResponseLosses || 0;
     let attachResponseLossAfterCommit = options.attachResponseLossAfterCommit === true;
@@ -36,6 +39,10 @@ function mockGateway(options: {
                 return {
                     async upload(path: string) {
                         calls.push("upload");
+                        if (uploadFailures > 0) {
+                            uploadFailures -= 1;
+                            return { data: null, error: { message: "temporary storage failure" } };
+                        }
                         if (uploadedPaths.has(path)) return { data: null, error: { message: "already exists" } };
                         uploadedPaths.add(path);
                         return { data: {}, error: null };
@@ -55,6 +62,7 @@ function mockGateway(options: {
             if (name === "omr_prepare_attempt_handwriting_asset_v2") {
                 expect(params?.p_organization_id).toBe("org-1");
                 expect(params?.p_owner_student_id).toBe("student-1");
+                if (options.denyPrepare) return { data: null, error: { message: "submitted attempt session not found" } };
                 const candidate = params?.p_asset as Record<string, unknown>;
                 preparedAssetIds.push(String(candidate.id));
                 reservedAsset ||= {
@@ -81,6 +89,7 @@ function mockGateway(options: {
                 expect(params?.p_session_id).toBe("session-1");
                 expect(params?.p_organization_id).toBe("org-1");
                 expect(params?.p_owner_student_id).toBe("student-1");
+                expect(params?.p_ticket_id).toBe("ticket-1");
                 expect(params).not.toHaveProperty("p_ref");
                 if (attachFailures > 0) {
                     attachFailures -= 1;
@@ -123,13 +132,38 @@ const input = {
     sessionId: "session-1",
     organizationId: "org-1",
     ownerStudentId: "student-1",
-    attemptId: "attempt-1",
-    attachmentTicketId: "ticket-1",
+    attemptId: "attempt_ticket-1",
     body: new TextEncoder().encode("{}"),
     originalName: "handwriting.json",
 };
 
 describe("durable attempt handwriting archive gateway", () => {
+    it("does not upload when the database rejects the owned submitted session", async () => {
+        const { client, calls } = mockGateway({ denyPrepare: true });
+        await expect(archiveStudentAttemptHandwritingWithGateway(client, input))
+            .resolves.toEqual({ status: "service_unavailable" });
+        expect(calls).toEqual(["omr_prepare_attempt_handwriting_asset_v2"]);
+    });
+
+    it("rejects noncanonical attempt IDs before any side effect", async () => {
+        const { client, calls } = mockGateway();
+        for (const attemptId of ["attempt_", "attempt-ticket-1", "attempt_ticket-1 "]) {
+            await expect(archiveStudentAttemptHandwritingWithGateway(client, { ...input, attemptId }))
+                .resolves.toEqual({ status: "invalid_asset" });
+        }
+        expect(calls).toHaveLength(0);
+    });
+
+    it("retries storage failure with a fresh reservation and attaches once", async () => {
+        const { client, calls, preparedAssetIds } = mockGateway({ uploadFailures: 1 });
+        await expect(archiveStudentAttemptHandwritingWithGateway(client, input))
+            .resolves.toEqual({ status: "service_unavailable" });
+        await expect(archiveStudentAttemptHandwritingWithGateway(client, input))
+            .resolves.toMatchObject({ status: "uploaded" });
+        expect(new Set(preparedAssetIds).size).toBe(2);
+        expect(calls.filter(call => call === "omr_attach_attempt_handwriting_v2")).toHaveLength(1);
+    });
+
     it("uses a nonce generation so re-uploading identical bytes cannot reuse a late-delete path", async () => {
         const { client, preparedAssetIds } = mockGateway({ attachFailures: 1 });
 
@@ -186,14 +220,14 @@ describe("durable attempt handwriting archive gateway", () => {
         const getter = vi.fn(() => "remote");
         const hostileRef = Object.defineProperty({
             key: "x", organizationId: "org-1", kind: "attempt_handwriting",
-            attemptId: "attempt-1", name: "handwriting.json", mimeType: "application/json",
+            attemptId: "attempt_ticket-1", name: "handwriting.json", mimeType: "application/json",
             size: 2, updatedAt: "2026-08-06T00:00:00.000000Z",
         }, "store", { enumerable: true, get: getter });
         for (const attachResult of [
             [{ drawingsRef: {} }],
             { drawingsRef: {
                 store: "remote", key: "x", organizationId: "org-1", kind: "attempt_handwriting",
-                attemptId: "attempt-1", name: "handwriting.json", mimeType: "application/json",
+                attemptId: "attempt_ticket-1", name: "handwriting.json", mimeType: "application/json",
                 size: 2, updatedAt: "2026-08-06T00:00:00.000000Z", extra: true,
             } },
             { drawingsRef: hostileRef },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo, useId, useSyncExternalStore } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId, useSyncExternalStore } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, type PdfDrawings } from '@/types/omr';
 import { toast } from '@/components/Toast';
@@ -78,6 +78,7 @@ interface PDFViewerProps {
     onRenderError?: (error: Error) => void;
     onPageClick?: (page: number, x: number, y: number) => void;
     onFileDrop?: (file: File) => void;
+    allowWritingZone?: boolean;
     // Drawing Props
     enableDrawing?: boolean;
     readOnlyDrawings?: boolean;
@@ -107,6 +108,15 @@ const PDF_EMPTY_STATE_COPY: Record<PdfEmptyStateAudience, { title: string; hint:
         dropError: "문제지는 PDF 파일만 열 수 있어요.",
     },
 };
+
+type WritingZone = { page: number; left: number; top: number; right: number; bottom: number };
+const zoneRect = (page: number, start: { x: number; y: number }, end: { x: number; y: number }): WritingZone => ({
+    page, left: Math.min(start.x, end.x), top: Math.min(start.y, end.y),
+    right: Math.max(start.x, end.x), bottom: Math.max(start.y, end.y),
+});
+const clampPagePoint = (value: number) => Math.min(1, Math.max(0, value));
+const containsZonePoint = (zone: WritingZone, point: { x: number; y: number }) =>
+    point.x >= zone.left && point.x <= zone.right && point.y >= zone.top && point.y <= zone.bottom;
 
 type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
 
@@ -200,6 +210,7 @@ export default function PDFViewer({
     onPageClick,
     onFileDrop,
     enableDrawing = false,
+    allowWritingZone = false,
     readOnlyDrawings = false,
     drawings = {},
     onDrawingsChange,
@@ -213,6 +224,18 @@ export default function PDFViewer({
     const [pageNumber, setPageNumber] = useState<number>(1);
     const [inputPage, setInputPage] = useState<string>("1");
     const [scale, setScale] = useState<number>(1.0);
+    const zoomAnchorRef = useRef<{ page: number; x: number; y: number; targetScale: number } | null>(null);
+    const [redrawVersion, setRedrawVersion] = useState(0);
+    const paintFrameRef = useRef<number | null>(null);
+    const [writingZone, setWritingZone] = useState<WritingZone | null>(null);
+    const [zoneDraft, setZoneDraft] = useState<WritingZone | null>(null);
+    const [zoneSelecting, setZoneSelecting] = useState(false);
+    const [zoneScale, setZoneScale] = useState(1);
+    const zonePointerRef = useRef<{ pointer: number; page: number; start: { x: number; y: number } } | null>(null);
+    const zoneOriginRef = useRef<{ left: number; top: number } | null>(null);
+    const pendingZoneRestoreRef = useRef<{ left: number; top: number } | null>(null);
+    const activeZone = allowWritingZone && writingZone?.page === pageNumber ? writingZone : null;
+    const effectiveScale = activeZone ? zoneScale : scale;
     const [isDragging, setIsDragging] = useState(false);
 
     // Drawing State
@@ -246,6 +269,7 @@ export default function PDFViewer({
     // so drawing never forces a synchronous layout/reflow mid-stroke.
     const activeStrokeRectRef = useRef<DOMRect | null>(null);
     const activePointerIdRef = useRef<number | null>(null);
+    const activeStrokePageRef = useRef<number | null>(null);
     // Pointer type of the in-flight stroke. Read at stroke END so the
     // click→pen toolbar switch never re-renders (and re-evaluates the canvas's
     // touch-action) in the middle of the first pen stroke — that mid-stroke
@@ -289,6 +313,9 @@ export default function PDFViewer({
     const [displayedPage, setDisplayedPage] = useState(pageNumber);
     if (navigationSource.file !== file) {
         setNavigationSource({ file, forcePage, focusTarget, numPages: 0 });
+        setWritingZone(null);
+        setZoneSelecting(false);
+        setZoneDraft(null);
         setNumPages(0);
         setPageNumber(1);
         setInputPage("1");
@@ -310,15 +337,17 @@ export default function PDFViewer({
         // Adjust only this component before commit, keeping the input DOM and
         // drawing canvases mounted while dropping page-specific popup state.
         setDisplayedPage(pageNumber);
+        setZoneSelecting(false);
+        setZoneDraft(null);
         setInputPage(String(pageNumber));
         setActivePopupKey(null);
     }
     const currentPdfRenderIdentity = useMemo<PdfRenderIdentity>(() => ({
         file,
         pageNumber,
-        scale,
+        scale: effectiveScale,
         containerWidth,
-    }), [file, pageNumber, scale, containerWidth]);
+    }), [file, pageNumber, effectiveScale, containerWidth]);
     const [pdfRenderState, setPdfRenderState] = useState(
         () => createPdfRenderReadinessState(currentPdfRenderIdentity),
     );
@@ -478,6 +507,83 @@ export default function PDFViewer({
             backingCanvas?.width ?? 0,
             backingCanvas?.height ?? 0,
         ));
+    };
+
+    // Keep the PDF point beneath the viewport center in place while the backing
+    // canvas is resized. At the edges, native scroll limits take precedence.
+    const changeZoom = (delta: number) => {
+        if (isDrawingRef.current) return;
+        const targetScale = Math.max(0.5, Math.min(3, Math.round((scale + delta) * 100) / 100));
+        if (targetScale === scale) return;
+        const pane = wrapperRef.current;
+        const page = containerRef.current;
+        if (pane && page) {
+            const view = pane.getBoundingClientRect();
+            const rect = page.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+                const previous = zoomAnchorRef.current;
+                zoomAnchorRef.current = {
+                    page: pageNumber,
+                    x: previous?.page === pageNumber ? previous.x : (view.left + pane.clientWidth / 2 - rect.left) / rect.width,
+                    y: previous?.page === pageNumber ? previous.y : (view.top + pane.clientHeight / 2 - rect.top) / rect.height,
+                    targetScale,
+                };
+            }
+        }
+        setScale(targetScale);
+    };
+
+    useLayoutEffect(() => {
+        const pane = wrapperRef.current;
+        const restored = pendingZoneRestoreRef.current;
+        if (!activeZone && pdfRenderReady && restored && pane) {
+            pane.scrollLeft = restored.left;
+            pane.scrollTop = restored.top;
+            pendingZoneRestoreRef.current = null;
+        }
+        const anchor = zoomAnchorRef.current;
+        if (!anchor) return;
+        if (anchor.page !== pageNumber) {
+            zoomAnchorRef.current = null;
+            return;
+        }
+        if (!pdfRenderReady || effectiveScale !== anchor.targetScale) return;
+        const page = containerRef.current;
+        if (!pane || !page) return;
+        const view = pane.getBoundingClientRect();
+        const rect = page.getBoundingClientRect();
+        pane.scrollLeft += rect.left + anchor.x * rect.width - (view.left + pane.clientWidth / 2);
+        pane.scrollTop += rect.top + anchor.y * rect.height - (view.top + pane.clientHeight / 2);
+        zoomAnchorRef.current = null;
+    }, [pageNumber, pdfRenderReady, effectiveScale, activeZone]);
+
+    const setFocusedZoneScale = (zone: WritingZone, targetScale: number) => {
+        zoomAnchorRef.current = {
+            page: zone.page, x: (zone.left + zone.right) / 2, y: (zone.top + zone.bottom) / 2, targetScale,
+        };
+        setZoneScale(targetScale);
+    };
+
+    const beginZone = (zone: WritingZone) => {
+        const pane = wrapperRef.current;
+        if (pane) zoneOriginRef.current = { left: pane.scrollLeft, top: pane.scrollTop };
+        setWritingZone(zone);
+        setZoneSelecting(false);
+        setZoneDraft(null);
+        setDrawingMode('pen');
+        setEraserMode('stroke');
+        setFocusedZoneScale(zone, Math.min(3, Math.max(1.6, scale + 0.4)));
+    };
+
+    const closeZone = () => {
+        if (isDrawingRef.current) return;
+        pendingZoneRestoreRef.current = activeZone ? zoneOriginRef.current : null;
+        zoneOriginRef.current = null;
+        zonePointerRef.current = null;
+        zoomAnchorRef.current = null;
+        setWritingZone(null);
+        setZoneSelecting(false);
+        setZoneDraft(null);
     };
 
     const handlePageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -645,7 +751,9 @@ export default function PDFViewer({
         }
 
         // Draw saved paths
-        const paths = drawings[pageNumber] || [];
+        const strokeErasePreview = isDrawingRef.current && activeStrokePageRef.current === pageNumber && activeDrawingModeRef.current === 'eraser'
+            && activeEraserModeRef.current === 'stroke' ? eraseDragStrokesRef.current : null;
+        const paths = strokeErasePreview ? strokeErasePreview.map(entry => entry.raw) : drawings[pageNumber] || [];
         paths.forEach(pathStr => {
             const pathData = parseStoredDrawingPath(pathStr);
             if (!pathData) return;
@@ -663,7 +771,7 @@ export default function PDFViewer({
         // else re-triggers this effect when the parent doesn't re-render — a
         // read-only review could otherwise keep a default-sized, blank overlay
         // and never paint the stored handwriting.
-    }, [pageNumber, drawings, shouldRenderDrawingLayer, scale, file, eraserWidth, highlighterWidth, drawSmoothPath, pageRenderVersion, containerWidth]); // Re-render on these changes
+    }, [pageNumber, drawings, shouldRenderDrawingLayer, effectiveScale, file, eraserWidth, highlighterWidth, drawSmoothPath, pageRenderVersion, containerWidth, redrawVersion]); // Re-render on these changes
 
     const handleUndo = useCallback(() => {
         if (!canEditDrawing || !onDrawingsChange) return;
@@ -803,7 +911,7 @@ export default function PDFViewer({
         let removed = false;
         for (const entry of entries) {
             let hit = false;
-            if (entry.pts) {
+            if (entry.pts && (!activeZone || entry.pts.every(point => containsZonePoint(activeZone, point)))) {
                 const pxPts = entry.pts.map(p => ({ x: p.x * rect.width, y: p.y * rect.height }));
                 hit = strokeHitTest(pointerX, pointerY, pxPts, baseRadius + entry.halfWidth);
             }
@@ -814,7 +922,7 @@ export default function PDFViewer({
         if (removed) {
             eraseDragStrokesRef.current = kept;
             strokeEraseChangedRef.current = true;
-            emitDrawingsChange(pageNumber, kept.map(e => e.raw));
+            setRedrawVersion(version => version + 1);
         }
     };
 
@@ -842,11 +950,22 @@ export default function PDFViewer({
     };
 
     const startDrawing = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        if (!shouldHandlePointer(e)) return;
+        if (allowWritingZone && zoneSelecting) {
+            if (zonePointerRef.current || e.button !== 0 || !pdfRenderReady) return;
+            e.preventDefault();
+            const start = getPagePoint(e);
+            zonePointerRef.current = { pointer: e.pointerId, page: pageNumber, start };
+            setZoneDraft(zoneRect(pageNumber, start, start));
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+            return;
+        }
+        if (!pdfRenderReady || isDrawingRef.current || !shouldHandlePointer(e)
+            || (activeZone && !containsZonePoint(activeZone, getPagePoint(e)))) return;
         e.preventDefault();
         setActivePopupKey(null);
         e.currentTarget.setPointerCapture?.(e.pointerId);
         activePointerIdRef.current = e.pointerId;
+        activeStrokePageRef.current = pageNumber;
         activePointerTypeRef.current = e.pointerType;
         activeStrokeRectRef.current = containerRef.current?.getBoundingClientRect() ?? null;
         isDrawingRef.current = true;
@@ -877,7 +996,7 @@ export default function PDFViewer({
     };
 
     const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        if (!isDrawingRef.current || activePointerIdRef.current !== e.pointerId || !canEditDrawing || !canvasRef.current) return;
+        if (!isDrawingRef.current || activePointerIdRef.current !== e.pointerId || activeStrokePageRef.current !== pageNumber || !canEditDrawing || !canvasRef.current) return;
         e.preventDefault();
 
         if (activeDrawingModeRef.current === 'eraser' && activeEraserModeRef.current === 'stroke') {
@@ -933,25 +1052,54 @@ export default function PDFViewer({
             }
         }
 
-        if (!appended) return;
-        if (!isEraser) renderLiveStroke();
+        if (!appended || isEraser || paintFrameRef.current !== null) return;
+        paintFrameRef.current = requestAnimationFrame(() => {
+            paintFrameRef.current = null;
+            if (isDrawingRef.current) renderLiveStroke();
+        });
+    };
+
+    useEffect(() => () => {
+        if (paintFrameRef.current !== null) cancelAnimationFrame(paintFrameRef.current);
+    }, []);
+
+    const discardPaintFrame = () => {
+        if (paintFrameRef.current !== null) {
+            cancelAnimationFrame(paintFrameRef.current);
+            paintFrameRef.current = null;
+        }
     };
 
     const stopDrawing = (e?: React.PointerEvent<HTMLCanvasElement>) => {
+        if (e && zonePointerRef.current?.pointer === e.pointerId) {
+            const selection = zonePointerRef.current;
+            zonePointerRef.current = null;
+            if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+            setZoneDraft(null);
+            const zone = zoneRect(pageNumber, selection.start, getPagePoint(e));
+            if (selection.page === pageNumber && zone.right - zone.left >= 0.035 && zone.bottom - zone.top >= 0.035) beginZone(zone);
+            return;
+        }
         if (!isDrawingRef.current) return;
         if (e && activePointerIdRef.current !== e.pointerId) return;
+        if (activeStrokePageRef.current !== pageNumber) {
+            if (e) cancelDrawing(e);
+            return;
+        }
         e?.preventDefault();
+        discardPaintFrame();
+        isDrawingRef.current = false;
+        activePointerIdRef.current = null;
+        activeStrokePageRef.current = null;
         if (e && e.currentTarget.hasPointerCapture?.(e.pointerId)) {
             e.currentTarget.releasePointerCapture?.(e.pointerId);
         }
-
-        isDrawingRef.current = false;
-        activePointerIdRef.current = null;
         activeStrokeRectRef.current = null;
 
         if (activeDrawingModeRef.current === 'eraser' && activeEraserModeRef.current === 'stroke') {
             if (strokeEraseChangedRef.current && strokeEraseBaselineRef.current) {
                 const baseline = strokeEraseBaselineRef.current;
+                emitDrawingsChange(pageNumber, eraseDragStrokesRef.current?.map(entry => entry.raw) ?? baseline);
                 setUndoStack(prev => ({
                     ...prev,
                     [pageNumber]: [...(prev[pageNumber] || []), baseline],
@@ -1035,6 +1183,27 @@ export default function PDFViewer({
         }
     };
 
+    const cancelDrawing = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (zonePointerRef.current?.pointer === e.pointerId) {
+            zonePointerRef.current = null;
+            setZoneDraft(null);
+            return;
+        }
+        if (activePointerIdRef.current !== e.pointerId) return;
+        discardPaintFrame();
+        activePointerIdRef.current = null;
+        activeStrokePageRef.current = null;
+        isDrawingRef.current = false;
+        activeStrokeRectRef.current = null;
+        currentPathRef.current = [];
+        strokeEraseBaselineRef.current = null;
+        eraseDragStrokesRef.current = null;
+        strokeEraseChangedRef.current = false;
+        if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+        // Both eraser previews and in-flight ink must be repainted from committed paths only.
+        setRedrawVersion(version => version + 1);
+    };
+
     const updateEraserRing = (e: React.PointerEvent<HTMLCanvasElement>) => {
         const ring = eraserRingRef.current;
         if (!ring || !containerRef.current) return;
@@ -1045,6 +1214,10 @@ export default function PDFViewer({
     };
 
     const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (zonePointerRef.current?.pointer === e.pointerId && zonePointerRef.current.page === pageNumber) {
+            setZoneDraft(zoneRect(pageNumber, zonePointerRef.current.start, getPagePoint(e)));
+            return;
+        }
         if (canEditDrawing && drawingMode === 'eraser') updateEraserRing(e);
         draw(e);
     };
@@ -1058,15 +1231,23 @@ export default function PDFViewer({
     };
 
     // Accepts native PointerEvents too (coalesced events carry no React wrapper).
-    const getPos = (e: { clientX: number; clientY: number }) => {
+    const getPagePoint = (e: { clientX: number; clientY: number }) => {
         if (!canvasRef.current) return { x: 0, y: 0 };
         const rect = activeStrokeRectRef.current ?? canvasRef.current.getBoundingClientRect();
         const normalizedX = (e.clientX - rect.left) / rect.width;
         const normalizedY = (e.clientY - rect.top) / rect.height;
         return {
-            x: Math.min(1, Math.max(0, normalizedX)),
-            y: Math.min(1, Math.max(0, normalizedY))
+            x: clampPagePoint(normalizedX),
+            y: clampPagePoint(normalizedY)
         };
+    };
+
+    const getPos = (e: { clientX: number; clientY: number }) => {
+        const point = getPagePoint(e);
+        return activeZone ? {
+            x: Math.min(activeZone.right, Math.max(activeZone.left, point.x)),
+            y: Math.min(activeZone.bottom, Math.max(activeZone.top, point.y)),
+        } : point;
     };
 
     const requestClearPage = () => {
@@ -1141,6 +1322,12 @@ export default function PDFViewer({
     const drawingTools = canEditDrawing ? (
         <div className="pdf-viewer-drawing-tools">
             <div className="pdf-tool-group" role="toolbar" aria-label="PDF 필기 도구">
+            {allowWritingZone && <button type="button" className="pdf-tool-button" title="필기 구역 지정" aria-label="필기 구역 지정"
+                aria-pressed={zoneSelecting} onClick={() => {
+                    if (activeZone || isDrawingRef.current) return;
+                    setZoneSelecting(value => !value);
+                    setDrawingPopoverOpen(false);
+                }} disabled={!!activeZone}>▣</button>}
                 <button
                     type="button"
                     className={`pdf-tool-button ${drawingMode === 'click' ? 'active' : ''}`}
@@ -1201,6 +1388,7 @@ export default function PDFViewer({
                             type="button"
                             className="pdf-seg-button"
                             onClick={() => setEraserMode(mode)}
+                                        disabled={!!activeZone && mode === 'pixel'}
                             aria-pressed={eraserMode === mode}
                             aria-label={mode === 'stroke' ? '획 지우기: 닿은 획 전체 삭제' : '부분 지우기'}
                             title={mode === 'stroke' ? '획 지우기 (닿은 획 전체 삭제)' : '부분 지우기'}
@@ -1419,9 +1607,9 @@ export default function PDFViewer({
                             </span>
                             <button type="button" onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} aria-label="다음 페이지" style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>▶</button>
                             <div className="pdf-viewer-controls-divider" aria-hidden="true" style={{ width: '1px', height: '15px', background: '#666', margin: '0 0.5rem' }}></div>
-                            <button type="button" onClick={() => setScale(s => Math.max(0.5, s - 0.1))} aria-label="축소" style={{ color: 'white', cursor: 'pointer' }}>-</button>
+                            <button type="button" onClick={() => changeZoom(-0.1)} disabled={!!activeZone} aria-label="축소" style={{ color: 'white', cursor: 'pointer' }}>-</button>
                             <span className="pdf-zoom-value">{Math.round(scale * 100)}%</span>
-                            <button type="button" onClick={() => setScale(s => Math.min(2.5, s + 0.1))} aria-label="확대" style={{ color: 'white', cursor: 'pointer' }}>+</button>
+                            <button type="button" onClick={() => changeZoom(0.1)} disabled={!!activeZone} aria-label="확대" style={{ color: 'white', cursor: 'pointer' }}>+</button>
                         </div>
 
                         {isCompactToolbar && canEditDrawing && (
@@ -1443,6 +1631,23 @@ export default function PDFViewer({
                     </div>
                 )}
             </div>
+
+            {(zoneSelecting || activeZone) && (
+                <div className="pdf-zone-controls" role="group" aria-label="필기 구역">
+                    {zoneSelecting ? <>
+                        <span role="status">PDF에서 필기할 구역을 드래그하세요.</span>
+                        <button type="button" onClick={() => beginZone(zoneRect(pageNumber, { x: .3, y: .3 }, { x: .7, y: .7 }))}>가운데 구역 지정</button>
+                        <button type="button" onClick={closeZone}>선택 취소</button>
+                    </> : activeZone && <>
+                        <span role="status">구역 {Math.round(zoneScale * 100)}%</span>
+                        <button type="button" disabled={zoneScale <= 1}
+                            aria-label="구역 축소" onClick={() => !isDrawingRef.current && setFocusedZoneScale(activeZone, Math.max(1, Math.round((zoneScale - .2) * 100) / 100))}>−</button>
+                        <button type="button" disabled={zoneScale >= 3}
+                            aria-label="구역 확대" onClick={() => !isDrawingRef.current && setFocusedZoneScale(activeZone, Math.min(3, Math.round((zoneScale + .2) * 100) / 100))}>+</button>
+                        <button type="button" onClick={closeZone}>구역 닫기</button>
+                    </>}
+                </div>
+            )}
 
             {/* Stage = everything below the toolbar. It positions the drawing
                 popover over the page (no layout height of its own, so opening
@@ -1470,11 +1675,11 @@ export default function PDFViewer({
                                 <div
                                     ref={containerRef}
                                     onClick={handlePageClick}
-                                    style={{ position: 'relative', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+                                    style={{ position: 'relative', overflow: 'hidden', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
                                 >
                                     <Page
                                         pageNumber={pageNumber}
-                                        scale={scale}
+                                        scale={effectiveScale}
                                         width={containerWidth > 0 ? containerWidth : undefined}
                                         renderTextLayer={true}
                                         renderAnnotationLayer={false}
@@ -1489,7 +1694,8 @@ export default function PDFViewer({
                                             onPointerDown={startDrawing}
                                             onPointerMove={handleCanvasPointerMove}
                                             onPointerUp={stopDrawing}
-                                            onPointerCancel={stopDrawing}
+                                            onPointerCancel={cancelDrawing}
+                                            onLostPointerCapture={cancelDrawing}
                                             onPointerEnter={handleCanvasPointerEnter}
                                             onPointerLeave={handleCanvasPointerLeave}
                                             style={{
@@ -1499,10 +1705,20 @@ export default function PDFViewer({
                                                 zIndex: 10,
                                                 cursor: canvasCursor,
                                                 pointerEvents: canEditDrawing ? 'auto' : 'none',
-                                                touchAction: fingerDrawingEnabled && drawingMode !== 'click' ? 'none' : 'pan-x pan-y pinch-zoom'
+                                                touchAction: zoneSelecting || (fingerDrawingEnabled && drawingMode !== 'click') ? 'none' : 'pan-x pan-y pinch-zoom'
                                             }}
                                         />
                                     )}
+                                    {(zoneDraft || activeZone) && (() => {
+                                        const zone = zoneDraft ?? activeZone!;
+                                        return <div data-testid="pdf-writing-zone" aria-hidden="true"
+                                            data-zone={JSON.stringify(zone)}
+                                            style={{ position: 'absolute', pointerEvents: 'none', zIndex: 12,
+                                                left: (zone.left * 100) + '%', top: (zone.top * 100) + '%',
+                                                width: ((zone.right - zone.left) * 100) + '%',
+                                                height: ((zone.bottom - zone.top) * 100) + '%', border: '2px dashed #60a5fa',
+                                                boxShadow: activeZone ? '0 0 0 100vmax rgba(15,23,42,.33)' : undefined }} />;
+                                    })()}
                                     {/* Live-stroke overlay: input passes through to the
                                         main canvas below; this layer only displays the
                                         in-progress stroke (see renderLiveStroke). */}

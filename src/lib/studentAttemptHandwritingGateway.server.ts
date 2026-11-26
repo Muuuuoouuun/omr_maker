@@ -113,11 +113,15 @@ export async function archiveStudentAttemptHandwritingWithGateway(
         organizationId: string;
         ownerStudentId: string;
         attemptId: string;
-        attachmentTicketId: string;
         body: Uint8Array;
         originalName?: string;
     },
 ): Promise<StudentAttemptHandwritingArchiveResult> {
+    const prefix = "attempt_";
+    const ticketId = input.attemptId.slice(prefix.length);
+    if (!input.attemptId.startsWith(prefix) || !ticketId || ticketId.trim() !== ticketId) {
+        return { status: "invalid_asset" };
+    }
     const sha256Hex = createHash("sha256").update(input.body).digest("hex");
     const assetId = canonicalAttemptHandwritingAssetId(input.sessionId, randomUUID());
     const objectPath = buildRemoteAssetObjectPath({
@@ -197,7 +201,9 @@ export async function archiveStudentAttemptHandwritingWithGateway(
         p_session_id: input.sessionId,
         p_organization_id: input.organizationId,
         p_owner_student_id: input.ownerStudentId,
-        p_ticket_id: input.attachmentTicketId,
+        // Prepare verified the exact attempt ID above; attach independently
+        // verifies the ticket against both the submitted session and the attempt.
+        p_ticket_id: ticketId,
         p_asset_id: asset.id,
     });
     if (attached.error) {

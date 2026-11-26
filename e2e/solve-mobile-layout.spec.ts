@@ -269,3 +269,183 @@ test.describe("solve layout with the answer sheet open", () => {
         });
     }
 });
+
+test("drawing accepts one pointer and cancellation leaves no mark", async ({ page }) => {
+    await openSolve(page, {width: 1100, height: 800});
+    const canvas = page.getByTestId("pdf-draw-overlay");
+    await expect(canvas).toHaveAttribute("data-pdf-ready", "true");
+    await page.getByRole("button", {name: "펜", exact: true}).click();
+    const point = {x: .21, y: .15};
+    const stroke = async (action: "cancel" | "up") => {
+        const rect = (await canvas.boundingBox())!;
+        const x = rect.x + rect.width * point.x, y = rect.y + rect.height * point.y;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        await page.mouse.move(x + 48, y + 14, {steps: 10});
+        if (action === "cancel") {
+            await canvas.dispatchEvent("pointercancel", {pointerId: 1, pointerType: "mouse", bubbles: true});
+        }
+        await page.mouse.up();
+    };
+    const alpha = () => canvas.evaluate((node, p) => {
+        const c = node as HTMLCanvasElement;
+        return c.getContext("2d")!.getImageData(Math.round(c.width * p.x), Math.round(c.height * p.y),1,1).data[3];
+    }, point);
+    await stroke("cancel");
+    expect(await alpha()).toBe(0);
+    await stroke("up");
+    await expect.poll(alpha).toBeGreaterThan(0);
+    await page.getByRole("button", {name:"실행 취소", exact:true}).click();
+    await expect.poll(alpha).toBe(0);
+    await page.getByRole("button", {name:"다시 실행", exact:true}).click();
+    await expect.poll(alpha).toBeGreaterThan(0);
+    await page.getByRole("button", {name:"지우개", exact:true}).click();
+    await stroke("cancel");
+    await expect.poll(alpha).toBeGreaterThan(0);
+    await stroke("up");
+    await expect.poll(alpha).toBe(0);
+    await page.getByRole("button", {name:"실행 취소", exact:true}).click();
+    await expect.poll(alpha).toBeGreaterThan(0);
+});
+test("PDF zoom retains the panned viewport anchor and handwriting geometry", async ({page}) => {
+    await openSolve(page,{width:1100,height:760});
+    const overlay = page.getByTestId("pdf-draw-overlay");
+    const pane = page.locator(".pdf-viewer-scroll");
+    const plus = page.getByRole("button",{name:"확대",exact:true});
+    for (let i=0;i<6;i++) await plus.click();
+    await expect(overlay).toHaveAttribute("data-pdf-ready", "true");
+    const frame = await pane.boundingBox();
+    expect(frame?.height).toBeGreaterThan(100);
+    await pane.evaluate(el=>{el.scrollTop=240; el.scrollLeft=120});
+    const anchor = () => pane.evaluate(el=>{
+        const view=el.getBoundingClientRect();
+        const doc=el.querySelector('[data-testid="pdf-draw-overlay"]')!.getBoundingClientRect();
+        return {x:(view.left+el.clientWidth/2-doc.left)/doc.width,
+            y:(view.top+el.clientHeight/2-doc.top)/doc.height};
+    });
+    const before=await anchor();
+    await plus.click();
+    await expect(overlay).toHaveAttribute("data-pdf-ready", "true");
+    const after=await anchor();
+    console.log("view anchor normalized", JSON.stringify({before,after}));
+    expect(Math.abs(after.x-before.x)).toBeLessThan(.012);
+    expect(Math.abs(after.y-before.y)).toBeLessThan(.012);
+});
+
+
+test("300% maximum; independent writing-zone zoom and return preserve full-page coordinates", async ({page})=>{
+    await openSolve(page,{width:1100,height:800});
+    const ink=page.getByTestId("pdf-draw-overlay");
+    const pane=page.locator(".pdf-viewer-scroll");
+    const plus=page.getByRole("button",{name:"확대",exact:true});
+    const minus=page.getByRole("button",{name:"축소",exact:true});
+    const percent=page.locator(".pdf-zoom-value");
+    const center=async(x:number,y:number)=>{
+        const bounds=(await ink.boundingBox())!;
+        const view=(await pane.boundingBox())!;
+        await pane.evaluate((el,d)=>{el.scrollLeft+=d.x;el.scrollTop+=d.y},{x:bounds.x+x*bounds.width-view.x-view.width/2,y:bounds.y+y*bounds.height-view.y-view.height/2});
+    };
+    const pos=async(x:number,y:number)=>{
+        const r=(await ink.boundingBox())!;
+        return {x:r.x+x*r.width,y:r.y+y*r.height};
+    };
+    const sample=async(x:number,y:number)=>ink.evaluate((raw,p)=>{
+        const c=raw as HTMLCanvasElement;
+        return c.getContext("2d")!.getImageData(Math.round(c.width*p.x),Math.round(c.height*p.y),1,1).data[3];
+    },{x,y});
+    for(let i=0;i<21;i++) await plus.click();
+    await expect(percent).toHaveText("300%");
+    await expect(ink).toHaveAttribute("data-pdf-ready","true");
+    for(let i=0;i<20;i++) await minus.click();
+    await expect(percent).toHaveText("100%");
+    await expect(ink).toHaveAttribute("data-pdf-ready","true");
+    await center(.45,.24);
+    await page.getByRole("button",{name:"필기 구역 지정",exact:true}).click();
+    await center(.45,.24);
+    const begin=await pos(.32,.18),end=await pos(.57,.30);
+    await page.mouse.move(begin.x,begin.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x,end.y,{steps:5});
+    await page.mouse.up();
+    const region=page.getByTestId("pdf-writing-zone");
+    await expect(region).toBeVisible();
+    const savedZone=await region.getAttribute("data-zone");
+    await expect(percent).toHaveText("100%");
+    for(let i=0;i<4;i++) await page.getByRole("button",{name:"구역 확대",exact:true}).click();
+    await expect(page.getByRole("group",{name:"필기 구역"}).getByRole("status")).toHaveText("구역 240%");
+    for(let i=0;i<3;i++) await page.getByRole("button",{name:"구역 확대",exact:true}).click();
+    await expect(page.getByRole("group",{name:"필기 구역"}).getByRole("status")).toHaveText("구역 300%");
+    await expect(page.getByRole("button",{name:"구역 확대",exact:true})).toBeDisabled();
+    for(let i=0;i<3;i++) await page.getByRole("button",{name:"구역 축소",exact:true}).click();
+    await expect(region).toHaveAttribute("data-zone",savedZone!);
+    await expect(ink).toHaveAttribute("data-pdf-ready","true");
+    await center(.44,.24);
+    const draw=await pos(.44,.24);
+    await page.mouse.move(draw.x,draw.y);
+    await page.mouse.down();
+    await page.mouse.move(draw.x+42,draw.y+22,{steps:11});
+    await page.mouse.up();
+    await expect.poll(()=>sample(.44,.24)).toBeGreaterThan(0);
+    const hitTarget = await page.getByRole("button",{name:"구역 확대",exact:true}).boundingBox();
+    expect(hitTarget?.width).toBeGreaterThanOrEqual(44);
+    expect(hitTarget?.height).toBeGreaterThanOrEqual(44);
+    await page.screenshot({path:test.info().outputPath("student-zone-evidence.png")});
+    const outside=await pos(.30,.24);
+    await page.mouse.click(outside.x,outside.y);
+    expect(await sample(.30,.24)).toBe(0);
+    await page.getByRole("button",{name:"구역 닫기"}).click();
+    await expect(region).toHaveCount(0);
+    await expect(percent).toHaveText("100%");
+    await expect(ink).toHaveAttribute("data-pdf-ready","true");
+    await expect.poll(()=>sample(.44,.24)).toBeGreaterThan(0);
+    await page.waitForFunction(()=>Object.keys(localStorage).some(key=>{
+        try {
+            const d=JSON.parse(localStorage.getItem(key)??"null");
+            return d&&typeof d==="object"&&d.drawingsRef;
+        } catch {
+            return false;
+        }
+    }));
+    await page.getByRole("button",{name:"다음 페이지",exact:true}).click();
+    await expect(ink).toHaveAttribute("data-pdf-ready","true");
+    expect(await sample(.44,.24)).toBe(0);
+    await page.getByRole("button",{name:"이전 페이지",exact:true}).click();
+    await expect(ink).toHaveAttribute("data-pdf-ready","true");
+    await expect.poll(()=>sample(.44,.24)).toBeGreaterThan(0);
+    await page.reload();
+    await continueSolveEntryIfPresent(page);
+    await expect(ink).toHaveAttribute("data-pdf-ready","true",{timeout:15_000});
+    await expect.poll(()=>sample(.44,.24)).toBeGreaterThan(0);
+});
+
+test("coalesces a burst of pointer input to one live-canvas paint and preserves the drawing", async ({page})=>{
+    await openSolve(page,{width:1100,height:800});
+    const ink=page.getByTestId("pdf-draw-overlay");
+    await expect(ink).toHaveAttribute("data-pdf-ready","true");
+    await page.getByRole("button",{name:"펜",exact:true}).click();
+    const r=(await ink.boundingBox())!;
+    const x=r.x+.22*r.width,y=r.y+.16*r.height;
+    await page.mouse.move(x,y);
+    await page.mouse.down();
+    const count=await ink.evaluate(async(el,pt)=>{
+        const contextType=CanvasRenderingContext2D.prototype;
+        const before=contextType.clearRect;
+        let paints=0;
+        contextType.clearRect=function(...args:Parameters<typeof before>){
+            if(this.canvas.dataset.testid==="pdf-draw-live-overlay") paints++;
+            return before.apply(this,args);
+        };
+        try {
+            for(let i=1;i<=120;i++) el.dispatchEvent(new PointerEvent("pointermove",{
+                bubbles:true,cancelable:true,pointerId:1,pointerType:"mouse",buttons:1,
+                clientX:pt.x+i,clientY:pt.y+(i%8),
+            }));
+            await new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r())));
+            return paints;
+        } finally {contextType.clearRect=before;}
+    },{x,y});
+    console.log("120-input burst live canvas paints", count);
+    expect(count).toBe(1);
+    await page.mouse.up();
+    await expect(page.getByRole("button",{name:"실행 취소",exact:true})).toBeEnabled();
+});

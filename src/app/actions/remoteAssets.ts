@@ -206,50 +206,25 @@ export async function uploadStudentAttemptHandwriting(input: {
                     error: { message?: string } | null;
                 }>;
             };
-        let organizationId = "";
-        let exactOwnerStudentId = "";
-        let attachmentTicketId = "";
-        if (input.sessionId) {
-            const cookieStore = await cookies();
-            const validation = await resolveAuthorizedStudentSessionCookie(
-                cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
-                client,
-            );
-            if (validation.status === "service_unavailable") return { status: "service_unavailable" };
-            if (validation.status !== "active" || !validation.identity.organizationId) {
-                return { status: "invalid_ticket" };
-            }
-            const identity = validation.identity;
-            const sessionRead = await client.from("omr_attempt_sessions")
-                .select("organization_id,owner_student_id,status,submission_id,submitted_attempt_id")
-                .eq("id", input.sessionId.trim())
-                .eq("organization_id", identity.organizationId)
-                .eq("owner_student_id", ownerStudentId(identity))
-                .maybeSingle();
-            const session = sessionRead.data as {
-                organization_id?: unknown;
-                status?: unknown;
-                submission_id?: unknown;
-                submitted_attempt_id?: unknown;
-            } | null;
-            if (
-                sessionRead.error || !session
-                || session.status !== "submitted"
-                || session.submitted_attempt_id !== input.attemptId
-                || typeof session.organization_id !== "string"
-                || typeof session.submission_id !== "string"
-            ) return { status: "invalid_ticket" };
-            organizationId = session.organization_id;
-            exactOwnerStudentId = ownerStudentId(identity);
-            attachmentTicketId = session.submission_id;
-        } else return { status: "invalid_ticket" };
+        const sessionId = input.sessionId?.trim();
+        if (!sessionId) return { status: "invalid_ticket" };
+        const cookieStore = await cookies();
+        const validation = await resolveAuthorizedStudentSessionCookie(
+            cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+            client,
+        );
+        if (validation.status === "service_unavailable") return { status: "service_unavailable" };
+        if (validation.status !== "active" || !validation.identity.organizationId) {
+            return { status: "invalid_ticket" };
+        }
+        const identity = validation.identity;
+        // Prepare validates the owned submitted session and exact attempt before upload.
         const body = new TextEncoder().encode(JSON.stringify(input.drawings));
         const archived = await archiveStudentAttemptHandwritingWithGateway(client, {
-            sessionId: input.sessionId,
-            organizationId,
-            ownerStudentId: exactOwnerStudentId,
+            sessionId,
+            organizationId: identity.organizationId,
+            ownerStudentId: ownerStudentId(identity),
             attemptId: input.attemptId,
-            attachmentTicketId,
             body,
             originalName: `${input.attemptId}-handwriting.json`,
         });
