@@ -1,13 +1,20 @@
 .workspace {
-  --analytics-blue: var(--primary);
+  --analytics-blue: #175bd5;
   --analytics-blue-soft: color-mix(in srgb, var(--primary) 9%, var(--surface));
   --analytics-mint: #0f9f84;
   --analytics-mint-soft: color-mix(in srgb, #10b981 11%, var(--surface));
   --analytics-coral: #e84c4f;
   --analytics-coral-soft: color-mix(in srgb, #ef4444 9%, var(--surface));
+  --report-wash: color-mix(in srgb, var(--analytics-blue) 4%, var(--surface));
+  --report-quiet: color-mix(in srgb, var(--foreground) 22%, var(--muted));
+  --report-pad: clamp(1rem, 2.5vw, 1.8rem);
   display: grid;
   gap: 1rem;
   color: var(--foreground);
+}
+
+:global([data-theme="dark"]) :global(.teacher-dashboard-shell:not(.mockup-dashboard-shell)) .workspace {
+  --analytics-blue: #8ab6ff;
 }
 
 .headerPanel,
@@ -32,6 +39,7 @@
   position: relative;
   z-index: 8;
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
 
 .workspace > * {
@@ -40,55 +48,48 @@
 
 .headingRow {
   display: flex;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 1.25rem;
-  padding: 1.25rem 1.35rem 0.95rem;
-}
-
-.headingCopy {
-  min-width: 0;
+  gap: 0.5rem 1rem;
+  padding: var(--report-pad) var(--report-pad) 1rem;
 }
 
 .headingCopy h2 {
+  margin: 0;
   color: var(--foreground);
-  font-size: clamp(1.5rem, 2.2vw, 2rem);
-  font-weight: 900;
+  font-size: clamp(1.65rem, 2.7vw, 2.35rem);
+  font-weight: 850;
   line-height: 1.2;
   letter-spacing: -0.01em;
 }
 
-.headingCopy p {
-  margin-top: 0.35rem;
-  color: var(--muted);
-  font-size: var(--type-body-sm);
-  font-weight: 650;
-  line-height: 1.5;
-  word-break: keep-all;
-}
-
 .scopeNote {
-  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 0.38rem;
-  min-height: 34px;
-  padding: 0.42rem 0.7rem;
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--background);
+  gap: 0.4rem;
+  color: var(--report-quiet);
   font-size: 0.78rem;
-  font-weight: 800;
-  white-space: nowrap;
+  font-weight: 650;
+}
+
+.scopeWarning {
+  margin: 0.5rem var(--report-pad);
+  padding: 0.6rem 0.8rem;
+  color: var(--text-warning);
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+  border-left: 2px solid var(--warning);
+  font-size: var(--type-caption);
+  line-height: 1.55;
+  word-break: keep-all;
 }
 
 .controlRow {
   display: grid;
-  grid-template-columns: minmax(260px, 1.45fr) minmax(170px, 0.55fr) minmax(300px, 1fr);
-  gap: 0.7rem;
+  grid-template-columns: minmax(0, 1.45fr) minmax(9rem, 0.85fr) auto;
+  gap: 0.6rem 1rem;
   align-items: end;
-  padding: 0 1.35rem 1rem;
+  padding: 0 var(--report-pad) 1rem;
 }
 
 .field {
@@ -284,48 +285,44 @@
 
 .examMeta {
   min-height: 46px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 0.7rem;
-  background: var(--background);
+  gap: 0.35rem 0;
 }
 
 .metaItem {
-  min-width: 0;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  padding: 0 0.65rem;
-  color: var(--muted);
+  gap: 0.35rem;
+  padding-inline: 0.65rem;
+  color: var(--report-quiet);
   border-left: 1px solid var(--border);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 650;
   white-space: nowrap;
 }
 
 .metaItem:first-child {
+  padding-left: 0;
   border-left: 0;
 }
 
 .metaItem svg {
   flex: 0 0 auto;
-  color: var(--analytics-blue);
+  color: var(--muted);
 }
 
 .tabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
-  padding: 0 1.35rem;
+  display: flex;
+  padding: 0 var(--report-pad);
   border-top: 1px solid var(--border);
 }
 
 .tab {
   position: relative;
-  min-height: 52px;
+  min-width: 6rem;
+  min-height: 46px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -342,9 +339,9 @@
 .tab::after {
   content: "";
   position: absolute;
-  right: 18%;
-  bottom: -1px;
-  left: 18%;
+  right: 0;
+  bottom: 0;
+  left: 0;
   height: 3px;
   border-radius: 3px 3px 0 0;
   background: transparent;
@@ -875,56 +872,157 @@
 
 .reportOverview {
   display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(17rem, 1fr);
   gap: 1rem;
 }
 
-.reportMetricsSection,
-.reportHeadlineSection,
-.reportEvidenceSection,
-.reportWeakSection,
-.reportActionsSection {
+.reportFocusRow,
+.reportAchievementSection,
+.reportHeadlineSection {
+  grid-column: 1 / -1;
+}
+
+.reportOverview section {
+  padding: var(--report-pad);
+  box-shadow: var(--shadow-sm);
+}
+
+.reportOverview header h2 {
+  color: var(--foreground);
+  font-size: 1.06rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.reportOverview header p {
+  color: var(--report-quiet);
+  font-weight: 500;
+}
+
+.reportFocusRow {
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.8fr) minmax(0, 1.6fr);
+  align-items: start;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.reportOverview .reportMetricsSection {
+  padding: 0;
+  background: transparent;
+  border: 0;
   box-shadow: none;
 }
 
-.reportMetricGrid {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0;
+.reportMetricsSection > header {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.reportMetricsSection > div {
+  margin-block-start: 0;
+}
+
+.reportOverview .reportMetricGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem 0.65rem;
 }
 
 .reportMetricGrid > div {
-  padding: 0.65rem 1rem;
+  padding: 0.1rem 0.75rem;
   border: 0;
-  border-inline-start: 1px solid var(--border);
+  border-inline-start: 2px solid var(--border);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
 
+.reportMetricGrid dt {
+  color: var(--report-quiet);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.reportMetricGrid dd > span:first-child {
+  gap: 0.16rem;
+  font-size: 1.32rem;
+  font-weight: 760;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  word-break: keep-all;
+}
+
+.reportOverview :global(.numeric-emphasis) {
+  animation: none;
+}
+
+.reportMetricGrid dd > span:not(:first-child) {
+  margin-top: 0.3rem;
+}
+
 .reportMetricGrid > div:first-child {
-  border-inline-start: 0;
+  grid-column: 1 / -1;
+  padding: clamp(1rem, 1.6vw, 1.5rem);
+  border: 1px solid color-mix(in srgb, var(--analytics-blue) 15%, var(--border));
+  border-radius: var(--radius-lg);
+  color: var(--analytics-blue);
+  background: color-mix(in srgb, var(--analytics-blue) 9%, var(--surface));
 }
 
-.reportHeadlineSection {
-  border-inline-start-width: 3px;
+.reportMetricGrid > div:first-child dd > span:first-child {
+  font-size: 72px;
+  font-weight: 800;
+  letter-spacing: -0.055em;
+  line-height: 1;
 }
 
-.reportHeadlineAction {
-  border-inline-start-color: var(--grade-red);
+.reportMetricGrid > div:first-child dd > span:first-child > span:last-child {
+  font-size: 1.3rem;
 }
 
-.reportHeadlineObservation {
-  border-inline-start-color: var(--warning);
+.reportMetricGrid > div:last-child {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
 }
 
-.reportHeadlinePositive {
-  border-inline-start-color: var(--success);
+.reportMetricGrid > div:last-child dd > span:first-child {
+  margin: 0;
+  font-size: 1.08rem;
+}
+
+.reportOverview .reportHeadlineSection {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1rem;
+  align-items: baseline;
+  padding-block: 1rem;
+  border-color: color-mix(in srgb, var(--analytics-blue) 17%, var(--border));
+  background: var(--report-wash);
+}
+
+.reportHeadlineSection header h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: var(--analytics-blue);
+  font-size: 0.82rem;
+}
+
+.reportOverview .reportHeadlineSection > div {
+  margin: 0;
 }
 
 .reportHeadlineTitle {
   margin: 0;
   color: var(--foreground);
-  font-size: var(--type-heading-md);
-  font-weight: 850;
+  font-size: clamp(1rem, 1.45vw, 1.2rem);
+  font-weight: 800;
+  letter-spacing: -0.01em;
   line-height: 1.4;
 }
 
@@ -938,156 +1036,308 @@
 }
 
 .reportSampleNote {
+  margin: 0.3rem var(--report-pad) 0.65rem;
   color: var(--text-warning);
   font-size: var(--type-caption);
   font-weight: 800;
 }
 
-.reportEvidenceGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.8fr);
-  gap: 1rem;
-  align-items: start;
+.reportDistributionSection {
   min-width: 0;
+  align-self: stretch;
 }
 
-.distributionBars {
+.reportEvidenceSection header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.75rem;
+}
+
+.reportEvidenceSection header p {
+  grid-row: 2;
+}
+
+.reportEvidenceSection header > div {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+
+.chartToggle {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--report-quiet);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.chartToggle:hover,
+.chartToggle[aria-pressed="true"] {
+  border-color: var(--analytics-blue);
+  color: var(--analytics-blue);
+}
+
+.chartToggle:focus-visible {
+  outline: 2px solid var(--analytics-blue);
+  outline-offset: 2px;
+}
+
+.reportEvidenceSection .distributionFrame {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+
+.distributionPlot {
+  --plot-height: clamp(10rem, 13vw, 13rem);
   width: 100%;
-  min-height: 220px;
   display: grid;
-  grid-template-columns: repeat(10, minmax(28px, 1fr));
-  align-items: end;
-  gap: 0.45rem;
-  margin: 0;
-  padding: 1rem 1rem 0.75rem;
-  list-style: none;
-}
-
-.distributionBars li {
-  min-width: 0;
-  height: 190px;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 0.35rem;
-  align-items: end;
-  text-align: center;
-}
-
-.distributionCount,
-.distributionLabel {
-  color: var(--muted);
-  font-size: var(--type-micro);
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-rows: 2.3rem var(--plot-height) auto auto;
+  gap: 0 0.65rem;
+  align-items: stretch;
   font-variant-numeric: tabular-nums;
 }
 
-.distributionCount {
-  color: var(--foreground);
-  font-weight: 800;
+.distributionUnit,
+.distributionScoreUnit {
+  color: var(--report-quiet);
+  font-size: 0.72rem;
 }
 
-.distributionBar {
-  width: 100%;
-  height: var(--distribution-share);
-  min-height: 2px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  background: var(--primary);
-  transition: height 0.5s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+.distributionUnit {
+  align-self: start;
+  text-align: right;
 }
 
-.distributionItemPeak {
+.meanRail {
   position: relative;
 }
 
-.distributionBarPeak {
-  background: linear-gradient(180deg, #6366f1 0%, #4f46e5 100%);
-  box-shadow: 0 -2px 10px color-mix(in srgb, var(--primary) 35%, transparent);
+.meanLabel {
+  position: absolute;
+  left: clamp(2.4rem, var(--average-position), calc(100% - 2.4rem));
+  top: 0;
+  width: 4.8rem;
+  padding-block: 0.18rem;
+  transform: translateX(-50%);
+  border-radius: 0.32rem;
+  color: var(--analytics-blue);
+  background: color-mix(in srgb, var(--analytics-blue) 9%, var(--surface));
+  font-size: 0.72rem;
+  font-weight: 750;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
 }
 
-.distributionBars li:hover .distributionBar {
-  filter: brightness(1.12);
-  transform: scaleY(1.03);
-  transform-origin: bottom;
+.distributionAxis {
+  position: relative;
+  color: var(--report-quiet);
+  font-size: 0.71rem;
+  line-height: 1;
 }
 
-.distributionCountPeak {
-  color: var(--primary);
-  font-weight: 900;
+/* Reserve the widest tick's natural width while positioning its visible labels. */
+.distributionAxis::before {
+  content: attr(data-maximum);
+  visibility: hidden;
 }
 
-.distributionLabelPeak {
-  color: var(--foreground);
-  font-weight: 800;
+.distributionAxis span {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
 }
 
-.achievementList {
+.distributionField {
+  position: relative;
+  min-width: 0;
+}
+
+.distributionGridline {
+  position: absolute;
+  inset-inline: 0;
+  border-top: 1px solid var(--border);
+}
+
+.meanLine {
+  position: absolute;
+  top: -0.85rem;
+  bottom: 0;
+  left: var(--average-position);
+  border-left: 1px dashed color-mix(in srgb, var(--analytics-blue) 58%, transparent);
+}
+
+.distributionBars,
+.distributionLabels {
   display: grid;
-  gap: 0.75rem;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+
+.distributionBars {
+  position: relative;
+  height: 100%;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.achievementList > li {
-  padding: 0.45rem 0.6rem;
-  border-radius: var(--radius-md);
-  transition: background-color 0.18s ease, transform 0.18s ease;
+.distributionBars li {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 0;
 }
 
-.achievementList > li:hover {
-  background-color: color-mix(in srgb, var(--primary) 4%, transparent);
+.distributionBar {
+  position: relative;
+  width: min(78%, 46px);
+  border-radius: 3px 3px 0 0;
+  background: color-mix(in srgb, var(--analytics-blue) 40%, var(--surface));
+  transition: height 350ms cubic-bezier(0.22, 0.72, 0.24, 1);
 }
 
-.achievementCopy {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 0.75rem;
-  align-items: baseline;
-  color: var(--muted);
-  font-size: var(--type-label);
+.distributionPlot[data-entered] .distributionBar {
+  transition-duration: 450ms;
 }
 
-.achievementCopy strong {
-  color: var(--foreground);
-  font-size: var(--type-heading-sm);
+@starting-style {
+  .distributionPlot:not([data-entered]) .distributionBar {
+    height: 0% !important;
+  }
+}
+
+.distributionBarPeak {
+  background: var(--analytics-blue);
+}
+
+.distributionCount {
+  position: absolute;
+  bottom: calc(100% + 0.18rem);
+  inset-inline: -0.4rem;
+  color: var(--report-quiet);
+  font-size: 0.77rem;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
+.distributionItemPeak .distributionCount {
+  color: var(--analytics-blue);
+}
+
+.distributionLabels {
+  grid-column: 2;
+  padding-top: 0.45rem;
+  color: var(--report-quiet);
+  font-size: 0.69rem;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.distributionLabels > span > span {
+  display: inline-block;
+}
+
+.distributionBoundaryLabels {
+  display: none;
+}
+
+.distributionScoreUnit {
+  grid-column: 2;
+  margin-top: 0.45rem;
+  text-align: right;
+}
+
+.distributionTableAlternate {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.reportEvidenceSection .distributionTable {
+  min-width: 0;
+}
+
+
+.reportAchievementSection header {
+  justify-content: space-between;
 }
 
 .achievementTrack {
-  display: block;
-  height: 0.5rem;
-  margin-top: 0.4rem;
+  display: flex;
+  height: 0.63rem;
   overflow: hidden;
-  border-radius: var(--radius-full);
-  background: var(--background);
+  border-radius: 1rem;
+  background: var(--border);
 }
 
-.achievementFill {
-  display: block;
-  width: var(--achievement-share);
-  height: 100%;
-  border-radius: inherit;
-  background: var(--achievement-gradient, var(--achievement-color));
-  transition: width 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+.achievementTrack > span {
+  flex-basis: 0;
+  background: var(--achievement-color);
 }
 
-.achievementNeutral {
-  --achievement-color: var(--muted);
-  --achievement-gradient: linear-gradient(90deg, #64748b, #475569);
+.achievementList {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0.85rem 0 0;
+  padding: 0;
+  list-style: none;
 }
 
-.achievementSuccess {
-  --achievement-color: var(--success);
-  --achievement-gradient: linear-gradient(90deg, #10b981, #059669);
+.achievementList > li {
+  display: grid;
+  grid-template-columns: 0.55rem minmax(0, 1fr);
+  gap: 0.2rem 0.45rem;
+  align-items: baseline;
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
-.achievementWarning {
-  --achievement-color: var(--warning);
-  --achievement-gradient: linear-gradient(90deg, #f59e0b, #d97706);
+.achievementList > li::before {
+  content: "";
+  align-self: center;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 2px;
+  background: var(--achievement-color);
 }
 
-.achievementGrade {
-  --achievement-color: var(--grade-red);
-  --achievement-gradient: linear-gradient(90deg, #f43f5e, #e11d48);
+.achievementValues {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+  color: var(--report-quiet);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
+
+.achievementValues strong {
+  color: var(--foreground);
+  font-weight: 700;
+}
+
+.achievementNeutral { --achievement-color: color-mix(in srgb, var(--analytics-blue) 65%, var(--surface)); }
+.achievementSuccess { --achievement-color: var(--analytics-blue); }
+.achievementWarning { --achievement-color: color-mix(in srgb, var(--analytics-blue) 48%, var(--surface)); }
+.achievementGrade { --achievement-color: color-mix(in srgb, var(--analytics-blue) 28%, var(--surface)); }
 
 .reportTableWrap {
   min-width: 0;
@@ -1209,6 +1459,7 @@
 .emptyState {
   display: grid;
   place-items: center;
+  --analytics-blue: var(--primary);
   min-height: 250px;
   padding: 2rem;
   color: var(--muted);
@@ -1267,19 +1518,9 @@
     border-left: 0;
   }
 
-  .reportMetricGrid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 
-  .reportMetricGrid > div:nth-child(3n+1) {
-    border-inline-start: 0;
-  }
 
-  .reportMetricGrid > div:nth-child(n+4) {
-    border-top: 1px solid var(--border);
-  }
-
-  .reportEvidenceGrid {
+  .reportOverview {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -1290,33 +1531,58 @@
   }
 
   .headingRow {
-    padding: 1rem 1rem 0.8rem;
-  }
-
-  .scopeNote {
-    display: none;
+    padding-bottom: 0.75rem;
   }
 
   .controlRow {
-    grid-template-columns: minmax(0, 1fr);
-    padding: 0 1rem 0.85rem;
+    grid-template-columns: minmax(0, 1.5fr) minmax(6rem, 1fr);
+    gap: 0.65rem;
   }
 
   .examMeta {
-    grid-column: auto;
+    grid-column: 1 / -1;
+    min-height: 24px;
   }
 
   .tabs {
-    grid-template-columns: repeat(4, minmax(92px, 1fr));
-    overflow-x: auto;
-    padding: 0 0.35rem;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 0 0.5rem;
   }
 
   .tab {
-    min-height: 48px;
-    padding-inline: 0.55rem;
-    font-size: 0.78rem;
+    min-width: 0;
+    min-height: 46px;
+    gap: 0.28rem;
+    padding-inline: 0.25rem;
+    font-size: 0.8rem;
     white-space: nowrap;
+  }
+
+  .reportFocusRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .reportOverview .reportMetricGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .reportMetricGrid > div:last-child {
+    grid-column: span 2;
+    display: block;
+  }
+
+  .reportMetricGrid > div:last-child dd > span:first-child {
+    margin-top: 0.375rem;
+  }
+
+  .reportMetricGrid > div:first-child dd > span:first-child {
+    font-size: 4rem;
+  }
+
+  .achievementList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .summaryPanel {
@@ -1360,31 +1626,17 @@
     margin-inline: -0.95rem;
   }
 
-  .reportMetricGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .reportOverview .reportHeadlineSection {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
   }
 
-  .reportMetricGrid > div:nth-child(3n+1) {
-    border-inline-start: 1px solid var(--border);
+  .distributionPlot {
+    gap: 0 0.3rem;
   }
 
-  .reportMetricGrid > div:nth-child(odd) {
-    border-inline-start: 0;
-  }
-
-  .reportMetricGrid > div:nth-child(n+3) {
-    border-top: 1px solid var(--border);
-  }
-
-  .distributionBars {
-    grid-template-columns: repeat(10, minmax(0, 1fr));
-    gap: 0.25rem;
-    padding-inline: 0.5rem;
-  }
-
-  .distributionLabel {
-    font-size: var(--type-micro);
-    writing-mode: vertical-rl;
+  .distributionLabels {
+    font-size: 0.65rem;
   }
 
   .reportDataTable {
@@ -1393,28 +1645,70 @@
 }
 
 @media (max-width: 520px) {
-  .headingCopy p {
-    font-size: 0.82rem;
+
+  .distributionLabels {
+    display: none;
   }
 
-  .examMeta {
-    grid-template-columns: 1fr;
-    padding-block: 0.25rem;
+  .distributionBoundaryLabels {
+    grid-column: 2;
+    position: relative;
+    display: block;
+    height: 1.3rem;
+    color: var(--report-quiet);
+    font-size: 0.71rem;
+  }
+
+  .distributionBoundaryLabels span {
+    position: absolute;
+    top: 0.35rem;
+    transform: translateX(-50%);
+  }
+
+  .scopeNote {
+    font-size: 0.7rem;
   }
 
   .metaItem {
-    min-height: 34px;
-    justify-content: flex-start;
-    border-top: 1px solid var(--border);
-    border-left: 0;
-  }
-
-  .metaItem:first-child {
-    border-top: 0;
+    padding-inline: 0.48rem;
+    font-size: 0.72rem;
   }
 
   .tab svg {
-    display: none;
+    width: 14px;
+  }
+
+  .controlRow {
+    grid-template-columns: minmax(6.7rem, 0.58fr) minmax(0, 1fr);
+    align-items: end;
+  }
+
+  .controlRow > .field:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .examMeta {
+    grid-column: auto;
+    gap: 0.25rem 0;
+    align-content: center;
+    min-height: 46px;
+  }
+
+  .metaItem:first-child {
+    width: 100%;
+    padding-left: 0.48rem;
+  }
+
+  .metaItem:nth-child(2) {
+    border-left: 0;
+  }
+
+  .reportMetricGrid > div {
+    padding-inline: 0.45rem;
+  }
+
+  .reportMetricGrid dd > span:first-child {
+    font-size: 1.1rem;
   }
 
   .actionRow {
@@ -1451,8 +1745,7 @@
   .bandSegment,
   .primaryAction,
   .tab::after,
-  .distributionBar,
-  .achievementFill {
+  .distributionPlot .distributionBar {
     transition: none;
   }
 
@@ -1466,12 +1759,122 @@
   }
 }
 
+:global(html[data-motion="off"]) .distributionPlot .distributionBar,
 :global(html[data-motion="off"]) .reportAction {
   transition: none;
 }
 
 @media print {
   .scrollHint {
+    display: none;
+  }
+}
+
+@media print {
+  :global(html):has(.reportOverview),
+  :global(body):has(.reportOverview) {
+    width: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* The app's answer-sheet print mode hides all other content and pins the
+     document to A4. Restore normal document flow only for this exam report. */
+  :global(body):has(.reportOverview) :not(:has(.workspace), .workspace, .workspace *) {
+    display: none !important;
+  }
+
+  :global(.teacher-dashboard-shell):has(.reportOverview),
+  :global(.dashboard-workspace):has(.reportOverview),
+  :global(.dashboard-main):has(.reportOverview) {
+    display: block;
+    width: 100%;
+    max-width: none;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    background: white;
+  }
+
+  .workspace:has(.reportOverview) {
+    display: block;
+    padding: 8mm;
+    --analytics-blue: #175bd5;
+    --foreground: #12213a;
+    --muted: #53647b;
+    --surface: #fff;
+    --background: #fff;
+    --border: #dce3eb;
+  }
+
+  .workspace:has(.reportOverview),
+  .workspace:has(.reportOverview) * {
+    visibility: visible !important;
+  }
+
+  .workspace:has(.reportOverview) .tabs,
+  .workspace:has(.reportOverview) .headingRow button {
+    display: none;
+  }
+
+  .workspace:has(.reportOverview) .headerPanel {
+    margin-block-end: 3mm;
+  }
+
+  .workspace:has(.reportOverview) .headingRow {
+    padding: 3mm 4mm 2mm;
+  }
+
+  .workspace:has(.reportOverview) .controlRow {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.6fr) auto;
+    padding: 0 4mm 3mm;
+  }
+
+  .workspace:has(.reportOverview) .examMeta {
+    grid-column: auto;
+  }
+
+  .reportOverview {
+    display: block;
+  }
+
+  .reportOverview section {
+    padding: 3mm;
+    margin-block-end: 3mm;
+    box-shadow: none;
+  }
+
+  .reportFocusRow {
+    grid-template-columns: 0.9fr 1.4fr;
+    break-inside: avoid;
+  }
+
+  .reportOverview .reportDataTable th,
+  .reportOverview .reportDataTable td {
+    padding: 1mm 2.5mm;
+    font-size: 9pt;
+  }
+
+  .reportOverview .reportAction {
+    min-height: 0;
+    padding-block: 2mm;
+  }
+
+  .distributionPlot .distributionBar {
+    transition: none;
+  }
+
+  .distributionTableAlternate {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
+  }
+
+  .reportEvidenceSection:has(.distributionTable) .distributionFrame,
+  .chartToggle {
     display: none;
   }
 }

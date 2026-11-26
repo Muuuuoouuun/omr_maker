@@ -498,6 +498,10 @@ describe("ExamAnalyticsReportOverview", () => {
         );
         expect(screen.getByRole("alert")).toHaveTextContent("공식 문항 분석 근거를 확인하지 못했습니다");
         expect(screen.queryByRole("button", { name: "제출 정의 CSV" })).not.toBeInTheDocument();
+        const achievement = screen.getByRole("region", { name: "성취 구간" });
+        expect(within(achievement).getByRole("status")).toHaveTextContent("학생별 성취 구간을 집계할 근거가 부족합니다.");
+        expect(within(achievement).queryByRole("list")).toBeNull();
+        expect(screen.getByRole("img", { name: "점수 구간별 응시 인원" })).toBeInTheDocument();
 
         const snapshot = buildTeacherCanonicalAnalyticsSnapshot(exam, [canonicalAttempt]);
         view.rerender(
@@ -509,6 +513,8 @@ describe("ExamAnalyticsReportOverview", () => {
                     [exam.id]: {
                         ...snapshot,
                         advancedAggregatesComplete: false,
+                        studentAggregatesComplete: false,
+                        studentRows: [],
                         pointBiserial: [],
                         similarQuestionGroups: [],
                         recommendations: [],
@@ -518,6 +524,8 @@ describe("ExamAnalyticsReportOverview", () => {
             />,
         );
         expect(screen.getByText(/고급 추천 분석은 사용할 수 없습니다/)).toBeInTheDocument();
+        expect(within(achievement).queryByText("채점 응시 0명 기준")).toBeNull();
+        expect(within(achievement).getByRole("status")).toHaveTextContent("학생별 성취 구간을 집계할 근거가 부족합니다.");
     });
 
     it("does not invoke the client grading verifier or index for an exact remote snapshot", async () => {
@@ -657,6 +665,22 @@ describe("ExamAnalyticsReportOverview", () => {
         fireEvent.keyDown(combobox, { key: "Escape" });
         expect(combobox).toHaveValue("두 번째 진단");
         expect(combobox).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("activates the adjacent report panel with arrow keys and wraps between endpoints", () => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        render(<ExamAnalyticsTab exams={[exam]} attempts={attempts} />);
+        const summary = screen.getByRole("tab", { name: "요약" });
+        summary.focus();
+        for (const [key, label] of [["ArrowRight", "문항 분석"], ["End", "운영"], ["ArrowRight", "요약"], ["ArrowLeft", "운영"], ["Home", "요약"]]) {
+            fireEvent.keyDown(document.activeElement!, { key });
+            const active = screen.getByRole("tab", { name: label });
+            expect(active).toHaveFocus();
+            expect(active).toHaveAttribute("aria-selected", "true");
+            expect(active).toHaveAttribute("tabindex", "0");
+            expect(document.getElementById(active.getAttribute("aria-controls")!)).toBeVisible();
+            expect(screen.getAllByRole("tab").filter(tab => tab.tabIndex === 0)).toEqual([active]);
+        }
     });
 
     it("keeps listbox options out of the Tab order while preserving pointer selection", () => {
@@ -1036,14 +1060,24 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(within(achievementRegion).getByText("80~100점").closest("li")).toHaveTextContent("1명100%");
     });
 
-    it("renders the approved editorial report regions in exact reading order", () => {
+    it("keeps a graded zero visible in both the histogram and the lowest achievement band", () => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        render(<ExamAnalyticsTab exams={[exam]} attempts={[{ ...attempts[0], score: 0, totalScore: 10 }]} />);
+        const achievement = screen.getByRole("region", { name: "성취 구간" });
+        expect(within(achievement).getByText("40점 미만").closest("li")).toHaveTextContent("1명100%");
+        expect(screen.getByRole("img", { name: "점수 구간별 응시 인원" })).toHaveAccessibleDescription(
+            "0-10점 구간이 1명으로 가장 많습니다. 총 1명입니다.",
+        );
+    });
+
+    it("reads the average and distribution together, followed by achievement and interpretation", () => {
         render(<ExamAnalyticsReportOverview {...buildProps()} />);
 
         const orderedRegions = [
             screen.getByRole("region", { name: "시험 핵심 지표" }),
-            screen.getByRole("region", { name: "시험 핵심 해석" }),
             screen.getByRole("region", { name: "점수 분포" }),
             screen.getByRole("region", { name: "성취 구간" }),
+            screen.getByRole("region", { name: "시험 핵심 해석" }),
             screen.getByRole("region", { name: "취약 문항" }),
             screen.getByRole("region", { name: "다음 행동" }),
         ];
@@ -1059,7 +1093,7 @@ describe("ExamAnalyticsReportOverview", () => {
             name: "‘이차함수’ 보강이 가장 효과적입니다",
         });
         expect(
-            headline.compareDocumentPosition(screen.getByRole("region", { name: "점수 분포" }))
+            headline.compareDocumentPosition(screen.getByRole("region", { name: "취약 문항" }))
             & Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
     });
@@ -1080,6 +1114,31 @@ describe("ExamAnalyticsReportOverview", () => {
 
         const gradeRate = screen.getByText("32%");
         expect(gradeRate.className).toContain("rateGrade");
+    });
+
+    it("retains the exam-wide scale on filtering and describes all tied leaders", () => {
+        const props = buildProps({ examPeakCount: 61 });
+        const { rerender } = render(<ExamAnalyticsReportOverview {...props} />);
+        const chart = screen.getByRole("img", { name: "점수 구간별 응시 인원" });
+        expect(chart.querySelector("[data-maximum]")).toHaveAttribute("data-maximum", "80");
+        const tied = props.distribution.map((bucket, i) => ({ ...bucket, count: i < 2 ? 1 : 0 }));
+        rerender(<ExamAnalyticsReportOverview {...props} distribution={tied} />);
+        expect(chart.querySelector("[data-maximum]")).toHaveAttribute("data-maximum", "80");
+        expect(chart).toHaveAccessibleDescription("0-10점, 10-20점 구간이 각각 1명으로 공동 최다입니다. 총 2명입니다.");
+        const bars = chart.querySelectorAll<HTMLElement>("li > span");
+        expect([...bars].map(bar => bar.style.height)).toEqual(["1.25%", "1.25%", "0%", "0%"]);
+    });
+
+    it("switches between the histogram and the corresponding counts", () => {
+        render(<ExamAnalyticsReportOverview {...buildProps()} />);
+        const toggle = screen.getByRole("button", { name: "점수 분포 데이터 표" });
+        fireEvent.click(toggle);
+        expect(toggle).toHaveAttribute("aria-pressed", "true");
+        expect(screen.queryByRole("img", { name: "점수 구간별 응시 인원" })).toBeNull();
+        const table = screen.getByRole("table", { name: "점수 분포 데이터" });
+        expect(within(table).getByRole("row", { name: "20-30점 4명" })).toBeVisible();
+        fireEvent.click(toggle);
+        expect(screen.getByRole("img", { name: "점수 구간별 응시 인원" })).toBeVisible();
     });
 
     it("links one external sample qualifier without duplicating its copy", () => {

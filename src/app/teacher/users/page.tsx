@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import NextLink from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
+import styles from "./roster.module.css";
 import StatusPill from "@/components/dashboard/StatusPill";
 import {
     Users,
@@ -17,7 +18,8 @@ import {
     MoreVertical,
     FolderPlus,
     CheckCircle2,
-    Clock,
+    ChevronDown,
+    Info,
     X,
     Trash2,
     Download,
@@ -100,7 +102,6 @@ import { useServerPlan } from "@/lib/useServerPlan";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
 import { studentIdFor } from "@/utils/storage";
 import {
-    KPI,
     MiniStat,
     MiniRegionMetric,
     RegionalAverageMetric,
@@ -324,6 +325,17 @@ function ManageUsersInner() {
     const deferredQuery = useDeferredValue(query);
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
     const [selectedId, setSelectedId] = useState<string | null>(initialStudentId);
+    const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+    const detailTriggerRef = useRef<HTMLButtonElement | null>(null);
+    function openStudentDetail(id: string, trigger: HTMLButtonElement | null) {
+        detailTriggerRef.current = trigger;
+        setSelectedId(id);
+        requestAnimationFrame(() => detailHeadingRef.current?.focus());
+    }
+    function closeStudentDetail() {
+        setSelectedId(null);
+        requestAnimationFrame(() => detailTriggerRef.current?.focus());
+    }
     useEffect(() => {
         if (!initialStudentId) return;
         let cancelled = false;
@@ -1762,18 +1774,16 @@ function ManageUsersInner() {
     }
 
     return (
-        <div className="layout-main">
-            <div className="orb orb-primary" />
-            <div className="orb orb-accent" />
+        <div className={`layout-main ${styles.workspace}`}>
             <TeacherHeader badge="USERS" badgeColor="#22c55e" />
 
             <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
-                <div className="teacher-users-page-heading mobile-section-stack" style={{ margin: '3rem 0 2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '2rem', flexWrap: 'wrap' }}>
+                <div className={`teacher-users-page-heading ${styles.heading}`}>
                     <div>
-                        <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.2 }}>
+                        <h1>
                             사용자 관리
                         </h1>
-                        <p className="text-muted" style={{ fontSize: '1.05rem' }}>
+                        <p>
                             학생, 반, 초대를 한 곳에서 관리하세요.
                         </p>
                     </div>
@@ -1792,33 +1802,19 @@ function ManageUsersInner() {
                     {!rosterMutationsDisabled && (tab !== "students" || showStudentListControls) && <div className="teacher-users-desktop-actions" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                         <button
                             onClick={() => fileInputRef.current?.click()}
-                            style={{
-                                padding: '0.75rem 1.25rem', background: 'var(--surface)', border: '1px solid var(--border)',
-                                borderRadius: 'var(--radius-full)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem',
-                                transition: 'var(--transition-base)', color: 'var(--foreground)'
-                            }} className="card-hover">
+                            className={styles.secondary}>
                             <Upload size={16} /> CSV 업로드
                         </button>
                         {tab === "groups" ? (
                             <button
                                 onClick={() => { setEditingGroup(null); setShowGroupModal(true); }}
-                                style={{
-                                    padding: '0.75rem 1.5rem', background: 'var(--primary)',
-                                    color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 700,
-                                    display: 'flex', alignItems: 'center', gap: '0.5rem',
-                                    boxShadow: '0 4px 12px rgba(79,70,229,0.28)'
-                                }}>
+                                className={styles.primary}>
                                 <FolderPlus size={16} /> 새 반 만들기
                             </button>
                         ) : (
                             <button
                                 onClick={() => { setEditingStudent(null); setStudentModalDefaultGroupId(undefined); setShowStudentModal(true); }}
-                                style={{
-                                    padding: '0.75rem 1.5rem', background: 'linear-gradient(135deg, #22c55e, #10b981)',
-                                    color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 600,
-                                    display: 'flex', alignItems: 'center', gap: '0.5rem',
-                                    boxShadow: '0 4px 12px rgba(34,197,94,0.3)'
-                                }}>
+                                className={styles.primary}>
                                 <UserPlus size={16} /> 학생 추가
                             </button>
                         )}
@@ -1845,26 +1841,12 @@ function ManageUsersInner() {
                     <div
                         role="status"
                         aria-label="데모 명단 안내"
-                        style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: '0.85rem',
-                            padding: '1rem 1.1rem',
-                            marginBottom: '1.5rem',
-                            borderRadius: 'var(--radius-lg)',
-                            border: '1px solid rgba(245,158,11,0.28)',
-                            background: 'rgba(245,158,11,0.09)',
-                            color: 'var(--foreground)',
-                        }}
+                        className={styles.notice}
                     >
-                        <AlertTriangle size={19} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
-                        <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--warning)', marginBottom: '0.2rem' }}>
-                                데모 명단 모드
-                            </div>
-                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
-                                공개 데모의 예시 명단을 읽기 전용으로 표시 중입니다. 학생 추가·반 생성·CSV 업로드는 실제 교사 계정으로 로그인한 뒤 사용할 수 있습니다.
-                            </p>
+                        <Info size={17} aria-hidden="true" />
+                        <div>
+                            <strong>데모 명단 모드</strong>
+                            <span>예시 명단을 읽기 전용으로 표시합니다. 학생 추가와 CSV 업로드는 교사 계정에서 사용할 수 있습니다.</span>
                         </div>
                     </div>
                 )}
@@ -1898,17 +1880,18 @@ function ManageUsersInner() {
 
                 {(tab !== "students" || showStudentListControls) && (
                     <>
-                        <section className="teacher-users-mobile-summary" aria-label="명단 핵심 지표">
-                            <div><span>전체 학생</span><strong>{displayStudents.length}명</strong></div>
-                            <div><span>활동 중</span><strong>{attemptAnalyticsAvailable ? `${displayStudents.filter(student => student.status === "active").length}명` : "—"}</strong></div>
-                            <div><span>반</span><strong>{displayGroups.length}개</strong></div>
+                        <section className={styles.metrics} aria-label="명단 핵심 지표">
+                            <div><span>전체 학생</span><strong>{displayStudents.length}<small>명</small></strong></div>
+                            <div><span>활동 중</span><strong>{attemptAnalyticsAvailable ? <>{displayStudents.filter(student => student.status === "active").length}<small>명</small></> : "—"}</strong></div>
+                            <div><span>반</span><strong>{displayGroups.length}<small>개</small></strong></div>
+                            <div><span>미수락 초대</span><strong>{rosterInvites.filter(invite => invite.status === "pending").length}<small>건</small></strong></div>
                         </section>
 
                         {!rosterMutationsDisabled && <div className="teacher-users-mobile-page-actions mobile-action-row" role="group" aria-label="명단 작업">
                             {tab === "groups" ? (
                                 <button
                                     type="button"
-                                    className="btn btn-primary"
+                                    className={styles.primary}
                                     onClick={() => { setEditingGroup(null); setShowGroupModal(true); }}
                                 >
                                     <FolderPlus size={16} /> 새 반 만들기
@@ -1916,7 +1899,7 @@ function ManageUsersInner() {
                             ) : (
                                 <button
                                     type="button"
-                                    className="btn btn-primary"
+                                    className={styles.primary}
                                     onClick={() => { setEditingStudent(null); setStudentModalDefaultGroupId(undefined); setShowStudentModal(true); }}
                                 >
                                     <UserPlus size={16} /> 학생 추가
@@ -1924,27 +1907,19 @@ function ManageUsersInner() {
                             )}
                             <button
                                 type="button"
-                                className="btn btn-secondary"
+                                className={styles.secondary}
                                 onClick={() => fileInputRef.current?.click()}
                             >
                                 <Upload size={16} /> CSV 업로드
                             </button>
                         </div>}
 
-                        {attemptAnalyticsAvailable && <details className="teacher-users-analysis">
+                        {attemptAnalyticsAvailable && regionalScopes.length > 0 && <details className={`teacher-users-analysis ${styles.analysis}`}>
                             <summary>
                                 <span>명단 분석</span>
-                                <small>학생 {displayStudents.length}명 · 반 {displayGroups.length}개 · 지역 {regionalScopes.length}곳</small>
+                                <small>지역 {regionalScopes.length}곳 <ChevronDown size={16} aria-hidden="true" /></small>
                             </summary>
                             <div className="teacher-users-analysis-content">
-                                <div className="bento-grid" style={{ marginBottom: '1.25rem' }}>
-                                    <KPI label="전체 학생" value={displayStudents.length} color="#4f46e5" icon={<Users size={22} />} />
-                                    <KPI label="활동 중" value={displayStudents.filter(s => s.status === "active").length} color="#10b981" icon={<CheckCircle2 size={22} />} />
-                                    <KPI label="반 개수" value={displayGroups.length} color="#8b5cf6" icon={<FolderPlus size={22} />} />
-                                    <KPI label="지역 수" value={regionalScopes.length} color="#0ea5e9" icon={<MapPin size={22} />} />
-                                    <KPI label="미수락 초대" value={rosterInvites.filter(i => i.status === "pending").length} color="#f59e0b" icon={<Clock size={22} />} />
-                                </div>
-
                                 {regionalScopes.length > 0 && (
                                     <div className="bento-card" style={{ padding: '1.25rem 1.35rem', marginBottom: '1.25rem' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', marginBottom: '1rem', flexWrap: 'wrap' }}>
@@ -1983,6 +1958,7 @@ function ManageUsersInner() {
                                                     <button
                                                         key={scope.regionKey}
                                                         type="button"
+                                                        aria-pressed={selectedRegion}
                                                         onClick={() => setSelectedRegionKey(selectedRegion ? ALL_REGION_KEY : scope.regionKey)}
                                                         style={{
                                                             padding: '0.85rem 0.9rem',
@@ -2017,31 +1993,20 @@ function ManageUsersInner() {
                 )}
 
                 {/* Sub-tabs */}
-                <div className="teacher-users-tabs" role="group" aria-label="명단 보기" style={{
-                    display: 'flex', gap: '0.5rem', marginBottom: '1.5rem',
-                    background: 'var(--surface)', padding: '0.5rem', borderRadius: 'var(--radius-lg)',
-                    border: '1px solid var(--border)', width: 'fit-content',
-                    boxShadow: '0 4px 6px rgba(0,0,0,0.02)'
-                }}>
+                <div className={`teacher-users-tabs ${styles.tabs}`} role="group" aria-label="명단 보기">
                     {([
-                        { key: "students", label: `학생 (${displayStudents.length})` },
-                        { key: "groups", label: `반 · 그룹 (${displayGroups.length})` },
-                        { key: "invites", label: `초대 (${rosterInvites.length})` },
+                        { key: "students", label: "학생", count: displayStudents.length },
+                        { key: "groups", label: "반 · 그룹", count: displayGroups.length },
+                        { key: "invites", label: "초대", count: rosterInvites.length },
                     ] as const).map(t => (
                         <button
                             key={t.key}
                             type="button"
                             aria-pressed={tab === t.key}
+                            aria-label={`${t.label} (${t.count})`}
                             className={tab === t.key ? "is-active" : undefined}
-                            onClick={() => selectTab(t.key)}
-                            style={{
-                                padding: '0.65rem 1.4rem', borderRadius: 'var(--radius-md)',
-                                background: tab === t.key ? 'var(--primary)' : 'transparent',
-                                color: tab === t.key ? 'white' : 'var(--muted)',
-                                fontWeight: tab === t.key ? 700 : 500, fontSize: '0.9rem',
-                                whiteSpace: 'nowrap', transition: 'var(--transition-base)'
-                            }}>
-                            {t.label}
+                            onClick={() => selectTab(t.key)}>
+                            {t.label} <span>{t.count}</span>
                         </button>
                     ))}
                 </div>
@@ -2051,46 +2016,41 @@ function ManageUsersInner() {
                         className={selectedId ? "teacher-users-students-grid has-detail" : "teacher-users-students-grid"}
                         style={{ display: 'grid', gridTemplateColumns: selectedId ? 'minmax(0, 1fr) minmax(320px, 380px)' : 'minmax(0, 1fr)', gap: '1.25rem' }}
                     >
-                        <div className="bento-card teacher-users-list-card" style={{ padding: '1.5rem' }}>
+                        <div className={`bento-card teacher-users-list-card ${styles.list}`}>
                             {showStudentListControls && <>
                             {/* Search */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1rem', padding: '0.75rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', flexWrap: 'wrap' }}>
-                                <Search size={16} color="var(--muted)" />
-                                <input
-                                    value={query}
-                                    onChange={e => setQuery(e.target.value)}
-                                    placeholder="이름, 이메일, 반, 지역 검색"
-                                    style={{ flex: '1 1 220px', background: 'transparent', border: 'none', outline: 'none', color: 'var(--foreground)', fontSize: '0.95rem' }}
-                                />
+                            <div className={styles.toolbar}>
+                                <label className={styles.search}>
+                                    <Search size={17} aria-hidden="true" />
+                                    <input
+                                        type="search"
+                                        aria-label="학생 명단 검색"
+                                        value={query}
+                                        onChange={e => setQuery(e.target.value)}
+                                        placeholder="이름, 이메일, 반, 지역 검색"
+                                    />
+                                </label>
                                 <select
                                     aria-label="학생 지역 필터"
                                     value={activeRegionKey}
                                     onChange={e => setSelectedRegionKey(e.target.value)}
-                                    style={{
-                                        padding: '0.35rem 0.55rem',
-                                        background: 'var(--surface)',
-                                        border: '1px solid var(--border)',
-                                        borderRadius: 'var(--radius-sm)',
-                                        color: 'var(--foreground)',
-                                        fontSize: '0.8rem',
-                                        fontWeight: 700,
-                                    }}
                                 >
                                     <option value={ALL_REGION_KEY}>전체 지역</option>
                                     {regionalScopes.map(scope => (
                                         <option key={scope.regionKey} value={scope.regionKey}>{regionLabel(scope)}</option>
                                     ))}
                                 </select>
-                                <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>{filtered.length}명</span>
+                                <span className={styles.resultCount} aria-live="polite">{filtered.length}명</span>
+                                {selectedIds.size === 0 && (
+                                    <button type="button" onClick={handleExportCsv} disabled={rosterMutationsDisabled} className={styles.exportButton}>
+                                        <Download size={15} aria-hidden="true" /> 전체 CSV 내보내기
+                                    </button>
+                                )}
                             </div>
 
                             {/* Selection banner */}
-                            {selectedIds.size > 0 ? (
-                                <div style={{
-                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem',
-                                    padding: '0.7rem 1rem', background: 'rgba(99,102,241,0.08)', borderRadius: 'var(--radius-md)',
-                                    border: '1px solid rgba(99,102,241,0.25)'
-                                }}>
+                            {selectedIds.size > 0 && (
+                                <div className={styles.selectionBar}>
                                     <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--primary)' }}>
                                         <strong>{selectedIds.size}명</strong> 선택됨
                                         <span style={{ fontWeight: 500, color: 'var(--muted)' }}> · 모든 페이지 포함 (필터 전체 {filtered.length}명 중)</span>
@@ -2140,23 +2100,13 @@ function ManageUsersInner() {
                                         }}>취소</button>
                                     </div>
                                 </div>
-                            ) : (
-                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
-                                    <button onClick={handleExportCsv} disabled={rosterMutationsDisabled} style={{
-                                        padding: '0.45rem 0.9rem', background: 'var(--surface)', color: 'var(--muted)',
-                                        border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
-                                        fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem'
-                                    }}>
-                                        <Download size={13} /> 전체 CSV 내보내기
-                                    </button>
-                                </div>
                             )}
 
                             <div className="teacher-users-table-scroll scroll-custom">
-                                <table className="teacher-users-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <table className={`teacher-users-table ${styles.table}`} aria-label="학생 명단">
                                     <thead>
                                         <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                                            <th style={{ padding: '0.85rem 0.5rem', width: 32 }}>
+                                            <th style={{ width: 32 }}>
                                                 <input
                                                     type="checkbox"
                                                     aria-label={`필터된 전체 ${filtered.length}명 선택`}
@@ -2169,32 +2119,30 @@ function ManageUsersInner() {
                                                     style={{ cursor: isDemoRoster || rosterMutationsDisabled ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
                                                 />
                                             </th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }} aria-sort={sortAriaValue(sortState, "name")}>
+                                            <th aria-sort={sortAriaValue(sortState, "name")}>
                                                 <SortableHeaderButton label="학생" sortKey="name" sortState={sortState} onSort={toggleSort} />
                                             </th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }}>반</th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }}>지역</th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }} aria-sort={sortAriaValue(sortState, "avgScore")}>
+                                            <th>반</th>
+                                            <th>지역</th>
+                                            <th aria-sort={sortAriaValue(sortState, "avgScore")}>
                                                 <SortableHeaderButton label="평균 점수" sortKey="avgScore" sortState={sortState} onSort={toggleSort} />
                                             </th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }} aria-sort={sortAriaValue(sortState, "examsTaken")}>
+                                            <th aria-sort={sortAriaValue(sortState, "examsTaken")}>
                                                 <SortableHeaderButton label="응시 수" sortKey="examsTaken" sortState={sortState} onSort={toggleSort} />
                                             </th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }} aria-sort={sortAriaValue(sortState, "lastActive")}>
+                                            <th aria-sort={sortAriaValue(sortState, "lastActive")}>
                                                 <SortableHeaderButton label="최근 활동" sortKey="lastActive" sortState={sortState} onSort={toggleSort} />
                                             </th>
-                                            <th style={{ padding: '0.85rem 0.5rem', width: 40 }}></th>
+                                            <th style={{ width: 40 }}></th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {pagedStudents.map(s => (
                                             <tr key={s.id}
-                                                onClick={() => setSelectedId(s.id)}
-                                                style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.2s', background: selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent' }}
-                                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.04)'}
-                                                onMouseLeave={e => e.currentTarget.style.background = selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent'}
+                                                onClick={(event) => openStudentDetail(s.id, event.currentTarget.querySelector("button"))}
+                                                data-selected={selectedIds.has(s.id) || selectedId === s.id || undefined}
                                             >
-                                                <td style={{ padding: '0.85rem 0.5rem' }} onClick={(e) => e.stopPropagation()}>
+                                                <td onClick={(e) => e.stopPropagation()}>
                                                     <input
                                                         type="checkbox"
                                                         aria-label={`${s.name} 선택`}
@@ -2204,30 +2152,28 @@ function ManageUsersInner() {
                                                         style={{ cursor: isDemoRoster || rosterMutationsDisabled ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
                                                     />
                                                 </td>
-                                                <td style={{ padding: '0.85rem 0.5rem' }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                                                        <div style={{ width: 34, height: 34, borderRadius: '50%', background: s.avatar, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 700, flexShrink: 0 }}>{s.name.slice(1, 2)}</div>
-                                                        <div>
-                                                            <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{s.name}</div>
-                                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{s.email}</div>
-                                                        </div>
-                                                    </div>
+                                                <td>
+                                                    <button type="button" className={styles.person} aria-label={`${s.name} 상세 보기`}
+                                                        onClick={event => { event.stopPropagation(); openStudentDetail(s.id, event.currentTarget); }}>
+                                                        <span className={styles.avatar} aria-hidden="true">{s.name.slice(0, 1)}</span>
+                                                        <span><strong>{s.name}</strong><small>{s.email}</small></span>
+                                                    </button>
                                                 </td>
-                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{s.group}</td>
-                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{rosterStudentRegionName(s, displayGroups)}</td>
-                                                <td style={{ padding: '0.85rem 0.5rem' }}>
+                                                <td style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{s.group}</td>
+                                                <td style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{rosterStudentRegionName(s, displayGroups)}</td>
+                                                <td>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                                        <span style={{ fontSize: '0.95rem', fontWeight: 700, color: attemptAnalyticsAvailable ? (s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)') : 'var(--muted)' }}>
-                                                            {attemptAnalyticsAvailable ? `${s.avgScore}` : "—"}
+                                                        <span className={styles.score}>
+                                                            {attemptAnalyticsAvailable ? <span className={styles.scoreValue}>{s.avgScore}<small>점</small></span> : "—"}
                                                         </span>
                                                         {attemptAnalyticsAvailable && s.trend === "up" && <TrendingUp size={14} color="var(--success)" />}
                                                         {attemptAnalyticsAvailable && s.trend === "down" && <TrendingDown size={14} color="var(--error)" />}
                                                     </div>
                                                 </td>
-                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>
+                                                <td style={{ fontSize: '0.9rem', fontWeight: 600 }}>
                                                     {attemptAnalyticsAvailable ? `${s.examsTaken}회` : "—"}
                                                 </td>
-                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
+                                                <td style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
                                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                                                         {attemptAnalyticsAvailable && <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.status === "active" ? 'var(--success)' : 'var(--muted)' }} />}
                                                         {attemptAnalyticsAvailable ? s.lastActive : "—"}
@@ -2235,7 +2181,7 @@ function ManageUsersInner() {
                                                 </td>
                                                 <td
                                                     data-teacher-user-popover-root
-                                                    style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}
+                                                    style={{ textAlign: 'right', position: 'relative' }}
                                                 >
                                                     {!isDemoRoster && !rosterMutationsDisabled && (
                                                         <button
@@ -2288,9 +2234,6 @@ function ManageUsersInner() {
                             <div className="teacher-users-mobile-list" aria-label="학생 명단">
                                 {pagedStudents.map(s => {
                                     const regionName = rosterStudentRegionName(s, displayGroups);
-                                    const scoreTone = attemptAnalyticsAvailable
-                                        ? s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)'
-                                        : 'var(--muted)';
                                     return (
                                         <article
                                             key={s.id}
@@ -2299,8 +2242,8 @@ function ManageUsersInner() {
                                             aria-labelledby={`teacher-mobile-student-${s.id}`}
                                         >
                                             <div className="teacher-users-mobile-card-head">
-                                                <div className="teacher-users-mobile-avatar" style={{ background: s.avatar }} aria-hidden="true">
-                                                    {s.name.slice(1, 2)}
+                                                <div className={`teacher-users-mobile-avatar ${styles.avatar}`} aria-hidden="true">
+                                                    {s.name.slice(0, 1)}
                                                 </div>
                                                 <div className="teacher-users-mobile-identity">
                                                     <h3 id={`teacher-mobile-student-${s.id}`}>{s.name}</h3>
@@ -2326,8 +2269,8 @@ function ManageUsersInner() {
                                             <div className="teacher-users-mobile-metrics">
                                                 <div aria-label={attemptAnalyticsAvailable ? `평균 ${s.avgScore}점` : "평균 확인 불가"}>
                                                     <span>평균</span>
-                                                    <strong style={{ color: scoreTone }}>
-                                                        {attemptAnalyticsAvailable ? `${s.avgScore}점` : "—"}
+                                                    <strong className={styles.score}>
+                                                        {attemptAnalyticsAvailable ? <span className={styles.scoreValue}>{s.avgScore}<small>점</small></span> : "—"}
                                                         {attemptAnalyticsAvailable && s.trend === "up" && <TrendingUp size={13} aria-label="상승" />}
                                                         {attemptAnalyticsAvailable && s.trend === "down" && <TrendingDown size={13} aria-label="하락" />}
                                                     </strong>
@@ -2350,7 +2293,7 @@ function ManageUsersInner() {
                                                     type="button"
                                                     className="btn btn-secondary"
                                                     aria-label={`${s.name} 상세 보기`}
-                                                    onClick={() => setSelectedId(s.id)}
+                                                    onClick={event => openStudentDetail(s.id, event.currentTarget)}
                                                 >
                                                     상세 보기
                                                 </button>
@@ -2483,21 +2426,12 @@ function ManageUsersInner() {
                                     {!rosterMutationsDisabled && <div style={{ display: 'inline-flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
                                         <button
                                             onClick={() => { setEditingStudent(null); setShowStudentModal(true); }}
-                                            style={{
-                                                minHeight: 44, padding: '0.55rem 1.1rem', background: 'linear-gradient(135deg, #22c55e, #10b981)',
-                                                color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
-                                                display: 'flex', alignItems: 'center', gap: '0.4rem'
-                                            }}>
+                                            className={styles.primary}>
                                             <UserPlus size={14} /> 첫 학생 추가
                                         </button>
                                         <button
                                             onClick={() => fileInputRef.current?.click()}
-                                            style={{
-                                                minHeight: 44, padding: '0.55rem 1.1rem', background: 'var(--surface)',
-                                                border: '1px solid var(--border)',
-                                                borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
-                                                display: 'flex', alignItems: 'center', gap: '0.4rem'
-                                            }}>
+                                            className={styles.secondary}>
                                             <Upload size={14} /> CSV 업로드
                                         </button>
                                     </div>}
@@ -2514,25 +2448,25 @@ function ManageUsersInner() {
                                         <Search size={28} />
                                     </div>
                                     <div style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.35rem' }}>검색 결과가 없습니다</div>
-                                    <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>다른 키워드나 지역으로 검색해보세요.</div>
+                                    <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>다른 키워드나 지역으로 검색해보세요.</p>
+                                    <button className={styles.reset} type="button" onClick={() => {
+                                        setQuery("");
+                                        setSelectedRegionKey(ALL_REGION_KEY);
+                                    }}>검색 조건 초기화</button>
                                 </div>
                             )}
                         </div>
 
                         {selected && (
-                            <div className="bento-card teacher-users-detail-card" style={{ padding: '1.5rem', position: 'sticky', top: '5.5rem', alignSelf: 'flex-start', animation: 'fadeIn 0.3s both' }}>
+                            <div className={`bento-card teacher-users-detail-card ${styles.detail}`}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
-                                    <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>학생 상세</h3>
-                                    <button type="button" aria-label="학생 상세 닫기" onClick={() => setSelectedId(null)} style={{ color: 'var(--muted)' }}>
+                                    <h3 ref={detailHeadingRef} tabIndex={-1} className={styles.detailHeading}>학생 상세</h3>
+                                    <button type="button" aria-label="학생 상세 닫기" onClick={closeStudentDetail} className={styles.close}>
                                         <X size={18} />
                                     </button>
                                 </div>
                                 <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-                                    <div style={{
-                                        width: 72, height: 72, borderRadius: '50%', background: selected.avatar,
-                                        color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                                        fontSize: '1.6rem', fontWeight: 800, marginBottom: '0.75rem'
-                                    }}>{selected.name.slice(1, 2)}</div>
+                                    <div className={styles.profileAvatar} aria-hidden="true">{selected.name.slice(0, 1)}</div>
                                     <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{selected.name}</div>
                                     <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{selected.email}</div>
                                     <button

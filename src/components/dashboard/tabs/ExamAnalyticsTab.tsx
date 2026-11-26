@@ -278,7 +278,13 @@ export function buildStudentQuestionAnalysisCsvRows(input: {
 }
 
 type AnalysisScope = "exam" | "class" | "student";
-type AnalyticsWorkspaceView = "overview" | "questions" | "students" | "operations";
+const workspaceViews = [
+    { key: "overview", label: "요약", icon: BarChart2 },
+    { key: "questions", label: "문항 분석", icon: List },
+    { key: "students", label: "학생·반", icon: Users },
+    { key: "operations", label: "운영", icon: Settings2 },
+] as const;
+type AnalyticsWorkspaceView = typeof workspaceViews[number]["key"];
 const ALL_REGION_KEY = "__all_regions__";
 const KAKAO_REVIEW_STATUS_OPTIONS: Array<{ status: KakaoCandidateReviewStatus; label: string }> = [
     { status: "ready", label: "후보 준비" },
@@ -537,9 +543,9 @@ export default function ExamAnalyticsTab({
     };
     const analyticsIndex = useMemo(() => (
         !requiresCanonicalSnapshot && selectedExam
-            ? buildCanonicalAttemptAnalyticsIndex(selectedExam, examAttempts)
+            ? buildCanonicalAttemptAnalyticsIndex(selectedExam, baseExamAttempts)
             : undefined
-    ), [examAttempts, requiresCanonicalSnapshot, selectedExam]);
+    ), [baseExamAttempts, requiresCanonicalSnapshot, selectedExam]);
     const scopedRosterStudents = useMemo(() => (
         activeRegionKey === ALL_REGION_KEY
             ? rosterStudents
@@ -551,21 +557,32 @@ export default function ExamAnalyticsTab({
             : rosterGroups.filter(group => regionKeyFor(regionNameForGroup(group, rosterStudents)) === activeRegionKey)
     ), [activeRegionKey, rosterGroups, rosterStudents]);
 
+    // Keep the exam-wide score basis stable while the visible regional cohort changes.
+    const scoresByAttempt = useMemo(() => {
+        const scores = new Map<Attempt, number>();
+        if (!selectedExam) return scores;
+        for (const attempt of baseExamAttempts) {
+            if (requiresCanonicalSnapshot) {
+                if (Number.isFinite(attempt.totalScore) && attempt.totalScore > 0) {
+                    scores.set(attempt, safeScorePercent(attempt.score, attempt.totalScore));
+                }
+            } else {
+                const summary = summarizeAttemptScore(selectedExam, attempt, analyticsIndex);
+                if (hasGradableAttemptScore(summary)) scores.set(attempt, summary.scorePercent);
+            }
+        }
+        return scores;
+    }, [analyticsIndex, baseExamAttempts, requiresCanonicalSnapshot, selectedExam]);
+    const examDistribution = useMemo(() => computeScoreDistribution([...scoresByAttempt.values()]), [scoresByAttempt]);
     const examStats = useMemo(() => {
         if (!selectedExam || examAttempts.length === 0) return null;
 
-        // A stored legacy score remains valid when it carries a positive totalScore.
-        // Rows with no computed or stored denominator are submission evidence only,
-        // never zero-score performance evidence.
-        const scores = requiresCanonicalSnapshot
-            ? examAttempts
-                .filter(attempt => Number.isFinite(attempt.totalScore) && attempt.totalScore > 0)
-                .map(attempt => safeScorePercent(attempt.score, attempt.totalScore))
-            : examAttempts
-                .map(attempt => summarizeAttemptScore(selectedExam, attempt, analyticsIndex))
-                .filter(hasGradableAttemptScore)
-                .map(summary => summary.scorePercent);
-        const distribution = computeScoreDistribution(scores);
+        const distribution = examAttempts === baseExamAttempts
+            ? examDistribution
+            : computeScoreDistribution(examAttempts.flatMap(attempt => {
+                const score = scoresByAttempt.get(attempt);
+                return score === undefined ? [] : [score];
+            }));
         const elapsedTimes = examAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
         const avgElapsedTimeSec = elapsedTimes.length > 0
             ? Math.round(elapsedTimes.reduce((sum, value) => sum + value, 0) / elapsedTimes.length)
@@ -586,7 +603,7 @@ export default function ExamAnalyticsTab({
             avgElapsedTimeSec,
             handwritingArchiveCount,
         };
-    }, [analyticsIndex, examAttempts, requiresCanonicalSnapshot, selectedExam]);
+    }, [baseExamAttempts, examAttempts, examDistribution, scoresByAttempt, selectedExam]);
 
     const questionBankReadiness = useMemo(() => {
         if (!selectedExam) return null;
@@ -1012,11 +1029,11 @@ export default function ExamAnalyticsTab({
         riskyQuestionCount: teachingInsights?.riskyQuestionCount ?? 0,
     }), [examStats?.performanceCount, examStats?.submissionCount, gradableQuestionAnalytics.length, teachingInsights]);
     const overviewMetrics = useMemo<AnalyticsMetricItem[]>(() => examStats ? [
-        { id: "mean", label: "평균", value: examStats.avgScore ?? "-", unit: examStats.avgScore === null ? undefined : "점", detail: examStats.standardDeviation === null ? "채점 가능한 점수 없음" : `표준편차 ${examStats.standardDeviation}`, animate: true },
-        { id: "median", label: "중앙값", value: examStats.medianScore ?? "-", unit: examStats.medianScore === null ? undefined : "점", animate: true },
-        { id: "maximum", label: "최고", value: examStats.maxScore ?? "-", unit: examStats.maxScore === null ? undefined : "점", animate: true },
-        { id: "minimum", label: "최저", value: examStats.minScore ?? "-", unit: examStats.minScore === null ? undefined : "점", tone: "grade", animate: true },
-        { id: "submissions", label: "채점 응시", value: examStats.performanceCount, unit: "명", detail: `전체 제출 ${examStats.submissionCount}건`, animate: true },
+        { id: "mean", label: "평균", value: examStats.avgScore ?? "-", unit: examStats.avgScore === null ? undefined : "점", detail: examStats.standardDeviation === null ? "채점 가능한 점수 없음" : `표준편차 ${examStats.standardDeviation}점` },
+        { id: "median", label: "중앙값", value: examStats.medianScore ?? "-", unit: examStats.medianScore === null ? undefined : "점" },
+        { id: "maximum", label: "최고", value: examStats.maxScore ?? "-", unit: examStats.maxScore === null ? undefined : "점" },
+        { id: "minimum", label: "최저", value: examStats.minScore ?? "-", unit: examStats.minScore === null ? undefined : "점", tone: "grade" },
+        { id: "submissions", label: "채점 응시", value: examStats.performanceCount, unit: "명", detail: `전체 제출 ${examStats.submissionCount}건` },
         { id: "elapsed", label: "평균 시간", value: formatSeconds(examStats.avgElapsedTimeSec) },
     ] : [], [examStats]);
     const overviewWeakQuestions = useMemo<ExamOverviewWeakQuestion[]>(() => (
@@ -1417,29 +1434,14 @@ export default function ExamAnalyticsTab({
 
     if (exams.length === 0) {
         return (
-            <div className="fade-in-up" style={{ padding: '3rem 2rem', textAlign: 'center' }}>
-                <div style={{
-                    width: 80, height: 80, borderRadius: '50%',
-                    background: 'linear-gradient(135deg, rgba(99,102,241,0.1), rgba(236,72,153,0.1))',
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'var(--primary)', marginBottom: '1.5rem'
-                }}>
-                    <BarChart2 size={36} />
+            <section className={styles.emptyState} aria-labelledby="exam-analytics-empty-title">
+                <div>
+                    <BarChart2 size={28} aria-hidden="true" />
+                    <h2 id="exam-analytics-empty-title">분석할 시험이 없습니다</h2>
+                    <p>먼저 시험을 출제하면 응시 결과를 분석할 수 있습니다.</p>
+                    <a className={styles.primaryAction} href="/create">시험 출제하기</a>
                 </div>
-                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '0.5rem' }}>분석할 시험이 없습니다</h3>
-                <p style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '1.5rem' }}>
-                    먼저 시험을 출제하면 응시 결과를 분석할 수 있습니다.
-                </p>
-                <a href="/create" style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
-                    padding: '0.75rem 1.4rem',
-                    background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))',
-                    color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 600, fontSize: '0.9rem',
-                    boxShadow: '0 4px 14px rgba(99,102,241,0.3)'
-                }}>
-                    시험 출제하기
-                </a>
-            </div>
+            </section>
         );
     }
 
@@ -1449,7 +1451,6 @@ export default function ExamAnalyticsTab({
                 <div className={styles.headingRow}>
                     <div className={styles.headingCopy}>
                         <h2 id="exam-analytics-title">시험별 통계</h2>
-                        <p>점수보다 먼저, 다음 수업에서 무엇을 바꿀지 확인하세요.</p>
                     </div>
                     <div className={styles.scopeNote}>
                         <MapPin size={14} aria-hidden="true" />
@@ -1463,19 +1464,19 @@ export default function ExamAnalyticsTab({
                 </div>
 
                 {requiresCanonicalSnapshot && (!canonicalSnapshot || canonicalSnapshot.status !== "ready") && (
-                    <div role="alert" className={styles.scopeNote}>
+                    <div role="alert" className={styles.scopeWarning}>
                         공식 문항 분석 근거를 확인하지 못했습니다. 총점 요약만 표시하며 문항 통계와 CSV는 사용할 수 없습니다.
                     </div>
                 )}
                 {canonicalSnapshot?.status === "ready" && !canonicalSnapshot.advancedAggregatesComplete && (
-                    <div role="status" className={styles.scopeNote}>
+                    <div role="status" className={styles.scopeWarning}>
                         최대 제출 규모 안전 경계로 기본 문항 통계만 표시합니다. 반·학생별 고급 추천 분석은 사용할 수 없습니다.
                     </div>
                 )}
                 {canonicalSnapshot?.status === "ready"
                     && canonicalSnapshot.questionStats.length > 0
                     && canonicalSnapshot.retakeEligibleCohortKeys.length === 0 && (
-                    <div role="status" className={styles.scopeNote}>
+                    <div role="status" className={styles.scopeWarning}>
                         제출 당시 문항 정의가 현재 시험과 달라 공식 재시험 링크를 만들 수 없습니다.
                     </div>
                 )}
@@ -1496,6 +1497,10 @@ export default function ExamAnalyticsTab({
                                     ? `exam-analytics-option-${activeOptionIndex}`
                                     : undefined}
                                 value={inputValue}
+                                onBlur={() => {
+                                    setIsSelectOpen(false);
+                                    setActiveOptionIndex(-1);
+                                }}
                                 onChange={(event) => {
                                     const nextInputValue = event.target.value;
                                     const hasMatchingExam = exams.some(exam => (
@@ -1642,28 +1647,14 @@ export default function ExamAnalyticsTab({
                 {(excludedGradingEvidence.legacy > 0 || excludedGradingEvidence.incomplete > 0) && (
                     <p
                         role="status"
-                        style={{
-                            margin: 0,
-                            padding: '0.65rem 0.8rem',
-                            borderRadius: 'var(--radius-md)',
-                            border: '1px solid color-mix(in srgb, var(--warning) 45%, var(--border))',
-                            background: 'color-mix(in srgb, var(--warning) 10%, var(--surface))',
-                            color: 'var(--text-warning)',
-                            fontSize: '0.78rem',
-                            fontWeight: 800,
-                        }}
+                        className={styles.scopeWarning}
                     >
                         과거 기록 기반 참고 분석 {excludedGradingEvidence.legacy}건과 근거 불완전 기록 {excludedGradingEvidence.incomplete}건은 공식 문항·유형 집계에서 제외했습니다.
                     </p>
                 )}
 
                 <div className={styles.tabs} role="tablist" aria-label="시험 통계 보기 전환">
-                    {[
-                        { key: "overview" as const, label: "요약", icon: BarChart2 },
-                        { key: "questions" as const, label: "문항 분석", icon: List },
-                        { key: "students" as const, label: "학생·반", icon: Users },
-                        { key: "operations" as const, label: "운영", icon: Settings2 },
-                    ].map(item => {
+                    {workspaceViews.map((item, index) => {
                         const Icon = item.icon;
                         const selected = activeWorkspaceView === item.key;
                         return (
@@ -1672,9 +1663,24 @@ export default function ExamAnalyticsTab({
                                 type="button"
                                 role="tab"
                                 aria-selected={selected}
+                                tabIndex={selected ? 0 : -1}
                                 aria-controls={`exam-analytics-panel-${item.key}`}
                                 className={`${styles.tab} ${selected ? styles.tabSelected : ""}`}
                                 onClick={() => setActiveWorkspaceView(item.key)}
+                                onKeyDown={event => {
+                                    const last = workspaceViews.length - 1;
+                                    const destinations: Record<string, number> = {
+                                        ArrowLeft: index === 0 ? last : index - 1,
+                                        ArrowRight: index === last ? 0 : index + 1,
+                                        Home: 0,
+                                        End: last,
+                                    };
+                                    const next = destinations[event.key];
+                                    if (next === undefined) return;
+                                    event.preventDefault();
+                                    event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+                                    setActiveWorkspaceView(workspaceViews[next].key);
+                                }}
                             >
                                 <Icon size={16} aria-hidden="true" />
                                 {item.label}
@@ -2240,15 +2246,17 @@ export default function ExamAnalyticsTab({
                             className={styles.reportOverviewPanel}
                         >
                             <ExamAnalyticsReportOverview
+                                key={selectedExamId}
                                 metrics={overviewMetrics}
                                 headline={overviewHeadline}
                                 distribution={examStats.distributionBuckets}
+                                examPeakCount={Math.max(0, ...examDistribution.buckets.map(bucket => bucket.count))}
                                 weakQuestions={overviewWeakQuestions}
                                 achievementBands={studentAchievementBands.map(band => ({
                                     key: band.key,
                                     label: band.label,
                                     count: band.count,
-                                    percent: band.rate,
+                                    percent: performanceStudentScores.length ? Math.round(1000 * band.count / performanceStudentScores.length) / 10 : 0,
                                     tone: band.tone,
                                 }))}
                                 actions={overviewActions}

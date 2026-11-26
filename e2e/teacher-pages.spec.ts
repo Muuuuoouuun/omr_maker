@@ -475,12 +475,19 @@ test("connects the editorial exam overview to a dense personal growth report", a
     await expect(page.getByRole("table", { name: "취약 문항 근거" })).toBeVisible();
     expect(await overviewHeadings.allTextContents()).toEqual([
         "시험 핵심 지표",
-        "시험 핵심 해석",
         "점수 분포",
         "성취 구간",
+        "시험 핵심 해석",
         "취약 문항",
         "다음 행동",
     ]);
+
+    const metrics = await page.getByRole("region", { name: "시험 핵심 지표", exact: true }).boundingBox();
+    const distribution = await page.getByRole("region", { name: "점수 분포", exact: true }).boundingBox();
+    expect(metrics).not.toBeNull();
+    expect(distribution).not.toBeNull();
+    expect(distribution!.x).toBeGreaterThanOrEqual(metrics!.x + metrics!.width - 1);
+    expect(Math.abs(distribution!.y - metrics!.y)).toBeLessThan(2);
 
     await page.getByRole("complementary", { name: "교사 대시보드 내비게이션" })
         .getByRole("button", { name: "학생 성취도", exact: true }).click();
