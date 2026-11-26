@@ -1,15 +1,18 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import {
   DESKTOP_AUDIT_WAIVER_EXPIRES_AT,
   evaluateDesktopDependencyAudit,
 } from "./desktop-dependency-audit-policy.mjs";
 
 const root = resolve(import.meta.dirname, "..");
+const auditArgs = ["audit", "--package-lock-only", "--json"];
+// Windows ships npm as a .cmd shim. Run its JS entry point without a shell.
+const windowsNpmCli = resolve(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
 const audit = spawnSync(
-  "npm",
-  ["audit", "--package-lock-only", "--json"],
+  process.platform === "win32" ? process.execPath : "npm",
+  process.platform === "win32" ? [windowsNpmCli, ...auditArgs] : auditArgs,
   { cwd: root, encoding: "utf8" },
 );
 
