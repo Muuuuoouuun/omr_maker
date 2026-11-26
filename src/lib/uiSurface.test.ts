@@ -396,7 +396,7 @@ describe("service UI surface", () => {
         expect(pdfViewer).toContain("if (e.pointerType === 'touch' && !fingerDrawingEnabled) return false");
         expect(pdfViewer).toContain("setDrawingMode('pen')");
         expect(pdfViewer).toContain("pointerEvents: canEditDrawing ? 'auto' : 'none'");
-        expect(pdfViewer).toContain("touchAction: fingerDrawingEnabled && drawingMode !== 'click' ? 'none' : 'pan-x pan-y pinch-zoom'");
+        expect(pdfViewer).toContain("touchAction: zoneSelecting || (fingerDrawingEnabled && drawingMode !== 'click') ? 'none' : 'pan-x pan-y pinch-zoom'");
     });
 
     it("keeps student handwriting visible as question-linked OMR status while solving", () => {

@@ -76,7 +76,7 @@ jobs:
 
   e2e:
     name: E2E tests (Playwright)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: lint-and-test
     steps:
       - uses: actions/checkout@v4
@@ -211,7 +211,7 @@ jobs:
 
   build:
     name: Next.js build · PWA smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: lint-and-test
     timeout-minutes: 10
     steps:
