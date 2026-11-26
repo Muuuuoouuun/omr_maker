@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import styles from "./StudentAnalyticsTab.module.css";
 import StatusPill from "@/components/dashboard/StatusPill";
 import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import {
     ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-    ResponsiveContainer, Legend, ReferenceLine
+    ResponsiveContainer
 } from 'recharts';
 
 interface StudentTrendTooltipProps {
@@ -42,7 +43,7 @@ function StudentTrendTooltip({ active, payload }: StudentTrendTooltipProps) {
             fontSize: '0.85rem',
             pointerEvents: 'none',
         }}>
-            <div style={{ fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.15rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px' }}>
+            <div style={{ fontWeight: 700, color: 'var(--foreground)', marginBottom: '0.15rem', overflowWrap: 'anywhere', maxWidth: '220px' }}>
                 {data.examTitle}
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginBottom: '0.55rem' }}>
@@ -52,7 +53,7 @@ function StudentTrendTooltip({ active, payload }: StudentTrendTooltipProps) {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--foreground)', fontWeight: 600 }}>
                         <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--primary)', flexShrink: 0 }} />
-                        내 점수
+                        학생 점수
                     </span>
                     <strong style={{ color: 'var(--primary)', fontWeight: 800, fontSize: '0.95rem' }}>
                         {data.studentScore}점
@@ -60,7 +61,7 @@ function StudentTrendTooltip({ active, payload }: StudentTrendTooltipProps) {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--muted)' }}>
-                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--warning)', flexShrink: 0 }} />
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--muted)', flexShrink: 0 }} />
                         선택 범위 평균
                     </span>
                     <span style={{ color: 'var(--muted)', fontWeight: 700 }}>
@@ -81,7 +82,7 @@ function StudentTrendTooltip({ active, payload }: StudentTrendTooltipProps) {
                         fontWeight: 800,
                         color: isAbove ? 'var(--success)' : 'var(--grade-red)',
                     }}>
-                        {isAbove ? `+${diff}점 (상회)` : `${diff}점 (하회)`}
+                        {diff === 0 ? '동일' : isAbove ? `+${diff}점 (상회)` : `${diff}점 (하회)`}
                     </span>
                 </div>
             </div>
@@ -380,12 +381,14 @@ export default function StudentAnalyticsTab({
         return studentAttempts
             .filter(attempt => !attempt.retake)
             .filter(a => !excludedExamIds.has(a.examId))
-            .map(attempt => {
+            .map((attempt, index) => {
                 const avgScore = averageScoreByExamId.get(attempt.examId) ?? 0;
                 const studentScore = attemptScoreById.get(attempt.id)?.scorePercent
                     ?? storedAttemptScore(attempt).scorePercent;
 
                 return {
+                    position: index + 1,
+                    attemptId: attempt.id,
                     date: formatKoreanDate(attempt.finishedAt),
                     examTitle: attempt.examTitle,
                     examId: attempt.examId,
@@ -597,67 +600,32 @@ export default function StudentAnalyticsTab({
                 </p>
             )}
             {/* Filter Section */}
-            <div className="card student-analysis-filters" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
+            <div className={styles.filters}>
                 {regionScopeOptions.length > 0 && (
-                    <>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 800, color: 'var(--text)' }}>
-                            <MapPin size={16} color="var(--primary)" />
-                            지역:
-                        </span>
-                        <select
-                            aria-label="학생 분석 지역 필터"
-                            value={activeRegionKey}
-                            onChange={(e) => {
-                                setSelectedRegionKey(e.target.value);
-                                setSelectedStudentKey("");
-                            }}
-                            style={{
-                                padding: '0.75rem 1rem',
-                                borderRadius: 'var(--radius-md)',
-                                border: '1px solid var(--border)',
-                                background: 'var(--background)',
-                                color: 'var(--text)',
-                                minWidth: '170px',
-                                outline: 'none',
-                                cursor: 'pointer',
-                                fontWeight: 800,
-                            }}
-                        >
+                    <label>
+                        <span><MapPin size={14} aria-hidden="true" />지역</span>
+                        <select aria-label="학생 분석 지역 필터" value={activeRegionKey} onChange={event => {
+                            setSelectedRegionKey(event.target.value);
+                            setSelectedStudentKey("");
+                        }}>
                             <option value={ALL_REGION_KEY}>전체 지역</option>
                             {regionScopeOptions.map(scope => (
-                                <option key={scope.regionKey} value={scope.regionKey}>
-                                    {scope.regionName} ({scope.attemptCount}건)
-                                </option>
+                                <option key={scope.regionKey} value={scope.regionKey}>{scope.regionName} ({scope.attemptCount}건)</option>
                             ))}
                         </select>
-                    </>
+                    </label>
                 )}
-                <label htmlFor="student-analysis-student" style={{ fontWeight: 600, color: 'var(--text)' }}>분석할 학생 선택:</label>
-                <select
-                    id="student-analysis-student"
-                    value={activeStudentKey}
-                    onChange={(e) => setSelectedStudentKey(e.target.value)}
-                    style={{
-                        padding: '0.75rem 1rem',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px solid var(--border)',
-                        background: 'var(--background)',
-                        color: 'var(--text)',
-                        flex: 1,
-                        maxWidth: '100%',
-                        minWidth: 0,
-                        cursor: 'pointer'
-                    }}
-                >
-                    {students.map(student => (
-                        <option key={student.key} value={student.key}>
-                            {student.label} (원시험 {student.baseAttemptCount}건{student.retakeAttemptCount > 0 ? ` · 재시험 ${student.retakeAttemptCount}건` : ""})
-                        </option>
-                    ))}
-                </select>
-                <span style={{ fontSize: '0.82rem', color: 'var(--muted)', fontWeight: 700 }}>
-                    {activeRegionLabel} 기준 원시험 {baseScopedAttempts.length}건 · 재시험 {retakeScopedAttempts.length}건
-                </span>
+                <label htmlFor="student-analysis-student">
+                    <span>분석할 학생 선택</span>
+                    <select id="student-analysis-student" value={activeStudentKey} onChange={event => setSelectedStudentKey(event.target.value)}>
+                        {students.map(student => (
+                            <option key={student.key} value={student.key}>
+                                {student.label} (원시험 {student.baseAttemptCount}건{student.retakeAttemptCount > 0 ? ` · 재시험 ${student.retakeAttemptCount}건` : ""})
+                            </option>
+                        ))}
+                    </select>
+                </label>
+                <p>{activeRegionLabel} 기준 원시험 {baseScopedAttempts.length}건 · 재시험 {retakeScopedAttempts.length}건</p>
             </div>
 
             {(!retakeAssignmentsEnabled || !remindersEnabled) && (
@@ -669,18 +637,15 @@ export default function StudentAnalyticsTab({
                 />
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem', alignItems: 'start' }}>
-                {/* Left side: Chart */}
-                <div className="card chart-card-enter" style={{ ...CARD_SURFACE_STYLE, padding: '1.5rem', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                    <div style={{ marginBottom: '1.5rem' }}>
-                        <h3 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                            <TrendingUp size={20} color="var(--primary)" />
-                            {activeStudentLabel} 성취도 추이
-                        </h3>
-                        <p style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
-                            원시험 점수 추이와 선택 범위 학생의 원시험 평균을 같이 비교합니다.
-                        </p>
-                    </div>
+            <div className={styles.primaryGrid}>
+                <section className={`chart-card-enter ${styles.trendCard}`} aria-labelledby="student-trend-heading">
+                    <header className={styles.chartHeader}>
+                        <div className={styles.chartIcon}><TrendingUp size={20} aria-hidden="true" /></div>
+                        <div>
+                            <h3 id="student-trend-heading">{activeStudentLabel} 성취도 추이</h3>
+                            <p>원시험 점수 추이 · 100점 환산</p>
+                        </div>
+                    </header>
                     {!studentGrowthReportsEnabled && (
                         <PremiumFeatureCard
                             title="성취도 추이 차트"
@@ -691,85 +656,39 @@ export default function StudentAnalyticsTab({
                     )}
 
                     {studentGrowthReportsEnabled && studentTrendSummary && (
-                        <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(105px, 1fr))',
-                            gap: '0.65rem',
-                            marginBottom: '1rem',
-                            padding: '0.75rem 0.9rem',
-                            background: 'rgba(99, 102, 241, 0.04)',
-                            border: '1px solid var(--border)',
-                            borderRadius: 'var(--radius-md)',
-                        }}>
-                            <div>
-                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>최신 원시험</div>
-                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem' }}>
-                                    <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--foreground)' }}>
-                                        {studentTrendSummary.latestScore}
-                                    </span>
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
-                                    {studentTrendSummary.delta !== null && (
-                                        <span style={{
-                                            fontSize: '0.72rem',
-                                            fontWeight: 800,
-                                            color: studentTrendSummary.delta >= 0 ? 'var(--success)' : 'var(--grade-red)',
-                                        }}>
-                                            {studentTrendSummary.delta >= 0 ? `▲+${studentTrendSummary.delta}` : `▼${studentTrendSummary.delta}`}
-                                        </span>
-                                    )}
-                                </div>
+                        <dl className={styles.metrics}>
+                            <div className={styles.leadMetric}>
+                                <dt>최신 원시험</dt>
+                                <dd>{studentTrendSummary.latestScore}<small>점</small></dd>
+                                {studentTrendSummary.delta !== null && (
+                                    <span>직전 대비 {studentTrendSummary.delta === 0 ? '동일' : `${studentTrendSummary.delta > 0 ? '+' : ''}${studentTrendSummary.delta}점`}</span>
+                                )}
                             </div>
-
-                            <div>
-                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>원시험 평균</div>
-                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                                    <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--primary)' }}>
-                                        {studentTrendSummary.averageScore}
-                                    </span>
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
-                                </div>
-                            </div>
-
-                            <div>
-                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>최고 점수</div>
-                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                                    <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--foreground)' }}>
-                                        {studentTrendSummary.maxScore}
-                                    </span>
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
-                                </div>
-                            </div>
-
-                            <div>
-                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.15rem' }}>반 평균 대비</div>
-                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                                    <span style={{
-                                        fontSize: '1.2rem',
-                                        fontWeight: 900,
-                                        color: studentTrendSummary.avgDiff >= 0 ? 'var(--success)' : 'var(--grade-red)',
-                                    }}>
-                                        {studentTrendSummary.avgDiff >= 0 ? `+${studentTrendSummary.avgDiff}` : studentTrendSummary.avgDiff}
-                                    </span>
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>점</span>
-                                </div>
-                            </div>
-                        </div>
+                            <div><dt>원시험 평균</dt><dd>{studentTrendSummary.averageScore}<small>점</small></dd></div>
+                            <div><dt>최고 점수</dt><dd>{studentTrendSummary.maxScore}<small>점</small></dd></div>
+                            <div title="최신 원시험에서 학생 점수와 선택 범위 평균의 차이"><dt>범위 평균 대비</dt><dd>{studentTrendSummary.avgDiff > 0 ? '+' : ''}{studentTrendSummary.avgDiff}<small>점</small></dd></div>
+                        </dl>
                     )}
 
-                    <div className="comet-chart-light" style={{ height: studentGrowthReportsEnabled ? '280px' : 0, width: '100%', minWidth: 0, position: 'relative' }}>
-                        <div className="chart-texture is-light" aria-hidden="true" />
-                        {studentGrowthReportsEnabled && trendData.length > 0 ? (
+                    {studentGrowthReportsEnabled && trendData.length > 0 && (
+                        <div className={styles.legend}>
+                            <span><i aria-hidden="true" />학생 점수</span>
+                            <span><i aria-hidden="true" />선택 범위 평균</span>
+                        </div>
+                    )}
+                    {studentGrowthReportsEnabled && <div className={styles.plot}>
+                        {trendData.length > 0 ? (
                             <ResponsiveContainer
                                 width="100%"
                                 height="100%"
                                 minWidth={0}
-                                minHeight={280}
-                                initialDimension={{ width: 760, height: 280 }}
+                                minHeight={220}
+                                initialDimension={{ width: 360, height: 220 }}
                             >
                                 <ComposedChart
                                     key={`${activeStudentKey}-${trendData.length}`}
                                     data={trendData}
-                                    margin={{ top: 15, right: 25, left: -10, bottom: 15 }}
+                                    margin={{ top: 12, right: 18, left: 0, bottom: 4 }}
                                 >
                                     <defs>
                                         <linearGradient id="studentScoreGlow" x1="0" y1="0" x2="0" y2="1">
@@ -779,13 +698,16 @@ export default function StudentAnalyticsTab({
                                     </defs>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" opacity={0.7} />
                                     <XAxis
-                                        dataKey="examTitle"
+                                        dataKey="position"
+                                        minTickGap={18}
+                                        tickFormatter={v => `${v}회`}
                                         tick={{ fill: 'var(--muted)', fontSize: 11, fontWeight: 600 }}
                                         axisLine={{ stroke: 'var(--border)' }}
                                         tickLine={false}
                                         dy={8}
                                     />
                                     <YAxis
+                                        width={40}
                                         domain={[0, 100]}
                                         ticks={[0, 25, 50, 75, 100]}
                                         tick={{ fill: 'var(--muted)', fontSize: 11 }}
@@ -794,72 +716,60 @@ export default function StudentAnalyticsTab({
                                         tickFormatter={(v) => `${v}점`}
                                         dx={-4}
                                     />
-                                    <ReferenceLine y={100} stroke="var(--border)" strokeDasharray="2 4" />
                                     <RechartsTooltip
                                         cursor={{ stroke: 'var(--primary)', strokeWidth: 1.5, strokeDasharray: '4 4', strokeOpacity: 0.4 }}
                                         content={<StudentTrendTooltip />}
                                         animationDuration={150}
                                     />
-                                    <Legend
-                                        verticalAlign="bottom"
-                                        align="center"
-                                        wrapperStyle={{ paddingTop: '12px', fontSize: '0.8rem' }}
-                                        formatter={(value) => (
-                                            <span style={{ color: 'var(--foreground)', fontWeight: 600, marginRight: '8px' }}>
-                                                {value}
-                                            </span>
-                                        )}
-                                    />
                                     <Area
-                                        type="monotone"
+                                        type="linear"
                                         dataKey="studentScore"
                                         stroke="none"
                                         fill="url(#studentScoreGlow)"
-                                        isAnimationActive={true}
-                                        animationDuration={850}
-                                        animationEasing="ease-out"
+                                        isAnimationActive={false}
                                         legendType="none"
                                         tooltipType="none"
                                     />
                                     <Line
-                                        name="내 점수"
-                                        type="monotone"
+                                        name="학생 점수"
+                                        type="linear"
                                         dataKey="studentScore"
-                                        className="comet-target"
                                         stroke="var(--primary)"
                                         strokeWidth={3}
                                         dot={{ r: 4.5, strokeWidth: 2, fill: 'var(--background)' }}
                                         activeDot={{ r: 6.5, strokeWidth: 2, stroke: 'var(--primary)', fill: 'var(--background)' }}
-                                        isAnimationActive={true}
-                                        animationDuration={850}
-                                        animationEasing="ease-out"
+                                        isAnimationActive={false}
                                     />
                                     <Line
                                         name="선택 범위 평균"
-                                        type="monotone"
+                                        type="linear"
                                         dataKey="avgScore"
-                                        stroke="var(--warning)"
+                                        stroke="var(--muted)"
                                         strokeWidth={2}
                                         strokeDasharray="5 5"
                                         dot={{ r: 3.5, strokeWidth: 0, fill: 'var(--muted)' }}
-                                        activeDot={{ r: 5.5, strokeWidth: 0, fill: 'var(--warning)' }}
-                                        isAnimationActive={true}
-                                        animationBegin={200}
-                                        animationDuration={850}
-                                        animationEasing="ease-out"
+                                        activeDot={{ r: 5.5, strokeWidth: 0, fill: 'var(--muted)' }}
+                                        isAnimationActive={false}
                                     />
                                 </ComposedChart>
                             </ResponsiveContainer>
-                        ) : studentGrowthReportsEnabled ? (
-                            <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
-                                표시할 원시험 데이터가 없습니다. (모든 시험 목록이 제외됨)
-                            </div>
-                        ) : null}
-                    </div>
-                </div>
-
-                {/* Right side: Exam List & Unattempted Exams */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
+                        ) : <p className={styles.empty}>표시할 원시험 데이터가 없습니다. 원시험 기록의 선택 상태를 확인하세요.</p>}
+                    </div>}
+                    {studentGrowthReportsEnabled && trendData.length > 0 && (
+                        <details className={styles.values}>
+                            <summary>시험별 비교값 <span>{trendData.length}건</span></summary>
+                            <table aria-label="선택한 원시험별 점수 비교">
+                                <thead><tr><th scope="col">시험 · 응시일</th><th scope="col">학생</th><th scope="col">범위 평균</th></tr></thead>
+                                <tbody>{trendData.map(row => (
+                                    <tr key={row.attemptId}>
+                                        <th scope="row">{row.position}회 · {row.examTitle}<small>{row.date}</small></th>
+                                        <td>{row.studentScore}점</td><td>{row.avgScore}점</td>
+                                    </tr>
+                                ))}</tbody>
+                            </table>
+                        </details>
+                    )}
+                </section>
                     <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '0.45rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                             <Target size={17} color="var(--primary)" />
@@ -920,6 +830,8 @@ export default function StudentAnalyticsTab({
                         )}
                     </div>
 
+            </div>
+            <div className={styles.historyGrid}>
                     {/* Unattempted Exams & Reminder Queue */}
                     <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--error)' }}>
@@ -1083,7 +995,6 @@ export default function StudentAnalyticsTab({
                             </div>
                         </div>
                     )}
-                </div>
             </div>
 
             {/* Detailed Table Section */}

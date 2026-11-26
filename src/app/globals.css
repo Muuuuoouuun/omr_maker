@@ -12704,3 +12704,30 @@ body:has(.create-workspace.is-resizing) {
   .student-analysis-filters { padding: 1rem !important; gap: .65rem !important; }
   .student-analysis-filters select { width: 100%; min-width: 0 !important; flex-basis: 100% !important; }
 }
+
+@media (max-width: 760px) {
+  .teacher-attempt-page > header {
+    height: auto;
+    min-height: 4.5rem;
+  }
+
+  .teacher-attempt-page > header .header-content {
+    gap: 0.5rem;
+    padding-block: 0.5rem;
+  }
+
+  .teacher-attempt-page > header .header-content > div:first-child {
+    flex: 1 1 0;
+  }
+
+  .teacher-attempt-page > header .header-content > div:last-child {
+    flex: 0 0 auto;
+    flex-wrap: nowrap !important;
+    gap: 0.25rem !important;
+  }
+
+  .teacher-attempt-page > header .header-content > div:last-child .btn {
+    min-height: 44px;
+    padding-inline: 0.6rem;
+  }
+}

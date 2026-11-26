@@ -80,7 +80,9 @@
   background: var(--background);
   font-size: 0.78rem;
   font-weight: 800;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
 }
 
 .controlRow {
@@ -902,10 +904,14 @@
 
 .reportMetricGrid > div:first-child {
   border-inline-start: 0;
+  border-radius: .6rem;
+  background: var(--analytics-blue-soft);
+  color: var(--text-primary);
 }
 
 .reportHeadlineSection {
   border-inline-start-width: 3px;
+  background: color-mix(in srgb, var(--primary) 3%, var(--surface));
 }
 
 .reportHeadlineAction {
@@ -951,74 +957,62 @@
   min-width: 0;
 }
 
-.distributionBars {
-  width: 100%;
-  min-height: 220px;
-  display: grid;
-  grid-template-columns: repeat(10, minmax(28px, 1fr));
-  align-items: end;
-  gap: 0.45rem;
+.distributionFigure {
   margin: 0;
-  padding: 1rem 1rem 0.75rem;
-  list-style: none;
-}
-
-.distributionBars li {
-  min-width: 0;
-  height: 190px;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 0.35rem;
-  align-items: end;
-  text-align: center;
-}
-
-.distributionCount,
-.distributionLabel {
-  color: var(--muted);
-  font-size: var(--type-micro);
   font-variant-numeric: tabular-nums;
 }
-
-.distributionCount {
-  color: var(--foreground);
-  font-weight: 800;
+.distributionFigure figcaption {
+  padding: .7rem .9rem;
+  border-radius: .65rem;
+  background: var(--analytics-blue-soft);
+  color: var(--text-primary);
+  font-size: .86rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
 }
-
-.distributionBar {
+.distributionTable {
   width: 100%;
-  height: var(--distribution-share);
-  min-height: 2px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  background: var(--primary);
-  transition: height 0.5s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
-}
-
-.distributionItemPeak {
-  position: relative;
-}
-
-.distributionBarPeak {
-  background: linear-gradient(180deg, #6366f1 0%, #4f46e5 100%);
-  box-shadow: 0 -2px 10px color-mix(in srgb, var(--primary) 35%, transparent);
-}
-
-.distributionBars li:hover .distributionBar {
-  filter: brightness(1.12);
-  transform: scaleY(1.03);
-  transform-origin: bottom;
-}
-
-.distributionCountPeak {
-  color: var(--primary);
-  font-weight: 900;
-}
-
-.distributionLabelPeak {
+  margin-top: .75rem;
+  border-collapse: collapse;
   color: var(--foreground);
-  font-weight: 800;
+  font-size: .82rem;
+  text-align: left;
 }
-
+.distributionTable thead th {
+  padding-bottom: .45rem;
+  color: var(--muted);
+  font-size: .75rem;
+}
+.distributionTable thead th:last-child { text-align: right; }
+.distributionTable tbody th {
+  width: 6rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.distributionTable tbody tr { border-top: 1px solid var(--border); }
+.distributionTable td { padding-block: .32rem; }
+.distributionMeasure {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3.4rem;
+  align-items: center;
+  gap: .6rem;
+}
+.distributionMeasure strong { min-width: 3ch; text-align: right; }
+.distributionTrack {
+  display: block;
+  height: .58rem;
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+}
+.distributionTrack > span {
+  display: block;
+  height: 100%;
+  width: var(--distribution-share);
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--primary) 54%, var(--surface));
+}
+.distributionTable tr[data-peak="true"] { color: var(--text-primary); }
+.distributionTable tr[data-peak="true"] .distributionTrack > span { background: var(--primary); }
 .achievementList {
   display: grid;
   gap: 0.75rem;
@@ -1376,20 +1370,23 @@
     border-top: 1px solid var(--border);
   }
 
-  .distributionBars {
-    grid-template-columns: repeat(10, minmax(0, 1fr));
-    gap: 0.25rem;
-    padding-inline: 0.5rem;
+  .reportWeakSection { padding: 1rem; }
+  .reportWeakSection .reportDataTable {
+    min-width: 0;
+    width: 100%;
+    table-layout: fixed;
+    font-size: .8rem;
   }
+  .reportWeakSection .reportDataTable th,
+  .reportWeakSection .reportDataTable td {
+    padding: .65rem .25rem;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+  }
+  .reportWeakSection .reportDataTable thead th:nth-child(1) { width: 2.8rem; }
+  .reportWeakSection .reportDataTable thead th:nth-child(2) { width: 23%; }
+  .reportWeakSection .reportDataTable thead th:nth-child(3) { width: 3rem; }
 
-  .distributionLabel {
-    font-size: var(--type-micro);
-    writing-mode: vertical-rl;
-  }
-
-  .reportDataTable {
-    min-width: 560px;
-  }
 }
 
 @media (max-width: 520px) {
@@ -1451,7 +1448,6 @@
   .bandSegment,
   .primaryAction,
   .tab::after,
-  .distributionBar,
   .achievementFill {
     transition: none;
   }

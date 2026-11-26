@@ -1027,7 +1027,7 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(within(metricsRegion).getByText("평균").parentElement).toHaveTextContent("평균100점");
         expect(within(metricsRegion).getByText("최저").parentElement).toHaveTextContent("최저100점");
         expect(within(metricsRegion).getByText("채점 응시").parentElement).toHaveTextContent("채점 응시1명전체 제출 5건");
-        expect(screen.getByRole("img", { name: "점수 구간별 응시 인원" })).toHaveAccessibleDescription(
+        expect(screen.getByRole("figure", { name: "점수 구간별 응시 인원" })).toHaveAccessibleDescription(
             "90-100점 구간이 1명으로 가장 많습니다. 총 1명입니다.",
         );
 
@@ -1067,7 +1067,7 @@ describe("ExamAnalyticsReportOverview", () => {
     it("exposes score distribution and weak-question evidence as accessible tables", () => {
         render(<ExamAnalyticsReportOverview {...buildProps()} />);
 
-        expect(screen.getByRole("img", { name: "점수 구간별 응시 인원" })).toHaveAccessibleDescription(
+        expect(screen.getByRole("figure", { name: "점수 구간별 응시 인원" })).toHaveAccessibleDescription(
             "20-30점 구간이 4명으로 가장 많습니다. 총 9명입니다.",
         );
         expect(screen.getByRole("table", { name: "점수 분포 데이터" })).toBeInTheDocument();
@@ -1080,6 +1080,18 @@ describe("ExamAnalyticsReportOverview", () => {
 
         const gradeRate = screen.getByText("32%");
         expect(gradeRate.className).toContain("rateGrade");
+    });
+
+    it("shows tied score intervals and keeps zero-count bars empty", () => {
+        render(<ExamAnalyticsReportOverview {...buildProps({ distribution: [
+            { label: "0-10", min: 0, max: 10, count: 0 },
+            { label: "10-20", min: 10, max: 20, count: 2 },
+            { label: "20-30", min: 20, max: 30, count: 2 },
+        ] })} />);
+        const chart = screen.getByRole("figure", { name: "점수 구간별 응시 인원" });
+        expect(chart).toHaveAccessibleDescription("최다 구간 2개가 각각 2명입니다. 총 4명입니다.");
+        expect(within(chart).getByRole("row", { name: /0-10점 0명/ }).querySelector("[style]"))
+            .toHaveStyle({ "--distribution-share": "0%" });
     });
 
     it("links one external sample qualifier without duplicating its copy", () => {

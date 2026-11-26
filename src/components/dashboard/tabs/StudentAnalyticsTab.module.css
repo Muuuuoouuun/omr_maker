@@ -1,0 +1,73 @@
+.filters, .trendCard {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--foreground);
+  box-shadow: var(--shadow-sm);
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: .8rem 1rem;
+  padding: 1rem 1.25rem;
+}
+.filters label { display: grid; gap: .35rem; min-width: 0; flex: 1 1 9rem; }
+.filters label[for] { flex: 2 1 15rem; }
+.filters label > span, .filters p, .chartHeader p, .legend, .metrics dt, .values th small {
+  color: var(--muted);
+  font-size: .82rem;
+}
+.filters label > span { display: flex; gap: .35rem; align-items: center; font-weight: 700; }
+.filters select {
+  width: 100%; min-width: 0; min-height: 44px; padding: .5rem .65rem;
+  font: inherit; color: var(--foreground); border-radius: .55rem;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.filters select:focus-visible, .values summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.filters p { align-self: center; margin: 0; }
+.primaryGrid, .historyGrid { display: grid; gap: 1rem; align-items: start; min-width: 0; }
+.primaryGrid { grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); }
+.historyGrid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); }
+.primaryGrid > *, .historyGrid > * { min-width: 0; }
+.trendCard { padding: clamp(1rem, 2.1vw, 1.65rem); }
+.chartHeader { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.2rem; }
+.chartIcon { display: grid; place-items: center; flex: none; width: 42px; height: 42px; border-radius: .8rem; background: color-mix(in srgb, var(--primary) 8%, var(--surface)); color: var(--text-primary); }
+.chartHeader h3 { font-size: clamp(1.08rem, 1.35vw, 1.35rem); line-height: 1.4; overflow-wrap: anywhere; }
+.chartHeader p { margin: .15rem 0 0; }
+.metrics {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0;
+  gap: 1rem .75rem; padding: 1rem; border-radius: .8rem;
+  background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+  font-variant-numeric: tabular-nums;
+}
+.metrics dt { font-weight: 650; word-break: keep-all; }
+.metrics dd { font-size: 1.45rem; font-weight: 750; letter-spacing: -.025em; margin: .2rem 0 0; line-height: 1.1; }
+.metrics dd small { color: var(--muted); font-size: .76rem; font-weight: 600; margin-left: .2rem; }
+.leadMetric {
+  grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .6rem;
+  border-bottom: 1px solid var(--border); padding-bottom: .7rem;
+}
+.leadMetric dd { font-size: clamp(2.15rem, 3.2vw, 3rem); font-weight: 800; color: var(--text-primary); }
+.leadMetric span { margin-left: auto; color: var(--foreground); font-size: .8rem; }
+.legend { display: flex; flex-wrap: wrap; justify-content: end; gap: .75rem; margin: 1rem 0 .3rem; }
+.legend span { display: inline-flex; align-items: center; gap: .35rem; }
+.legend i { width: 1.2rem; border-top: 3px solid var(--primary); }
+.legend span:last-child i { border-top: 2px dashed var(--muted); }
+.plot { width: 100%; min-width: 0; height: 220px; }
+.empty { display: grid; height: 100%; place-content: center; text-align: center; color: var(--muted); }
+.values { margin-top: .5rem; border-top: 1px solid var(--border); }
+.values summary { min-height: 44px; padding: .8rem .15rem .45rem; font-size: .87rem; font-weight: 700; cursor: pointer; }
+.values summary span { font-size: .78rem; margin-left: .25rem; color: var(--muted); }
+.values table { width: 100%; border-collapse: collapse; font-size: .82rem; font-variant-numeric: tabular-nums; }
+.values th, .values td { text-align: right; padding: .55rem .2rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.values th:first-child { width: 60%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.values th small { display: block; font-weight: 400; }
+@media (max-width: 900px) { .primaryGrid { grid-template-columns: 1fr; } }
+@media (max-width: 540px) {
+  .filters { align-items: stretch; }
+  .filters label, .filters label[for] { flex-basis: 100%; }
+  .metrics { gap: .65rem; padding: .8rem; }
+  .metrics dt { font-size: .76rem; }
+}

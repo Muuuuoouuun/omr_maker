@@ -91,7 +91,6 @@ import {
 } from "@/lib/kakaoCandidateReviewPersistence";
 import { getKakaoProviderReadiness, type KakaoProviderReadinessStatus } from "@/lib/kakaoProvider";
 import { hasPlanEntitlement } from "@/utils/plans";
-import WaveBar from "@/components/dashboard/WaveBar";
 import StatusPill from "@/components/dashboard/StatusPill";
 import type { AnalyticsMetricItem } from "@/components/AnalyticsMetricGrid";
 import {
@@ -714,7 +713,7 @@ export default function ExamAnalyticsTab({
                 rate: safeRatePercent(count, stat.totalCount)
             }));
             const topWrongOption = optionRates
-                .filter(item => item.option !== stat.correctAnswer)
+                .filter(item => item.option !== stat.correctAnswer && item.count > 0)
                 .sort((a, b) => b.rate - a.rate)[0];
 
             return {
@@ -1027,7 +1026,7 @@ export default function ExamAnalyticsTab({
             correctRate: question.correctRate,
             evidence: question.topWrongOption
                 ? `정답 ${question.correctCount}/${question.totalCount}명 · 최다 오답 ${question.topWrongOption.option}번 ${question.topWrongOption.rate}%`
-                : `정답 ${question.correctCount}/${question.totalCount}명 · 오답 없음`,
+                : `정답 ${question.correctCount}/${question.totalCount}명 · 선택 오답 없음`,
         }))
     ), [gradableQuestionAnalytics]);
     const overviewActions = useMemo<ExamOverviewAction[]>(() => {
@@ -3144,8 +3143,8 @@ export default function ExamAnalyticsTab({
                             >
                                 <BarChart data={questionCorrectRateChartData}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
-                                    <XAxis dataKey="index" tickFormatter={(v) => `${v}번`} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-                                    <YAxis domain={[0, 100]} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
+                                    <XAxis dataKey="index" minTickGap={14} tickFormatter={(v) => `${v}번`} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
+                                    <YAxis domain={[0, 100]} width={43} ticks={[0, 25, 50, 75, 100]} tickFormatter={v => `${v}%`} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
                                     <RechartsTooltip
                                         filterNull={false}
                                         cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }}
@@ -3166,7 +3165,7 @@ export default function ExamAnalyticsTab({
                                             }}
                                         />
                                     )}
-                                    <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} shape={<WaveBar />}>
+                                    <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} maxBarSize={28} radius={[4, 4, 0, 0]}>
                                         {questionCorrectRateChartData.map((entry, idx) => {
                                             const rate = entry.correctRate;
                                             const cellColor = rate === null

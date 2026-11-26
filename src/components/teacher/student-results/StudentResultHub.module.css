@@ -1121,31 +1121,6 @@
 }
 
 @media (max-width: 760px) {
-  :global(.teacher-attempt-page > header) {
-    height: auto;
-    min-height: 4.5rem;
-  }
-
-  :global(.teacher-attempt-page > header .header-content) {
-    gap: 0.5rem;
-    padding-block: 0.5rem;
-  }
-
-  :global(.teacher-attempt-page > header .header-content > div:first-child) {
-    flex: 1 1 0;
-  }
-
-  :global(.teacher-attempt-page > header .header-content > div:last-child) {
-    flex: 0 0 auto;
-    flex-wrap: nowrap !important;
-    gap: 0.25rem !important;
-  }
-
-  :global(.teacher-attempt-page > header .header-content > div:last-child .btn) {
-    min-height: 44px;
-    padding-inline: 0.6rem;
-  }
-
   .headerMain {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;

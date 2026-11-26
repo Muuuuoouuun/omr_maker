@@ -11,7 +11,7 @@ import type { Attempt } from "@/types/omr";
 const rootDir = process.cwd();
 
 function readProjectFile(filePath: string): string {
-    return readFileSync(path.join(rootDir, filePath), "utf8");
+    return readFileSync(path.join(rootDir, filePath), "utf8").replace(/\r\n/g, "\n");
 }
 
 function loadGrowthAttemptContextHelper(): (

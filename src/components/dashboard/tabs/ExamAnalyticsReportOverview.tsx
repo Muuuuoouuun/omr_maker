@@ -2,7 +2,6 @@
 
 import type { CSSProperties } from "react";
 import { ArrowRight } from "lucide-react";
-import { AnalyticsChartFrame } from "@/components/AnalyticsChartFrame";
 import {
     AnalyticsMetricGrid,
     type AnalyticsMetricItem,
@@ -75,12 +74,11 @@ const achievementToneClasses: Record<ExamOverviewAchievementTone, string> = {
 
 function distributionSummary(distribution: ScoreBucket[]): string {
     const total = distribution.reduce((sum, bucket) => sum + bucket.count, 0);
-    const peak = distribution.reduce<ScoreBucket | undefined>((current, bucket) => (
-        !current || bucket.count > current.count ? bucket : current
-    ), undefined);
-
-    if (!peak || total === 0) return "표시할 점수 분포가 없습니다.";
-    return `${peak.label}점 구간이 ${peak.count}명으로 가장 많습니다. 총 ${total}명입니다.`;
+    if (total === 0) return "표시할 점수 분포가 없습니다.";
+    const highest = Math.max(...distribution.map(bucket => bucket.count));
+    const peaks = distribution.filter(bucket => bucket.count === highest);
+    if (peaks.length > 1) return `최다 구간 ${peaks.length}개가 각각 ${highest}명입니다. 총 ${total}명입니다.`;
+    return `${peaks[0].label}점 구간이 ${highest}명으로 가장 많습니다. 총 ${total}명입니다.`;
 }
 
 export default function ExamAnalyticsReportOverview({
@@ -126,58 +124,33 @@ export default function ExamAnalyticsReportOverview({
                 <AnalyticsReportSection
                     id="exam-report-distribution"
                     title="점수 분포"
-                    description="10점 구간별 응시 인원"
+                    description="100점 환산 · 10점 구간별 응시 인원"
                     className={styles.reportEvidenceSection}
                     printBehavior="allow-break"
                 >
-                    <AnalyticsChartFrame
-                        ariaLabel="점수 구간별 응시 인원"
-                        height={260}
-                        state={hasPerformanceEvidence
-                            ? { status: "ready", summary: chartSummary }
-                            : { status: "empty", message: "채점 가능한 점수 근거가 없습니다." }}
-                        accessibleTable={(
-                            <table className={styles.reportDataTable}>
-                                <caption>점수 분포 데이터</caption>
-                                <thead>
-                                    <tr>
-                                        <th scope="col">점수 구간</th>
-                                        <th scope="col">응시 인원</th>
-                                    </tr>
-                                </thead>
+                    {hasPerformanceEvidence ? (
+                        <figure className={styles.distributionFigure} aria-label="점수 구간별 응시 인원" aria-describedby="exam-distribution-summary">
+                            <figcaption id="exam-distribution-summary">{chartSummary}</figcaption>
+                            <table className={styles.distributionTable} aria-label="점수 분포 데이터">
+                                <thead><tr><th scope="col">점수 구간</th><th scope="col">응시 인원</th></tr></thead>
                                 <tbody>
                                     {distribution.map(bucket => (
-                                        <tr key={`${bucket.min}-${bucket.max}`}>
+                                        <tr key={bucket.min} data-peak={bucket.count === maxDistributionCount}>
                                             <th scope="row">{bucket.label}점</th>
-                                            <td className="numeric-emphasis">{bucket.count}명</td>
+                                            <td>
+                                                <div className={styles.distributionMeasure}>
+                                                    <span className={styles.distributionTrack} aria-hidden="true">
+                                                        <span style={{ "--distribution-share": `${bucket.count / maxDistributionCount * 100}%` } as DistributionBarStyle} />
+                                                    </span>
+                                                    <strong>{bucket.count}명</strong>
+                                                </div>
+                                            </td>
                                         </tr>
                                     ))}
                                 </tbody>
                             </table>
-                        )}
-                    >
-                        <ol className={styles.distributionBars} aria-hidden="true">
-                            {distribution.map(bucket => {
-                                const isPeak = bucket.count === maxDistributionCount && bucket.count > 0;
-                                return (
-                                    <li key={`${bucket.min}-${bucket.max}`} className={isPeak ? styles.distributionItemPeak : undefined}>
-                                        <span className={`${styles.distributionCount} ${isPeak ? styles.distributionCountPeak : ""}`}>
-                                            {bucket.count}
-                                        </span>
-                                        <span
-                                            className={`${styles.distributionBar} ${isPeak ? styles.distributionBarPeak : ""}`}
-                                            style={{
-                                                "--distribution-share": `${(bucket.count / maxDistributionCount) * 100}%`,
-                                            } as DistributionBarStyle}
-                                        />
-                                        <span className={`${styles.distributionLabel} ${isPeak ? styles.distributionLabelPeak : ""}`}>
-                                            {bucket.label}
-                                        </span>
-                                    </li>
-                                );
-                            })}
-                        </ol>
-                    </AnalyticsChartFrame>
+                        </figure>
+                    ) : <p role="status">채점 가능한 점수 근거가 없습니다.</p>}
                 </AnalyticsReportSection>
 
                 <AnalyticsReportSection
@@ -213,7 +186,7 @@ export default function ExamAnalyticsReportOverview({
                 printBehavior="allow-break"
                 className={styles.reportWeakSection}
             >
-                <div className={styles.reportTableWrap}>
+                {weakQuestions.length === 0 ? <p role="status">표시할 취약 문항 근거가 없습니다.</p> : <div className={styles.reportTableWrap}>
                     <table className={styles.reportDataTable}>
                         <caption>취약 문항 근거</caption>
                         <thead>
@@ -241,7 +214,7 @@ export default function ExamAnalyticsReportOverview({
                             ))}
                         </tbody>
                     </table>
-                </div>
+                </div>}
             </AnalyticsReportSection>
 
             <AnalyticsReportSection
