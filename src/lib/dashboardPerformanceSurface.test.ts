@@ -62,7 +62,10 @@ describe("dashboard loading performance surface", () => {
         expect(usersPage).toContain("응시 분석을 일시 중단");
         expect(usersPage).toContain('attemptAnalyticsStatus === "ready"');
         expect(usersPage).toContain("응시 분석 데이터 미표시");
-        expect(usersPage).toContain('attemptAnalyticsAvailable ? `${s.avgScore}` : "—"');
+        const gatedScore = 'attemptAnalyticsAvailable ? <span className={styles.scoreValue}>{s.avgScore}<small>점</small></span> : "—"';
+        expect(usersPage.split(gatedScore)).toHaveLength(3);
+        expect(usersPage).toContain('aria-label={attemptAnalyticsAvailable ? `평균 ${s.avgScore}점` : "평균 확인 불가"}');
+        expect(usersPage).toContain('attemptAnalyticsAvailable ? s.avgScore : ""');
     });
 
     it("renders useful loading shells and applies local data before remote refresh", () => {

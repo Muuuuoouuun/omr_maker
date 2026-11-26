@@ -63,10 +63,11 @@ describe("teacher surface simplification regressions", () => {
         expect(dashboard).toContain('notifyOnSuccess: true, notifyOnError: true');
     });
 
-    it("preserves roster analysis except for an empty student tab", () => {
+    it("preserves roster metrics outside the empty student tab and guards the regional analysis", () => {
         const users = read("src/app/teacher/users/page.tsx");
 
-        expect(users).toContain('className="teacher-users-analysis"');
+        expect(users).toMatch(/\(tab !== "students" \|\| showStudentListControls\) && \(\s*<>\s*<section className=\{styles\.metrics\} aria-label="명단 핵심 지표"/);
+        expect(users).toContain('attemptAnalyticsAvailable && regionalScopes.length > 0 && <details className={`teacher-users-analysis ${styles.analysis}`}');
         expect(users).toContain("명단 분석");
         expect(users).toContain('(tab !== "students" || showStudentListControls) && (');
         expect(users).toContain("hasStudentRosterData");
